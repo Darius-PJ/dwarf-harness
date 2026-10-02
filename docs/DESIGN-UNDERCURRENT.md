@@ -1,6 +1,8 @@
 # Undercurrent: design for the environmental field layer
 
-**Status:** Draft 0.3, 2026-10-01. A proposal assembled from an ongoing design conversation. It is not an owner decision, not an approved Field Design, and not an implementation report. No code exists yet for any layer of the harness: the core, the router and Undercurrent are all designs. Every mechanism below is a recommendation unless it is labelled as a constraint carried from the prospective project documents.
+**Status:** Draft 0.3, 2026-10-01. Updated 2026-10-02 with implementation decisions (`DECISIONS.md` D20, D23, D33–D37, D40). A proposal assembled from an ongoing design conversation. It is not an owner decision, not an approved Field Design, and not an implementation report. No code exists yet for any layer of the harness: the core, the router and Undercurrent are all designs. Every mechanism below is a recommendation unless it is labelled as a constraint carried from the prospective project documents.
+
+**Changes on 2026-10-02:** constraints from the implementation decisions (section 3); a mapping from build phases to roadmap steps (section 15); in the ledger contract, the D37 identity and time rules, temporary-scratch and authoring-context fields (D23), and three proposed events: graph delta, law activation and interference-check result (section 15.1); Q16 resolved by D36 (section 17).
 
 **Changes in 0.3:** a proposed answer to Q4, the admissible validation path for failure and repair, is set out in `RESEARCH-ADMISSIBLE-VALIDATION.md` and folded in here: source rules for `dependency_strain`, `affordance` and `epistemic_uncertainty` (section 9), validation and check-governance events in the ledger contract (section 15.1), a validation runner as a core phase 1 dependency (section 15.2), new adversarial cases (section 14.2), and a proposed answer to Q12.
 
@@ -49,7 +51,9 @@ Section numbers such as "philosophy §9" or "core §3.5" refer to those document
 | Idle agents must be able to encounter the field efficiently | Philosophy §9 | Threshold-crossing wakeups, gated by cooldowns and an allowance (section 11). |
 | Build the core first; the field engine is a package testable standalone against synthetic ledgers; substantial testing before it affects agents | Core D14, §9 phase 5 | Build order in section 15; acceptance gate in section 14. |
 | Typed action deltas in an append-only ledger; bodies content-addressed | Core D15, §3.2 | The ledger is Undercurrent's only input. |
+| One colony log with one sequence (D33), kept as our own append-only log of JSON-lines records. It is never deleted or compacted; bodies may be garbage-collected, so everything replay needs lives in the record itself | `DECISIONS.md` D33–D36 | Replay never depends on a body: source rules read only record fields (changed paths and their hashes, check digests, outcomes, measurements). The engine declares the event types it consumes and stops with a clear error on one it cannot decode (D35). Full replay from the first record stays possible, which resolves Q16. |
 | Private scratch per work context, fast-forward-only promotion | Core D16 to D18, §3.5 | Supplies exact staleness and refused-promotion signals. Creates the private-work disclosure problem. |
+| An agent may run turns in several of its contexts at once. A second writer to a task gets a temporary scratch, merged back after its turn, and the ledger records the authoring context of each change | `DECISIONS.md` D22, D23 | Scratch events carry a parent scratch and the authoring context, and a merge-back is an event of its own (section 15.1). Source rules and footprints can tell which context wrote a change, not only which context promoted it. Merge-backs are private work, under Q3. One agent's turns can overlap, so in-flight load counts every active turn. |
 | Volatile per-turn content goes in the prompt tail; context modules declare cost | Routing R3, §6.5 | Rendering is a context module appended to the tail (section 11). |
 | Turns and approvals bind to agent, context and turn | Routing §5.1 | Perception is bound to the work context, not the agent identity. |
 | The router owns provider status, headroom and spend accounting; the harness, not the provider, holds the truth | Routing T10, §6.4, §9.8, §11 | Undercurrent never queries the router. It reads the router's measurements only as ledger events (section 15.1), and it never changes routing decisions, budgets or provider choice. |
@@ -429,21 +433,23 @@ The gate before Undercurrent may affect any agent is: all properties in 14.1 pas
 | H | `interference` and scratch-level `crowding`, after the disclosure decision | Disclosure tests pass for the chosen policy |
 | I, optional | Diffusion kernel for any kind that benefits | Diffusion-specific boundedness and stability tests |
 
+`ROADMAP-UNDERCURRENT.md` turns these phases into steps: phase A is delivered by core step C1 and router step R1; B by U1, with its kinds added in U4 (the promotion pipeline) and U5 (`resource_pressure`); C by U3; D by U6; E by U7; F by U8; G and H by U9, although `affordance` already arrives with U4 and the encounter geometry with U3. Phase I is optional and has no step. Under D20, the phase B engine (U1) may start once C1's ledger contracts are frozen, and the synthetic-ledger and simulation work (U2) follows it; everything that needs real data waits for the step that provides it. U1 also owns the law-file format as the `law-format` contract (D40).
+
 ### 15.1 Ledger contract (Phase A)
 
 Undercurrent reads nothing but the ledger. Any measurement a field needs must therefore be written to the ledger by the component that observes it, at the moment it observes it. Measurements held only in memory, or only in the router's JSONL decision record, are invisible to the field and cannot be replayed. Because no code exists yet, this contract can be built in from the start at no extra cost; adding it later would mean changing every emitting component and losing history from before the change.
 
-The contract has three parts.
+The contract has the following parts.
 
 **General fields on every action delta (core).**
 
 | Field | Purpose |
 |---|---|
-| Ledger sequence and event time | Ordering and replay; the engine never reads the wall clock |
-| Colony, agent, execution session, bound context, turn | Attribution and footprint construction; perception binds to the context |
+| Ledger sequence and event time | Ordering and replay; the engine never reads the wall clock. The sequence is gapless within a colony and is the only order replay uses. Event time is UTC Unix nanoseconds at observation and never decreases within a colony; a time held back because the system clock moved backwards is flagged (D37) |
+| Colony, agent, execution session, bound context, turn | Attribution and footprint construction; perception binds to the context. Every ID is a UUIDv7; names are separate from IDs and grant no authority (D37) |
 | Operation type and targets (paths, resources, accounts) | Node mapping for sources |
 | Outcome and measurement path | Distinguishes host-observed results from reports; admissibility (Q4) |
-| Start and end times, or a pending marker | Lets in-flight work count immediately (section 12) |
+| Start and end times, or a pending marker | Lets in-flight work count immediately (section 12). In-flight work is a start and an end that share an operation ID; after a crash the core writes an `interrupted` end for every unmatched start and never assumes success. Durations come from the monotonic clock (D37) |
 | Lineage hints: clone ancestry, input content hashes, model and provider | Evidential deduplication (Q2) |
 | Content-addressed body references | Larger payloads without bloating the ledger |
 
@@ -451,10 +457,11 @@ The contract has three parts.
 
 | Event | Fields Undercurrent needs | Feeds |
 |---|---|---|
-| Scratch created | Context, workspace root, base commit | Staleness; crowding (subject to Q3) |
-| Scratch changed paths | Context, changed path set, the scratch commit it reflects | Interference; staleness with overlap |
+| Scratch created | Context, workspace root, base commit, authoring context; for a temporary scratch (D23), its parent scratch | Staleness; crowding (subject to Q3) |
+| Scratch changed paths | Context, authoring context, changed path set, the scratch commit it reflects | Interference; staleness with overlap |
+| Temporary scratch merged back | Context, parent scratch, authoring context, outcome (fast-forward, clean merge or conflict), changed paths | Private work, subject to Q3 |
 | Promotion attempted | Context, scratch tip, canonical tip at the time | Pipeline accounting |
-| Promotion accepted | Context, old and new canonical tips, changed paths | Interference, staleness, affordance |
+| Promotion accepted | Context, old and new canonical tips, changed paths, the authoring contexts of its changes (D23) | Interference, staleness, affordance |
 | Promotion refused | Context, reason, canonical tip that caused it | Staleness; interference only where overlap exists |
 | Validation run | Trigger reference (promotion, schedule, agent request, perturbation); check digest and check lineage; subject tree hash computed by the host; environment digest; every attempt's outcome state (`passed`, `failed`, `timeout`, `skipped`, `incomplete`, `infra_failure`, `no_status`); summary (`passed`, `failed`, `flaky`, `inconclusive`); exit status and evidence that the suite ran; cache-bypass flag; runner identity; assurance level (A1 to A3); log body hash | Dependency strain, affordance, interference grading, epistemic uncertainty (`RESEARCH-ADMISSIBLE-VALIDATION.md` §4) |
 | Check added, modified, retired or quarantined | Check digest before and after, lineage, the context or owner that caused it, open failures affected | Ends strain by retirement; epistemic uncertainty |
@@ -467,7 +474,7 @@ The contract has three parts.
 | Event | Fields | Feeds |
 |---|---|---|
 | Queue entry, start, finish | Resource, bound context, wait duration | `resource_pressure`, crowding |
-| Turn start and end | Bound context, provider account | In-flight load on provider accounts |
+| Turn start and end | Bound context, provider account | In-flight load on provider accounts. One agent may have turns in flight in several contexts at once, at most one per context, up to a per-agent limit (D22) |
 
 **Provider and budget events (router phase 1).**
 
@@ -479,6 +486,16 @@ The contract has three parts.
 | Usage attribution | Router spend accounting | Bound context, provider account, reported usage | Usage edges from consumers to resources (Q11) |
 
 Bucketing headroom keeps the ledger from recording every response while still capturing every change that matters; bucket boundaries are law-adjacent configuration and should be versioned with the law (Q28).
+
+**Graph, law and interference-check events (proposed 2026-10-02).**
+
+| Event | Emitted by | Fields | Feeds |
+|---|---|---|---|
+| **[PROPOSAL]** Graph delta | The graph service (`ROADMAP-UNDERCURRENT.md` U3) | Graph version after the change; each node or edge added, changed or removed, with the edge's geometry (coupling or encounter), endpoints, type, weight and source (section 8.2) | Reach for every kind (section 7.1); encounter neighborhoods (section 10.2) |
+| **[PROPOSAL]** Law version takes effect | The core, when the operator activates a law | Law version and hash; the ledger position at which it takes effect; the law content, or enough of it for replay, inline (D36) | Every kind; replay and law comparison (section 14.1) |
+| **[PROPOSAL]** Post-promotion interference check | The core's workspace service, because Undercurrent never runs git | The promotion, the scratch checked, the grade (textual, build failure, test failure, coupling-only), the overlapping paths | `interference`; staleness with overlap |
+
+These three event types are not part of the 2026-10-02 decisions. Under D40 they can join the `ledger-format` catalogue by addition after it is frozen, with the owner's sign-off, so they do not hold up the freeze. Which roadmap builds the interference-check emitter is open (`ROADMAP-UNDERCURRENT.md` U4).
 
 ### 15.2 Cross-layer dependencies
 
@@ -540,7 +557,7 @@ The walkthrough now starts with the promotion pipeline, because its sources arri
 | Q13 | What is one universe, and how do fields cross colony or installation boundaries? | Cross-colony propagation, transport and trust | Any multi-colony deployment |
 | Q14 | How are persisted field states handled across law versions: full replay or carried state? | Replay cost grows with ledger length | Law governance |
 | Q15 | What replay tolerance is acceptable across architectures? | Determinism claims depend on it | Phase B tests |
-| Q16 | Can ledger retention or compaction remove deltas the engine needs for replay? | Snapshot plus tail must cover everything retention removes | Recoverability claim |
+| Q16 | Can ledger retention or compaction remove deltas the engine needs for replay? | Snapshot plus tail must cover everything retention removes | **Resolved by D36 (2026-10-02):** the log is never deleted or compacted, and bodies may be garbage-collected, so everything replay needs lives in the record itself |
 | Q17 | Which measured quantities have baselines for `surprise`? | Surprise is undefined without them | Phase G |
 | Q18 | Should a colony-wide regime field exist, and from what concrete source? | Without a concrete source it becomes a morale signal | None until answered |
 | Q19 | Is dropping agent silence acceptable, with orchestration handling stalled agents? | Confirms the boundary between field and logistics | None |

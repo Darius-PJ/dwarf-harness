@@ -15,7 +15,7 @@
 
 Sources were checked on 2026-09-28. The 2026-09-29 addenda clarify design consequences without refreshing the historical sources or measurements.
 
-**Reconciliation scope:** The 2026-09-29 incorporation is limited to the three owner-authorized idea sections recorded in `DESIGN-CORE-AND-LAUNCHERS.md` §11 and §12. The original is archived as `superceeded-Design.md`; its remaining material is not reconciled. The historical survey relied on skill descriptions of existing JavaScript/port tooling without opening it; this update neither inspects nor changes legacy code or data.
+**Reconciliation scope:** The 2026-09-29 incorporation is limited to the three owner-authorized idea sections recorded in `DESIGN-CORE-AND-LAUNCHERS.md` §11 and §12. The original is archived as `superceeded-Design.md` in the archive folder `../dwarfharness/`, outside this repository; its remaining material is not reconciled. The historical survey relied on skill descriptions of existing JavaScript/port tooling without opening it; this update neither inspects nor changes legacy code or data.
 
 Conventions:
 

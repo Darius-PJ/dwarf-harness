@@ -1,6 +1,6 @@
 # Admissible validation paths: research and proposal for Q4
 
-**Status:** Research and proposal, 2026-10-01; V3 decided and V6 options added 2026-10-02. Answers open question Q4 in `DESIGN-UNDERCURRENT.md`: *what counts as an admissible validation path for failure and repair?* This is not an owner decision, not an approved Field Design and not an implementation report. No code exists yet for any layer of the harness. Proposals are marked as such; findings cite their sources in section 9.
+**Status:** Research and proposal, 2026-10-01; V3 decided and V6 options added 2026-10-02, together with notes on the runner's roadmap placement (section 6) and the cost of materializing fresh subjects on Windows (section 8). Answers open question Q4 in `DESIGN-UNDERCURRENT.md`: *what counts as an admissible validation path for failure and repair?* This is not an owner decision, not an approved Field Design and not an implementation report. No code exists yet for any layer of the harness. Proposals are marked as such; findings cite their sources in section 9.
 
 **Why this question is load-bearing.** Three of Undercurrent's initial field kinds depend on it. `dependency_strain` starts when a failure is established and ends when a repair is established. `affordance` needs a definition of "validated" for promoted work. Graded `interference` needs build and test outcomes, not just textual overlap. If the validation path can be forged, gamed or fooled by noise, those fields become the counterfeit-consequence channel that `FIELD-PHILOSOPHY.md` §8 warns against. If it is too strict or too expensive, the fields stay empty.
 
@@ -351,14 +351,14 @@ The colony is not only a software organization. The Science Corps researcher in 
 
 ## 6. Implications for the core design
 
-This proposal places requirements on the core that its current draft leaves open. They are listed here for the owner's decision; the core document has not been edited.
+This proposal places requirements on the core that its draft left open. They were listed here for the owner's decision. Since 2026-10-02 the core design cites this section for the runner's placement (core §9), and `ROADMAP-CORE.md` builds the runner at C4; the other rows remain proposals.
 
 | Core item | Current state | Implication |
 |---|---|---|
 | §3.5 promotion | "Fast-forward promotion does not itself certify that tests were run or passed"; whether acceptance is required is open | Recommend a promotion gate that runs affected checks on the candidate tree |
 | §3.5 per-action observation | Host derives changed paths and hashes from scratch; untracked files unspecified | The runner materializes subjects from host-computed tree hashes, so untracked scratch state never reaches a validation run |
 | §11.3 acceptance | Host evaluates acceptance; unsupported checks are reported, not passed | Consistent; acceptance rows become pinned checks with lineage |
-| §9 rollout | Recipes and acceptance in phase 4 | A minimal validation runner moves into phase 1, since promotion gating and the field's failure evidence both need it |
+| §9 rollout | Recipes and acceptance in phase 4 | A minimal validation runner moves into phase 1, since promotion gating and the field's failure evidence both need it. `ROADMAP-CORE.md` (2026-10-02) places the runner at step C4, immediately after the agent runtime step (C3) |
 | §10 item 8 | Same-user boundary unresolved | Sets the ceiling on assurance level; A2 requires it to be resolved |
 
 ## 7. What this cannot guarantee
@@ -379,6 +379,8 @@ These limits are the reason the proposal grades evidence rather than accepting o
 | V6 | What minimum assurance level must a source have before Undercurrent shows it to agents? | To be settled by an adversarial test suite; options and a proposed starting configuration in section 4.9.1 |
 | V7 | Is a human-oracle verdict ever reversible, and by whom? | Owner verdicts are the only source for much non-code work |
 | V8 | Should agent-authored checks that reproduce a failure be promoted automatically into the canonical suite when the failure is repaired? | Grows the suite with regression tests, but also grows it with agent-written oracles |
+
+**Materialization cost on Windows (2026-10-02).** On the owner's Windows machine, creating a checkout cost about 2 ms per file (19–21 s for 10,000 files), and the first read of each freshly written file about 23 ms (core Appendix A.7). **[INFERENCE]** Materializing a fresh subject for every run is therefore expensive for large workspaces, which bears on V4 and V5. Whether to exclude the colony's `runs/` directory from scanning is an open owner decision (`DECISIONS.md`, open items).
 
 ## 9. Sources
 

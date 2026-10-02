@@ -1,14 +1,25 @@
 # Routing layer design
 
-**Status:** Draft 0.6, for review; design decisions and proposals, not implementation claims. No router code exists yet.
-**Date:** 2026-10-01 (environmental-layer contract); 2026-09-30 (workspace-model alignment); provider research and worked examples: 2026-09-28
+**Status:** Draft 0.7, for review; design decisions and proposals, not implementation claims. No router code exists yet.
+**Date:** 2026-10-02 (implementation decisions); 2026-10-01 (environmental-layer contract); 2026-09-30 (workspace-model alignment); provider research and worked examples: 2026-09-28
 **Scope:** The component between the harness's agent loop and the model providers. Anthropic and OpenAI first; more providers later.
 **Inputs:** The open-source harness survey (`RESEARCH-OPEN-SOURCE-HARNESSES.md`), the implementation-language research (`RESEARCH-IMPLEMENTATION-LANGUAGE.md`), the core-and-launchers design (`DESIGN-CORE-AND-LAUNCHERS.md`), and the provider-efficiency and router surveys from the same research rounds. Provider facts were re-verified against primary documentation on 2026-09-28 (Appendix B).
-**Reconciliation scope:** The 2026-09-29 incorporation is limited to the three owner-authorized idea sections recorded in `DESIGN-CORE-AND-LAUNCHERS.md` §11 and §12. The original is archived as `superceeded-Design.md`; its remaining material is not reconciled. This update does not inspect legacy code or data.
+**Reconciliation scope:** The 2026-09-29 incorporation is limited to the three owner-authorized idea sections recorded in `DESIGN-CORE-AND-LAUNCHERS.md` §11 and §12. The original, `superceeded-Design.md`, is kept in the archive folder `../dwarfharness/`, outside this repository; its remaining material is not reconciled. This update does not inspect legacy code or data.
 
-**Fresh session:** Start with [the core design's canonical handoff](DESIGN-CORE-AND-LAUNCHERS.md#start-here-for-a-fresh-session) for reading order, authority and continuation scope. This document specifies the proposed router; its context/broker assumptions depend on the still-proposed mechanism in core §7.3–§7.5. It does not approve that mechanism or report an implementation.
+**Fresh session:** Start with [`ROADMAPS.md`](ROADMAPS.md) for the order of work, then [the core design's canonical handoff](DESIGN-CORE-AND-LAUNCHERS.md#start-here-for-a-fresh-session) for reading order, authority and continuation scope. Owner decisions from 2026-10-02 onward are in [`DECISIONS.md`](DECISIONS.md). This document specifies the proposed router. Its context model rests on core §7.3, which the owner adopted on 2026-10-02 (D21); the broker and board mechanisms in core §7.4–§7.5 remain proposals. This document does not approve those proposals or report an implementation.
 
 **Related philosophy and field design:** [`FIELD-PHILOSOPHY.md`](FIELD-PHILOSOPHY.md) explores the owner's universe-wide indirect environmental layer, separate from DMs, Corps boards and Griot stories. [`DESIGN-UNDERCURRENT.md`](DESIGN-UNDERCURRENT.md) is a draft design for that layer, working title Undercurrent. Its fields do not grant permissions, pool private contexts, override budget scopes or authorize provider changes. The router's obligations toward it are limited to writing its measurements to the core action ledger (R11) and hosting its rendered impressions as a tail context module (§5.5). Field sensing and disclosure remain undesigned and unapproved; this link does not adopt a Field Design.
+
+**Changes in 0.7**, from the owner's implementation decisions of 2026-10-02 (`DECISIONS.md`):
+
+- D21 adopts one execution session per agent with many private contexts (core §7.3), so the context-bound router state in §5.1 and §6.4 now rests on an owner decision. The broker in core §7.4 is still a proposal.
+- D22 lets an agent run turns in several of its contexts at once, up to a per-agent limit, with at most one active turn per context (§5.1).
+- D24 accepts that simultaneous turns starting on a cold shared prefix may each pay the cache-write price. A separate shared-prefix cache record is not decided (§9.2; §15 question 9).
+- D25 adds a tail note listing the agent's other active contexts by name only (§5.1).
+- D22 safeguard 4: each call's maximum cost is reserved against every applicable budget scope before the call and settled against reported usage afterwards (§11).
+- D33: the per-call decision record stays a separate JSON-lines file, outside the colony log (§11).
+- D28 keeps cgo out of the core, so the local embedding matcher's encoder can only be a separate helper program (§7.1).
+- The rollout is tracked as steps R0–R5 in `ROADMAP-ROUTER.md` (§14).
 
 **Changes in 0.6**, from the environmental-layer design discussion of 2026-10-01:
 
@@ -151,13 +162,17 @@ The router remains a library inside the Go core. Under the proposed colony-scope
 
 Advanced users who want LiteLLM's multi-deployment balancing can point an adapter at a LiteLLM proxy, with LiteLLM's auto-router disabled so that two routers don't make conflicting decisions. [INFERENCE]
 
-**Execution and context ownership (2026-09-29 proposal).** A launcher is a view, not an agent or a second execution owner. The proposed model gives every agent one execution session, including Orchestrators and the Grand roles. A session owns lifecycle, scheduling, turns and an audit trail; it is not one continuously pooled provider conversation. Terminal and native GUI commands address that same execution, with a cursor per view (`DESIGN-CORE-AND-LAUNCHERS.md` §4 and §7.3). [INFERENCE]
+**Execution and context ownership (2026-09-29 proposal, adopted 2026-10-02 as D21).** A launcher is a view, not an agent or a second execution owner. The model gives every agent one execution session, including Orchestrators and the Grand roles. A session owns lifecycle, scheduling, turns and an audit trail; it is not one continuously pooled provider conversation. Terminal and native GUI commands address that same execution, with a cursor per view (`DESIGN-CORE-AND-LAUNCHERS.md` §4 and §7.3). [INFERENCE: the session and view mechanics beyond D21]
 
 Private state is addressed by `(agent_id, context_id)` within a colony. General work, a directed peer relationship and participation in a Corps board are separate contexts, each with its own memory/handoff, rendered history, compaction, routing decisions and provider/cache state. A's memory about B is not B's memory about A. One session may hold many dormant contexts without a permanent process or model call for each. Common `Agent.md` and shareable general `Memory.md` must not silently pool private relationship details. The audit trail across the whole session is not fed back wholesale to the provider. [INFERENCE]
 
 The owner-defined Grand/Corps roles and allowed communication paths live in `DESIGN-CORE-AND-LAUNCHERS.md` §7.1 and §7.2; the same context mechanism applies to all roles. A private observation about another worker, learned from the Corps board, does not authorize a worker-to-worker DM. A leadership title does not grant access to subordinate private contexts. Authorized pairwise or board logs supply shared exchanges; only the active context's private records and explicitly authorized shared materials supply its prompt (`DESIGN-CORE-AND-LAUNCHERS.md` §7.3 and §7.5). [INFERENCE: context/rendering mechanism]
 
-Bind each routing decision to colony, agent, execution session, context and turn. `Needs`, `Plan`, pending changes, overrides, provider response IDs, tool continuations and cache ledgers cannot follow the last-used context when the same agent addresses another counterpart. Returning to a dormant context restores only its own state. View focus does not select or mutate an active model turn. The default is one active turn per agent; waiting for a social reply pauses/yields rather than opening a recursively blocking agent-call chain. [INFERENCE]
+Bind each routing decision to colony, agent, execution session, context and turn. `Needs`, `Plan`, pending changes, overrides, provider response IDs, tool continuations and cache ledgers cannot follow the last-used context when the same agent addresses another counterpart. Returning to a dormant context restores only its own state. View focus does not select or mutate an active model turn. [INFERENCE]
+
+An agent may run turns in several of its contexts at once, up to a per-agent limit that is a setting, with at most one active turn per context (D22 in `DECISIONS.md`; a limit of 1 gives one turn at a time). Each such turn has its own binding, and its routing state never crosses into another context's concurrent turn. Waiting for a social reply still pauses/yields that context's turn rather than opening a recursively blocking agent-call chain. [INFERENCE: the yield rule]
+
+Each turn's tail lists the agent's other active contexts by counterpart name or task title only, never their content (D25). The list sits after the cached prefix (R3) and costs roughly 10–30 tokens per active context [INFERENCE]. Until the context-module interface (§6.5) is frozen, the runtime renders it as a fixed tail section; afterwards it becomes a context module (`ROADMAP-ROUTER.md` R1).
 
 Changing a message counterpart is a context transition, not just changing a destination field: pause/yield or finish the old turn, then compose in a freshly rendered turn bound to the destination relationship or board context. A send must match that context's authorized channel and operation. For example, a worker moving from its Orchestrator to its Diplomat cannot continue from the Orchestrator prompt, tool results or provider response ID; only explicitly shareable material may be carried over. [INFERENCE]
 
@@ -418,7 +433,7 @@ interface ProviderAdapter {
 | 1. Continuation | Tool-loop calls reuse the bound turn's decision; short follow-ups inherit only the selected context's last `Needs` | 0 | Negligible | None | On |
 | 2. Rules | Signals → partial `Needs` | 0 | Negligible | None | On |
 | 3. Heuristic scorer | Difficulty and confidence | 0 | Target: sub-millisecond, as LiteLLM documents for its scorer | None | On |
-| 4. Local embedding matcher | Kind or domain | 0 | Not measured | Encoder download and memory. A lazy helper remains preferred for isolation and no running helper when the stage is off; an in-process cgo integration is no longer excluded (`DESIGN-CORE-AND-LAUNCHERS.md` §8.1) | Off |
+| 4. Local embedding matcher | Kind or domain | 0 | Not measured | Encoder download and memory. A lazy helper remains preferred for isolation and no running helper when the stage is off; the core never uses cgo (D28), so a native encoder can run only as a separate helper program (D29) | Off |
 | 5. LLM classifier | Full `Needs` via structured output | Classifier prompt and output | One round trip, bounded by a timeout | Network | Off; value-gated (§7.6) |
 | Plugins | Anything; may abstain | Declared | Declared | Declared | Off |
 
@@ -629,6 +644,8 @@ Every request renders one selected context as an ordered list of segments: tools
 - **Minimum cacheable length.** Below it nothing is cached, and no error is returned. It's 512 tokens on current Anthropic flagships, 4,096 on Claude Haiku 4.5, and 1,024 on OpenAI GPT-5.6 and later. The planner prices such segments as uncached input, not writes. A short system prompt and tool set may not be cacheable on some models until the history grows. [INFERENCE]
 - **Retention.** Each context keeps its ledger across model/provider changes and while dormant. Returning to that context within the TTL may retain a warm cache, subject to its fingerprints and observed hit rate (T6); another context's activity does not refresh its local timestamps. [INFERENCE]
 
+**Simultaneous turns on a cold shared prefix (D24).** When several of one agent's turns start together while the shared prefix (tools and system instructions) is cold, each may pay the cache-write price. The owner accepted this: there are no staggered starts and no pre-warm requests. Because entries live inside each `ContextRouteState`, the planner can also predict as cold a shared prefix that the agent's other contexts keep warm, and so overprice a write it does not then pay [INFERENCE]. A separate shared-prefix record that would correct this is not decided (§15 question 9). `DECISIONS.md` D24 records the estimated cost of a collision.
+
 ### 9.3 Change impact
 
 `adapter.impact(model, change)` returns which segments a change invalidates, using the capability file (Appendix B). Changes that invalidate nothing apply immediately.
@@ -773,7 +790,7 @@ Failure counters, correction history, escalation ceilings and pinned overrides b
 
 ## 11. Observability and accounting
 
-**Decision record**, one per call, written locally as JSONL:
+**Decision record**, one per call, written locally as JSONL. It stays a separate file, outside the colony log (D33); the router's measurements reach the colony log as R11 events (§5.4). Each record holds:
 
 - colony, agent, execution session, context, turn and call index; origin;
 - the cause chain, e.g. `continuation`, or `rule:multi-file-change` followed by `heuristic`;
@@ -800,7 +817,7 @@ savings = cost(baseline) − cost(actual) − cost(router overhead)
 
 **Health check.** A persistent gap between predicted and observed cache hits points to stale capability data or a rendering bug (R2).
 
-**Local spend and budgets.** The harness attributes reported usage × capability-file prices to each agent/context/turn, and rolls totals up separately by execution session, agent, provider/account, day and month. Context isolation is not a new budget boundary: budgets must explicitly name an agent or provider/account scope. An agent cap continues across its contexts; an account cap covers every agent using that account. The router warns at `warn_at` (80% by default) and blocks further calls only within an exhausted budget's scope, then offers choices that still obey every applicable cap (§9.8). It does not mark a shared provider account exhausted solely because one agent's cap was reached. The provider's own records stay authoritative; the local count is an early warning that works with ordinary API keys. [INFERENCE: accounting scopes]
+**Local spend and budgets.** The harness attributes reported usage × capability-file prices to each agent/context/turn, and rolls totals up separately by execution session, agent, provider/account, day and month. Context isolation is not a new budget boundary: budgets must explicitly name an agent or provider/account scope. An agent cap continues across its contexts; an account cap covers every agent using that account. Before each call, its maximum cost is reserved against every applicable budget scope; afterwards the reservation is settled against reported usage (D22 safeguard 4). An agent's simultaneous turns therefore cannot together spend past a cap that each would respect alone. Reservations and settlements are colony-log events (D33). The router warns at `warn_at` (80% by default) and blocks further calls only within an exhausted budget's scope, then offers choices that still obey every applicable cap (§9.8). It does not mark a shared provider account exhausted solely because one agent's cap was reached. The provider's own records stay authoritative; the local count is an early warning that works with ordinary API keys. [INFERENCE: accounting scopes]
 
 ## 12. Extension model
 
@@ -906,7 +923,9 @@ The following is proposed evaluation work, not executed verification of a router
 
 ## 14. Rollout (proposed)
 
-These are conditional implementation stages, not completed milestones or approval of the core's proposed session/context/broker arrangement. §12 describes the intended end-state proposal; each stage still needs the applicable §13 gates and core prerequisites.
+These are conditional implementation stages, not completed milestones or approval of the core's proposed broker arrangement; the session/context model they assume is adopted (D21). §12 describes the intended end-state proposal; each stage still needs the applicable §13 gates and core prerequisites.
+
+`ROADMAP-ROUTER.md` tracks these phases as steps R0–R5: R0 is phase 0, R1 is phase 1, and so on to R5, phase 5. R0 waits for the core's agent runtime (core roadmap step C3); each later step waits for the one before. The roadmap adds each step's dependencies, decided items, open questions and status; the exit criteria below remain the steps' exit criteria.
 
 | Phase | Enables | Exit criterion |
 |---|---|---|
@@ -955,11 +974,12 @@ Automatic provider switching isn't planned for v1. If it's added later, it reuse
 1. Should `balanced` be the default profile for regular users?
 2. May the optional LLM classifier send prompts to a different provider from the main model?
 3. Which providers should the harness offer when the active one stops serving, and should local budgets ship with default values?
-4. Whether and how to reconcile the remaining material in `superceeded-Design.md`, beyond the three owner-authorized idea sections already incorporated in `DESIGN-CORE-AND-LAUNCHERS.md` §11 and §12.
+4. Whether and how to reconcile the remaining material in `superceeded-Design.md`, kept in the archive folder `../dwarfharness/`, outside this repository, beyond the three owner-authorized idea sections already incorporated in `DESIGN-CORE-AND-LAUNCHERS.md` §11 and §12.
 5. How should the owner-facing flow resolve a required floor above the budget ceiling? No valid `Plan` means no model dispatch; task revision, an explicit budget change or stopping must not be silently chosen. The blocked-result API shape remains to be designed (§5.3 and §8.2).
 6. What bounded-compaction or owner-approved reduction mechanism handles a history that cannot fit the target while the source is unavailable? A full-history target summary is not a valid fallback in that case (§9.8).
 7. What headroom buckets should adapters use for R11 samples, and should the bucket boundaries live in router configuration or be versioned with the environmental layer's law files (`DESIGN-UNDERCURRENT.md` Q28)?
 8. Which disclosure scope applies to usage attribution in the ledger? Attribution is needed to build consumer-to-resource edges, but who may perceive it is an unresolved field-layer decision (`DESIGN-UNDERCURRENT.md` Q5).
+9. Should the cache ledger keep one record for the shared prefix (tools plus system instructions), keyed by provider, model, cache-isolation scope and prefix hash, separate from the per-context records? Under D22 several of an agent's contexts may keep that prefix warm, and §9.2 would otherwise predict it as cold. The record would hold prefix segments only, never history, so §9.2's rule against claiming a hit from another context's ledger still applies to history [INFERENCE]. D24 left this undecided; it is open in `ROADMAP-ROUTER.md` step R0.
 
 ## Appendix A — Worked examples
 
