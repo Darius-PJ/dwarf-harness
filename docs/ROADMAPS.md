@@ -120,7 +120,7 @@ Notes on the edges:
 
 | Step | Title | Waits for | Status |
 |---|---|---|---|
-| C0 | Repository, toolchain, check command, decision log | Owner: GitHub name and package layout. The repository and `docs/` were created on 2026-10-02 | Waiting |
+| C0 | Repository, toolchain, check command, decision log | Nothing; every owner input has arrived (D43–D46) | Ready |
 | C1 | Action ledger and body store | C0 | Waiting |
 | C2 | Workspaces, observation, promotion, temporary scratch | C1 | Waiting |
 | C3 | Agent runtime | C2; owner: private remote with CI (D42) | Waiting |
@@ -179,7 +179,7 @@ These rules implement D41 and D42; `CLAUDE.md` in the repository repeats them.
 
 1. **Assignment.** The owner assigns one agent per step, or per part of a step where the roadmap splits it.
 2. **Isolation.** Each agent works in its own git worktree and branch.
-3. **Integration.** Rebase onto `main`, run `go run ./tools/check`, then fast-forward `main`. `main` only moves forward.
+3. **Integration.** Commit on your own branch whenever the tests you touched pass. Before `main` moves: rebase onto `main`, run `go run ./tools/check`, then fast-forward `main` (D46). `main` only moves forward.
 4. **Owner sign-off first** for changes that touch a frozen contract, an owner decision or a new dependency.
 5. **When blocked,** stop at the step's stop point, set its status to *Blocked* with the reason here and in the roadmap, and report. Never write a stub, placeholder or fake of what the step waits for. Tests may use stand-in data only against a frozen contract.
 6. **Decisions.** A build decision that revises a [PROPOSAL] or [INFERENCE] gets a B entry in `DECISIONS.md`. Anything a document marks as awaiting the owner goes back to the owner.

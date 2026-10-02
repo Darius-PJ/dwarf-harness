@@ -61,12 +61,12 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 **Delivers.**
 
-- `go.mod` with `go 1.27` and the future GitHub path as its module path (D28, D30). Its `tool` lines pin staticcheck 2026.2.1 and govulncheck (D42).
-- The package layout, once the owner decides it.
-- The import-boundary test, which walks package imports and fails on any edge outside D29's per-layer allowlist.
+- `go.mod` with module path `github.com/Darius-PJ/dwarf-harness` (D43), `go 1.27` and `toolchain go1.27.1` (D28, D45). Its `tool` lines pin staticcheck 2026.2.1 and govulncheck (D42).
+- The package layout in D45: `cmd/dwarf-harness/`, `contract/{ledger,launcher,module,law}/`, `internal/{core,router,undercurrent}/`, `tools/check/`, `docs/`. C0 creates the directories that have content at C0 (`cmd/dwarf-harness`, `tools/check`); every other package is created by the step that owns it (D41: no placeholders). The nested `gui/` module and `go.work` arrive with the GUI roadmap (D44).
+- The import-boundary test, which runs `go list -deps` for every package and fails on any import outside D45's table.
 - `tools/check`, run as `go run ./tools/check` (D42): gofmt, `go vet`, staticcheck and govulncheck; the import-boundary test; tests with `CGO_ENABLED=0`; the tests again with `-race`, with `CC` set explicitly to the pinned compiler (D28); Linux and macOS builds with `CGO_ENABLED=0`.
 - Test conventions (D42): `testing/synctest`, Go's native fuzzing, rapid v1.3.0 as a test-only dependency, and golden samples for contracts. D42 records staticcheck, govulncheck and rapid under D29.
-- `CLAUDE.md`, written following `skill://writing-for-agents`. It holds the reading order from `ROADMAPS.md`; the working rules in `ROADMAPS.md` (D41, D42); the working principles at the top of this roadmap; D29's rule on when to write code ourselves and when to use a recorded library; and D31's commit rules (Conventional Commits with the package as the scope; Claude Code commits when the check passes and never pushes without the owner).
+- `CLAUDE.md`, written following `skill://writing-for-agents`. It holds the reading order from `ROADMAPS.md`; the working rules in `ROADMAPS.md` (D41, D42, D46); the working principles at the top of this roadmap; D45's layout and import table; D29's rule on when to write code ourselves and when to use a recorded library; and the commit rules (Conventional Commits with the package as the scope; commit on your own branch when the tests you touched pass; the full check passes before `main` moves; never push without the owner).
 - The toolchain on the owner's machine (D28): go1.27.1 from the official installer, and llvm-mingw 20260922 (clang 23.1.2, UCRT, x86_64 host), pinned and installed outside `PATH`.
 - Already in place since 2026-10-02: the repository, `docs/` with the design documents and `DECISIONS.md` (D30, D31), and `.gitattributes` (B1).
 
@@ -74,12 +74,12 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 |---|---|
 | Decision record | A short dated entry: the question, the decision, who made it (owner or build) and the documents it changes. Owner decisions are numbered D19 onward and build decisions B1 onward; a build decision may revise anything marked **[PROPOSAL]** or **[INFERENCE]** (`DECISIONS.md`) |
 | Layer boundary | A package that may not import another; for example `undercurrent/...` may not import the router, broker or launchers (Undercurrent §13.1) |
-| Import allowlist | What each layer may import (D29). Undercurrent packages: the standard library only. Core and router packages: the standard library, `golang.org/x/*` and recorded exceptions. GUI packages: the chosen toolkit. Separate helper programs may use cgo. Contract packages use the standard library only (D40) |
-| Check command | `go run ./tools/check`. It gates fast-forwarding `main` (D42) |
+| Import allowlist | D45's table: what each package tree may import besides the standard library. `contract/...` nothing else; `internal/undercurrent/...` only `contract/...`; the router and core add `golang.org/x/...` and recorded exceptions; `gui/...` never imports `internal/...` |
+| Check command | `go run ./tools/check`. It gates fast-forwarding `main` (D42, D46); agents commit on their own branches when the tests they touched pass |
 
-**Waits for.** The owner: the GitHub account or organisation name, and the package and module layout (`DECISIONS.md`, open items). The repository and `docs/` were created on 2026-10-02.
+**Waits for.** Nothing. Every owner input has arrived (D43–D46); the repository and `docs/` were created on 2026-10-02.
 
-**Stop point.** Until both owner items arrive, the toolchain can be installed and verified (D28) and `CLAUDE.md` drafted. No `go.mod` is written with a stand-in module path, and no package is created ahead of the layout decision (D41: no stubs or placeholders).
+**Stop point.** None before the exit criterion. Dependencies beyond the standard library and the pinned tools wait for a D29 record before reaching `main` (D41).
 
 **Unblocks.** C1.
 
@@ -92,9 +92,12 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 | C compiler: llvm-mingw 20260922 outside `PATH`, reached through `CC` only for race-detector test builds and the GUI build. Not TDM-GCC or Microsoft's compiler | D28; core Appendix A.9 |
 | Import boundaries are enforced by the import-boundary test, against the per-layer allowlist | D29 |
 | Dependency tiers and records; vendoring when there is a reason; copied code only in `third_party/<name>/` | D29 |
-| Repository: `dwarf-harness` in its own folder, with `docs/` as the only living copy of the design documents; no remote yet; the module path is the future GitHub path | D30 |
+| Repository: `dwarf-harness` in its own folder, with `docs/` as the only living copy of the design documents; module path `github.com/Darius-PJ/dwarf-harness`; no remote yet | D30, D43 |
+| A nested `gui/` module, created with the GUI roadmap; a committed `go.work`; the GUI module also tested with `GOWORK=off` | D44 |
+| The package layout and the import table the check enforces | D45 |
+| The full check passes before `main` moves; agents commit on their branches when the tests they touched pass | D46 |
 | The check's contents; tools pinned with `tool` lines; test tooling, with rapid in place of the earlier `testing/quick` suggestion | D42 |
-| The decision log with its numbering and amendment rules; commit rules | D31 |
+| The decision log with its numbering and amendment rules; commit rules, as amended by D46 | D31, D46 |
 | One agent per step, each in its own worktree and branch; rebase, check, fast-forward `main`; owner sign-off for changes that touch a frozen contract, an owner decision or a new dependency | D41 |
 | Line endings: `* text=auto eol=lf` | B1 |
 | Windows first; the check also builds for Linux and macOS | D27, D42 |
@@ -103,16 +106,13 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 | Question | Notes |
 |---|---|
-| Module path | Owner: the GitHub account or organisation name (D30) |
-| Package and module layout | Owner; the next walkthrough topic. It depends on D39, for example whether the GUI is a separate Go module. The earlier roadmap suggested a top level of `core/` (ledger, workspace, validation, broker later), `router/`, `undercurrent/` (law, graph, engine, perceive, render, sim) and `cmd/dwarf-harness/` [PROPOSAL] |
 | How the check finds the compiler | D28 keeps llvm-mingw off `PATH`, and the check sets `CC` explicitly. Where the check learns the compiler's location is not decided |
 | Race-detector compiler in Linux and macOS CI | D28 names only the Windows compiler. Go's race detector needs an installed C compiler on systems other than macOS (core Appendix A.9). Which compiler the Linux runner uses for `-race`, and whether the macOS runner needs one |
 | govulncheck without a network | [INFERENCE] govulncheck reads the Go vulnerability database over the network. Whether the check may need a network, or uses a local copy of the database |
-| Commit gate | D31 says Claude Code commits when the check passes; D42 says the check gates fast-forwarding `main`, not every commit. `CLAUDE.md` needs one rule. Owner |
 
 **Exit criterion.** The module builds with `CGO_ENABLED=0`. `go run ./tools/check` passes on Windows, including the `-race` tests. The import-boundary test exists, passes, and fails on a planted forbidden import. `CLAUDE.md` is present. `DECISIONS.md` contains every decision in §1, which has been true since 2026-10-02.
 
-**Status.** Waiting.
+**Status.** Ready.
 
 ### C1. Action ledger and body store
 
@@ -636,7 +636,7 @@ Details are in each step. "Owner" marks items awaiting the owner.
 
 | Step | Open questions |
 |---|---|
-| C0 | Owner: the GitHub name (module path); the package and module layout; one commit-gate rule for D31 and D42. Also: how the check finds the compiler; the race-detector compiler in Linux and macOS CI; govulncheck without a network |
+| C0 | How the check finds the compiler; the race-detector compiler in Linux and macOS CI; govulncheck without a network |
 | C1 | Segment size and rotation; flush semantics per OS; lock mechanism per OS; body garbage-collection policy; index rebuild budget and snapshot trigger; write throughput target (measure); event catalogue v1; view cursors and streamed deltas (with C7) |
 | C2 | Owner: Defender exclusion for `scratch/`. Also: canonical ref identity and protection (core §10 item 8); observation mechanism; promotion authority; the human's participation; scratch retention and garbage collection; per-workspace setup (V4); pool size; line endings in the agents' repositories (B1); the emitter of the post-promotion interference check |
 | C3 | Default per-agent limit; turn starts beyond the limit; default tool set; approval defaults; keychain or environment only; simultaneous turns in the terminal; the static configuration; private-context file layout (core §10 item 3); budget defaults (routing open question 3); the D25 note as a module; entries for new dependencies |

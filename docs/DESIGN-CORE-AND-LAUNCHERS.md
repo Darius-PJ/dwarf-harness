@@ -94,6 +94,7 @@ Conventions:
 | D27 | Windows first; portable to macOS and Linux | §8 |
 | D28 | Toolchain and cgo | §1, §6.3, §8.1, §8.5 |
 | D29 | Dependency policy | §8.1, §8.2 |
+| D43–D46 | Module path; a nested `gui/` module; package layout and import rules; the full check passes before `main` moves | §8.2; Start here |
 | D30, D31, D41 | Repository; decision log and working rules; several agents in one repository | Start here |
 | D32 | `Agent.md` spelling | Throughout; §3.5 |
 | D33–D38 | What the colony log holds; ledger storage; record format; integrity and retention; IDs and time; where colony data lives | §1, §3.2, §3.5, §4.1, §7.4, §8.2, §8.6, §10 |
@@ -511,6 +512,8 @@ Go remains the core language: go1.27.1, installed permanently with the official 
 ### 8.2 Dependencies
 
 **Policy (D29):** the standard library is free; a `golang.org/x/*` module needs a decision-log entry; any other module needs a record of its function, licence, the modules it brings in, change in binary size, maintenance status, minimum Go version and how it would be removed. Test-only and tool-only dependencies (go.mod `tool` lines) need the same record but ship in no program. An import-boundary test enforces an allowlist per layer: Undercurrent packages use the standard library only; core and router packages add `golang.org/x/*` and recorded exceptions; GUI packages use the recorded toolkit; separate helper programs may use cgo, and the core never does. Write code ourselves only when the needed part is small, fully specified and fully testable; use a recorded library for anything security-sensitive, anything that differs across operating systems, and protocols or formats with many edge cases; never write our own cryptography. Vendoring needs a reason, and copied code lives only in `third_party/<name>/` with its licence, source and record.
+
+**Layout and import rules (D44, D45):** the root module `github.com/Darius-PJ/dwarf-harness` (D43) holds `cmd/dwarf-harness/`, `contract/` (the five D40 contracts, standard library only), `internal/{core,router,undercurrent}/` and `tools/check/`. The GUI is a nested module at `gui/`, so its toolkit and cgo never enter the root module; it may import only `contract/...`. The import table in D45 is the allowlist the import-boundary test enforces: `contract` imports nothing else; Undercurrent imports only `contract`; the router and the core add `golang.org/x/...` and recorded exceptions; the dependency direction is one way, `cmd` → core → router and Undercurrent → `contract`. Go's `internal` rule checks import paths, so the test, not the compiler, keeps the GUI module out of `internal/...`.
 
 Every dependency also states its token implications and device/build cost. Rows that cite a decision are decided; the others are researched candidates, not an installed lockfile, and need their D29 entry or record before use.
 

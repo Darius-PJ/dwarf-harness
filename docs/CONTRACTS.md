@@ -4,7 +4,7 @@
 
 ## What a contract is
 
-- A Go package that uses only the standard library. Its location follows the package layout decision (open; see `DECISIONS.md`).
+- A Go package that uses only the standard library, under `contract/` in the root module (D45): `contract/ledger` holds `ledger-format` and `ledger-reader`, `contract/launcher` holds `launcher-protocol`, `contract/module` holds `context-module`, and `contract/law` holds `law-format`. Golden samples live in `contract/<name>/testdata/`.
 - Golden sample files for every version of every record or message type it defines. Tests check the package against them, so a change made without a decision entry fails the check.
 - An entry in the register below.
 
