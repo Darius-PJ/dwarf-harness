@@ -22,7 +22,7 @@ The earlier single roadmap's step 6, "Router phases 0 and 1", is now R0 and R1. 
 | Decision | What it means for the router | Source |
 |---|---|---|
 | D4: no automatic provider switching in v1; user-chosen changes work; provider betas stay behind flags, off by default | No step adds automatic switching. R1 makes the user-chosen change safe (routing §9.8). Every control that needs a beta, such as per-message effort or OpenAI Flex, stays off until its flag is turned on | Core §2; routing §9.8 |
-| D22 safeguard 4: before a call, its maximum cost is reserved against every applicable budget scope; afterwards the reservation is settled against reported usage | C3 builds reserve-and-settle. R1 adds threshold crossings and scoped status as R11 events. Every later step's calls go through the same reservation | `DECISIONS.md` D22; routing §11 |
+| D22 safeguard 4: before a call, its maximum cost is reserved against every applicable budget scope; afterwards the reservation is settled against reported usage | C3 owns the budget service: scopes, reservations and settlements. R1 builds on it, adding prices from the capability file, threshold crossings and scoped status as R11 events. Every later step's calls go through the same reservation | `DECISIONS.md` D22; routing §11 |
 | D24: simultaneous turns on a cold shared prefix may each pay the cache-write price; no staggered starts, no pre-warm requests | No step schedules a pre-warm request or delays a turn start to save a cache write. A separate shared-prefix cache record is not decided (R0) | `DECISIONS.md` D24; routing §9.2, §15 question 9 |
 | D25: the prompt tail lists the agent's other active contexts by counterpart name or task title only | C3 renders the note as a fixed tail section. R1 turns it into a context module once `context-module` is frozen | `DECISIONS.md` D25; routing §5.1; `CONTRACTS.md` |
 | D33: the router's per-call decision record stays a separate JSON-lines file | R0 writes the decision record as its own file. Router measurements (R11) and budget reservations and settlements go to the colony log | `DECISIONS.md` D33; routing §11 |
@@ -42,7 +42,7 @@ Each step follows the format in `ROADMAPS.md`. Each waits for the step before it
 **Delivers.**
 
 - The router interface (routing §5.3) running in shadow inside the core: `beginTurn`, `compile` and `observe` run for every bound turn and call, but the runtime still sends C3's static configuration.
-- One `ContextRouteState` per `(agent_id, context_id)` (routing §6.4), each with its own shadow cache ledger: prediction, and correction from reported usage (routing §9.2); the cost model (routing §9.4).
+- One `ContextRouteState` per `(agent_id, context_id)` (routing §6.4), kept in the named subdirectory the core assigns under `contexts/<id>/` (C3), each with its own shadow cache ledger: prediction, and correction from reported usage (routing §9.2); the cost model (routing §9.4).
 - The default classifier stages proposed in routing §12 (commands, continuation, rules and the heuristic scorer; routing §7.1–§7.5) and the policy's `Plan` (routing §8), logged and never applied.
 - The versioned capability file, seeded from routing Appendix B with each value's source and verification date.
 - The per-call decision record as a separate JSON-lines file (routing §11; D33).
@@ -70,6 +70,7 @@ Each step follows the format in `ROADMAPS.md`. Each waits for the step before it
 - Cache-write double payments accepted; no staggered starts or pre-warm requests (D24).
 - The decision record stays a separate JSON-lines file (D33).
 - Shadow mode changes no provider and no setting (D4; routing §14).
+- The router's `ProviderAdapter` (routing §6.5) wraps C3's hand-written adapters, which expose from the start the canonical transcript records, raw usage with cache tokens and service tier, rate-limit headers, classified errors and opaque provider artifacts that routing §6.5, R5 and R10 require; R0 never re-implements them (`ROADMAP-CORE.md` C3).
 
 **Open questions.**
 
@@ -77,9 +78,8 @@ Each step follows the format in `ROADMAPS.md`. Each waits for the step before it
 |---|---|
 | The shared-prefix cache record (routing §15 question 9) | Awaiting the owner; D24 left it undecided, and `DECISIONS.md` lists it as an open item. The proposal is one record for the tools-plus-system prefix, keyed by provider, model, cache-isolation scope and prefix hash, kept separate from the per-context records. Under D22 several of an agent's contexts keep that prefix warm, and routing §9.2's per-context entries would otherwise predict it as cold and overprice a write the call does not pay. The record would hold prefix segments only, never history, so routing §9.2's rule against claiming a hit from another context's ledger still holds for history [INFERENCE]. Its answer also decides how R3 prices the prefix |
 | Whether R0 emits R11 events in shadow | Routing §14 allows it [INFERENCE]. Requires the router event types in a frozen `ledger-format` |
-| How the router's `ProviderAdapter` (routing §6.5) relates to C3's hand-written adapters | Neither design says whether the router extends C3's adapters or wraps them; answer before writing `compile` and `usage` [INFERENCE] |
 
-**Exit criterion.** Routing §14 phase 0: context-switch isolation holds; cache predictions are calibrated per context; classifier agreement is measured on the labelled subset. Under routing §13's gate, context and turn isolation and authorization must hold before any routing stage ships.
+**Exit criterion.** Routing §14 phase 0, gated on the context kinds C3 delivers: context-switch isolation holds between an agent's general and task contexts and between agents; cache predictions are calibrated per context on live calls; classifier agreement is measured on the labelled replay subset. The full routing §13 drill, a worker switching among its Orchestrator, Diplomat and Corps-board contexts and worker-to-worker rejection, needs the relationship and board contexts and the role graph, so it runs as a C6 integration gate; R1 does not wait for it. Under routing §13's gate, context and turn isolation and authorization must hold before any routing stage ships: R0's partition covers the context kinds that exist at R0, and C6's the rest.
 
 **Status.** Waiting (C3).
 
@@ -93,7 +93,7 @@ Each step follows the format in `ROADMAPS.md`. Each waits for the step before it
 - Tail context modules (routing R3, §6.5), and the `context-module` contract: a standard-library-only Go package with golden samples (D40). R1 owns the contract and requests its freeze from the owner.
 - The D25 note as a context module, replacing the fixed tail section C3 renders (`CONTRACTS.md`).
 - The `ProviderStatus` registry at its true scope (routing §6.4), and user-chosen provider changes with the handover, notice and recovery rules of routing §9.8, R9 and R10.
-- Budgets that build on C3's reserve-and-settle (D22 safeguard 4): `warn_at` threshold crossings, blocking only within an exhausted budget's scope, and scoped status (routing §11).
+- Budgets that build on C3's budget service (D22 safeguard 4): prices from the capability file, `warn_at` threshold crossings, blocking only within an exhausted budget's scope, and scoped status (routing §11).
 - R11 events written at observation: status transitions, headroom samples when the bucket changes, budget threshold crossings, and usage attribution per bound context and provider account (routing §5.4).
 
 | Definition | Meaning |
@@ -104,7 +104,7 @@ Each step follows the format in `ROADMAPS.md`. Each waits for the step before it
 | Budget reservation | A call's maximum cost held against every applicable budget scope until the call's reported usage settles it (D22 safeguard 4) |
 | Tail context module | Volatile content placed after the cached prefix with a declared token cost (routing R3, §6.5) |
 
-**Waits for.** R0. Under D40 it builds against `ledger-format` and `ledger-reader` only once they are frozen (`CONTRACTS.md` lists R1 as a consumer of both), and against `law-format` too if headroom buckets are versioned with the law (open question below).
+**Waits for.** R0. Under D40 it builds against `ledger-format` and `ledger-reader` only once they are frozen (`CONTRACTS.md` lists R1 as a consumer of both), and against `law-format` too if headroom buckets are versioned with the law (open question below). The routing §13 role drill runs as a C6 integration gate; R1 does not wait for it.
 
 **Stop point.** If the R11 event types are not in a frozen `ledger-format`, finish everything except the R11 emission, then stop and set the status to *Blocked*. If the bucket question places buckets in law files and `law-format` (U1) is not frozen, stop before headroom sampling. Waiting for the owner to freeze `context-module` does not stop the rest of R1, but U6 cannot start until it is frozen.
 

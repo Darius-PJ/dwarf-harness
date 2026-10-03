@@ -21,7 +21,7 @@
 | Core | `ROADMAP-CORE.md` | C0–C10 | Repository and check command; ledger; workspaces; the agent runtime; validation; check governance; broker, colony host and launchers; later Corps and recipes; the isolation track |
 | Router | `ROADMAP-ROUTER.md` | R0–R5 | Routing §14 phases 0–5 |
 | Undercurrent | `ROADMAP-UNDERCURRENT.md` | U1–U10 | The field layer, from the standalone engine to the usefulness evaluation |
-| GUI | Not yet written | — | Follows native toolkit selection (core §10 item 1) |
+| GUI | Not yet written | — | Follows native toolkit selection (core §10 item 1); owns C9's GUI gate |
 
 ## Step format
 
@@ -55,6 +55,9 @@ flowchart TD
     C3 --> C7[C7 Colony host, local IPC, launcher protocol]
     C6 --> C8[C8 Corps, clones, birth, Griot]
     C4 --> C9[C9 Recipes, workflows, skills]
+    C5 --> C9
+    C6 --> C9
+    C5 -.->|Corps-authority gate| C6
     C2 --> C10[C10 Isolation boundary, A2]
   end
   subgraph Router
@@ -80,18 +83,22 @@ flowchart TD
   C5 --> U4
   U1 --> U4
   U3 --> U4
+  U3 --> U5
   R1 --> U5
   U1 --> U5
   C4 -.->|runner queue node| U5
   U4 --> U6
   U5 --> U6
   R1 --> U6
-  U2 --> U7
+  U2 -.->|stages for the released kinds| U7
   U6 --> U7
   R1 --> U7
   C10 -.->|only if the V6 floor needs A2| U7
-  C3 -.->|validation part| U2
-  C4 -.->|validation part| U2
+  C3 -.->|A1 suite| U2
+  C4 -.->|A1 suite| U2
+  C5 -.->|governance cases| U2
+  C6 -.->|governance cases| U2
+  C10 -.->|A2 measurements| U2
   U7 --> U8
   C6 --> U8
   U7 --> U9
@@ -102,16 +109,13 @@ flowchart TD
 Notes on the edges:
 
 - **D20 limits early Undercurrent work.** U1 may start once C1's contracts are frozen, and the field-level part of U2 once U1 is done. Nothing else in Undercurrent starts before its listed dependencies are done.
-- **Dotted edges are partial or conditional.** U2's validation-level cases need real agents and the runner (C3, C4); U2 stops there until both are done. U5's resource node for the validation-runner queue needs C4's queue events; the rest of U5 does not.
+- **Dotted edges are partial or conditional.** U2's validation-level cases are staged by capability: the A1 suite needs real agents and the runner (C3, C4); the governance cases need the registry and Corps membership (C5, C6); the A2 measurements need the boundary (C10); no step delivers A3, so A3 rates are reported as not measured. U7 waits only for the U2 stages that cover the kinds it releases, and its gate report names the assurance levels not measured. C6's Corps-authority gate needs C5's retirement flow; the rest of C6 does not. U5's resource node for the validation-runner queue needs C4's queue events; the rest of U5 does not.
 - **C10 and affordance.** Under the V6 starting configuration, affordance requires assurance A2 (validation §4.9.1), so agent-visible affordance needs C10 whatever floor the adversarial suite sets. Whichever U step first releases affordance waits for C10.
 - **Possible U1 → R1 edge.** If Undercurrent Q28 (routing open question 7) puts headroom buckets in law files, R1 consumes `law-format` and waits for U1. Decide before R1 starts.
-- **Unowned emitters.** These have no owning step yet; the listed steps hold them as open questions.
-  - The core's law-activation event and the post-promotion interference-check event (Undercurrent §15.1, [PROPOSAL]): U1 and U4.
-  - Culprit-attribution and revert-or-repair events (Undercurrent §15.1, needed for grades F3 and R3): C4 is the candidate [INFERENCE].
-  - U8 needs the Orchestrator skill suite for interruption criteria, which no step yet delivers.
+- **Unowned emitters.** One remains: the core's law-activation event (Undercurrent §15.1, [PROPOSAL]), which U1 holds as an open question while the owner decides the emitter. Assigned: the post-promotion interference-check event to C2's workspace service; culprit-attribution and revert-or-repair events (needed for grades F3 and R3) to C4's rerun scheduling; the scratch lifecycle events (base advanced, closed) to C2; graph deltas to U3. The Orchestrator instruction set that U8 needs for interruption criteria is delivered by C6, together with V3's review criteria.
 - **Possible U1 → C4 and C5 edges.** Validation §5 makes the flake-rate prior, its confidence and the quarantine threshold versioned law parameters, which are `law-format` (U1). C4 and C5 do not wait for U1; C4 holds the question of where these parameters live until `law-format` is frozen. Decide before C4 starts.
-- **C5 and Corps.** Before Corps exist, the owner is the only retirer, and C5's exit criterion is met with that. The V3 rule (an agent in the owning Corps retires; the Orchestrator has the last say) takes effect when C6 delivers the role graph.
-- **C9 and launchers.** C9's exit criterion (core §9 phase 4) names "either launcher", which needs C7 and the GUI roadmap. C9 is *Not ready* in any case.
+- **C5 and Corps.** C5's exit criterion is owner-only: a retirement by the owner takes effect and replays, and the repairer-exclusion and quarantine mechanics are exercised with owner-issued events. C6 delivers explicit Corps membership and parent-link records with the role graph, without waiting for C8's designs, and owns the Corps-authority integration gate (V3; validation §4.6.1): a retirement by an agent in the owning Corps takes effect, the repairing context's retirement is refused, and the Orchestrator can overturn. C6 waits for C5 for that gate only. The routing §13 role drill also runs at C6; R0's isolation gate covers the general and task contexts, and R1 does not wait for the drill.
+- **C9 and launchers.** C9's exit criterion (core §9 phase 4) names "either launcher". It is split: the core-and-terminal gate stays at C9, and the GUI gate belongs to the GUI roadmap, which waits for C7 and toolkit selection. C9 also waits for C5 (recipe acceptance rows become pinned checks; validation §4.7) and C6 (workflow edges use the real role graph and broker; core §11.2), and is *Not ready* in any case.
 - **C6 and C7.** Core §9 phase 2 orders the broker before shared live attachment; neither strictly needs the other.
 - **C8 and C9** are *Not ready: design open* until the birth protocol, Griot cadence, Grand mandates, and recipe and workflow schemas are designed.
 - **The GUI roadmap** waits for C7 and for toolkit selection.
@@ -126,10 +130,10 @@ Notes on the edges:
 | C3 | Agent runtime | C2; owner: private remote with CI (D42) | Waiting |
 | C4 | Validation runner and promotion gate | C3 | Waiting |
 | C5 | Check registry and governance | C4 | Waiting |
-| C6 | Broker, role graph and Corps boards | C3 | Waiting |
+| C6 | Broker, role graph and Corps boards | C3; C5 for the Corps-authority gate | Waiting |
 | C7 | Colony host, local IPC and launcher protocol | C3 | Waiting |
 | C8 | Corps, Grand chains, clones, birth, Griot publication | C6; design | Not ready: design open |
-| C9 | Recipes, workflows and skills | C4; design | Not ready: design open |
+| C9 | Recipes, workflows and skills | C4, C5, C6; design | Not ready: design open |
 | C10 | Isolation boundary and assurance A2 | C2 | Waiting |
 | R0 | Shadow mode | C3 | Waiting |
 | R1 | Safe per-turn settings, provider awareness, R11 events | R0 | Waiting |
@@ -138,12 +142,12 @@ Notes on the edges:
 | R4 | Priced model changes | R3 | Waiting |
 | R5 | Optional modules | R4 | Waiting |
 | U1 | Law and engine | C1 contracts frozen | Waiting |
-| U2 | Synthetic ledgers, simulation, adversarial suite | U1; C3 and C4 for the validation part | Waiting |
+| U2 | Synthetic ledgers, simulation, adversarial suite | U1; for the validation part, C3 and C4 (A1 suite), C5 and C6 (governance cases), C10 (A2) | Waiting |
 | U3 | Coupling graph service | C2 | Waiting |
 | U4 | Promotion-pipeline field kinds | C2, C4, C5, U1, U3 | Waiting |
-| U5 | Resource pressure | R1, U1; C4 for the runner-queue node | Waiting |
+| U5 | Resource pressure | R1, U1, U3; C4 for the runner-queue node | Waiting |
 | U6 | Perception, disclosure, shadow rendering | U4, U5, R1 | Waiting |
-| U7 | Acceptance gate and first agent-visible release | U2, U6, R1; C10 if the V6 floor needs A2 | Waiting |
+| U7 | Acceptance gate and first agent-visible release | U2 (the stages for the kinds released), U6, R1; C10 if the V6 floor needs A2 | Waiting |
 | U8 | Idle sensing and strange moods | U7, C6 | Waiting |
 | U9 | Remaining kinds and the ambient channel | U7 | Waiting |
 | U10 | Usefulness evaluation | U7 | Waiting |

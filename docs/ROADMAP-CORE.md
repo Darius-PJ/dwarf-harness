@@ -47,7 +47,7 @@ The entries themselves are in `DECISIONS.md`; this table shows only where each i
 | D41 | Several agents in one repository | C0; every step |
 | D42 | Check command and CI | C0, C3 |
 | B1 | Line endings | C0 (in place); C2 for the agents' repositories |
-| V3 | Check retirement authority | C5 |
+| V3 | Check retirement authority | C5; C6 for the Corps-authority gate |
 | V6 start | O4 plus canaries; sample re-runs off by default | C4 |
 | R11 | Router measurements reach the field layer only as ledger events | C1 defines the event types; R1 writes them |
 
@@ -175,7 +175,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 | Body garbage-collection policy | The operator policy D36 allows; replay never needs a body |
 | Index rebuild budget and snapshot trigger | D34 adds snapshots only if startup replay is too slow, and a SQLite index only when replay time or index memory exceeds a budget. The budgets are not set |
 | Write throughput target | Agent turns occur at human-scale rates; measure before optimizing. Core Appendix A.8 measured 0.52 ms for one durable single-event commit of this design on the owner's machine |
-| Event catalogue v1 | v1 covers Undercurrent §15.1 as it stands at freeze, and routing R11. §15.1 has three **[PROPOSAL]** rows (a graph delta, a law version taking effect, a post-promotion interference check result); if they are not ready at freeze, they join later by addition (D40). Open: which of the other types D33 names (turns, approvals, reservations, messages) are in v1, and which later steps add |
+| Event catalogue v1 | v1 covers Undercurrent §15.1 as it stands at freeze, and routing R11. §15.1 has three **[PROPOSAL]** rows (a graph delta, a law version taking effect, a post-promotion interference check result); if they are not ready at freeze, they join later by addition (D40). Two scratch lifecycle rows are expected from C2, *Scratch base advanced* and *Scratch closed*, with *scratch changed paths* carrying the full current set relative to the current base (C2's Delivers); C1 adds them to §15.1 as **[PROPOSAL]** rows when it drafts the catalogue, or they join by addition. Open: which of the other types D33 names (turns, approvals, reservations, messages) are in v1, and which later steps add |
 | View cursors (`ledger-reader`) | Core §4's event sketch numbers events "consecutive within this session", but D37 makes the colony sequence the only replay order, and D33 keeps streamed text in memory only. How a view's cursor relates to the colony sequence, and how in-memory streamed deltas are addressed. Shared with C7 (`launcher-protocol`) |
 
 **Exit criterion.** Events of every planned type can be written, read back by cursor and replayed in order after a restart. The synthetic ledger generator produces every catalogue v1 event without missing fields, including every Undercurrent §15.1 event in v1, every routing R11 event and D23's scratch fields. Readers skip unknown event types safely, and stop with a clear error on a consumed type they cannot decode (D35). Fuzzed truncation of segments recovers to the last complete commit. `ledger-format` and `ledger-reader` are proposed to the owner for freeze.
@@ -192,6 +192,8 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 - **Remedies for the costs in core Appendix A.7 [INFERENCE].** On the owner's machine, `git worktree add` took 19–21 s for 10,000 files, and hashing every file of a fresh 10,000-file worktree took 305 s. The remedies: a pool of spare worktrees, reused with `git switch` after their untracked files are removed (0.3 s when few files differ); and observation that hashes only files whose stat data changed (a stat-only walk took 0.6 s).
 - **Windows hazards.** `core.autocrlf` in the agents' repositories (open, below). Long paths: git's `core.longpaths` is unset by default, and D38's short IDs keep scratch paths short. Files held open by running processes can block a worktree's removal [INFERENCE]. Paths are case-insensitive on Windows, unlike Linux (D32) [INFERENCE].
 - **[PROPOSAL] Git operations go through the `git` program.** D23 already names `git merge-tree --write-tree`. Core Appendix A.7 measured `git update-ref <ref> <new> <old>` refusing a stale old value, which is the compare-and-swap that promotion needs.
+- **Post-promotion interference check [PROPOSAL].** After each promotion the workspace service runs `git merge-tree` of each open scratch against the promoted change and emits the result event Undercurrent §15.1 proposes: the promotion, the scratch checked, the grade and the overlapping paths. U4 reads the event; Undercurrent never runs git. One `git merge-tree --write-tree` took 0.09–0.15 s on the owner's machine (core Appendix A.7). If the type is not in catalogue v1 it joins `ledger-format` by addition (D40), with the owner's sign-off (D41).
+- **Scratch lifecycle events [PROPOSAL].** The workspace catalogue in Undercurrent §15.1 records a scratch's base only at creation and has no closure. C2 emits two further events, which C1 adds to §15.1 as **[PROPOSAL]** rows when it drafts the catalogue: *Scratch base advanced* (context, scratch, old and new base commits), emitted after a context integrates canonical without promoting; and *Scratch closed* (context, scratch, reason: promoted, abandoned, garbage-collected, temporary merged back). Every *scratch changed paths* event carries the full current set of changed paths relative to the current base, never a delta. U4 needs the current base lag and the set of open scratches, U9 needs occupancy lifetimes, and D36 forbids recovering any of them from bodies.
 
 | Definition | Meaning |
 |---|---|
@@ -238,7 +240,6 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 | Defender exclusion for `scratch/` | Owner; a security decision (`DECISIONS.md`, open items). A first read of a freshly written file took about 23 ms, against 0.2 ms on repeat; attributing this to Defender is [INFERENCE] (core Appendix A.7) |
 | Pool size | How many spare worktrees to keep per workspace root |
 | Line endings in the agents' repositories | B1 leaves this to C2. This machine's system git sets `core.autocrlf=true`, so files on disk can differ from what git stores, while observed changes are hashed from the files on disk |
-| Post-promotion interference check | Undercurrent §15.1 proposes **[PROPOSAL]** an event for the result of the `git merge-tree` check run after each promotion, emitted by the core's workspace service. Whether C2 builds that emitter or U4 does is open; U4 lists it |
 
 **Exit criterion.** Core phase 1 gates from core §9: scratch paths are distinct per context, promotion refuses after canonical moves, and the host-derived promotion delta equals the promoted tree diff. In addition, a temporary scratch merges back clean, by fast-forward or through `git merge-tree --write-tree`, and a conflicting one is detected and reported as work. A directory reused from the pool contains no file from its previous user.
 
@@ -257,13 +258,17 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 - Host file and shell tools that run only in the bound context's scratch (D19; core §3.5).
 - Child-process lifetime (core §3.3): on Windows, job objects through `golang.org/x/sys/windows`, `WaitDelay` and output limits; on Linux and macOS, process groups, with `Pdeathsig` on Linux. Verified per OS in CI (D42).
 - Credentials from environment variables or the OS keychain, read by the core (core §3.2). go-keyring would be a recorded dependency (D29); whether v1 reads environment variables only is open.
-- Minimal agent and account budget reservation and settlement (D22, safeguard 4; routing §11). R1 adds the threshold events (routing R11).
+- Budget scopes, reservations and settlements as a core service that C3 owns (D22, safeguard 4; routing §11). R1 builds on it: prices from the capability file, thresholds, scoped status and the threshold events (routing R11).
 - D22's other safeguards. The core writes agent-wide files (`Agent.md`, general `Memory.md`, skill edits) with a version check, so a write based on an out-of-date copy is refused and the turn re-reads. Task assignments and reservations are core records changed atomically. At most one turn per context is active. The per-agent limit is a setting.
 - D23 wired to turns: a temporary scratch on a second turn's first write to a task whose scratch is in use; a commit of the observed changes at the end of every turn; merge-back as soon as the turn ends and nothing else writes to the task scratch; a note to the task's next turn naming the files changed and the context that changed them.
 - D25's list of the agent's other active contexts, rendered as a fixed tail section until R1 freezes `context-module` (`CONTRACTS.md`).
 - Events (D33): turn starts and ends with the provider account (Undercurrent §15.1), approvals and their outcomes, reservations and settlements, and every action. Streamed text stays in memory for the views watching the turn; the finished message is recorded. Changes to private context files are logged by hash.
 - Crash recovery (D37): an `interrupted` end for every unmatched start. Success is never assumed, and no tool effect is rerun blindly (routing R10).
 - The plain terminal `dwarf-harness` (core §5), in one process with the core and built without cgo (D39). C7 later splits the host from its views.
+- **The core §4 boundary from the start.** The terminal talks to the core only through the command and event interface of core §4, even while the two share one process, so that C7 adds a transport rather than rewriting the turn loop (core §4, §5; D39).
+- **The adapter surface the router needs.** The provider adapters expose from the start what routing §6.5, R5 and R10 require: provider-neutral canonical transcript records per context; raw usage, including cache read and write tokens and the service tier actually served; rate-limit headers; classified errors; and opaque provider artifacts (reasoning blocks, continuation IDs) stored with the context. R0 wraps these adapters and never re-implements them (routing §6.5, R5, R10).
+- **Ownership of `contexts/<id>/`.** The core owns the directory (D38). C3 records its file layout as a B entry in `DECISIONS.md` (core §10 item 3), and each other layer that keeps per-context state, such as the router's `ContextRouteState` (routing §6.4), gets a named subdirectory from the core and writes nowhere else.
+- **[PROPOSAL] One scheduler, one appender.** One scheduler per colony admits turns, enforcing D22's per-agent limit and per-context exclusivity, and every in-process service appends to the ledger through one appender that assigns the sequence (D37; the appender interface in `contract/ledger`, D45). The goroutine topology is C3's choice. Pending the owner's decision on the append path.
 
 | Definition | Meaning |
 |---|---|
@@ -277,7 +282,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 **Stop point.** Do not start before C2 is Done and the remote with CI exists. Live provider calls stop until the owner supplies API keys; everything that runs against the local fake SSE server can be finished first. Changes that add a dependency wait for the owner before reaching `main` (D41).
 
-**Unblocks.** C4, C6, C7 and R0; the validation-level part of U2, together with C4.
+**Unblocks.** C4, C6, C7 and R0; U2's A1 validation suite, together with C4.
 
 **Decided.**
 
@@ -308,10 +313,11 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 | Keychain or environment only | Whether v1 reads credentials from environment variables only, or also from the keychain through go-keyring |
 | Simultaneous turns in the terminal | How the plain scrollback terminal (core §5) shows several turns at once |
 | Static configuration | Which provider and model it uses |
-| Private-context file layout | Core §10 item 3. D38 fixes `contexts/<id>/`, not the files inside it |
+| Private-context file layout | Core §10 item 3. D38 fixes `contexts/<id>/`, not the files inside it. C3 decides the layout and records it as a B entry; other layers get named subdirectories (Delivers) |
 | Budget defaults | Routing open question 3: whether local budgets ship with default values |
 | The D25 note as a module | When R1 freezes `context-module`, the fixed tail section becomes a module (`CONTRACTS.md`). No step owns that change yet |
 | New dependencies | `golang.org/x/sys` (job objects) and `golang.org/x/term` (line editing, core §5) each need a decision-log entry; go-keyring, if used, needs a record (D29) |
+| Append path | Owner. Whether every in-process service appends through one core appender that assigns the sequence (Delivers, **[PROPOSAL]**) |
 
 **Exit criterion.** Core §9 phase 1's runtime gates, and drills for D22 and D23:
 
@@ -331,7 +337,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 **Goal.** The host-owned runner that produces admissible validation evidence (validation §4.2) and gates promotion on affected checks (validation §4.8). Every promotion-pipeline field depends on it. Validation §6 proposes moving a minimal runner into core phase 1 **[PROPOSAL]**; this roadmap places it directly after the runtime.
 
-**Delivers.** A runner interface, subject materialization from tree hashes, check overlay, in-process canaries, outcome derivation, rerun and confirmation scheduling, the validation record in the ledger, and a promotion gate. Run directories live under `runs/<short id>/` (D38), run logs go in the body store (D33), and the runner's queue emits the queue entry, start and finish events of Undercurrent §15.1.
+**Delivers.** A runner interface, subject materialization from tree hashes, check overlay, in-process canaries, outcome derivation, rerun and confirmation scheduling, the validation record in the ledger, and a promotion gate. Run directories live under `runs/<short id>/` (D38), run logs go in the body store (D33), and the runner's queue emits the queue entry, start and finish events of Undercurrent §15.1. The rerun scheduling emits the culprit-attribution and revert-or-repair events of Undercurrent §15.1, which grades F3 and R3 need (validation §4.4, §4.5); the attribution algorithm is C4's choice (open questions).
 
 | Definition | Meaning |
 |---|---|
@@ -347,7 +353,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 **Stop point.** Do not start before C3 is Done. C4 does not wait for U3: until the coupling graph exists, the gate uses a declared per-workspace check list (V5, below). The owner's Defender decision for `runs/` (`DECISIONS.md`, open items) affects cost, not correctness: as in C2, the runner can be built and measured with scanning on [INFERENCE], and the materialization-cost question below waits for the owner's decision.
 
-**Unblocks.** C5 and C9; U4, together with C2, C5, U1 and U3; the validation-level part of U2, together with C3; U5's runner-queue node.
+**Unblocks.** C5; C9, together with C5 and C6; U4, together with C2, C5, U1 and U3; U2's A1 validation suite, together with C3; U5's runner-queue node.
 
 **Decided.**
 
@@ -373,7 +379,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 | Concurrency and queueing | How many runs at once; the queue becomes a resource node for `resource_pressure` |
 | Affordable fresh materialization | Fresh run directories pay core Appendix A.7's per-file cost on Windows: roughly 2 ms per file on the owner's machine with scanning on [INFERENCE]. How to keep fresh, ephemeral materialization affordable without reusing directories in a way that breaks admissibility (validation §4.2) |
 | Defender exclusion for `runs/` | Owner; a security decision (`DECISIONS.md`, open items) |
-| Culprit attribution | The culprit-attribution and revert-or-repair events in Undercurrent §15.1, which grades F3 and R3 need (validation §4.4, §4.5), have no assigned step. C4's rerun scheduling is a candidate [INFERENCE] |
+| Culprit-attribution algorithm | The events are C4's (Delivers). Open: how the rerun scheduling attributes a failure to a promotion when several promotions precede the first failing run, and when it emits revert-or-repair |
 
 **Exit criterion.** The runner rejects every adversarial case in validation §5 that is in scope at A1: printed pass lines without a passing exit, skipped suites, suites that never ran, edited tests (overwritten by overlay), and a canary reported as passing. A promotion with a failing affected check is refused and recorded.
 
@@ -383,7 +389,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 **Goal.** Make checks first-class: pinned identity, lineage, open failures, quarantine and the V3 retirement flow.
 
-**Delivers.** A registry derived from ledger events, check lineage records, the retirement packet assembled by the host, the Orchestrator review hook, quarantine rules and human-oracle verdict events. They include the check events of Undercurrent §15.1: check added, modified, retired or quarantined, and human-oracle verdict. The retirement mechanism follows validation §4.6.1, a **[PROPOSAL]** implementing V3: retirement within the owning Corps, a host-assembled packet, and Orchestrator review that acts only to overturn.
+**Delivers.** A registry derived from ledger events, check lineage records, the retirement packet assembled by the host, the Orchestrator review hook, quarantine rules and human-oracle verdict events. They include the check events of Undercurrent §15.1: check added, modified, retired or quarantined, and human-oracle verdict. The retirement mechanism follows validation §4.6.1, a **[PROPOSAL]** implementing V3: retirement within the owning Corps, a host-assembled packet, and Orchestrator review that acts only to overturn. At C5 the owner is the only retirer; explicit Corps membership and the Corps-authority integration gate arrive with C6.
 
 | Definition | Meaning |
 |---|---|
@@ -396,9 +402,9 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 **Waits for.** C4.
 
-**Stop point.** Do not start before C4 is Done. Until Corps exist, the owner is the only retirer (below). The step does not fake Corps membership to test the agent path (D41).
+**Stop point.** Do not start before C4 is Done. At C5 the owner is the only retirer: Corps membership and the Corps-authority integration gate arrive with C6. The step does not fake Corps membership to test the agent path (D41).
 
-**Unblocks.** U4, together with C2, C4, U1 and U3.
+**Unblocks.** C6's Corps-authority integration gate; C9, together with C4 and C6; U4, together with C2, C4, U1 and U3; U2's governance cases, together with C6.
 
 **Decided.**
 
@@ -411,15 +417,13 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 | Question | Notes |
 |---|---|
-| Interim retirement authority before Corps exist | Corps membership arrives with C6's role graph. Until then no agent belongs to an owning Corps, so the owner is the only retirer [INFERENCE from V3] |
+| Interim retirement authority before Corps exist | Corps membership arrives with C6's role graph. Until then no agent belongs to an owning Corps, so the owner is the only retirer [INFERENCE from V3]; the exit criterion is gated on that |
 | Exclusion of the repairing context and its clones | Kept in the proposal; confirm or drop (validation §4.6.1) |
-| Orchestrator review criteria | Written as part of the Orchestrator skill suite; review is notify-and-overturn |
 | V7 | Are human-oracle verdicts reversible, and by whom? |
 | V8 | Are agent-authored reproduction checks promoted into the suite automatically after repair? |
 | Quarantine threshold and release | Law parameters (see C4 on where they live before `law-format`); how a quarantined check returns to service |
-| Whether C5 waits for C6 | The exit criterion's retirement by another agent needs Corps membership from C6; `ROADMAPS.md` has no edge from C6 to C5 |
 
-**Exit criterion.** A retirement by the repairing context is refused; a retirement by another agent takes effect and is reversible by the Orchestrator (or by the owner, before Corps exist); every governance event replays correctly.
+**Exit criterion.** Owner-only: a retirement by the owner takes effect and replays; the repairer-exclusion and quarantine mechanics are exercised with owner-issued events; every governance event replays correctly. The Corps-authority gate (retirement by an agent in the owning Corps, refusal of the repairing context, the Orchestrator's overturn) is C6's.
 
 **Status.** Waiting.
 
@@ -435,6 +439,9 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 - Relationship and board contexts (core §7.3), completing the context kinds of D21.
 - The `conversation.send` and `board.post` commands and the `conversation.appended` and `message.processed` events (core §4.2).
 - Messages and inbox processing in the colony log; message bodies in the body store (D33).
+- Explicit Corps membership and parent-link records, which the role graph needs in any case, without waiting for C8's birth or Griot designs (core §7.2, §7.6).
+- The Corps-authority integration gate with C5 (V3; validation §4.6.1): a retirement by an agent in the owning Corps takes effect, the repairing context's retirement is refused, and the Orchestrator can overturn. C5's own gate is owner-only.
+- The Orchestrator instruction set: V3's review criteria (notify-and-overturn) and the interruption criteria U8 needs for strange moods are one set (open questions).
 
 The broker (core §7.4) and the board handling (core §7.5) are marked [INFERENCE] in the core document, and D21 keeps the broker a proposal.
 
@@ -445,11 +452,11 @@ The broker (core §7.4) and the board handling (core §7.5) are marked [INFERENC
 | Submission ID | A sender-scoped ID, so that a resend after reconnecting returns the original acceptance instead of a second message (core §7.4) |
 | Processing checkpoint | A committed record covering a message's resulting context changes and outgoing messages. Only it marks a message processed (core §7.4) |
 
-**Waits for.** C3.
+**Waits for.** C3; C5 for the Corps-authority integration gate.
 
-**Stop point.** Do not start before C3 is Done. C6 does not wait for C7; core §9 phase 2 orders the broker before shared live attachment (`ROADMAPS.md`).
+**Stop point.** Do not start before C3 is Done. C6 does not wait for C7; core §9 phase 2 orders the broker before shared live attachment (`ROADMAPS.md`). The Corps-authority integration gate needs C5's retirement flow: if C5 is not Done when the rest of C6 is, stop before that gate and set the status to *Blocked: waiting for C5*; nothing stands in for the registry (D41).
 
-**Unblocks.** C8; U8, together with U7.
+**Unblocks.** C8; C9, together with C4 and C5; U2's governance cases, together with C5; U8, together with U7.
 
 **Decided.**
 
@@ -461,6 +468,7 @@ The broker (core §7.4) and the board handling (core §7.5) are marked [INFERENC
 | No cross-colony route by implication; cross-colony messaging needs its own design | D26; core §7.2 |
 | Messages and inbox processing go in the colony log; message bodies go in the body store | D33 |
 | Message IDs are UUIDv7 | D37 |
+| An agent in the owning Corps may retire a check; the Orchestrator has the last say. C6 runs the gate, on C5's retirement flow | V3; validation §4.6.1 |
 
 **Open questions.**
 
@@ -471,8 +479,9 @@ The broker (core §7.4) and the board handling (core §7.5) are marked [INFERENC
 | Relationship reassignment and retirement | Core §10 item 3. Core §7.4: reassignment closes the old grants |
 | Historical-read retention | Core §10 item 3 |
 | Fair scheduling and response deadlines | Implementation choices (core §7.4) |
+| Orchestrator review criteria | Moved from C5. Written as part of the Orchestrator instruction set; review is notify-and-overturn (validation §4.6.1). The same set holds the interruption criteria U8 needs |
 
-**Exit criterion.** Core §9 phase 2's messaging gates: allowed direct and board paths work; forbidden paths fail before delivery; accepted messages survive restart.
+**Exit criterion.** Core §9 phase 2's messaging gates: allowed direct and board paths work; forbidden paths fail before delivery; accepted messages survive restart. The Corps-authority integration gate (V3; validation §4.6.1): a retirement by an agent in the owning Corps takes effect, the repairing context's retirement is refused, and the Orchestrator overturns one. The routing §13 role drill: a worker switching among its Orchestrator, Diplomat and Corps-board contexts leaks no history, provider continuation, approval or late result between them, and a worker-to-worker direct message is rejected before delivery. R0's isolation gate covers the general and task contexts; R1 does not wait for this drill.
 
 **Status.** Waiting.
 
@@ -571,7 +580,7 @@ The broker (core §7.4) and the board handling (core §7.5) are marked [INFERENC
 
 **Delivers.** Workflows as one executable graph (core §11.1), with the primitives and limits in core §11.2 and every agent-to-agent edge checked against core §7.2. Recipes with host-checked acceptance (core §11.3). Skills with shared-format discovery, lazy loading and update modes (core §12). Validation §4.7 proposes **[PROPOSAL]** that recipe acceptance rows become pinned checks with lineage, run by C4's runner and tracked by C5's registry. The graphical treatment belongs to the GUI roadmap.
 
-**Waits for.** C4, and the design of core §10 item 6.
+**Waits for.** C4; C5, because recipe acceptance rows become pinned checks with lineage in C5's registry (validation §4.7); C6, because workflow edges use the real role graph and broker (core §7.2, §11.2); and the design of core §10 item 6.
 
 **Stop point.** Do not start while the status is *Not ready: design open*. The `recipes/` folder in the archive folder `../dwarfharness/`, outside this repository, is not an input (`ROADMAPS.md`); core §11.3 adopts no imported catalogue.
 
@@ -589,9 +598,8 @@ The broker (core §7.4) and the board handling (core §7.5) are marked [INFERENC
 | Question | Notes |
 |---|---|
 | Recipe and workflow catalogues and schemas | Core §10 item 6, with any reconciliation beyond the three incorporated early-design sections |
-| "Either launcher" in the exit criterion | Core §9 phase 4's gate names both launchers, which needs C7 and the GUI roadmap; `ROADMAPS.md` lists only C4 before C9 |
 
-**Exit criterion.** Core §9 phase 4: core execution matches the selected workflow in either launcher; acceptance and skill precedence work without an inspirational project's runtime.
+**Exit criterion.** Core §9 phase 4, in two gates. The core-and-terminal gate, at C9: core execution matches the selected workflow in the terminal, every agent-to-agent edge is checked against the role graph through the broker, acceptance rows run as pinned checks, and acceptance and skill precedence work without an inspirational project's runtime. The GUI gate, owned by the GUI roadmap: the same workflow, selected and matched in the GUI client.
 
 **Status.** Not ready: design open (core §10 item 6).
 
@@ -605,7 +613,7 @@ The broker (core §7.4) and the board handling (core §7.5) are marked [INFERENC
 
 **Stop point.** Do not start building before C2 is Done. Researching the mechanisms needs no code and can start earlier **[PROPOSAL]**.
 
-**Unblocks.** U7, only if the V6 floor needs A2; and any agent-visible affordance, which requires A2 under the V6 starting configuration (`ROADMAPS.md`, notes on the edges).
+**Unblocks.** U2's A2 measurements; U7, only if the V6 floor needs A2; and any agent-visible affordance, which requires A2 under the V6 starting configuration (`ROADMAPS.md`, notes on the edges).
 
 **Decided.**
 
@@ -638,14 +646,14 @@ Details are in each step. "Owner" marks items awaiting the owner.
 |---|---|
 | C0 | How the check finds the compiler; the race-detector compiler in Linux and macOS CI; govulncheck without a network |
 | C1 | Segment size and rotation; flush semantics per OS; lock mechanism per OS; body garbage-collection policy; index rebuild budget and snapshot trigger; write throughput target (measure); event catalogue v1; view cursors and streamed deltas (with C7) |
-| C2 | Owner: Defender exclusion for `scratch/`. Also: canonical ref identity and protection (core §10 item 8); observation mechanism; promotion authority; the human's participation; scratch retention and garbage collection; per-workspace setup (V4); pool size; line endings in the agents' repositories (B1); the emitter of the post-promotion interference check |
-| C3 | Default per-agent limit; turn starts beyond the limit; default tool set; approval defaults; keychain or environment only; simultaneous turns in the terminal; the static configuration; private-context file layout (core §10 item 3); budget defaults (routing open question 3); the D25 note as a module; entries for new dependencies |
-| C4 | Owner: Defender exclusion for `runs/`. Also: V1, V4, V5; where law parameters live before `law-format`; language adapters; process control; concurrency and queueing; affordable fresh materialization; culprit attribution |
-| C5 | Interim retirement authority; repairer exclusion; Orchestrator review criteria; V7; V8; quarantine threshold and release; whether C5 waits for C6 |
-| C6 | Core §10 item 3: broker persistence and checkpoint layout, queue limits, reassignment and retirement, historical-read retention. Fair scheduling and response deadlines |
+| C2 | Owner: Defender exclusion for `scratch/`. Also: canonical ref identity and protection (core §10 item 8); observation mechanism; promotion authority; the human's participation; scratch retention and garbage collection; per-workspace setup (V4); pool size; line endings in the agents' repositories (B1) |
+| C3 | Owner: the append path. Also: default per-agent limit; turn starts beyond the limit; default tool set; approval defaults; keychain or environment only; simultaneous turns in the terminal; the static configuration; private-context file layout (core §10 item 3); budget defaults (routing open question 3); the D25 note as a module; entries for new dependencies |
+| C4 | Owner: Defender exclusion for `runs/`. Also: V1, V4, V5; where law parameters live before `law-format`; language adapters; process control; concurrency and queueing; affordable fresh materialization; the culprit-attribution algorithm |
+| C5 | Interim retirement authority; repairer exclusion; V7; V8; quarantine threshold and release |
+| C6 | Core §10 item 3: broker persistence and checkpoint layout, queue limits, reassignment and retirement, historical-read retention. Fair scheduling and response deadlines. Orchestrator review criteria (from C5) |
 | C7 | Core §10 item 2: IPC bindings, discovery, recovery, the core's lifetime after its last view; a host without its terminal; `go-winio`; view cursors and streamed text (with C1) |
 | C8 | Core §10 item 4: Grand mandates, intermediate levels, Grand-boundary birth approval. Core §10 item 5: Griot cadence and excerpts, birth policy and protocol, memory-inheritance policy |
-| C9 | Core §10 item 6: recipe and workflow catalogues and schemas; the "either launcher" exit criterion |
+| C9 | Core §10 item 6: recipe and workflow catalogues and schemas |
 | C10 | Mechanisms on Windows (first), Linux and macOS; ledger write path; performance cost per run; threat model |
 
 Question IDs beginning with Q are in `DESIGN-UNDERCURRENT.md` §17, and IDs beginning with V in `RESEARCH-ADMISSIBLE-VALIDATION.md` §8. Routing open questions are numbered in `DESIGN-ROUTING-LAYER.md` §15, and core §10 items in `DESIGN-CORE-AND-LAUNCHERS.md` §10.

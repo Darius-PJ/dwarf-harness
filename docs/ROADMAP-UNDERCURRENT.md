@@ -32,7 +32,7 @@ The steps Undercurrent waits for are in `ROADMAP-CORE.md` and `ROADMAP-ROUTER.md
 | D14 | Core first; the field engine is a standalone, gated package | 2026-09-30 | Every step; U1 and U2 are built and tested without agents |
 | D20 | Core first; Undercurrent builds only against frozen contracts, and its early work is limited to foundations that need no real data | 2026-10-02 | Every step's stop point (sections 3 and 4) |
 | R11 | Router measurements reach the field layer only as ledger events; router phase 1 precedes real-data resource pressure and any agent-visible impression | 2026-10-01 | U5, U6, U7 |
-| V3 | An agent in the owning Corps may retire a check; the Orchestrator has the last say | 2026-10-02 | Governance events that U4 reads (C5); agent instructions in U7 |
+| V3 | An agent in the owning Corps may retire a check; the Orchestrator has the last say | 2026-10-02 | Governance events that U4 reads (C5); the Corps-authority gate and U2's governance cases (C6); agent instructions in U7 |
 | V6 start | O4 plus canaries; sample re-runs off by default; the final floor is settled by the adversarial suite | 2026-10-02 | U2 measures; U7 chooses the floor |
 | D29 | Dependency policy. Undercurrent packages use the standard library only, enforced by the import-boundary test | 2026-10-02 | Every U package; Q24 (U1); analyzers (U3) |
 | D23 | Temporary scratch for a second writer to one task. The ledger records the authoring context of each change; scratch events gain parent-scratch and authoring-context fields | 2026-10-02 | Undercurrent §15.1; source rules (U4); private work under Q3 (U9) |
@@ -53,13 +53,13 @@ Undercurrent reads nothing but the ledger (Undercurrent §15.1), so every real i
 | Capability | Provided by | Needed by | Why |
 |---|---|---|---|
 | Frozen `ledger-format` and `ledger-reader` contracts | C1 | U1, and through it every step | The record format, event catalogue and reader interface the engine is built against; U1 may not start before both are frozen |
-| Workspace and promotion events, with D23's parent-scratch and authoring-context fields | C2 | U3, U4 | Graph updates on promotion; staleness and post-promotion interference |
-| Real agents running turns | C3 | U2's validation part | Impossible-task runs need real agents |
-| Validation runner and promotion gate | C4 | U4; U2's validation part | Without admissible validation records there is no failure or repair evidence (Undercurrent §15.2) |
-| Check registry and governance | C5 | U4 | Check lineage, retirement (V3), quarantine and human-oracle verdicts start, end or qualify strain |
+| Workspace and promotion events, with D23's parent-scratch and authoring-context fields, the post-promotion interference-check result, and the scratch lifecycle events (base advanced; closed; changed paths as full current sets) | C2 | U3, U4, U9 | Graph updates on promotion; staleness and post-promotion interference; current base lag and the set of open scratches (U4); occupancy lifetimes (U9). D36 forbids recovering any of them from bodies |
+| Real agents running turns | C3 | U2's A1 suite | Impossible-task runs need real agents |
+| Validation runner and promotion gate, with culprit-attribution and revert-or-repair events | C4 | U4; U2's A1 suite | Without admissible validation records there is no failure or repair evidence (Undercurrent §15.2); grades F3 and R3 need attribution |
+| Check registry and governance | C5 | U4; U2's governance cases | Check lineage, retirement (V3), quarantine and human-oracle verdicts start, end or qualify strain; the governance cases exercise the retirement flow |
 | R11 events (provider status, headroom, budget crossings, usage attribution) and the frozen `context-module` contract | R1 | U5, U6, U7 | Real-data resource pressure; the renderer's slot in the prompt tail; no agent-visible impression before router phase 1 (R11) |
-| Broker and role graph | C6 | U8 | Strange-mood notifications travel only along permitted routes |
-| Isolation boundary, assurance A2 | C10 | U7, only if the V6 floor needs A2 | Validation-derived sources above A1 (validation §4.9) |
+| Broker and role graph, with Corps membership and the Orchestrator instruction set | C6 | U2's governance cases; U8 | The governance cases need an agent in an owning Corps and the Orchestrator's overturn; strange-mood notifications travel only along permitted routes, and their interruption criteria are part of the instruction set |
+| Isolation boundary, assurance A2 | C10 | U2's A2 measurements; U7, only if the V6 floor needs A2 | Validation-derived sources above A1 (validation §4.9) |
 
 C1–C6 and C10 are in `ROADMAP-CORE.md`; R1 is in `ROADMAP-ROUTER.md`. Undercurrent §15.2 records the same dependencies by design phase, and routing §5.5 and §14 record the router's side. In the other direction, R1 consumes U1's `law-format` only if headroom buckets are versioned with the law (Q28; `CONTRACTS.md`).
 
@@ -91,20 +91,25 @@ flowchart TD
     U10[U10 Usefulness evaluation]
   end
   C1 -->|contracts frozen| U1
-  C3 -.->|validation part| U2
-  C4 -.->|validation part| U2
+  C3 -.->|A1 suite| U2
+  C4 -.->|A1 suite| U2
+  C5 -.->|governance cases| U2
+  C6 -.->|governance cases| U2
+  C10 -.->|A2 measurements| U2
   C2 --> U3
   C2 --> U4
   C4 --> U4
   C5 --> U4
   U1 --> U4
   U3 --> U4
+  U3 --> U5
   R1 --> U5
   U1 --> U5
+  C4 -.->|runner queue node| U5
   U4 --> U6
   U5 --> U6
   R1 --> U6
-  U2 --> U7
+  U2 -.->|stages for the released kinds| U7
   U6 --> U7
   R1 --> U7
   C10 -.->|only if the V6 floor needs A2| U7
@@ -116,7 +121,7 @@ flowchart TD
 
 - **Edges.** The graph shows every "Waits for" entry of the U steps on the status board in `ROADMAPS.md`. Core and router steps appear only as inputs; their own order is in `ROADMAP-CORE.md` and `ROADMAP-ROUTER.md`.
 - **Early work (D20).** U1 may start once the owner has frozen C1's `ledger-format` and `ledger-reader`; the field-level part of U2 follows U1. Both work on synthetic ledgers only. Every other step starts only when every step it waits for is Done. This replaces the earlier roadmap's statement that the engine could be built in parallel with core steps 2 to 6.
-- **Dotted edges** are partial or conditional. C3 and C4 gate only U2's validation part. C10 gates U7 only if the V6 floor needs A2; the first agent-visible release depends on whatever V6 floor the adversarial suite supports.
+- **Dotted edges** are partial or conditional. U2's validation-level cases are staged by capability: C3 and C4 gate the A1 suite, C5 and C6 the governance cases, C10 the A2 measurements; no step delivers A3, so A3 rates are reported as not measured. U7 waits only for the U2 stages that cover the kinds it releases. C10 gates U7 only if the V6 floor needs A2; the first agent-visible release depends on whatever V6 floor the adversarial suite supports.
 
 ## 4. Steps
 
@@ -181,7 +186,7 @@ Formerly step 8.
 **Delivers.**
 
 - **Field-level part.** A synthetic ledger generator, `undercurrent/sim` with stub agents for closed-loop stability tests, and the field-level adversarial cases (Undercurrent §14.2).
-- **Validation-level part.** The validation-level adversarial cases, including ImpossibleBench-style tasks run by real agents, reporting per assurance level the forged-pass rate, the confirmation and canary catch rates, and the runner overhead (validation §4.9.1).
+- **Validation-level part**, staged by capability. The A1 suite: ImpossibleBench-style tasks run by real agents through the runner, reporting the forged-pass rate, the confirmation and canary catch rates and the runner overhead at A1 (validation §4.9.1); needs C3 and C4. The governance cases: a repairer's retirement refused, and the Orchestrator reopening a retired check; need C5 and C6. The A2 measurements: the same rates at A2; need C10. No step delivers A3, so A3 rates are reported as not measured.
 
 | Definition | Meaning |
 |---|---|
@@ -191,11 +196,11 @@ Formerly step 8.
 | Impossible task | A task whose pinned checks cannot legitimately pass; any pass is a forgery or gaming |
 | Forged-pass rate | Fraction of impossible-task runs that produce a passing validation record at a given assurance level |
 
-**Waits for.** U1; C3 and C4 for the validation part.
+**Waits for.** U1; for the validation part, C3 and C4 (the A1 suite), C5 and C6 (the governance cases) and C10 (the A2 measurements).
 
-**Stop point.** Between the two parts. The field-level part needs only U1 and synthetic ledgers. The validation-level part needs real agents (C3) and the runner (C4). An agent that finishes the field-level part before both are Done stops there and sets the status to *Blocked: waiting for C3 and C4*; nothing stands in for the runtime or the runner (D41). The owner may assign the two parts to different agents (D41).
+**Stop point.** Staged. The field-level part needs only U1 and synthetic ledgers. The A1 suite needs real agents (C3) and the runner (C4); the governance cases need the registry (C5) and Corps membership with the Orchestrator route (C6); the A2 measurements need the boundary (C10). An agent that finishes a stage before the next stage's steps are Done stops there and sets the status to *Blocked: waiting for* those steps; nothing stands in for the runtime, the runner, the registry, the role graph or the boundary (D41). A3 is not waited for: no step delivers it, and the report says so. Q25 is fixed before the simulation runs and the V6 decision rule before the validation-suite runs, never after seeing their results. The owner may assign the stages to different agents (D41).
 
-**Unblocks.** U7.
+**Unblocks.** U7: each stage unblocks the release of kinds at the assurance level it measured.
 
 | Decided | Source |
 |---|---|
@@ -206,12 +211,12 @@ Formerly step 8.
 
 | Question | Notes |
 |---|---|
-| Q25: what simulation results count as stable enough | Needs numbers before U7 |
+| Q25: what simulation results count as stable enough | Fixed before the simulation runs, not after seeing their results; needs numbers before U7 |
 | Stub policies | Which policies approximate real agents well enough to be informative (Undercurrent §14.3 notes the limits) |
-| V6 decision rule | The forged-pass rate, confirmation catch rate and canary catch rate that justify keeping O4 plus canaries, tightening to O2, or relaxing toward O1 |
+| V6 decision rule | The forged-pass rate, confirmation catch rate and canary catch rate that justify keeping O4 plus canaries, tightening to O2, or relaxing toward O1. Fixed before the validation-suite runs, not after seeing their results |
 | Which models the adversarial suite uses | Rates differ sharply by model (validation §3.2); test the models the colony will actually run |
 
-**Exit criterion.** Field-level part: the simulation reproduces herding and oscillation when stability mechanisms are disabled and suppresses them when enabled. Validation-level part: the validation adversarial suite runs end to end and reports per-level rates. U2 is Done when both parts are.
+**Exit criterion.** Field-level part: the simulation reproduces herding and oscillation when stability mechanisms are disabled and suppresses them when enabled, against the Q25 numbers fixed beforehand. Validation-level part, per stage: after C3 and C4, the A1 suite runs end to end and reports the A1 rates against the V6 decision rule fixed beforehand; after C5 and C6, the governance cases pass (a repairer's retirement is refused; the Orchestrator reopens a retired check); after C10, the A2 rates are reported. Every report names the assurance levels it did not measure, A3 among them. U2 is Done when the field-level part and every stage are.
 
 **Status.** Waiting.
 
@@ -235,7 +240,7 @@ Formerly step 5.
 
 **Stop point.** U3 does not start before C2 is Done; its real inputs are C2's workspace and promotion events (D20). Usage edges are built from R1's usage attribution: until R1 is Done they are tested on synthetic ledgers only, and U5 connects them to real events. Stop before adding an analyzer dependency that lacks its D29 record or the owner's sign-off, and before adding the graph-delta type to a frozen `ledger-format` without the owner's sign-off (D41).
 
-**Unblocks.** U4.
+**Unblocks.** U4, U5.
 
 | Decided | Source |
 |---|---|
@@ -263,7 +268,7 @@ Formerly step 9.
 
 **Goal.** The first real field kinds, sourced from C2, C4, C5 and U3: post-promotion `interference`, context-local `epistemic_uncertainty` (staleness and flakiness), `dependency_strain`, then `affordance`.
 
-**Delivers.** Source rules for each kind; interference from the `git merge-tree` check after each promotion, which the core runs and records because Undercurrent never runs git (Undercurrent §15.1, **[PROPOSAL]**); graded interference using the validation runner; strain origin rules (check node when unattributed, culprit's changed nodes when attributed); the Q12 transitions; and lineage-based affordance.
+**Delivers.** Source rules for each kind; interference from the `git merge-tree` check after each promotion, which C2's workspace service runs and emits because Undercurrent never runs git (Undercurrent §15.1, **[PROPOSAL]**); graded interference using the validation runner; strain origin rules (check node when unattributed, culprit's changed nodes when attributed, from C4's culprit-attribution events); the Q12 transitions; and lineage-based affordance.
 
 | Definition | Meaning |
 |---|---|
@@ -275,7 +280,7 @@ Formerly step 9.
 
 **Waits for.** C2, C4, C5, U1, U3.
 
-**Stop point.** U4 does not start before C2, C4, C5, U1 and U3 are all Done (D20). Q27 must be answered before any source rule is written; if it is still open, stop there and report. Source rules that read the interference-check result need the core's emitter; if no step has built it, stop before them. Adding the check-result type to a frozen `ledger-format` needs the owner's sign-off (D41).
+**Stop point.** U4 does not start before C2, C4, C5, U1 and U3 are all Done (D20). Q27 must be answered before any source rule is written; if it is still open, stop there and report.
 
 **Unblocks.** U6.
 
@@ -286,6 +291,9 @@ Formerly step 9.
 | Source rules read record fields only: changed paths and their hashes, check digests, outcomes. Never a body such as a diff or a run log | D36 |
 | An agent in the owning Corps retires a check; the Orchestrator has the last say | V3; validation §4.6.1 |
 | Starting configuration: failures at A1 are visible and can start strain; a repair at A1 ends strain only after a confirming run; affordance requires A2; canaries in every run | V6 start; validation §4.9.1 |
+| The post-promotion interference check is run, and its result event emitted, by C2's workspace service; U4 reads the event | Undercurrent §15.1 **[PROPOSAL]**; `ROADMAP-CORE.md` C2 |
+| Culprit-attribution and revert-or-repair events are emitted by C4's rerun scheduling; the attribution algorithm is C4's choice | Undercurrent §15.1; `ROADMAP-CORE.md` C4 |
+| Current base lag and the set of open scratches are read from C2's scratch lifecycle events (base advanced; closed) and from changed-path sets that are full current sets, never from bodies | D36; `ROADMAP-CORE.md` C2 **[PROPOSAL]** |
 
 | Question | Notes |
 |---|---|
@@ -294,7 +302,6 @@ Formerly step 9.
 | Q2: lineage rule | Required for affordance and evidential deduplication; at minimum clone ancestry plus check content |
 | Q12 | Proposed in the validation document; confirm |
 | Q4 | Proposed; confirm as a whole now that V3 is decided and V6 has a starting configuration |
-| Interference-check emitter | Undercurrent §15.1 proposes the event (**[PROPOSAL]**): the core's workspace service emits the promotion, the scratch checked, the grade and the overlapping paths. Which roadmap builds that emitter is open. Under D40 the type can join `ledger-format` by addition after the freeze, so it does not hold up C1. One `git merge-tree --write-tree` took 0.09–0.15 s on the owner's machine (core Appendix A.7) |
 | Temporary scratches | Whether an open temporary scratch (D23) counts as an open scratch for interference and staleness, and which of the agent's contexts receives the impression |
 
 **Exit criterion.** On a replayed ledger from real colony activity, each kind's values match hand-computed expectations for a set of recorded scenarios; Undercurrent §14.1 properties hold for each kind.
@@ -307,16 +314,16 @@ Formerly step 10.
 
 **Goal.** `resource_pressure` from router R11 events and core queues (Undercurrent §9).
 
-**Delivers.** Resource nodes for provider accounts, budget scopes, executors and the validation runner queue; level sources from headroom, status, budgets and queue depth; usage edges from consumers to resources.
+**Delivers.** Level sources from headroom, status, budgets and queue depth, on the resource nodes (provider accounts, budget scopes, executors, the validation runner queue) and the usage edges from consumers to resources that U3's graph service constructs and versions. U5 declares which resources are nodes and how consumers map to them (Q11); it builds no node or edge path of its own.
 
 | Definition | Meaning |
 |---|---|
-| Resource node | A shared finite capacity |
-| Usage edge | A coupling edge from a consuming context's footprint to a resource, built from usage attribution |
+| Resource node | A shared finite capacity, a node of U3's graph |
+| Usage edge | A coupling edge from a consuming context's footprint to a resource, built by U3 from usage attribution |
 
-**Waits for.** R1, U1; C4 for the runner-queue node only.
+**Waits for.** R1, U1, U3; C4 for the runner-queue node only.
 
-**Stop point.** U5 does not start before R1 and U1 are Done, and it consumes no real router event before then (D20, R11). The validation runner's queue events come from C4, which U5 does not wait for: if C4 is not Done, that resource node is tested on synthetic ledgers only, and the step stops before connecting it to real events.
+**Stop point.** U5 does not start before R1, U1 and U3 are Done, and it consumes no real router event before then (D20, R11). Resource nodes, usage edges and graph versions come from U3's graph service: U5 stops before building any node or edge path of its own. The validation runner's queue events come from C4, which U5 does not wait for: if C4 is not Done, that resource node is tested on synthetic ledgers only, and the step stops before connecting it to real events.
 
 **Unblocks.** U6.
 
@@ -384,11 +391,11 @@ Formerly step 12.
 
 **Goal.** Pass the gate in Undercurrent §14.4 and show the first kinds to agents.
 
-**Delivers.** A gate report (properties, adversarial cases, simulation, resource measurements, V6 results), the chosen V6 floor, and rendering switched on for the released kinds.
+**Delivers.** A gate report (properties, adversarial cases, simulation, resource measurements, V6 results per assurance level that U2 measured, with every unmeasured level reported as not measured), the chosen V6 floor, and rendering switched on for the released kinds, each accepted per capability at the assurance level actually tested.
 
-**Waits for.** U2, U6, R1; C10 if the V6 floor needs A2.
+**Waits for.** U2's field-level part and each U2 validation stage that covers a kind it releases; U6; R1; C10 if the V6 floor needs A2.
 
-**Stop point.** U7 does not start before U2, U6 and R1 are Done. If the V6 floor chosen from U2's results needs A2 and C10 is not Done, stop before switching on any kind sourced from validation runs and set the status to *Blocked: waiting for C10*. V6 does not affect resource pressure or staleness, which the host measures without running agent-written code; under the starting configuration, affordance requires A2 (validation §4.9.1). Rendering is switched on only after the owner signs off the gate report.
+**Stop point.** U7 does not start before U2's field-level part, U6 and R1 are Done. A kind is released only at an assurance level U2 has measured: a kind whose level U2 has not measured is not released, and the gate report says the level is not measured rather than claiming it tested. If the V6 floor chosen from U2's results needs A2 and C10 is not Done, stop before switching on any kind sourced from validation runs and set the status to *Blocked: waiting for C10*. V6 does not affect resource pressure or staleness, which the host measures without running agent-written code; under the starting configuration, affordance requires A2 (validation §4.9.1). Rendering is switched on only after the owner signs off the gate report.
 
 **Unblocks.** U8, U9, U10.
 
@@ -406,7 +413,7 @@ Formerly step 12.
 | Rollback | How to switch rendering off per kind without code changes (a law or configuration flag) |
 | Agent instructions | Name retirement as the expected response to a check that appears wrong (validation §4.9.1) |
 
-**Exit criterion.** The owner signs off the gate report.
+**Exit criterion.** The owner signs off the gate report, which accepts each released kind per capability at the assurance level actually tested and names every assurance level not measured.
 
 **Status.** Waiting.
 
@@ -420,7 +427,7 @@ Formerly step 13.
 
 **Waits for.** U7, C6.
 
-**Stop point.** U8 does not start before U7 and C6 are Done. Interruption criteria come from the Orchestrator skill suite, which no step in `ROADMAPS.md` yet delivers; if the work reaches interruption handling without it, stop there and report.
+**Stop point.** U8 does not start before U7 and C6 are Done. Interruption criteria come from the Orchestrator instruction set, which C6 delivers together with V3's review criteria; if the work reaches interruption handling without it, stop there and report.
 
 **Unblocks.** None.
 
@@ -435,7 +442,7 @@ Formerly step 13.
 | Q7: sensing allowance and cadence | Every wakeup is a paid model turn |
 | Cooldown durations and insight identity | Philosophy §9 leaves them open |
 | Q23: who may read an impression cited in a notification | |
-| Depends on core phase 2 | Broker and role graph for notification routes (C6); Orchestrator skill suite for interruption criteria (no step yet) |
+| Depends on core phase 2 | Broker and role graph for notification routes, and the Orchestrator instruction set for interruption criteria (C6) |
 
 **Exit criterion.** Wakeup volume stays within allowances in simulation and in a shadow period; notifications follow only permitted routes.
 
@@ -460,6 +467,7 @@ Formerly step 14.
 | Temporary scratches are private scratch, so their merge-backs are private work: they reach outward fields only as far as Q3 allows | D16, D23; Undercurrent §15.1 |
 | One ledger per colony; every event carries the colony's globally unique ID, so ledgers can be combined for cross-colony experiments; cross-colony messaging needs its own design | D26 |
 | Provider status transitions, a `perturbation` source, arrive as ledger events | R11 |
+| Scratch occupancy lifetimes are read from C2's scratch lifecycle events (creation, base advanced, closed), never from bodies | D36; `ROADMAP-CORE.md` C2 **[PROPOSAL]** |
 
 | Question | Notes |
 |---|---|
@@ -507,9 +515,9 @@ Formerly step 16.
 | Step | Questions it must answer |
 |---|---|
 | U1 | Q14, Q15, Q20, Q21, Q24 (owner), law activation event, interrupted operations |
-| U2 | Q25, V6 decision rule, stub policies, adversarial-suite models |
+| U2 | Q25 and the V6 decision rule (both fixed before their runs), stub policies, adversarial-suite models |
 | U3 | Q1, Q9, Q10, analyzers, non-code nodes, rebuild cadence, graph-delta events |
-| U4 | Q2, Q4 confirmation, Q12, Q27, V2, interference-check emitter, temporary scratches |
+| U4 | Q2, Q4 confirmation, Q12, Q27, V2, temporary scratches |
 | U5 | Q5 (attribution), Q11, normalization, reservations |
 | U6 | Q5, Q8, Q22, shadow log location |
 | U7 | Kinds released first, V6 final floor, rollback, agent instructions |
