@@ -48,3 +48,5 @@ C0 is complete on Windows. The check command runs B17's nine steps with the pinn
 2026-10-09 — Claimed for the staged build. Work happens on branch `build/01-toolchain-check` in its own worktree (D41). The owner approved moving the toolchain to go1.27.2; that decision is recorded with this ticket's documentation changes.
 
 2026-10-09 — Resolved: the C0 change passed the full check on Windows with go1.27.2, including `-race`, and the build advisor approved it. It reaches `main` only after the owner's sign-off (D41), because it adds the first tool dependencies and records owner decision D106.
+
+2026-10-09 — The owner signed off under D41, and `main` fast-forwarded to commit ce05b81 after the full check passed on that exact commit.
