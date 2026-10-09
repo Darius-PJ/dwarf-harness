@@ -97,7 +97,8 @@ text.
   soles end on row 63, the near foot a little left of the far one.
 - In idle frames the near (right) hand holds what the front accessory holds. During
   a role action it holds the role's tool or makes the action's gesture, and a front
-  accessory held in that hand hangs from the belt in that action's frames.
+  accessory held in that hand is stowed on the back, across the pack, in that
+  action's frames; only the pixels that show from the front are drawn.
 - Layers keep their order in every frame. Where the near arm or hand must pass in
   front of a later layer (beard, hat, front accessory), that later layer leaves
   those pixels empty in that frame so the arm shows. Pose actions so such crossings
@@ -118,8 +119,10 @@ text.
   strike) is brief.
 - Move whole pixels. The breath settles chest, shoulders, head, beard, hat, pack,
   pennant and emblem by 1 px, as on the overworld; legs and feet stay. The bow
-  lowers head, beard, hat and torso a few pixels toward screen right. A tool travels
-  in an arc, a few pixels per frame.
+  bends the upper body forward from the waist: the torso leans toward screen right,
+  the head, beard and hat drop about 7 px forward and 7 px down, and pack, pennant
+  and emblem follow the back; hips, legs and feet stay. A tool travels in an arc, a
+  few pixels per frame.
 - Every layer has every frame. A layer that does not move repeats its rows exactly;
   layers that ride on the body (clothing, beard, hat, pack, pennant, emblem) move
   with it by the same amount so seams stay closed (collar, belt, brim, pole).
@@ -136,8 +139,8 @@ text.
   beside the hat's crown and clear of its brim; in the three-quarter view, where
   that shoulder is the far one, it flies above and behind it. Draw only the pole
   and flag that show; the pole may cross a pack. The pole never crosses a hat
-  brim: it stands clear of the brim's span (x 12-51 in the front still), so hatted
-  and hatless outfits show the same pole. The generator draws the marker over
+  brim except in the diplomat's bow, where the bent back carries it across the
+  brim; there the pole is drawn over the brim. The generator draws the marker over
   every slot layer, and only a role tool may cross it.
 - The flag is a field of b (base) with B (shadow) for folds and its shaded edge, a
   # outline and a metal finial. Its field gives at least 11 x 11 px of base around
