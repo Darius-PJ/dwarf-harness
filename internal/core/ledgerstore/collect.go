@@ -95,18 +95,8 @@ func (s *Store) Collect(ctx context.Context, p CollectPolicy) (CollectReport, er
 	s.collectMu.Lock()
 	defer s.collectMu.Unlock()
 
-	// Phase A, without the writer turn or the body lock: list the store and
-	// read the durable records once.
-	scanned := s.Durable()
-	listed, err := listBodies(s.bodiesDir)
+	scanned, present, err := s.collectScan()
 	if err != nil {
-		return rep, err
-	}
-	present := make(map[ledger.Digest]*collected, len(listed))
-	for d, info := range listed {
-		present[d] = &collected{bodyInfo: info}
-	}
-	if err := s.scan(0, scanned, present); err != nil {
 		return rep, err
 	}
 	if s.deps.afterCollectScan != nil {
@@ -123,6 +113,30 @@ func (s *Store) Collect(ctx context.Context, p CollectPolicy) (CollectReport, er
 		rep.PresentBytes += b.size
 	}
 	return rep, err
+}
+
+// collectScan is Collect's first phase, run without the writer turn or the
+// body lock: it lists the store and reads the durable records once, and
+// returns the last sequence read and what it learnt of each present body.
+// Close waits for it, and stops it with appender.ErrClosed.
+func (s *Store) collectScan() (uint64, map[ledger.Digest]*collected, error) {
+	if err := s.begin(); err != nil {
+		return 0, nil, err
+	}
+	defer s.inFlight.Done()
+	scanned := s.Durable()
+	listed, err := listBodies(s.bodiesDir)
+	if err != nil {
+		return 0, nil, err
+	}
+	present := make(map[ledger.Digest]*collected, len(listed))
+	for d, info := range listed {
+		present[d] = &collected{bodyInfo: info}
+	}
+	if err := s.scan(0, scanned, present); err != nil {
+		return 0, nil, err
+	}
+	return scanned, present, nil
 }
 
 // collectBatch runs one batch under the writer turn and the body lock and
@@ -244,7 +258,9 @@ func (s *Store) collectBatch(ctx context.Context, p CollectPolicy, present map[l
 }
 
 // scan reads the records in (after, through] and updates, for the bodies in
-// present, the newest reference and the newest collection record.
+// present, the newest reference and the newest collection record. It stops
+// with appender.ErrClosed between commits once Close has marked the store
+// closed; under the writer turn that never happens.
 func (s *Store) scan(after, through uint64, present map[ledger.Digest]*collected) error {
 	if after == through {
 		return nil
@@ -259,6 +275,9 @@ func (s *Store) scan(after, through uint64, present map[ledger.Digest]*collected
 	}
 	defer r.Close()
 	for {
+		if s.closing.Load() {
+			return appender.ErrClosed
+		}
 		c, err := r.Next()
 		if err == io.EOF {
 			return nil

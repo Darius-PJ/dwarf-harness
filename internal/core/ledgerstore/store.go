@@ -72,6 +72,13 @@
 // do not take the writer turn, so they keep working while the store is
 // poisoned.
 //
+// Close waits for body reads and publications in progress, and for the log
+// scan that begins a collection, to finish, after which the store holds no
+// file in the colony directory. Each of them notices Close between chunks,
+// segments or commits and stops with appender.ErrClosed, a publication
+// removing its temporary file. A Read on a publication's source that never
+// returns delays Close, so a host cancels its producers' contexts first.
+//
 // One sync.RWMutex orders the body store. Reads and reference checks share
 // it; the final step of a publication, each collection batch and Close take
 // it alone. On Windows a file that is open for reading cannot be removed or
@@ -162,6 +169,7 @@ type deps struct {
 	maxPinned        int    // the bound on active (pin, body) pairs
 	collectBatch     int    // the bodies one collection batch takes at most
 	afterCollectScan func() // called after Collect's first read of the log; nil in production
+	beforeClassify   func() // called by ReadBody for an absent body after it releases the body lock; nil in production
 }
 
 func realDeps() deps {
@@ -203,7 +211,12 @@ type Store struct {
 	closed    bool
 	collected []uint64 // the commit ends of the ledger.bodies_collected records, ascending
 
-	acked atomic.Uint64 // chain.Seq, readable without the turn
+	// inFlight counts the body reads, publications and collection scans
+	// that touch the colony's files outside the writer turn; Close waits
+	// for them. Each is added under the read lock while closed is false.
+	inFlight sync.WaitGroup
+	closing  atomic.Bool   // closed, readable without a lock
+	acked    atomic.Uint64 // chain.Seq, readable without the turn
 }
 
 var _ appender.Appender = (*Store)(nil)
@@ -347,11 +360,11 @@ func openLocked(dir string, cat ledger.Catalogue, d deps, lock *durable.Lock) (*
 		return nil, Recovery{}, err
 	}
 	s := newStore(dir, id, cat, d, lock)
-	if err := openBodies(s.bodiesDir); err != nil {
-		return nil, Recovery{}, err
-	}
 	res, err := ledger.Check(s.logDir, id)
 	if err != nil {
+		return nil, Recovery{}, err
+	}
+	if err := openBodies(s.bodiesDir); err != nil {
 		return nil, Recovery{}, err
 	}
 	var rec Recovery
@@ -607,19 +620,28 @@ func (s *Store) reopenSegment() (segmentFile, string, int64, error) {
 	return f, s.segName, s.size, nil
 }
 
-// Close waits for the writer turn and then for body reads and publications
-// in their final step to finish, closes the current segment, releases the
-// colony lock and marks the store closed. Append, Collect, PublishBody and
-// ReadBody then return appender.ErrClosed, and a second Close returns nil.
+// Close waits for the writer turn and marks the store closed. It then waits
+// for body reads and publications in progress, and for the log scan that
+// begins a collection, to finish, closes the current segment and releases the
+// colony lock. After Close returns the store holds no file in the colony
+// directory. Append, Collect, PublishBody and ReadBody then return
+// appender.ErrClosed, and a second Close returns nil. A Read on a
+// publication's source that never returns delays Close, so a host cancels
+// its producers' contexts first.
 func (s *Store) Close() error {
 	s.turn <- struct{}{}
 	defer s.release()
 	s.bodiesMu.Lock()
-	defer s.bodiesMu.Unlock()
 	if s.closed {
+		s.bodiesMu.Unlock()
 		return nil
 	}
 	s.closed = true
+	s.closing.Store(true)
+	// A publication takes the write lock to clean up, so the lock is not
+	// held while waiting.
+	s.bodiesMu.Unlock()
+	s.inFlight.Wait()
 	return errors.Join(s.closeSegment(), s.lock.Close())
 }
 

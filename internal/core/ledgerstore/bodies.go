@@ -208,21 +208,20 @@ func listBodies(dir string) (map[ledger.Digest]bodyInfo, error) {
 // bytes are flushed, the body is atomically published under its name and
 // that name is flushed, so a record may reference the body from then on. A
 // body already published is not written again. A body over MaxBodyBytes
-// fails with ErrBodyTooLarge. ctx is checked between chunks. On any error the
-// call removes its temporary file, and a body file its failed rename left,
-// and returns any error from that removal with the cause. PublishBody does
-// not take the writer turn, so it works while the store is poisoned; after
-// Close it returns appender.ErrClosed.
+// fails with ErrBodyTooLarge. ctx and Close are checked between chunks; a
+// Close stops the copy with appender.ErrClosed. On any error the call removes
+// its temporary file, and a body file its failed rename left, and returns any
+// error from that removal with the cause. PublishBody does not take the
+// writer turn, so it works while the store is poisoned; after Close it
+// returns appender.ErrClosed.
 func (s *Store) PublishBody(ctx context.Context, r io.Reader) (ledger.Digest, int64, error) {
 	if err := ctx.Err(); err != nil {
 		return ledger.Digest{}, 0, err
 	}
-	s.bodiesMu.RLock()
-	closed := s.closed
-	s.bodiesMu.RUnlock()
-	if closed {
-		return ledger.Digest{}, 0, appender.ErrClosed
+	if err := s.begin(); err != nil {
+		return ledger.Digest{}, 0, err
 	}
+	defer s.inFlight.Done()
 	f, err := s.deps.files.createTemp(filepath.Join(s.bodiesDir, tmpName))
 	if err != nil {
 		return ledger.Digest{}, 0, err
@@ -245,8 +244,24 @@ func (s *Store) PublishBody(ctx context.Context, r io.Reader) (ledger.Digest, in
 	return d, n, nil
 }
 
-// copyBody copies r to w in chunks, hashing and counting, and stops with
-// ErrBodyTooLarge once the count passes the cap.
+// begin registers an operation that touches the colony's files outside the
+// writer turn, so that Close waits for it, and returns appender.ErrClosed
+// after Close. The caller calls s.inFlight.Done when the operation ends.
+// The count is taken under the read lock, so none is added after Close has
+// marked the store closed under the write lock.
+func (s *Store) begin() error {
+	s.bodiesMu.RLock()
+	defer s.bodiesMu.RUnlock()
+	if s.closed {
+		return appender.ErrClosed
+	}
+	s.inFlight.Add(1)
+	return nil
+}
+
+// copyBody copies r to w in chunks, hashing and counting. It stops with
+// ErrBodyTooLarge once the count passes the cap, and with
+// appender.ErrClosed once Close has marked the store closed.
 func (s *Store) copyBody(ctx context.Context, w io.Writer, r io.Reader) (ledger.Digest, int64, error) {
 	h := sha256.New()
 	buf := make([]byte, copyChunk)
@@ -254,6 +269,9 @@ func (s *Store) copyBody(ctx context.Context, w io.Writer, r io.Reader) (ledger.
 	for {
 		if err := ctx.Err(); err != nil {
 			return ledger.Digest{}, 0, err
+		}
+		if s.closing.Load() {
+			return ledger.Digest{}, 0, appender.ErrClosed
 		}
 		k, rerr := io.ReadFull(r, buf)
 		if k > 0 {
@@ -331,7 +349,8 @@ func (s *Store) removeTemp(path string) error {
 // and returns it only if its SHA-256 is d and its size is within the cap,
 // and otherwise fails with ErrBodyCorrupt. Memory is at most one body. An
 // absent body fails with a *BodyUnavailableError if a ledger.bodies_collected
-// record lists it, and with ErrBodyMissing if none does. ReadBody does not
+// record lists it, and with ErrBodyMissing if none does; a collection that
+// lands while the call runs reads as missing for that call. ReadBody does not
 // take the writer turn, so it works while the store is poisoned; after Close
 // it returns appender.ErrClosed. Authorizing the read is the caller's.
 func (s *Store) ReadBody(ctx context.Context, d ledger.Digest) ([]byte, error) {
@@ -343,12 +362,17 @@ func (s *Store) ReadBody(ctx context.Context, d ledger.Digest) ([]byte, error) {
 		s.bodiesMu.RUnlock()
 		return nil, appender.ErrClosed
 	}
+	s.inFlight.Add(1)
+	defer s.inFlight.Done()
 	// Collect appends to collected under the write lock, so this snapshot
 	// is consistent; a collection after it reads as missing for this call.
 	collected := s.collected[:len(s.collected):len(s.collected)]
 	data, err := s.readBody(d)
 	s.bodiesMu.RUnlock()
 	if errors.Is(err, fs.ErrNotExist) {
+		if s.deps.beforeClassify != nil {
+			s.deps.beforeClassify()
+		}
 		return nil, s.classify(ctx, d, collected)
 	}
 	return data, err
@@ -389,7 +413,8 @@ func (s *Store) readBody(d ledger.Digest) ([]byte, error) {
 // snapshot of the store's collection index, the ascending commit ends of
 // those records. A commit end lies in the segment of its record, so classify
 // reads newest segment first, with one reader per segment that ends any,
-// bounded by the segment's start and the newest recorded end in it.
+// bounded by the segment's start and the newest recorded end in it. ctx and
+// Close are checked between segments.
 func (s *Store) classify(ctx context.Context, d ledger.Digest, ends []uint64) error {
 	if len(ends) == 0 {
 		return fmt.Errorf("%w: %s", ErrBodyMissing, d)
@@ -408,6 +433,9 @@ func (s *Store) classify(ctx context.Context, d ledger.Digest, ends []uint64) er
 	for i := len(firsts) - 1; i >= 0 && end > 0; i-- {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if s.closing.Load() {
+			return appender.ErrClosed
 		}
 		// ends[start:end] are the commit ends in the segment from firsts[i].
 		start, _ := slices.BinarySearch(ends[:end], firsts[i])

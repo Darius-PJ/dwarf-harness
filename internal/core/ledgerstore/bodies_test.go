@@ -578,4 +578,110 @@ func TestBodiesConcurrentUse(t *testing.T) {
 			t.Errorf("ReadBody after Close = %v, want ErrClosed", err)
 		}
 	})
+
+	t.Run("Close waits for an in-flight publication", func(t *testing.T) {
+		ctx := context.Background()
+		s := newColony(t, testDeps(nil))
+		src := &gatedReader{entered: make(chan struct{}, 1), release: make(chan struct{}), stop: make(chan struct{})}
+		// On a failure below, the source ends, so that the publication and
+		// Close can finish.
+		defer close(src.stop)
+		published := make(chan error, 1)
+		go func() {
+			_, _, err := s.PublishBody(ctx, src)
+			published <- err
+		}()
+		<-src.entered
+		closed := make(chan error, 1)
+		go func() { closed <- s.Close() }()
+		// Close marks the store closed before it waits.
+		for deadline := time.Now().Add(10 * time.Second); !s.closing.Load(); time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("Close did not mark the store closed")
+			}
+		}
+		select {
+		case err := <-closed:
+			t.Fatalf("Close returned %v while a publication was in flight", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+		src.release <- struct{}{}
+		select {
+		case err := <-published:
+			if !errors.Is(err, appender.ErrClosed) {
+				t.Errorf("the in-flight PublishBody = %v, want ErrClosed", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("PublishBody went on reading after Close")
+		}
+		select {
+		case err := <-closed:
+			if err != nil {
+				t.Errorf("Close = %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Close did not return after the publication ended")
+		}
+		assertTmpEmpty(t, s)
+		s2, _, err := open(s.dir, s.cat, testDeps(nil))
+		if err != nil {
+			t.Fatalf("Open after Close = %v", err)
+		}
+		if err := s2.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// gatedReader is a publication source whose every Read waits for a release,
+// then fills the whole buffer; once stop is closed, Reads end the source.
+type gatedReader struct {
+	entered chan struct{} // receives, if empty, when a Read starts
+	release chan struct{}
+	stop    chan struct{}
+}
+
+func (g *gatedReader) Read(p []byte) (int, error) {
+	select {
+	case g.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-g.release:
+		for i := range p {
+			p[i] = 'x'
+		}
+		return len(p), nil
+	case <-g.stop:
+		return 0, io.EOF
+	}
+}
+
+func TestReadBodyClassifiesFromSnapshot(t *testing.T) {
+	ctx := context.Background()
+	d := testDeps(nil)
+	var s *Store
+	content := "published and collected during the read"
+	x := digestOf(content)
+	var seq uint64
+	d.beforeClassify = func() {
+		publish(t, s, content)
+		mustAppend(t, s, ref("x", x))
+		rep := collect(t, s, CollectPolicy{Actor: ledger.ActorCore, BeforeNS: math.MaxInt64})
+		if len(rep.Records) != 1 {
+			t.Fatalf("Collect in the hook = %+v, want one record", rep)
+		}
+		seq = rep.Records[0]
+	}
+	s = newColony(t, d)
+	// The collection lands after the read's snapshot, so for this read the
+	// body is missing.
+	if _, err := s.ReadBody(ctx, x); !errors.Is(err, ErrBodyMissing) || errors.Is(err, ErrBodyUnavailable) {
+		t.Errorf("ReadBody during the collection = %v, want ErrBodyMissing", err)
+	}
+	s.deps.beforeClassify = nil
+	var ue *BodyUnavailableError
+	if _, err := s.ReadBody(ctx, x); !errors.As(err, &ue) || *ue != (BodyUnavailableError{Digest: x, Seq: seq}) {
+		t.Errorf("ReadBody after the collection = %v, want it collected at seq %d", err, seq)
+	}
 }
