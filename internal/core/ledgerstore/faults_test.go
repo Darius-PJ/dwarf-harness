@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger/appender"
@@ -317,4 +318,97 @@ func TestCancelledAppendWritesNothing(t *testing.T) {
 			t.Errorf("records %v, want %v", got, want)
 		}
 	})
+}
+
+func TestSubmitFailureLeavesNoIdentity(t *testing.T) {
+	ctx := context.Background()
+	ff := &faultFiles{}
+	s := newColony(t, testDeps(ff))
+	mustAppend(t, s, sample("acked"))
+	body := publish(t, s, "pinned by the effect")
+	pin := uuid.NewV7()
+	command, effect := commandDraft(t, commandID(clockMS(0), 1), submissionOf("a")), []ledger.Draft{pinDraft(t, pin, body)}
+
+	ff.onSync = func(segmentFile) error { return errFault }
+	if _, err := s.Submit(ctx, command, effect); !errors.Is(err, appender.ErrUncertain) {
+		t.Fatalf("Submit with a failed flush = %v, want ErrUncertain", err)
+	}
+	ff.onSync = nil
+	if _, err := s.Submit(ctx, command, effect); !errors.Is(err, appender.ErrPoisoned) {
+		t.Errorf("Submit while poisoned = %v, want ErrPoisoned", err)
+	}
+	if err := s.Recover(); err != nil {
+		t.Fatalf("Recover = %v", err)
+	}
+
+	// Recover removed the unacknowledged commit, its command and its pin: the
+	// retry writes a new commit, and the pin it brings is not active yet.
+	if got, want := mustSubmit(t, s, command, effect...), (Receipt{Committed: appender.Committed{First: 2, Last: 3}}); got != want {
+		t.Errorf("Submit after Recover = %+v, want %+v", got, want)
+	}
+	// The pin took effect once.
+	if _, err := s.Append(ctx, []ledger.Draft{pinDraft(t, pin, body)}); !errors.Is(err, appender.ErrRefused) {
+		t.Errorf("Append of the pin again = %v, want ErrRefused", err)
+	}
+	mustAppend(t, s, unpinDraft(t, pin))
+	if got, want := mustSubmit(t, s, command, effect...), (Receipt{Committed: appender.Committed{First: 2, Last: 3}, Duplicate: true}); got != want {
+		t.Errorf("retry after the commit = %+v, want %+v", got, want)
+	}
+}
+
+func TestSubmitFindsCommandsOfSegmentsRecoverMadeCurrent(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		first  bool // the fault strikes the log's first segment, so that no segment precedes it
+		reopen bool // close and open the store after Recover, so that Open lists the empty segment
+	}{
+		{"Recover leaves the new segment current", false, false},
+		{"Open lists the empty segment", false, true},
+		{"the log's first segment", true, false},
+		{"Open lists the empty first segment", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ff := &faultFiles{}
+			d := testDeps(ff)
+			d.hotCommands = 1
+			d.segmentTarget = 1 // every commit starts a segment
+			s := newColony(t, d)
+			id := func(i int) uuid.UUID { return commandID(clockMS(0)+int64(i), i) }
+			submit := func(i int) Receipt { return mustSubmit(t, s, commandDraft(t, id(i), submissionOf("a"))) }
+			failing := 1
+			if tc.first {
+				failing = 0
+			} else {
+				submit(0)
+			}
+
+			// The log directory's flush fails while the next commit starts its
+			// segment: the file exists, empty, and the store is poisoned.
+			ff.onSyncDir = func(string) error { return errFault }
+			if _, err := s.Submit(ctx, commandDraft(t, id(failing), submissionOf("a")), nil); !errors.Is(err, appender.ErrPoisoned) {
+				t.Fatalf("Submit while starting a segment = %v, want ErrPoisoned", err)
+			}
+			ff.onSyncDir = nil
+			if err := s.Recover(); err != nil {
+				t.Fatalf("Recover = %v", err)
+			}
+			if tc.reopen {
+				s, _ = reopen(t, s, d)
+			}
+			// The failing command goes into that segment, and later commands
+			// into others, so that only the newest is in the hot index.
+			for i := failing; i <= 3; i++ {
+				if got, want := submit(i), (Receipt{Committed: appender.Committed{First: uint64(i + 1), Last: uint64(i + 1)}}); got != want {
+					t.Fatalf("Submit of command %d = %+v, want %+v", i, got, want)
+				}
+			}
+			for i := range 4 {
+				if got, want := submit(i), (Receipt{Committed: appender.Committed{First: uint64(i + 1), Last: uint64(i + 1)}, Duplicate: true}); got != want {
+					t.Errorf("retry of command %d = %+v, want %+v", i, got, want)
+				}
+			}
+			commandsOnce(t, s)
+		})
+	}
 }

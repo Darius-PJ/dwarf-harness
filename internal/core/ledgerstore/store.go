@@ -1,7 +1,7 @@
 // Package ledgerstore is Core's store for one colony's ledger (D50): the
 // colony directory and its colony.json, the writer lock, the sequencer,
-// writer and recovery behind appender.Appender, and the body store with its
-// pins and explicit collection.
+// writer and recovery behind appender.Appender, the body store with its
+// pins and explicit collection, and command identities.
 //
 // # Directory
 //
@@ -104,14 +104,71 @@
 // the store when Collect lists it, pinned and ineligible bodies included,
 // less those it deletes.
 //
+// # Command identities
+//
+// Submit commits a ledger.command record and the drafts of the command's
+// effect as one commit, the command record first, unless the log already
+// holds its command ID. The ID is the caller's immutable UUIDv7, and the
+// record is the identity tombstone of D58: it carries no request content,
+// only the ID and the digest of the caller's canonical submission bytes. The
+// digest is all that Submit compares, so it must cover everything that binds
+// the request, its content, candidate and context: a binding it left out
+// could change under the same ID without the mismatch that D58 requires.
+//
+// Submit looks the ID up before it validates any draft. The same digest
+// returns the original commit's range with Receipt.Duplicate set and writes
+// nothing, even if the drafts would now be refused, for example because a
+// body they name has since been collected. Another digest is refused with
+// appender.ErrRefused and ErrCommandMismatch. An ID is unique in the colony
+// and resolves for the life of the log, which is never compacted. Append
+// refuses a ledger.command draft.
+//
+// Submit also refuses, with appender.ErrRefused and ErrCommandTime, an ID
+// dated more than commandLead, 5 minutes, after the event time of the commit
+// that would record it. ErrCommandTime is the one refusal that depends on the
+// clock: nothing was written, so a later retry, or a fresh ID, is safe.
+// commandLead may only grow. The bound lets a lookup treat a recent ID as new
+// without reading the log, which is sound only for records accepted under a
+// lead at least as large as the present one.
+//
+// The store keeps the newest 65,536 command IDs in a hot index and evicts the
+// oldest when a newer one arrives, but eviction is never absence: an ID that
+// the index lacks is looked up in the log. Event times never decrease, and an
+// ID is dated at most commandLead after its commit, so an ID dated later than
+// the newest evicted commit's time plus commandLead cannot be in the evicted
+// part of the log, and a fresh ID costs no read. Any other ID is looked up in
+// the segments that can hold it. The segment catalogue keeps, for each segment
+// file, the range of the UUIDv7 timestamps of its command IDs; the segments
+// stay authoritative, and the catalogue only says which of them can hold an
+// ID. The reading runs under the writer turn, so that the lookup and the
+// append are atomic, and a ctx that ends stops it with nothing written.
+//
 // # Opening
 //
-// Open takes the lock, verifies the whole log with ledger.Check, truncates a
-// torn final commit and flushes the segment and both directories. It fails
-// closed, changing no byte, on anything Check rejects, and on a missing body
-// store. Open keeps a complete, valid commit that was on disk when a writer
-// died, because it cannot know whether the commit was acknowledged; that is
-// why appender.ErrUncertain means unknown rather than not written.
+// Open takes the lock, verifies the whole log with ledger.Check, empties
+// bodies/.tmp, truncates a torn final commit and flushes the segment and both
+// directories. It fails closed, changing no byte, on anything Check rejects,
+// and on a missing body store. Open keeps a complete, valid commit that was on
+// disk when a writer died, because it cannot know whether the commit was
+// acknowledged; that is why appender.ErrUncertain means unknown rather than
+// not written.
+//
+// Open then reads the log once more and rebuilds what the store keeps in
+// memory: the active pins, the commit ends of the collection records, the hot
+// index and the segment catalogue. The pass applies the record rules of each
+// F0 type that the records themselves show, and fails closed with
+// ErrInconsistent, naming the record's sequence, on a record that breaks one:
+// a payload that does not decode; a pin that lists no body or whose ID is
+// active, or an unpin that lists bodies or whose ID is not; a collection
+// record that lists bodies in body_refs or whose actor is not owner or core;
+// a ledger.command that is not the first record of its commit, lists bodies
+// or repeats a command ID that is still in the hot index. A newer version of
+// an F0 type stops it with the reader's *ledger.UnsupportedVersionError. It
+// does not check that the bodies are present, which reads do, and it does not
+// refuse a log for holding more active pins than the bound: Append then
+// refuses new pins and accepts unpins. A log that the pass rejects has been
+// checked, has had its torn tail removed and its temporary files emptied, and
+// is otherwise unchanged; Open releases the lock.
 package ledgerstore
 
 import (
@@ -141,6 +198,11 @@ var (
 	ErrExists = errors.New("ledgerstore: colony already exists")
 	// ErrNotColony reports that Open found no colony in the directory.
 	ErrNotColony = errors.New("ledgerstore: not a colony directory")
+	// ErrInconsistent reports a record that breaks a rule of its F0 record
+	// type, as Open's rebuild of the store's projections finds it, or as a
+	// lookup of an old command ID finds it if the log changed under the
+	// store. The error names the record's sequence.
+	ErrInconsistent = errors.New("ledgerstore: log breaks a rule of an F0 record type")
 )
 
 const (
@@ -167,6 +229,7 @@ type deps struct {
 	segmentTarget    int64
 	maxBodyBytes     int64  // MaxBodyBytes
 	maxPinned        int    // the bound on active (pin, body) pairs
+	hotCommands      int    // the command IDs the hot index holds at most
 	collectBatch     int    // the bodies one collection batch takes at most
 	afterCollectScan func() // called after Collect's first read of the log; nil in production
 	beforeClassify   func() // called by ReadBody for an absent body after it releases the body lock; nil in production
@@ -175,7 +238,7 @@ type deps struct {
 func realDeps() deps {
 	return deps{
 		clock: time.Now, newID: uuid.NewV7, files: osFiles{}, segmentTarget: segmentTarget,
-		maxBodyBytes: MaxBodyBytes, maxPinned: maxPinned, collectBatch: collectBatch,
+		maxBodyBytes: MaxBodyBytes, maxPinned: maxPinned, hotCommands: hotCommands, collectBatch: collectBatch,
 	}
 }
 
@@ -192,7 +255,8 @@ type Store struct {
 	collectMu sync.Mutex
 
 	// turn is the writer turn, a 1-slot semaphore: a goroutine holds the turn
-	// while its token is in the channel. It guards the fields below.
+	// while its token is in the channel. It guards the fields below, up to
+	// bodiesMu; Open builds them before the store is shared.
 	turn chan struct{}
 
 	poison   error        // why the store is poisoned; nil if it is not
@@ -202,6 +266,17 @@ type Store struct {
 	segName  string       // the current segment's name; "" if there is none
 	size     int64        // the current segment's acknowledged bytes
 	pins     pinSet       // the active pins
+
+	// hot holds the newest command IDs, at most deps.hotCommands of them, and
+	// hotOrder the same IDs oldest first. Every ledger.command record above
+	// coldThrough, the end of the newest evicted command's commit, is in hot;
+	// coldTimeNS is that commit's event time. segs is the segment catalogue:
+	// one entry for each segment file, in order.
+	hot         map[uuid.UUID]entry
+	hotOrder    idQueue
+	coldThrough uint64
+	coldTimeNS  int64
+	segs        []segInfo
 
 	// bodiesMu orders body publication, reads, reference checks, collection
 	// batches and Close. A goroutine that holds both it and the turn took
@@ -217,6 +292,10 @@ type Store struct {
 	inFlight sync.WaitGroup
 	closing  atomic.Bool   // closed, readable without a lock
 	acked    atomic.Uint64 // chain.Seq, readable without the turn
+
+	// coldScans counts the segment reads that lookups of command IDs missing
+	// from the hot index made. Only tests and the measurement harness read it.
+	coldScans atomic.Int64
 }
 
 var _ appender.Appender = (*Store)(nil)
@@ -317,7 +396,12 @@ func checkNoColony(dir string) error {
 // ledger.Check and fails closed on any error Check returns, changing no byte
 // of the log. It then truncates and flushes a torn final commit, and flushes
 // the log and colony directories, so that entries left by a process that died
-// before flushing them are durable before anything builds on them.
+// before flushing them are durable before anything builds on them. Last, it
+// reads the log once more and rebuilds the store's projections of the F0
+// records. It fails closed with ErrInconsistent, naming the sequence, on a
+// record that breaks a rule of its type, and with the reader's
+// *ledger.UnsupportedVersionError on a version of an F0 type that this
+// package does not read.
 //
 // Open never creates a colony or its log directory, and leaves nothing in a
 // directory that is not a colony: a directory without colony.json, or no
@@ -388,7 +472,109 @@ func openLocked(dir string, cat ledger.Catalogue, d deps, lock *durable.Lock) (*
 	}
 	s.chain = res.Last
 	s.acked.Store(res.Last.Seq)
+	if err := s.rebuild(); err != nil {
+		return nil, Recovery{}, errors.Join(err, s.closeSegment())
+	}
 	return s, rec, nil
+}
+
+// rebuild reads the log once and rebuilds the projections of the F0 records:
+// the active pins, the commit ends of the collection records, the hot index
+// and the segment catalogue. It runs in Open, under the colony lock and
+// before the store is shared, on a log that Check verified. It fails with
+// ErrInconsistent, naming the sequence, on a record that breaks a rule of its
+// F0 record type that the records themselves show, and with the reader's
+// *ledger.UnsupportedVersionError on a newer version of one.
+func (s *Store) rebuild() error {
+	segs, err := segmentCatalogue(s.logDir)
+	if err != nil {
+		return err
+	}
+	s.segs = segs
+	if s.chain.Seq == 0 {
+		return nil
+	}
+	r, err := ledger.OpenReader(s.logDir, ledger.ReadOptions{
+		Colony: s.colony, Through: s.chain.Seq,
+		Consume: ledger.Consumption{
+			ledger.TypeCommand: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}, ledger.TypeBodiesCollected: {1},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	seg := 0 // the segment that holds the commit being replayed
+	for {
+		c, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("ledgerstore: rebuilding from the log: %w", err)
+		}
+		for seg+1 < len(s.segs) && s.segs[seg+1].first <= c.First {
+			seg++
+		}
+		if err := s.replay(c, &s.segs[seg]); err != nil {
+			return err
+		}
+	}
+}
+
+// replay applies the F0 records of commit c, which lies in segment seg, to
+// the projections, or returns the error for the first record that breaks a
+// rule of its type. Pins and unpins follow the rules of Append's plan but no
+// bound.
+func (s *Store) replay(c ledger.Commit, seg *segInfo) error {
+	p := pinPlan{pairs: s.pins.pairs}
+	collected := false
+	for _, rec := range c.Records {
+		switch rec.Type {
+		case ledger.TypeCommand:
+			cmd, err := ledger.DecodeCommand(rec.Payload)
+			switch {
+			case err != nil:
+				return inconsistent(rec.Seq, "%v", err)
+			case rec.CommitIndex != 0:
+				return inconsistent(rec.Seq, "%s is at commit_index %d, but must be the first record of its commit, and the only one", rec.Type, rec.CommitIndex)
+			case len(rec.BodyRefs) != 0:
+				return inconsistent(rec.Seq, "%s lists bodies", rec.Type)
+			}
+			if prior, dup := s.hot[cmd.CommandID]; dup {
+				return inconsistent(rec.Seq, "command %s was recorded before, at seq %d", cmd.CommandID, prior.first)
+			}
+			seg.widen(idMS(cmd.CommandID))
+			s.addHot(cmd.CommandID, entry{submission: cmd.SubmissionSHA256, first: c.First, last: c.Last, timeNS: rec.EventTimeNS})
+		case ledger.TypeBodyPin, ledger.TypeBodyUnpin:
+			if _, err := p.take(&s.pins, rec.Draft); err != nil {
+				return inconsistent(rec.Seq, "%v", err)
+			}
+		case ledger.TypeBodiesCollected:
+			_, err := ledger.DecodeBodiesCollected(rec.Payload)
+			switch {
+			case err != nil:
+				return inconsistent(rec.Seq, "%v", err)
+			case len(rec.BodyRefs) != 0:
+				return inconsistent(rec.Seq, "%s lists bodies in body_refs", rec.Type)
+			case rec.Actor != ledger.ActorOwner && rec.Actor != ledger.ActorCore:
+				return inconsistent(rec.Seq, "%s has actor %s, not owner or core", rec.Type, rec.Actor)
+			}
+			collected = true
+		}
+	}
+	s.pins.apply(p)
+	if collected {
+		// The index keeps the commit's end, where a reader may stop.
+		s.collected = append(s.collected, c.Last)
+	}
+	return nil
+}
+
+// inconsistent returns the error for the record at seq that breaks a rule of
+// its F0 record type.
+func inconsistent(seq uint64, format string, args ...any) error {
+	return fmt.Errorf("%w: seq %d: %s", ErrInconsistent, seq, fmt.Sprintf(format, args...))
 }
 
 // lockColony takes the colony lock of dir.
@@ -415,6 +601,7 @@ func newStore(dir string, id uuid.UUID, cat ledger.Catalogue, d deps, lock *dura
 		turn:      make(chan struct{}, 1),
 		chain:     ledger.Genesis(),
 		pins:      newPinSet(),
+		hot:       map[uuid.UUID]entry{},
 	}
 }
 
@@ -433,10 +620,11 @@ func (s *Store) Durable() uint64 { return s.acked.Load() }
 // Append commits drafts as one commit and returns its sequence range once the
 // commit is completely written and flushed. It refuses with
 // appender.ErrRefused a draft whose type version is not in the store's
-// catalogue, that breaks a rule of its F0 record type, that references a
-// body the body store does not hold, or that ledger.EncodeCommit rejects.
-// ctx bounds only the wait for the writer turn. See package appender for the
-// other errors.
+// catalogue, that breaks a rule of its F0 record type (a ledger.command or
+// ledger.bodies_collected draft, which only Submit and Collect write, or a pin
+// or unpin that breaks a rule of pins), that references a body the body store
+// does not hold, or that ledger.EncodeCommit rejects. ctx bounds only the wait
+// for the writer turn. See package appender for the other errors.
 func (s *Store) Append(ctx context.Context, drafts []ledger.Draft) (appender.Committed, error) {
 	// select chooses at random between a free turn and an ended ctx, so an
 	// ended ctx is checked first and never takes the turn.
@@ -455,10 +643,8 @@ func (s *Store) Append(ctx context.Context, drafts []ledger.Draft) (appender.Com
 	case s.poison != nil:
 		return appender.Committed{}, fmt.Errorf("%w: %w", appender.ErrPoisoned, s.poison)
 	}
-	for i, d := range drafts {
-		if !s.cat.Contains(ledger.TypeVersion{Type: d.Type, Version: d.TypeVersion}) {
-			return appender.Committed{}, fmt.Errorf("%w: draft %d: type %s version %d is not in the catalogue", appender.ErrRefused, i, d.Type, d.TypeVersion)
-		}
+	if err := s.checkCatalogue(drafts); err != nil {
+		return appender.Committed{}, err
 	}
 	plan, err := s.pins.plan(drafts, s.deps.maxPinned)
 	if err != nil {
@@ -475,16 +661,42 @@ func (s *Store) Append(ctx context.Context, drafts []ledger.Draft) (appender.Com
 	return c, nil
 }
 
-// commit stamps drafts with one event time, encodes them as one commit,
-// writes it and flushes it, under the writer turn. Only then do the chain
-// and Durable advance. An encoding refusal returns appender.ErrRefused, a
-// failure to start a segment appender.ErrPoisoned, and a failed write or
-// flush poisons the store and returns appender.ErrUncertain.
-func (s *Store) commit(drafts []ledger.Draft) (appender.Committed, error) {
-	h := ledger.CommitHeader{ColonyID: s.colony, CommitID: s.deps.newID(), EventTimeNS: s.deps.clock().UnixNano()}
-	if h.EventTimeNS < s.chain.EventTimeNS {
-		h.EventTimeNS, h.ClockHeld = s.chain.EventTimeNS, true
+// checkCatalogue refuses, with appender.ErrRefused, a draft whose type
+// version the store's catalogue lacks.
+func (s *Store) checkCatalogue(drafts []ledger.Draft) error {
+	for i, d := range drafts {
+		if !s.cat.Contains(ledger.TypeVersion{Type: d.Type, Version: d.TypeVersion}) {
+			return fmt.Errorf("%w: draft %d: type %s version %d is not in the catalogue", appender.ErrRefused, i, d.Type, d.TypeVersion)
+		}
 	}
+	return nil
+}
+
+// eventTime returns the event time of the next commit: the clock's reading,
+// or, if the clock reads earlier than the previous commit's time, that time,
+// held.
+func (s *Store) eventTime() (ns int64, held bool) {
+	ns = s.deps.clock().UnixNano()
+	if ns < s.chain.EventTimeNS {
+		return s.chain.EventTimeNS, true
+	}
+	return ns, false
+}
+
+// commit stamps drafts with one event time and writes them as one commit.
+func (s *Store) commit(drafts []ledger.Draft) (appender.Committed, error) {
+	ns, held := s.eventTime()
+	return s.commitAt(ns, held, drafts)
+}
+
+// commitAt encodes drafts as one commit stamped with the event time ns, held
+// if the clock moved backwards, writes it and flushes it, under the writer
+// turn. Only then do the chain, Durable and the segment catalogue advance. An
+// encoding refusal returns appender.ErrRefused, a failure to start a segment
+// appender.ErrPoisoned, and a failed write or flush poisons the store and
+// returns appender.ErrUncertain.
+func (s *Store) commitAt(ns int64, held bool, drafts []ledger.Draft) (appender.Committed, error) {
+	h := ledger.CommitHeader{ColonyID: s.colony, CommitID: s.deps.newID(), EventTimeNS: ns, ClockHeld: held}
 	data, next, err := ledger.EncodeCommit(s.chain, h, drafts)
 	if err != nil {
 		return appender.Committed{}, fmt.Errorf("%w: %w", appender.ErrRefused, err)
@@ -499,9 +711,15 @@ func (s *Store) commit(drafts []ledger.Draft) (appender.Committed, error) {
 		return appender.Committed{}, fmt.Errorf("%w: %w", appender.ErrUncertain, err)
 	}
 	first := s.chain.Seq + 1
+	// A segment is entered in the catalogue with its first commit, unless Open
+	// listed it already, as the log's empty final segment.
+	fresh := s.size == 0
 	s.size += int64(len(data))
 	s.chain = next
 	s.acked.Store(next.Seq)
+	if n := len(s.segs); fresh && (n == 0 || s.segs[n-1].first != first) {
+		s.segs = append(s.segs, newSegInfo(first))
+	}
 	return appender.Committed{First: first, Last: next.Seq}, nil
 }
 

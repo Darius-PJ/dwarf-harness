@@ -251,6 +251,27 @@ func TestAppendRefusesUnpublishedBodies(t *testing.T) {
 	if s.Durable() != 3 {
 		t.Errorf("Durable after the refusal = %d, want 3", s.Durable())
 	}
+
+	// Submit holds the drafts it carries to the same rule, and a refusal
+	// leaves the command unrecorded: it is new when the body is published.
+	late := digestOf("published late, for Submit")
+	id := commandID(clockMS(0), 1)
+	command, effect := commandDraft(t, id, submissionOf("a")), []ledger.Draft{sample("plain"), ref("late", late)}
+	before = snapshot(t, s.LogDir())
+	if _, err := s.Submit(ctx, command, effect); !errors.Is(err, appender.ErrRefused) || !errors.Is(err, ErrBodyUnpublished) {
+		t.Errorf("Submit referencing an unpublished body = %v, want ErrRefused and ErrBodyUnpublished", err)
+	}
+	if _, err := s.Submit(ctx, command, []ledger.Draft{ref("odd", odd)}); !errors.Is(err, appender.ErrRefused) || !errors.Is(err, ErrBodyStore) {
+		t.Errorf("Submit referencing a directory = %v, want ErrRefused and ErrBodyStore", err)
+	}
+	assertSnapshot(t, s.LogDir(), before)
+	if s.Durable() != 3 {
+		t.Errorf("Durable after the refusals = %d, want 3", s.Durable())
+	}
+	publish(t, s, "published late, for Submit")
+	if got, want := mustSubmit(t, s, command, effect...), (Receipt{Committed: appender.Committed{First: 4, Last: 6}}); got != want {
+		t.Errorf("Submit after publication = %+v, want %+v", got, want)
+	}
 }
 
 func TestF0TypeRules(t *testing.T) {
@@ -287,7 +308,47 @@ func TestF0TypeRules(t *testing.T) {
 		}
 	}
 
+	cmd := commandDraft(t, commandID(clockMS(0), 1), submissionOf("a"))
+	cmdWithRefs := cmd
+	cmdWithRefs.BodyRefs = b[:1]
+	cmdV2 := cmd
+	cmdV2.TypeVersion = 2
+	cmdBad := cmd
+	cmdBad.Payload = json.RawMessage(`{"command_id":"not a UUID","submission_sha256":"nor a digest"}`)
+	cmdIncomplete := cmd
+	cmdIncomplete.Payload = json.RawMessage(`{"command_id":"` + commandID(clockMS(0), 1).String() + `"}`)
+	unknownType := ledger.Draft{Type: "fixture.unknown", TypeVersion: 1, Actor: ledger.ActorCore, Payload: json.RawMessage(`{}`)}
+	submitRefused := func(name string, command ledger.Draft, drafts ...ledger.Draft) {
+		t.Helper()
+		before, seq := snapshot(t, s.LogDir()), s.Durable()
+		if _, err := s.Submit(ctx, command, drafts); !errors.Is(err, appender.ErrRefused) {
+			t.Errorf("%s: Submit = %v, want ErrRefused", name, err)
+		}
+		assertSnapshot(t, s.LogDir(), before)
+		if s.Durable() != seq {
+			t.Errorf("%s: Durable %d after the refusal, want %d", name, s.Durable(), seq)
+		}
+	}
+
+	// Only Submit writes a command record, and Submit refuses what is not
+	// one, or an effect that breaks a rule, whatever comes first.
+	refused("a command record", cmd)
+	refused("a command record among others", sample("a"), cmd)
 	refused("a collection record", ledger.Draft{Type: ledger.TypeBodiesCollected, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: collected})
+	submitRefused("a command with body references", cmdWithRefs)
+	submitRefused("a record of another type as the command", sample("not a command"))
+	submitRefused("a command of another version", cmdV2)
+	submitRefused("a command whose payload does not decode", cmdBad)
+	submitRefused("a command whose payload lacks the digest", cmdIncomplete)
+	submitRefused("a command among the effect's drafts", cmd, cmd)
+	submitRefused("a collection record among the effect's drafts", cmd, ledger.Draft{Type: ledger.TypeBodiesCollected, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: collected})
+	submitRefused("an unpin of an unknown pin in the effect", cmd, unpinDraft(t, p1))
+	submitRefused("a draft the catalogue lacks in the effect", cmd, unknownType)
+	// None of the refusals recorded the command: it is new, and takes the
+	// next sequence.
+	if got, want := mustSubmit(t, s, cmd), (Receipt{Committed: appender.Committed{First: 1, Last: 1}}); got != want {
+		t.Errorf("Submit of the command after the refusals = %+v, want %+v", got, want)
+	}
 	refused("a pin without references", pinDraft(t, p1))
 	refused("a pin whose payload does not decode", badPin)
 	refused("an unpin of an unknown pin", unpinDraft(t, p1))
@@ -311,6 +372,115 @@ func TestF0TypeRules(t *testing.T) {
 	accepted("an unpin over a lowered bound", unpinDraft(t, p1))
 	accepted("an unpin down to the lowered bound", unpinDraft(t, p2))
 	accepted("a pin within the lowered bound", unpinDraft(t, p3), pinDraft(t, p4, b[1]))
+
+	// A store whose catalogue lacks ledger.command writes none, as it
+	// writes no type version outside its catalogue.
+	t.Run("a catalogue without ledger.command", func(t *testing.T) {
+		cat, err := ledger.NewCatalogue(ledger.TypeVersion{Type: "fixture.sample", Version: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Create(filepath.Join(t.TempDir(), "colony"), cat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		if _, err := s.Submit(ctx, cmd, nil); !errors.Is(err, appender.ErrRefused) {
+			t.Errorf("Submit = %v, want ErrRefused", err)
+		}
+		if entries, err := os.ReadDir(s.LogDir()); err != nil || len(entries) != 0 || s.Durable() != 0 {
+			t.Errorf("after the refusal: log %v, %v, Durable %d; want an empty log", entries, err, s.Durable())
+		}
+	})
+}
+
+func TestOpenRebuildsPinsAndCollections(t *testing.T) {
+	ctx := context.Background()
+	policy := CollectPolicy{Actor: ledger.ActorCore, BeforeNS: math.MaxInt64}
+
+	t.Run("a pinned body stays and a collected body classifies", func(t *testing.T) {
+		d := testDeps(nil)
+		s := newColony(t, d)
+		held, gone := publish(t, s, "held by two pins"), publish(t, s, "collected before the restart")
+		p1, p2 := uuid.NewV7(), uuid.NewV7()
+		mustAppend(t, s, ref("both", held, gone))
+		mustAppend(t, s, pinDraft(t, p1, held))
+		mustAppend(t, s, pinDraft(t, p2, held))
+		rep := collect(t, s, policy)
+		if rep.Recorded != 1 || len(rep.Records) != 1 {
+			t.Fatalf("Collect = %+v, want the unpinned body recorded", rep)
+		}
+		seq := rep.Records[0]
+
+		s2, _ := reopen(t, s, d)
+		assertCollected(t, s2, gone, seq)
+		assertReadable(t, s2, held, "held by two pins")
+		// Both pins are active again: the body stays until both are released.
+		if rep := collect(t, s2, policy); rep.Recorded != 0 || len(rep.Records) != 0 {
+			t.Errorf("Collect after Open = %+v, want the pinned body kept", rep)
+		}
+		mustAppend(t, s2, unpinDraft(t, p1))
+		if rep := collect(t, s2, policy); rep.Recorded != 0 {
+			t.Errorf("Collect with one pin released = %+v, want the body kept by the other", rep)
+		}
+		mustAppend(t, s2, unpinDraft(t, p2))
+		rep = collect(t, s2, policy)
+		if rep.Recorded != 1 || len(rep.Records) != 1 {
+			t.Fatalf("Collect with both pins released = %+v, want the body recorded", rep)
+		}
+		assertCollected(t, s2, held, rep.Records[0])
+		assertCollected(t, s2, gone, seq)
+		if _, err := s2.Append(ctx, []ledger.Draft{unpinDraft(t, p1)}); !errors.Is(err, appender.ErrRefused) {
+			t.Errorf("Append of the unpin of a released pin = %v, want ErrRefused", err)
+		}
+	})
+
+	// A log that holds more active pairs than the bound is valid, because
+	// the bound may be lowered later: it opens, refuses new pins, and lets
+	// unpins shrink it.
+	t.Run("a log over a lowered pin bound opens", func(t *testing.T) {
+		d := testDeps(nil)
+		d.maxPinned = 4
+		s := newColony(t, d)
+		b := []ledger.Digest{publish(t, s, "b0"), publish(t, s, "b1"), publish(t, s, "b2"), publish(t, s, "b3")}
+		p1, p2, p3 := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+		mustAppend(t, s, pinDraft(t, p1, b[0], b[1]))
+		mustAppend(t, s, pinDraft(t, p2, b[2], b[3]))
+		d.maxPinned = 1
+		s2, _ := reopen(t, s, d)
+		refused := func(name string) {
+			t.Helper()
+			if _, err := s2.Append(ctx, []ledger.Draft{pinDraft(t, p3, b[0])}); !errors.Is(err, appender.ErrRefused) {
+				t.Errorf("%s: Append of a pin = %v, want ErrRefused", name, err)
+			}
+		}
+		refused("over the bound")
+		mustAppend(t, s2, unpinDraft(t, p1))
+		refused("still over the bound")
+		mustAppend(t, s2, unpinDraft(t, p2))
+		mustAppend(t, s2, pinDraft(t, p3, b[0]))
+	})
+
+	// The index of collection records holds the end of each commit, where a
+	// reader may stop, also when the record is not alone in its commit.
+	t.Run("the collection index keeps commit ends", func(t *testing.T) {
+		s := newColony(t, testDeps(nil))
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		x := digestOf("collected beside another record")
+		p, err := ledger.BodiesCollected{BeforeNS: 1, Bodies: []ledger.CollectedBody{{SHA256: x, Bytes: 3}}}.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeLog(t, s, []ledger.Draft{{Type: ledger.TypeBodiesCollected, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: p}, sample("beside the collection")})
+		s2, _, err := open(s.dir, s.cat, testDeps(nil))
+		if err != nil {
+			t.Fatalf("Open = %v", err)
+		}
+		t.Cleanup(func() { s2.Close() })
+		assertCollected(t, s2, x, 1)
+	})
 }
 
 func TestOpenBodiesLayout(t *testing.T) {
@@ -457,12 +627,20 @@ func TestOpenBodiesLayout(t *testing.T) {
 }
 
 func TestBodiesConcurrentUse(t *testing.T) {
-	// Publication, reads, appends with references and collection run
-	// together, and Close lands while they do. Every acknowledged reference
-	// reads back verified or classified as collected.
+	// Publication, reads, appends and submissions with references and
+	// collection run together, and Close lands while they do. Every
+	// acknowledged reference reads back verified or classified as collected.
 	t.Run("publish, read, append, collect and close", func(t *testing.T) {
 		ctx := context.Background()
-		s := newColony(t, testDeps(nil))
+		// Commits are stamped ten minutes apart, so that a command ID dated at
+		// its commit costs no read of the log, and the hot index holds eight
+		// commands, so that retries of older ones meet the log beside Collect
+		// and Close.
+		var ticks atomic.Int64
+		dd := testDeps(nil)
+		dd.clock = func() time.Time { return time.Unix(1_800_000_000+600*ticks.Add(1), 0) }
+		dd.hotCommands = 8
+		s := newColony(t, dd)
 		const workers = 4
 		var acked atomic.Int64
 		var wg sync.WaitGroup
@@ -478,6 +656,11 @@ func TestBodiesConcurrentUse(t *testing.T) {
 				t.Errorf("ReadBody(%s) = %v, want the verified body or a collection", d, err)
 			}
 		}
+		type submitted struct {
+			command ledger.Draft
+			effect  []ledger.Draft
+			r       Receipt
+		}
 		for w := range workers {
 			wg.Go(func() {
 				type body struct {
@@ -485,6 +668,7 @@ func TestBodiesConcurrentUse(t *testing.T) {
 					content string
 				}
 				var mine []body
+				var firstSubmit *submitted
 				for i := 0; ; i++ {
 					content := fmt.Sprintf("worker %d body %d", w, i)
 					d, _, err := s.PublishBody(ctx, strings.NewReader(content))
@@ -495,7 +679,29 @@ func TestBodiesConcurrentUse(t *testing.T) {
 						t.Errorf("PublishBody = %v", err)
 						return
 					}
-					_, err = s.Append(ctx, []ledger.Draft{ref(content, d)})
+					if i%2 == 0 {
+						_, err = s.Append(ctx, []ledger.Draft{ref(content, d)})
+					} else {
+						command := commandDraft(t, commandID((1_800_000_000+600*ticks.Load())*1000, w<<20|i), submissionOf(content))
+						sub := &submitted{command: command, effect: []ledger.Draft{ref(content, d)}}
+						if sub.r, err = s.Submit(ctx, sub.command, sub.effect); err == nil {
+							if firstSubmit == nil {
+								firstSubmit = sub
+							}
+							// A retry resolves to the same commit, also once
+							// collection has taken the body; the first one's
+							// is long out of the hot index.
+							for _, p := range []*submitted{sub, firstSubmit} {
+								switch again, retryErr := s.Submit(ctx, p.command, p.effect); {
+								case errors.Is(retryErr, appender.ErrClosed):
+								case retryErr != nil:
+									t.Errorf("retry of Submit = %v", retryErr)
+								case !again.Duplicate || again.Committed != p.r.Committed:
+									t.Errorf("retry of Submit = %+v, want a duplicate of %+v", again, p.r)
+								}
+							}
+						}
+					}
 					switch {
 					case errors.Is(err, appender.ErrClosed):
 						return

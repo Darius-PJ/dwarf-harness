@@ -391,6 +391,20 @@ func TestWriterReproducesGolden(t *testing.T) {
 				for _, r := range c.Records {
 					drafts = append(drafts, r.Draft)
 				}
+				// The store writes a command record itself, at the head of
+				// the commit that holds the command's effect.
+				if drafts[0].Type == ledger.TypeCommand {
+					want := Receipt{Committed: appender.Committed{First: c.First, Last: c.Last}}
+					if got, err := s.Submit(ctx, drafts[0], drafts[1:]); err != nil || got != want {
+						t.Fatalf("Submit = %+v, %v; want %+v", got, err, want)
+					}
+					// A retry is a duplicate that stamps and writes nothing.
+					want.Duplicate = true
+					if got, err := s.Submit(ctx, drafts[0], drafts[1:]); err != nil || got != want {
+						t.Fatalf("retry of Submit = %+v, %v; want %+v", got, err, want)
+					}
+					continue
+				}
 				if got := mustAppend(t, s, drafts...); got != (appender.Committed{First: c.First, Last: c.Last}) {
 					t.Fatalf("Append = %+v, want %d-%d", got, c.First, c.Last)
 				}
