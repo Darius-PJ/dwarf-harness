@@ -1,0 +1,212 @@
+package ledger
+
+import (
+	"bytes"
+	"errors"
+	"path/filepath"
+	"slices"
+	"testing"
+)
+
+// boundaries returns the commit boundaries of the golden segment seg: 0 and
+// the end of each of its commits.
+func (g *goldenLog) boundaries(seg string) []int64 {
+	b := []int64{0}
+	for _, c := range g.commits {
+		if c.seg == seg {
+			b = append(b, c.end)
+		}
+	}
+	return b
+}
+
+// chainAt returns the chain position at the end of the golden commits that
+// end at or before offset end of seg, counting every earlier segment.
+func (g *goldenLog) chainAt(seg string, end int64) Chain {
+	chain := Genesis()
+	for _, c := range g.commits {
+		if c.seg < seg || c.seg == seg && c.end <= end {
+			chain = c.after
+		}
+	}
+	return chain
+}
+
+// goldenLasts returns the Last of every golden commit up to seq last.
+func (g *goldenLog) goldenLasts(last uint64) []uint64 {
+	var s []uint64
+	for _, c := range g.commits {
+		if c.after.Seq <= last {
+			s = append(s, c.after.Seq)
+		}
+	}
+	return s
+}
+
+// resetLog writes the golden log into dir with segment name's bytes replaced
+// by data. One directory serves every execution of a fuzz target, because
+// creating and removing one per execution dominates its cost on Windows.
+func resetLog(t *testing.T, dir, name string, data []byte) {
+	t.Helper()
+	g := mustGolden(t)
+	for _, n := range g.names {
+		b := g.files[n]
+		if n == name {
+			b = data
+		}
+		writeFile(t, filepath.Join(dir, n), b)
+	}
+}
+
+func FuzzCheckTruncation(f *testing.F) {
+	g := mustGolden(f)
+	for i, name := range g.names {
+		for _, b := range g.boundaries(name) {
+			for _, d := range []int64{-1, 0, 1} {
+				if cut := b + d; cut >= 0 {
+					f.Add(uint8(i), uint32(cut))
+				}
+			}
+		}
+	}
+	dir := f.TempDir()
+	f.Fuzz(func(t *testing.T, segIndex uint8, cut uint32) {
+		name := g.names[int(segIndex)%len(g.names)]
+		size := int64(len(g.files[name]))
+		at := int64(cut) % (size + 1)
+		resetLog(t, dir, name, g.files[name][:at])
+		res, err := Check(dir, goldenColony)
+		commits, _, rerr := readAll(dir, ReadOptions{Colony: goldenColony, Through: ToEnd, Consume: allFixtures})
+
+		if name != g.final() {
+			if at == size {
+				if err != nil || res.Last != g.end() {
+					t.Fatalf("untruncated: Check = %+v, %v", res, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrCorrupt) || !errors.Is(rerr, ErrCorrupt) {
+				t.Fatalf("segment %s cut at %d of %d: Check error %v, read error %v; want ErrCorrupt", name, at, size, err, rerr)
+			}
+			return
+		}
+		var boundary int64
+		for _, b := range g.boundaries(name) {
+			if b <= at {
+				boundary = b
+			}
+		}
+		want := CheckResult{Last: g.chainAt(name, boundary), Segment: name, Size: boundary, TornBytes: at - boundary}
+		if err != nil || res != want {
+			t.Fatalf("final segment cut at %d: Check = %+v, %v; want %+v", at, res, err, want)
+		}
+		if got := lasts(commits); rerr != nil || !slices.Equal(got, g.goldenLasts(want.Last.Seq)) {
+			t.Fatalf("final segment cut at %d: read %v, %v; want %v", at, got, rerr, g.goldenLasts(want.Last.Seq))
+		}
+	})
+}
+
+func FuzzCheckTornTail(f *testing.F) {
+	g := mustGolden(f)
+	// next is a complete two-record commit continuing the golden log.
+	next, nextEnd, err := EncodeCommit(g.end(), CommitHeader{ColonyID: goldenColony, CommitID: fid("c5"), EventTimeNS: 1791000002000000000}, []Draft{
+		sampleDraft(`{"n":7}`), sampleDraft(`{"n":8}`),
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	first := slicesOfLines(next)[0]
+	// Seeds are strict prefixes of next, cut far enough from its end that a
+	// mutation cannot complete it by chance.
+	f.Add([]byte{})
+	f.Add(make([]byte, 4096))
+	f.Add([]byte("\n"))
+	f.Add(next[:len(first)/2])
+	f.Add(next[:len(first)+len(first)/2])
+	dir := f.TempDir()
+	final := g.files[g.final()]
+	f.Fuzz(func(t *testing.T, tail []byte) {
+		resetLog(t, dir, g.final(), append(slices.Clip(final), tail...))
+		res, err := Check(dir, goldenColony)
+		if err != nil {
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("Check error = %v, want ErrCorrupt or success", err)
+			}
+			return
+		}
+		size := int64(len(final))
+		want := CheckResult{Last: g.end(), Segment: g.final(), Size: size, TornBytes: int64(len(tail))}
+		// Only next itself can be a complete commit after the golden log, and
+		// the oracle accepts it if a mutation completes a seed.
+		if bytes.HasPrefix(tail, next) {
+			want = CheckResult{Last: nextEnd, Segment: g.final(), Size: size + int64(len(next)), TornBytes: int64(len(tail) - len(next))}
+		}
+		if res != want {
+			t.Fatalf("Check = %+v, want %+v", res, want)
+		}
+	})
+}
+
+func FuzzCheckCorruption(f *testing.F) {
+	g := mustGolden(f)
+	total := uint32(0)
+	for _, name := range g.names {
+		total += uint32(len(g.files[name]))
+	}
+	for _, r := range g.records {
+		pos := uint32(r.off)
+		if r.seg == g.final() {
+			pos += uint32(len(g.files[g.names[0]]))
+		}
+		f.Add(pos, byte(0x01))                       // the record's first hash digit
+		f.Add(pos+64, byte('\t'^'x'))                // its TAB
+		f.Add(pos+uint32(len(r.line))-1, byte(0x0a)) // its LF
+	}
+	dir := f.TempDir()
+	f.Fuzz(func(t *testing.T, pos uint32, mask byte) {
+		if mask == 0 {
+			return
+		}
+		pos %= total
+		// Locate pos in its segment and its record.
+		name := g.names[0]
+		off := int64(pos)
+		if size := int64(len(g.files[name])); off >= size {
+			name, off = g.final(), off-size
+		}
+		var damaged goldenRecord
+		for _, r := range g.records {
+			if r.seg == name && r.off <= off {
+				damaged = r
+			}
+		}
+		data := bytes.Clone(g.files[name])
+		data[off] ^= mask
+		resetLog(t, dir, name, data)
+		res, err := Check(dir, goldenColony)
+		if name != g.final() {
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("seq %d damaged at %s offset %d: Check = %+v, %v; want ErrCorrupt", damaged.seq, name, off, res, err)
+			}
+			return
+		}
+		if err != nil {
+			if !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("seq %d damaged: Check error = %v, want ErrCorrupt or success", damaged.seq, err)
+			}
+			return
+		}
+		// Success is a torn tail starting at the damaged record's commit.
+		var start int64
+		for _, c := range g.commits {
+			if c.seg == name && c.first <= damaged.seq {
+				start = c.start
+			}
+		}
+		size := int64(len(g.files[name]))
+		want := CheckResult{Last: g.chainAt(name, start), Segment: name, Size: start, TornBytes: size - start}
+		if res != want || res.Last.Seq >= damaged.seq {
+			t.Fatalf("seq %d damaged: Check = %+v, want %+v", damaged.seq, res, want)
+		}
+	})
+}
