@@ -1,10 +1,10 @@
 # Field Philosophy
 
-**Status:** Research-backed pre-design philosophy with owner clarifications from 2026-09-29 and 2026-09-30; not an approved Field Design or an implementation claim.
+**Status:** Research-informed philosophy and design crosswalk updated 2026-10-05. It records adopted directions and proposals; it is not an implementation claim, a frozen C1 contract or proof any gate passed.
 
-**Owner's direction:** A universe-wide, extensible environment, independent of colony boundaries, that communicates causality and consequences through evolving fields. Agents indirectly affect one another through concrete actions, without choosing recipients. Existing direct messages, Corps boards and Griot stories remain separate. Consequential activity should have wider effects than inconsequential activity. Agents remain individuals who develop through experience; their unique memories and context may reveal connections the system cannot predict. They cannot simply declare their own importance.
+**Owner-selected direction:** An extensible causal field environment spans explicitly enrolled colonies/operators without addressed field messages. The owner also selected assistant-written options for scoped private-pressure/overlap disclosure, federation among independently sovereign operators, owner-set capability/budget ceilings with scoped delegation, restricted retired-context history, chain-specific Grand coordination with owner apex notification, and fresh-by-default memory with explicit shareable inheritance. Those selections are recorded as decisions (D80–D87; B2–B15); their wording is not represented as owner-authored. Concrete actions, not an agent's declared importance, seed consequences. Direct messages, Corps boards and Griot stories remain separate.
 
-**Reading convention:** The owner's direction above and passages explicitly labelled **Owner decision** or **Owner decisions** below record requirements clarified in discussion. The explicitly provisional access decision remains open to revision. Other charter, field-candidate and mathematical recommendations are **[INFERENCE] — proposals for satisfying those requirements**, not additional owner decisions. Cited research establishes the named concepts and results, not that they will work securely for DwarfHarness. [The core design](DESIGN-CORE-AND-LAUNCHERS.md) remains authoritative for current organization, permissions and private relationship memory; [the routing design](DESIGN-ROUTING-LAYER.md) remains authoritative within those boundaries. The new behavioral requirements do not approve runtime mechanisms or expand communication permissions.
+**Reading convention:** Passages marked **Owner decision(s)** record the owner's stated direction; 2026-10-05 selected options are explicitly attributed as selections, not as owner-originated wording. Other charter, field-candidate and mathematical recommendations are **[INFERENCE] — proposals**, not additional owner decisions. Cited research establishes only its stated findings, not DwarfHarness security or usefulness. [The core design](DESIGN-CORE-AND-LAUNCHERS.md) remains authoritative for organization, permissions and private relationship memory; [the routing design](DESIGN-ROUTING-LAYER.md) remains authoritative for context and turn binding. The Undercurrent design and roadmap record candidate mechanism and status; neither is an implementation report.
 
 > **Recommendation: shared laws, situated perception, influence earned through consequences.**
 >
@@ -18,7 +18,7 @@ An agent consumes a scarce resource; conditions become more congested. It repair
 
 This is not communication-free. It is communication **without an addressed social exchange**. The environment mediates influence; an agent need not compose a message, select an audience, persuade a superior or maintain a conversation for the consequence to exist.
 
-**Owner decision — an extensible dynamical medium:** the field must be flexible enough to grow with the project; the full set of fields is not yet known. Decay and wave-propagation speeds should be adjustable, leaving room for emergent behavior in the system itself. A classifier that recognizes known situations and distributes relevant observations may meet an immediate need, but is not a substitute for this vision. These requirements do not select a field equation, topology or tuning mechanism.
+**Owner decision — an extensible dynamical medium:** the field must be flexible enough to grow with the project; the full set of fields is not yet known. Decay and wave-propagation speeds should be adjustable, leaving room for emergent behavior in the system itself. A classifier that recognizes known situations and distributes relevant observations may meet an immediate need, but is not a substitute for this vision. These requirements do not select a field equation, topology or tuning mechanism. The current engineering proposal starts with the typed graph and bounded best-arrival propagation in `DESIGN-UNDERCURRENT.md` §§7–9; that initial candidate does not narrow the owner's extensible vision or freeze calibration/API.
 
 The closest established concept is **stigmergy**: an action leaves a trace in a medium, and that trace stimulates subsequent action. [Heylighen's treatment](https://pespmc1.vub.ac.be/Papers/Stigmergy-varieties.pdf) is especially useful because it distinguishes effects of work itself from markers deposited for signaling. DwarfHarness should lean toward the former: a partly built bridge changes what others can do; a sign saying “my bridge is important” does not make it stronger.
 
@@ -26,7 +26,7 @@ There is a useful quantitative precedent in [Dorigo, Maniezzo and Colorni's Ant 
 
 ### Universal does not mean uniformly visible
 
-The universe is the entire participating DwarfHarness environment, not one colony's bulletin board. A colony is an organization **inside** this environment, not the owner of its physical laws.
+The environment spans colonies and installations that explicitly enroll in a matching federation; it is not one colony's bulletin board. Each operator retains its authority and decides its own imports/exports. A shared field law applies only where that operator adopts the exact version and grants the corresponding scope—there is no global owner, common private ledger or implicit trust.
 
 Universal scope means the same law applies wherever its conditions apply. It does not mean:
 
@@ -38,7 +38,7 @@ Universal scope means the same law applies wherever its conditions apply. It doe
 
 A shared service can couple distant colonies strongly; unrelated work in the same Corps can be weakly coupled. Meaningful exposure and dependency are useful sources of locality, not organizational rank. They must not become an exclusive relevance filter that prevents agents from discovering previously unknown connections (§4).
 
-Whether one universe spans processes on one computer, several trusted computers, or independently administered installations remains a Field Design question. Common rules do not, by themselves, solve networking, authentication or agreement between operators.
+The owner selected federation across independently administered operators, not a single shared owner or one implicit transport. Exact transport, peer identity, matching law/protocol and bilateral source grants remain pre-build contracts; they do not reopen whether federation is a supported capability.
 
 ## 2. What to borrow from physics — and what not to
 
@@ -93,11 +93,11 @@ Confusing any two produces trouble. A claim is not a fact. A fact is not its int
 
 **History matters without becoming an eternal noise floor.** Transient disturbances may fade. A working artifact, an unresolved defect or an exhausted account persists according to its actual state. The field is a view of consequences, not a replacement for durable facts.
 
-**Law changes are constitutional changes.** Authorized operators may revise the rules, but agents should not rewrite them through persuasion or field activity. Changes need explicit versions and an intelligible transition, rather than silently changing the meaning of yesterday's evidence. Whether multiple operators share that authority is unresolved.
+**Law changes are constitutional changes.** Authorized operators may revise the rules, but agents should not rewrite them through persuasion or field activity. Each operator separately authorizes law activation in its own installation; federation creates no shared or global authorizer. A foreign law applies only when that operator adopts the exact law/protocol and grants its own source/scope (§§10.6, 13.4 of `DESIGN-UNDERCURRENT.md`). Changes need explicit versions and an intelligible transition, rather than silently changing the meaning of yesterday's evidence.
 
 ### Recoverable causal history
 
-**Owner decision:** the environment must retain causal history or permit its reconstruction through reversible mathematics. Recoverability is the requirement; storage, replay and mathematical reversibility are alternative mechanisms to investigate, not selected implementations.
+**Owner decision — recoverable causal history:** the environment must retain causal history or permit its reconstruction. The current technical design selects a permanently retained append-only Core event log and deterministic replay as the causal source, with snapshots as disposable caches (Core D36; `DESIGN-UNDERCURRENT.md` §§5, 15.1). This is an engineering selection, not a demonstrated guarantee: C1 producer/event completeness and the recovery/replay gate remain prerequisites.
 
 **[INFERENCE] — reconstruction limit:** a reversible update rule alone cannot recover originating actions or external inputs that were never retained and cannot otherwise be inferred. Any proposed mechanism must demonstrate recovery of the causal history, not merely inversion of one field-state update. The illustrative diffusion model in §7 does not establish that guarantee.
 
@@ -107,9 +107,9 @@ Environmental retention and agent access are separate decisions. Retaining histo
 
 **Owner decisions (2026-09-30):** build the harness and colony core first. The field layer comes later as a package inside the harness that can be tested as a standalone engine, and it must undergo substantial testing before it is allowed to affect agents. The test scope and acceptance criteria remain for Field Design.
 
-The core will record typed action deltas in an append-only action ledger; larger bodies will live in a content-addressed store under an operator retention policy. This selects the logical action record and body-storage approach, not whether the action ledger shares a physical log or database with session/view events, nor how long bodies are retained. The causal-history requirement above therefore remains: these records are a candidate evidence substrate, not yet a demonstrated guarantee of complete recovery.
+The current design selects a permanently retained append-only Core event log and deterministic replay as the causal source, with snapshots treated as disposable caches; larger bodies may live in a content-addressed store under operator retention policy (Core D36; `DESIGN-UNDERCURRENT.md` §§5, 15.1). This does not select physical log/database layout or body retention, and it is not a proven completeness guarantee: C1 producer inputs and the recovery/replay gate must still be demonstrated.
 
-**Owner decision — private work artifacts:** each bound work context owns a private scratch per workspace root, intended to use a Git worktree, and canonical promotion is fast-forward only. This defines the workspace model, not field-source admissibility or disclosure. A promoted artifact becomes part of canonical workspace state; promotion alone does not make it a field source or authorize disclosure. Whether concrete actions within private scratch may affect outward fields remains unresolved in §9.
+**Owner decision — private work artifacts:** each bound work context owns a private scratch per workspace root, intended to use a Git worktree, and canonical promotion is fast-forward only. This defines the workspace model, not general field-source admissibility or disclosure. D80 resolves the influence boundary: private scratch may contribute only permission-scoped coarse overlap hints and explicitly shared resource pressure; neither its presence nor promotion makes work public or authorizes broader disclosure (`DESIGN-UNDERCURRENT.md` §10.4).
 
 **Security limit:** linked Git worktrees share repository metadata and are not OS sandboxes. They do not by themselves prevent a same-user shell from changing shared refs or reading other private files. The core design records this as an unresolved implementation boundary; the field design must not treat a worktree or a Git hash as proof against such access.
 
@@ -123,7 +123,7 @@ For DwarfHarness, useful locations could be artifacts, work domains and resource
 
 **Owner decision — unanticipated relevance must remain discoverable:** an agent may be the only one whose context, memory or task connects a field impression to a useful action. The environment may not know that connection is important. Consequently, known dependencies cannot be the exclusive gate for encountering field representations. This is a requirement for broader discovery, not permission to inspect everything or a decision to broadcast every condition to every agent.
 
-**[INFERENCE] — implication for the graph proposal:** distinguish an evidenced causal coupling from an agent's opportunity to perceive a condition and discover its relevance. A graph remains a candidate substrate, but the broader encounter geometry and sensing rules are unresolved; they cannot be declared complete merely by mapping known dependencies.
+[INFERENCE] — implication for the graph proposal: distinguish an evidenced causal coupling from an agent's opportunity to encounter a condition and discover its relevance. The current initial proposal propagates only over typed/evidenced graph edges, treats co-access as encounter-only, and provides permission-filtered ambient and reserved exploration beyond mapped dependencies (`DESIGN-UNDERCURRENT.md` §§8.1–8.2, 10.2–10.4). For causal routes, the design also proposes fixed-point per-hop floors and a deterministic FIFO candidate traversal: equal resulting strengths prefer fewer hops, then lexicographic stable edge-ID bytes, and no partial reach is published on an incomplete traversal (§7.1, §13.7). These are bounded design rules, not proof that coverage, correctness, performance or security is complete; the gates in §14.4 remain.
 
 This **consequence graph is not the communication-permission graph**. A library used by two colonies can connect their work environmentally without authorizing worker-to-worker chat. Conversely, permission to speak does not prove that two tasks share a resource or dependency.
 
@@ -131,7 +131,7 @@ An arbitrary two-dimensional grid would make proximity a drawing decision. A lan
 
 The graph is itself a security-sensitive model: invented dependencies and inflated edge weights can manufacture reach. Calling it a graph does not make it objective. Relationships need evidence and rules for admission, removal and uncertainty.
 
-### Is a “tensor state file” the right object?
+### A tensor state file is a representation, not field semantics
 
 It could be a useful storage representation. In machine-learning usage, a tensor often means a multidimensional array. In geometry and physics, a tensor has defined transformation behavior under changes of coordinates or basis. Merely storing `agent × field × time` values does not supply those semantics.
 
@@ -152,7 +152,7 @@ More importantly, a container does not answer who may change a value, what it me
 
 ## 5. Candidate fields
 
-Start with phenomena that have a defensible connection to concrete actions and their consequences. Names below are conceptual, not selected APIs. **Owner decision:** the field catalogue must remain extensible; these candidates are not a complete or closed set.
+Start with phenomena that have a defensible connection to concrete actions and consequences. The catalogue stays extensible (Owner decision). The Undercurrent design names `resource_pressure`, `dependency_strain`, `affordance`, `epistemic_uncertainty`, `perturbation` and `surprise` as initial kinds, with no separate `interference` or regime kind. These semantic names do not freeze an API or release; every kind remains gated by source admissibility, privacy, stability and capacity.
 
 | Field | What it represents | What can substantiate it | What must not substitute for evidence |
 |---|---|---|---|
@@ -161,7 +161,7 @@ Start with phenomena that have a defensible connection to concrete actions and t
 | **Affordance** | New or improved possibilities for action | An available capability, validated artifact, demonstrated reduction of a relevant obstacle | Self-promotion; download counts; clones pretending to be independent adopters |
 | **Epistemic uncertainty** | Where the world is insufficiently observed or evidence conflicts | Known coverage gaps, stale measurements, contradictory observations | Assuming everything unmeasured is safe, dangerous or valuable to explore |
 
-The first three are the strongest candidates. Uncertainty should accompany observations from the beginning; whether it deserves its own propagating field is open.
+Uncertainty accompanies observations and the Undercurrent design selects `epistemic_uncertainty` as its own initial evidential kind. It is not a morale or risk score: unobserved/denied/incomplete coverage stays unknown and does not manufacture either safety or danger.
 
 ### Resource pressure: the hardest grounding
 
@@ -169,17 +169,23 @@ This is closest to a physical constraint. If a shared executor is busy, an agent
 
 Separate the **resource ledger** from the **pressure field**. A pressure estimate may decay or spread. Money already spent does not come back because a field faded. Account limits, permissions and reservations remain hard controls in their real scopes; this is not a proposal to pool all colonies' budgets.
 
+The initial field mapping and R1 inputs are specified in `DESIGN-UNDERCURRENT.md` §§9 and 15.1: scoped coalesced headroom, provider availability and Core resource measurements are distinct evidence, while field estimates never replace hard ceilings, reservations or accounting.
+
 ### Dependency strain: consequence without blame
 
 A defect in a heavily used component can matter far beyond its author. The field concerns exposure to the defect, not the author's social standing. A verified repair removes the underlying obstruction; merely announcing a repair does not.
 
 Known hazards need continuing support from unresolved state, or a persistent constraint. An old warning becoming less fresh must not be interpreted as the underlying danger becoming smaller. Confidence, age and severity are different quantities.
 
+The current admissible source/lifecycle proposal is in `DESIGN-UNDERCURRENT.md` §9; its validation dependencies and limitations remain subject to the unrun gates in §14.4. `P-V2-F1-REPRODUCTION-ONLY` keeps F1 reproduction-only: it seeds no local or federated field source, while authorized private diagnostics remain. An existing C4 reproduction may be explicitly requested, but this rule schedules no autonomous job or model/provider turn. F2 is the minimum failure-field evidence; F3 attribution and F4 support remain unchanged. Any future F1 field effect requires an explicitly revised law/profile and existing approvals.
+
 ### Affordance: growth without a popularity contest
 
 An agent's successful work can make the universe richer in possibilities. A reliable tool, a usable bridge between formats or an established method can lower the cost of future work. This provides a durable consequence of learning without assigning the agent a universal reputation score.
 
 Affordance is contextual. A tool can be excellent for one input class and unsafe for another. Verified reuse is evidence only to the extent it adds genuinely new information; copying the same result through many agents does not.
+
+The current admission and retirement rules for R2/R3 promotions are specified in `DESIGN-UNDERCURRENT.md` §9; validation and release gates remain unrun.
 
 ### Fields to avoid initially
 
@@ -298,17 +304,17 @@ Therefore, “numeric,” “passive,” “aggregated” and “no recipient”
 
 We cannot promise both that a secret event has observably different consequences for an unauthorized observer and that the observer learns nothing about that event.
 
-**Unresolved owner decision:** whether private work may contribute outward field effects, including coarse shared-resource conditions that reveal its existence or timing, was raised but not answered. The recommendation below is not approval of that disclosure.
+**Owner-selected private-effects option (2026-10-05):** permission-scoped shared-resource pressure and coarse hints that private work overlaps the recipient's work may be disclosed without its contents. This is the owner's selection of an assistant-written option, not owner-originated wording. It deliberately accepts limited existence/relevance/timing leakage; it does not approve universal private-work influence.
 
-The proposed boundary is **explicitly permitted environmental disclosure**: decide which world consequences are shareable, at what resolution, and with whom. Private conversation text and private relationship interpretations must not be silently converted into universal field sources. Even resource metadata needs a disclosure policy. Coarsening, delay, aggregation or noise can reduce some leakage; none is a blanket proof of privacy.
+The boundary is a host-owned grant by source, origin, audience/context, region, resolution, freshness and policy revision. Shared-resource audiences may receive a versioned coarse pressure band/freshness, never the consumer, task, amount, private provider/account details or relationship history. Private-work projection may be only `possible_overlap=true|false|unknown` and an already-authorized coarse region, never paths, hashes, text, authorship or clone lineage. Filter unauthorized candidates before ranking, ambient sampling, mood eligibility and delivery; revoke/recheck grants at delivery. Unknown policy, coverage or scope fails closed. Cross-operator projection additionally needs both operators' matching grants and exact law/protocol.
 
-This is an intentional new information channel requiring its own approval. It does not reinterpret the core's default-deny direct-message rules, including the absence of implied cross-colony routes.
+This selected disclosure policy is separate from DMs, Corps boards and Griot stories and creates no recipient choice, work permission or authority. Coarsening, delay and aggregation reduce some leakage; none is a blanket privacy proof.
 
 ### Passive does not mean costless
 
 A field does not require an LLM call every time it changes. Its state can evolve independently of agent turns; an active agent can encounter a small, authorized observation when it next acts.
 
-**Owner decision — idle agents must also participate:** provide bounded, resource-efficient opportunities for idle agents to encounter fields and enter strange moods. Otherwise only already-active agents could discover these opportunities, unnecessarily requiring work to be interrupted. Whether this uses periodic sensing, event-driven wakeups or another mechanism remains open, as do cadence, thresholds and resource allowances. This is not a requirement for one model call per field update.
+**Owner decision — idle agents must also participate:** provide bounded, resource-efficient opportunities for idle agents to encounter fields and enter strange moods. The Undercurrent design proposes keyed/coalesced sensing and a persistent next-due timer, not one model call per field update (`DESIGN-UNDERCURRENT.md` §11.2). Exact cadence, caps and thresholds remain provisional calibration under owner-set ceilings; this is not an existing wakeup capability or measured budget.
 
 But observation still has costs: computation, storage, transport and possibly prompt tokens. A language model does not continuously feel an environment between calls. If the field should constrain an action without a model turn, the host must enforce that constraint.
 
@@ -316,9 +322,9 @@ Independence from messaging is a **semantic boundary**, not a claim of zero soft
 
 ### Learning from history and investigating an impression
 
-**Owner decisions:** causal history must remain recoverable (§3), but learning from exemplary agents who changed the world should currently be encoded by Griots. Broad agent access to historical evidence or causal records is not settled merely by requiring their retention.
+**Owner decisions:** causal history must remain recoverable (§3); learning from exemplary world-changing agents should currently be encoded by Griots, not broad agent access to raw causal records. For a retired context, the selected option retains read-only messages already delivered to that participant and its private memories only: no future delivery, unseen backlog, successor access or posting rights. New agents/clones start with fresh memory; an explicit inheritance manifest may select only already-shareable lessons/artifacts, never private relationship history. These are selections of assistant-written options, not owner-originated wording.
 
-**Provisional owner decision — explicitly open to change:** before a strange mood, the agent generates an insight from its impression, informed by its existing context and memories. It must clarify and scope that insight before work begins; it does not first have to establish a verified diagnosis through direct investigation. During the strange mood, allow direct, task-focused investigation within existing access permissions. The investigation can disprove the motivating hypothesis. This is not a grant to browse other agents' private records or a permanent decision about general history access.
+**Current technical behavior proposal (assistant-written, not owner policy):** before a strange mood, the agent generates an insight from its impression, informed by its existing context and memories. It must clarify and scope that insight before work begins; it does not first have to establish a verified diagnosis through direct investigation. During the strange mood, allow direct, task-focused investigation within existing permissions and currently visible material. The investigation can disprove the motivating hypothesis; it is not a grant to browse another agent's private records or recover its unseen history (`DESIGN-UNDERCURRENT.md` §11.3). This proposal does not claim an owner decision or a passed release gate.
 
 ### Self-initiated intervention and superior notification
 
@@ -328,7 +334,7 @@ Before intervention work begins, the agent must clarify the motivating insight a
 
 The Orchestrator's standard response is to adjust its team: reassign the parked task, cover it through another agent or an authorized clone, or accept that it is on hold. The worker contributes its unique insight; the Orchestrator contributes a wider logistical perspective. Allowing strange moods has costs, and the owner expects their benefits to outweigh those costs. Routine disruption is not, by itself, a reason to restore the old assignment.
 
-System-wide notification does not invent new direct-message routes, clone/birth authority or Grand-role approval powers. The core's existing hierarchy and permissions still apply; handling at the Grand boundary remains unresolved.
+The owner-selected boundary gives each Grand coordination of its corresponding hierarchy chain, not blanket descendant access. Grand-initiated births require owner approval. A mood can notify the owner apex without ordinary relationship permission, but that notification conveys only the authorized mood/impression reference; it does not grant history access or new worker DM rights. This is an assistant-written selected option, not owner-originated wording.
 
 ### Emergency-only interruption
 
@@ -346,61 +352,57 @@ This organizational rule does not override hard resource limits, tool permission
 - the colony does not have the resources to accomplish the task;
 - there is no step that will materially advance toward the scoped goal.
 
-An unconstrained judgment that “no further action will be useful” is insufficient. The scope and exit reasoning must make that judgment concrete; how to establish that no materially advancing step remains still needs definition.
+An unconstrained judgment that “no further action will be useful” is insufficient. The current proposal retains attempted steps, supporting evidence and why a plausible next step cannot materially advance the scoped goal (`DESIGN-UNDERCURRENT.md` §11.3). This records reviewable reasoning; it does not automatically prove that no useful step exists.
 
 Because the field may not change immediately, handle two separate cooldowns:
 
-| Cooldown | Scope | Owner-selected behavior |
+| Cooldown | Scope | Initial technical candidate |
 |---|---|---|
-| Short agent-wide cooldown | The individual agent, across insights | A recovery period before entering another strange mood |
-| Longer insight-specific cooldown | The individual agent revisiting that insight | A longer wait, potentially days, before that agent pursues the insight again |
+| Short agent-wide cooldown | The individual agent, across insights | 30 minutes |
+| Longer insight-specific cooldown | The individual agent revisiting that insight family | 24 hours |
 
-The longer cooldown is not a universe-wide lock on the problem. Another agent may solve it or approach it differently when the original closure was agent-specific. An agent-specific closure is not a verdict of universal impossibility; genuinely shared constraints still apply. This does not independently settle who can inspect closure records.
+The longer cooldown is not a universe-wide lock on the problem. Another agent may solve it or approach it differently when the original closure was agent-specific. An agent-specific closure is not a verdict of universal impossibility; genuinely shared constraints still apply. Closure records remain subject to current audience grants; retirement does not create successor or owner access to an unseen-history archive.
 
-Exact durations, clock semantics, what identifies the “same insight,” and any conditions for reconsideration before expiry remain open. The two cooldowns must be handled separately, rather than using field decay as a substitute for either.
+Initial technical candidates, not owner decisions or calibrated scientific constants, are a 30-minute agent-wide cooldown and a 24-hour cooldown for the same agent and host-evidenced insight family. Core derives that stable family from `(kind_id, condition_ref, authorized safe_region_id)`, falling back to the stable source/impression reference where no condition exists; revisions of one condition stay together. Never use free-text similarity, embeddings or an LLM to deduplicate insights, and never lock another agent out. Start both deadlines at the durable mood close on D37's nondecreasing Core UTC event time and persist them in Core; pauses do not close or start cooldowns. A crash closes an active mood as interrupted and starts both deadlines. Do not persist process-monotonic time; clock rollback or uncertain ordering cannot expire a deadline early. A new positive host-evidenced state revision may permit reconsideration only after both deadlines and a fresh current-grant/agent-availability check; it never waives rate or budget limits. Natural turns and paid sensing share the same mood-start gate, and queued sensing is cancelled/rechecked on grant revocation or agent disablement. Implementation, fairness and clock behavior remain untested U8 gates.
 
 ## 10. A cross-colony example
 
-Suppose two colonies use an openly shared parser. A worker in Colony A finds a reproducible failure in an input class also used by Colony B.
+Suppose independently administered operators A and B have explicitly enrolled, adopted the exact same law/protocol and granted a bounded share for a parser and its coarse failure-pressure consequence.
 
-1. The failure is established through an admissible validation path. The worker does not choose a field magnitude or name Colony B as a recipient.
-2. The parser's affected input class acquires dependency strain. The consequence follows validated exposure relationships, not the worker's contact list.
-3. A specialist in Colony B encounters increased strain in its authorized working environment. Its memories suggest an intervention. The broader discovery requirement also permits an agent with no previously mapped dependency to recognize an opportunity; the mechanism for that encounter is not selected here.
-4. If the agent enters a strange mood, it first clarifies the impression into a scoped insight and informs its superior of the goal and motivating signal. It then investigates directly under the provisional access rule in §9. An idle agent can enter this process through a bounded sensing opportunity too.
-5. The Orchestrator normally accommodates the intervention and manages any parked work; only the emergency conditions in §9 justify interruption. Other agents can respond differently, and not every agent need encounter or act on the condition.
-6. A validated repair changes the underlying state. The obstruction ends; any residual transient field evolves under its rule. Evidence and causal history are not erased. Alternatively, the intervention may close for one of §9's scoped reasons without resolving the obstruction.
-7. Closure starts the agent's two separate cooldowns. Another agent remains free to approach the problem; neither the first agent's closure nor its cooldown suppresses the field for everyone.
+1. A host-run admissible path establishes the failure. The worker neither sets field magnitude nor chooses Colony B as a recipient.
+2. The field source follows only proved parser dependencies and the source/audience grants; no path, task, actor identity or private work history crosses the boundary.
+3. A specialist in B may encounter the authorized condition in its bound work context. A separate permission-filtered ambient exploration slot can reveal an unaddressed eligible region even without a mapped dependency; it cannot bypass either operator's grant.
+4. A strange mood forms its insight from the impression and existing memory, clarifies and scopes the goal before work, then investigates only currently permitted material. Its superior receives the limited mood notification; an owner-apex notice follows the selected boundary and opens no history.
+5. The Orchestrator ordinarily rearranges work. Interruption remains emergency-only and requires the time-sensitive non-substitutable condition in §9; another agent or authorized clone may cover ordinary work.
+6. An R2 repair ends only its exact sustained failure and adds a short affordance impulse at repaired nodes; R3 can also make the repairing promotion a sustained affordance source. Retirement ends with uncertainty, never repair credit. Evidence history remains distinct from transient field state.
+7. Closure starts two agent-bound cooldowns. Another agent remains free to approach an issue not ruled out by a genuinely shared constraint.
 
-This example assumes the parser, exposure relationship and disclosed consequence are shareable. If the originating event is private, cross-colony disclosure is **not** automatically allowed. Field Design must define the permissible projection or prevent that influence.
-
-No new worker DM permission was created. No Griot had to retell the event. No agent gained authority. Yet work in one colony changed conditions in another.
+The cross-colony effect exists only for an explicitly shareable source, exact peer/law grants and a current recipient permission. Private content and direct-message routes remain separate; no new worker DM, authority or global coordinator is created.
 
 The inverse case is equally important: if the worker publishes a hundred excited claims but establishes no changed capability, failure or exposure, the field should not behave as if a hundred discoveries occurred.
 
-## 11. Choices to settle before Field Design
+## 11. Crosswalk to the Undercurrent design
 
-The discussion has settled requirements for an extensible dynamical medium, recoverable causal history, unexpected discovery, concrete-action sources, scoped self-initiated strange moods, emergency-only interruption, idle participation and two separate agent-bound cooldowns. The core-first build order, typed action-delta ledger with content-addressed bodies, and private-scratch/fast-forward workspace model are also settled as platform direction; none selects field-source admissibility, disclosure, or a complete history-recovery mechanism. Investigation access has a provisional owner decision. The following choices remain open; recommendations in this table are **[INFERENCE]**, not additional owner decisions.
+An Undercurrent design and dependency roadmap now exist. This crosswalk records what they specify and what is still a gate; it neither claims implementation nor freezes C1/Router producer schemas. The 2026-10-05 entries explicitly below are selections of assistant-written options, not wording attributed to the owner.
 
-| Remaining question | Boundary or recommended starting position |
-|---|---|
-| What constitutes one universe? | All explicitly participating colonies under an agreed law set; do not assume unrelated installations share an operator or trust boundary |
-| May private work contribute outward consequences, and at what resolution? | Unanswered in the interview. Explicit categories of shareable effects remain a proposal; no automatic disclosure of private activity is approved |
-| What does “heavy” mean quantitatively? | Substantiated change in exposure, feasible action, cost or hazard; never one universal virtue/importance score. Sources must respect the concrete-action-only decision |
-| Which initial fields deserve existence? | Resource pressure, dependency strain and affordance remain candidates, with uncertainty explicit. The catalogue must be extensible |
-| What geometry supports both causal propagation and unexpected encounters? | Evidence-backed resource/dependency links are useful, but cannot be the exclusive gate for perception. Broader discovery must preserve access boundaries without requiring universal broadcast |
-| How should effects persist and travel, and how are parameters changed? | Adjustable decay and wave speed are required; equations, units and tuning mechanisms remain open. Persistent unresolved facts must not be forgotten by simple decay |
-| How will causal history be recovered, and what may agents inspect? | Typed action deltas in an append-only ledger with content-addressed bodies are the chosen evidence-storage direction. Retention duration, whether collection may remove bodies needed for recovery, and proof that retained records support complete causal reconstruction remain open. For now, form the insight from an impression and investigate directly during the mood; broad historical access remains open, with Griots carrying exemplar-based learning |
-| Which concrete actions in private work can affect outward fields? | The harness can record deltas and separately record fast-forward promotion into canonical state. Neither event automatically authorizes disclosure or makes a field source; private-work disclosure and source admissibility remain open |
-| How are scope, closure and logistical emergency judgments made concrete? | Preserve self-initiation, pre-work scoping, superior notification and emergency-only interruption. Define evidence for the stated exit reasons and encode the time-sensitive, non-substitutable-task criterion in the Orchestrator skill suite; do not add ordinary prior approval |
-| How are the two cooldowns identified and timed? | Short agent-wide and longer agent–insight cooldowns are separate. Exact durations, insight identity, clocks and early reconsideration rules remain open; another agent is not locked out by an agent-specific closure |
-| How do idle agents sense efficiently? | Idle participation is required. Choose bounded sensing/wakeup opportunities and resource limits, not one inference call for every perturbation |
-| How does system-wide superior notification work at the top of the hierarchy? | Follow existing permitted relationships; do not infer new Grand mandates or routes |
-| What strategic behavior is legitimate? | Deliberate beneficial shaping through concrete action is allowed; forgery, evasion and counterfeit corroboration are not. The threat model still needs specification |
-| Who can change the laws? | Authorized operator governance, not an agent role's conversational authority; cross-operator governance remains open |
+| Decision | Canonical boundary | Still a gate |
+|---|---|---|
+| Shared universe | Independently sovereign operators may explicitly enroll, adopt matching law/protocol and grant scoped exchange; no global coordinator, implicit trust or raw shared ledger. | Transport, keys, C1 contracts and each operator's grants remain pre-build. |
+| Private effects | Owner-selected: permission-scoped pressure on explicitly shared resources and coarse private-work overlap hints, without contents or arbitrary recipient choice. | Implement/recheck host-owned grants before selection and delivery; test leakage and revocation. |
+| Concrete source and weight | Only host-observed/admissible outcomes, with typed identity, condition, provenance and support; exposure is not moral worth. | Exact event and law schemas remain C1/U1 work; no self-assigned magnitude. |
+| Initial fields | The six initial kinds form a closed v1 registry: pressure, strain, affordance, uncertainty, perturbation and surprise; no separate interference or regime field. Future extensions require explicit schema/evaluator versions, a typed built-in registry and replay compatibility; no arbitrary scripts, free-text authority or agent-supplied magnitudes. | Per-kind source, disclosure, stability and capacity gates precede release; controlled extension does not freeze C1. |
+| Geometry and discovery | Typed dependency/resource/check/work-domain graph plus context-local encounter hints; permission-filtered ambient exploration prevents dependency links becoming the only discovery path. | Coverage, poisoning, fairness and unseen-age behavior must be tested; no universal broadcast. |
+| Persistence and travel | First-arrival causal propagation with fixed-point per-hop floors and FIFO route candidates; equal integer amplitudes prefer fewer hops then lexicographic stable edge-ID bytes. Edges use selected dependency-to-consumer orientation and per-kind traversal whitelists; deterministic ledger-time delay/cancellation uses a separate bounded heap; initial profile has zero hop latency and no diffusion. U1.L selects strict versioned JSON v1 with exact Git-blob SHA-256 identity and local activation/C4 bindings. | Exhaustive small-graph tie tests, route-cap/atomic-publication checks, C1/Router freezes, actual law/parser/token/cost calibration and U2/U6/U9 empirical privacy, fairness and stability gates remain; no runtime or performance result is claimed. |
+| Recoverable history and private memory | D36 retains the source log; snapshots are caches, not authority. Griots carry exemplars. Retired participants retain only delivered messages/private memory, with no future/backlog/successor access; new memory is fresh unless a manifest selects already-shareable lessons/artifacts. | A retained log is not broad agent history access; archive/schema behavior must preserve permissions and C1 ordering. |
+| Strange moods | Self-initiated scoped work, ordinary notice not prior approval, emergency-only interruption and evidence-based closure; mood reference cannot exceed original/current-grant visibility. Grand coordination stays chain-specific, owner receives the apex notice and approves Grand-initiated births (D80, D84, B8); no blanket descendant access, history access or new DM right. | Core broker/role integration, evidence of emergency and closure implementation; U8 remains gated, with no additional ordinary mood approval. |
+| Idle sensing and cooldowns | Initial technical candidates: 12 paid turns/colony/rolling hour, 4/agent/rolling day and 5% of configured monthly sensing allocation; 30-minute agent-wide and 24-hour agent/insight-family cooldowns (§11.2–11.3). All stay below owner ceilings; missing cost ceilings deny paid sensing. | Implementation, token/cost, fairness, cooldown-boundary, clock/restart and privacy gates remain unrun; sampling alone never calls a model. |
+| Grand, owner and delegation | Each Grand coordinates its chain, not all descendants; owner is apex for mood notifications and approves Grand-initiated births. Owner sets capability/budget ceilings; delegated grants are narrower, expansions return to owner. | Current role graphs and Core durable notice/grant boundaries; a notice is not archive access. |
+| Retired-context and clone boundaries | Other contexts of the same agent may participate in retirement; repairing context and its clones may not. Inheritance shares only explicitly manifested lessons/artifacts. | Never strengthen context exclusion to the whole agent or infer independent evidence from a clone. |
+| Manipulation and assurance | Bounded, explicit resistance under a stated threat model; C10 same-user isolation remains distinct from C4's A1 evidence. | Forgery, correlated inputs, worktree privacy and unmodeled channels need adversarial gates. |
 
-As these choices are resolved, **Field Design** can specify source admissibility, field units and operators, topology maintenance, sensing and disclosure, identity/isolation, causal-history recovery, persistence and cross-colony transport. It must also define the strange-mood lifecycle, independent cooldown handling and evidence for stability, usefulness, manipulation resistance and preservation of private contexts. It must respect the core-first build order and substantial standalone testing before any field can affect agents. This document does not implement those mechanisms or the Orchestrator skill suite.
+Selected in this design lane: Q10's typed dependency-to-consumer direction; Q18's explicit non-adoption of an ungrounded regime field; Q24's strict JSON v1 field-law schema, exact immutable Git-blob SHA-256 and local activation-manifest binding; and Q22's deterministic six-item/384-estimated-token/4,096-byte renderer. D80/D84/B8 resolve U8's settled-index policy and Grand chain/owner-apex boundary: notify-not-ask for every configured role, without blanket descendants or extra ordinary mood approval. Numeric profiles and technical defaults elsewhere in the field design remain initial proposals, not owner decisions or empirical results. These selections do not make U6/U8 Ready/Done and are not wording attributed to the owner.
 
-Those specifications are deliberately not selected here. The current colony-host and relationship-context proposals are neither approved nor replaced by this document.
+Field Design adds operational detail but does not replace the core's organization, permissions or relationship memory. Source dispositions, exact dependencies, staged C1 schemas and acceptance gates live in [the Undercurrent design](DESIGN-UNDERCURRENT.md) and [its roadmap](ROADMAP-UNDERCURRENT.md). This document does not implement a field, a notification skill or an Orchestrator suite.
 
 ## Research notes and reading order
 

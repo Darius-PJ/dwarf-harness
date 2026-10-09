@@ -1,33 +1,39 @@
 # Routing layer design
 
-**Status:** Draft 0.7, for review; design decisions and proposals, not implementation claims. No router code exists yet.
-**Date:** 2026-10-02 (implementation decisions); 2026-10-01 (environmental-layer contract); 2026-09-30 (workspace-model alignment); provider research and worked examples: 2026-09-28
+**Status:** Draft 0.8, for review; selected engineering design, not implementation or contract-freeze evidence. No router code exists yet.
+**Date:** 2026-10-05 (engineering closure and selected endpoint/tariff verification); earlier research and worked examples retain their recorded dates.
 **Scope:** The component between the harness's agent loop and the model providers. Anthropic and OpenAI first; more providers later.
-**Inputs:** The open-source harness survey (`RESEARCH-OPEN-SOURCE-HARNESSES.md`), the implementation-language research (`RESEARCH-IMPLEMENTATION-LANGUAGE.md`), the core-and-launchers design (`DESIGN-CORE-AND-LAUNCHERS.md`), and the provider-efficiency and router surveys from the same research rounds. Provider facts were re-verified against primary documentation on 2026-09-28 (Appendix B).
+**Inputs:** The open-source harness survey (`RESEARCH-OPEN-SOURCE-HARNESSES.md`), the implementation-language research (`RESEARCH-IMPLEMENTATION-LANGUAGE.md`), the core-and-launchers design (`DESIGN-CORE-AND-LAUNCHERS.md`), and the provider-efficiency and router surveys from the same research rounds. Appendix B records the earlier primary-source research; the initial endpoint bounds and tariffs in §9.4 were rechecked on 2026-10-05.
 **Reconciliation scope:** The 2026-09-29 incorporation is limited to the three owner-authorized idea sections recorded in `DESIGN-CORE-AND-LAUNCHERS.md` §11 and §12. The original, `superceeded-Design.md`, is kept in the archive folder `../dwarfharness/`, outside this repository; its remaining material is not reconciled. This update does not inspect legacy code or data.
 
-**Fresh session:** Start with [`ROADMAPS.md`](ROADMAPS.md) for the order of work, then [the core design's canonical handoff](DESIGN-CORE-AND-LAUNCHERS.md#start-here-for-a-fresh-session) for reading order, authority and continuation scope. Owner decisions from 2026-10-02 onward are in [`DECISIONS.md`](DECISIONS.md). This document specifies the proposed router. Its context model rests on core §7.3, which the owner adopted on 2026-10-02 (D21); the broker and board mechanisms in core §7.4–§7.5 remain proposals. This document does not approve those proposals or report an implementation.
+**Fresh session:** Start with [`ROADMAPS.md`](ROADMAPS.md) for the order of work, then [the core design's canonical handoff](DESIGN-CORE-AND-LAUNCHERS.md#start-here-for-a-fresh-session) for authority and continuation scope. [`DECISIONS.md`](DECISIONS.md) distinguishes adopted owner policies from assistant-selected engineering mechanisms. D21 supplies the private-context model; B7–B8 and core §13.5–§13.6 select the broker, boards and role mechanisms. Their implementation and producer-owned contract freezes remain unrun.
 
-**Related philosophy and field design:** [`FIELD-PHILOSOPHY.md`](FIELD-PHILOSOPHY.md) explores the owner's universe-wide indirect environmental layer, separate from DMs, Corps boards and Griot stories. [`DESIGN-UNDERCURRENT.md`](DESIGN-UNDERCURRENT.md) is a draft design for that layer, working title Undercurrent. Its fields do not grant permissions, pool private contexts, override budget scopes or authorize provider changes. The router's obligations toward it are limited to writing its measurements to the core action ledger (R11) and hosting its rendered impressions as a tail context module (§5.5). Field sensing and disclosure remain undesigned and unapproved; this link does not adopt a Field Design.
+**Related philosophy and field design:** [`FIELD-PHILOSOPHY.md`](FIELD-PHILOSOPHY.md) and [`DESIGN-UNDERCURRENT.md`](DESIGN-UNDERCURRENT.md) specify the universe-wide indirect environmental layer, separate from DMs, Corps boards and Griot stories. D80–D81 settle scoped coarse disclosure and sovereign opt-in federation; the field design selects the engineering rules. Fields do not grant permissions, pool private contexts, override budget scopes or authorize provider changes. The router writes scoped measurements to the Core ledger (R11) and hosts authorized rendered impressions as a tail context module (§5.5). This selected design does not claim a frozen law, field implementation or passed disclosure/effectiveness gate.
 
-**Changes in 0.7**, from the owner's implementation decisions of 2026-10-02 (`DECISIONS.md`):
+**Changes in 0.8**, 2026-10-05:
+
+- B9–B10 select Core-owned durable accounting, inclusive endpoint cost bounds, sealed request/quote identity, one-attempt dispatch and scoped R1 observations.
+- Context-module limits, headroom publication, cache/classifier defaults and transport rules are concrete selections below; formal freezes and empirical gates remain explicit.
+- D80–D87 and the Core/field roadmaps replace the earlier unresolved social, disclosure, federation and platform-policy forks. C0 remains Ready; D52 owner approval and the six contract freezes are not completed by this document.
+
+**Historical changes in 0.7**, from the owner's implementation decisions of 2026-10-02 (`DECISIONS.md`):
 
 - D21 adopts one execution session per agent with many private contexts (core §7.3), so the context-bound router state in §5.1 and §6.4 now rests on an owner decision. The broker in core §7.4 is still a proposal.
 - D22 lets an agent run turns in several of its contexts at once, up to a per-agent limit, with at most one active turn per context (§5.1).
-- D24 accepts that simultaneous turns starting on a cold shared prefix may each pay the cache-write price. A separate shared-prefix cache record is not decided (§9.2; §15 question 9).
+- D24 accepts that simultaneous turns starting on a cold shared prefix may each pay the cache-write price; D51 adds a shared-prefix cache record without changing that behavior (§9.2; §15).
 - D25 adds a tail note listing the agent's other active contexts by name only (§5.1).
 - D22 safeguard 4: each call's maximum cost is reserved against every applicable budget scope before the call and settled against reported usage afterwards (§11).
 - D33: the per-call decision record stays a separate JSON-lines file, outside the colony log (§11).
 - D28 keeps cgo out of the core, so the local embedding matcher's encoder can only be a separate helper program (§7.1).
 - The rollout is tracked as steps R0–R5 in `ROADMAP-ROUTER.md` (§14).
 
-**Changes in 0.6**, from the environmental-layer design discussion of 2026-10-01:
+**Historical changes in 0.6**, from the environmental-layer design discussion of 2026-10-01:
 
 - New requirement R11: provider status transitions, headroom samples, budget threshold crossings and usage attribution are written to the core action ledger as typed events when observed, not held only in memory or in the JSONL decision record (§5.4).
 - New §5.5 describes the relationship between the router and Undercurrent: what flows in each direction, and what the field layer may never do to routing.
 - Rollout (§14) records that router phase 1 must be complete before Undercurrent's `resource_pressure` field can be validated on real data and before any field impression can reach a prompt.
 
-**Changes in 0.2**, from the owner's decisions of 2026-09-28:
+**Historical changes in 0.2**, from the owner's decisions of 2026-09-28:
 
 - The harness keeps control: its transcript, permission checks, tool gating, compaction and spend accounting are the source of truth, and provider-side features are optional (T10, §8.5).
 - No automatic provider switching in v1. The router tracks whether each provider is still serving, tells the user when one stops, and makes the provider change the user chooses safe (§9.8).
@@ -39,14 +45,14 @@
 - Go was selected with a no-cgo build constraint. The router's placement as a library inside the Go core remains current.
 - The two proposed launchers were a plain terminal and an external-browser launcher.
 
-**Changes in 0.4**, from the owner's decisions of 2026-09-29:
+**Historical changes in 0.4**, from the owner's decisions of 2026-09-29:
 
 - Go remains the core language. A C toolchain will be acquired; blanket `CGO_ENABLED=0` is no longer a product constraint (`DESIGN-CORE-AND-LAUNCHERS.md` §8.1).
 - `dwarf-harness` is the program and plain terminal entry point; `dwarf-harness-GUI` opens a native window, replacing the external-browser proposal. Both expose identical harness functionality through the same Go core, and the same live session is visible in both simultaneously. Each view has its own event cursor; the proposed colony-scoped core-host topology is described in `DESIGN-CORE-AND-LAUNCHERS.md` §3 and §4.
 - At most one GUI instance serves a colony; launching it again reuses/focuses that instance. Other colonies may have their own instances. The GUI can spawn agent sessions within core ownership limits. Dwarf Fortress styling is GUI-only; its visual design comes later (`DESIGN-CORE-AND-LAUNCHERS.md` §5 and §6).
 - DwarfHarness is a standalone product inspired by ideas, not a StarNet fork, port or addon; it has no StarNet runtime, compiler, JavaScript/goja, compatibility or parity contract.
 
-**Changes in 0.5**, from the owner's communication requirements and the proposed relationship-memory model of 2026-09-29:
+**Historical changes in 0.5**, from the owner's communication requirements and the proposed relationship-memory model of 2026-09-29:
 
 - The Colony's Grand roles and each specialized Corps' Orchestrator, Griot, Diplomat and workers follow the hierarchy and communication policy in `DESIGN-CORE-AND-LAUNCHERS.md` §7.1 and §7.2; routing does not grant additional channels.
 - One execution session per agent, including every leadership role, can serve many independently owned contexts. Routing state, private relationship memory, provider continuations and cache ledgers belong to `(agent_id, context_id)`, with each turn bound to that context (§5.1 and §6). [INFERENCE: proposed mechanism, not a newly approved owner implementation choice]
@@ -54,9 +60,9 @@
 
 Conventions:
 
-- **[INFERENCE]** marks design reasoning that no cited source establishes. Router mechanisms, defaults and rollout below are proposals unless identified as owner decisions; router-specific unresolved choices are in §15.
-- Numbers in Appendix A are computed from verified list prices. They illustrate the decision rules; they aren't measurements.
-- Go is the selected implementation language. TypeScript-like blocks are design pseudocode for data and call shapes, not implemented Go APIs or selected plugin/launcher wire schemas. `Promise`, `Map` and named helper types describe concepts; serialization and complete error/result shapes still need design. Plugin transport is discussed in §12.
+- **[INFERENCE]** marks reasoning not established by a cited source. Selected engineering defaults are distinct from adopted owner policy and from unrun implementation/approval gates; §15 records their disposition.
+- Appendix A's dated price calculations illustrate decision rules, not measurements or the current admission tariff. The pinned initial admission profiles are in §9.4.
+- Go is the selected implementation language. TypeScript-like blocks describe data and call shapes, not implemented Go APIs. `Promise`, `Map` and helper names are explanatory notation. The selected serialization, dispatch and error mechanisms are in §9.4, §11 and §12; producer-owned exported signatures and golden encodings are frozen at the named implementation gates, not implicitly by these sketches.
 
 ## 1. Summary
 
@@ -202,7 +208,7 @@ Classification runs once per new turn. Tool-loop calls reuse that turn's decisio
 
 ### 5.3 Router interface
 
-The interface below sketches successful decisions only. If no rung satisfies both floor and ceiling, there is no model dispatch; the blocked-result shape and owner-facing resolution remain open (§15). This is not a complete callable API.
+The interface below sketches successful decisions; it does not authorize dispatch. Every paid model call—including classifier, compaction, helper/social work and any explicit retry—must pass through the single Core admission service and its durable per-colony ledger. Adapter compilation supplies a complete finite `CostBound` and pinned capability/tariff version; Core atomically checks all applicable explicit scopes, persists the maximum reservation, and returns an immutable `BoundCall` before a provider request can be sent. Missing/unbounded prices, stale capability versions, floor/ceiling conflicts or exhausted caps return a typed `RouteBlocked`; they never dispatch or trigger a fallback model call (§11).
 
 ```ts
 interface Router {
@@ -216,7 +222,49 @@ interface Router {
   // decision for the next call (escalation) or request a change point (e.g. compaction).
   observe(turn: TurnDecision, result: ProviderResponse | ProviderError): Observation
 }
+
+type SealedProviderRequest = {
+  readonly provider: string; readonly endpoint: string; readonly model: string; readonly region: string
+  readonly method: "POST"; readonly path: string; readonly serviceTier: string // exact escaped path; initial profiles allow no query
+  readonly credentialScopeID: string; readonly credentialVersion: string // non-secret immutable Core credential binding
+  readonly headers: readonly (readonly [name: string, value: string])[] // sealed non-secret application headers
+  readonly bodyUTF8: string; readonly requestHash: string // exact serialized wire body, sealed before pricing
+}
+type ExactPricedDimension = {
+  classes: string[]                // unique mutually exclusive billable classes, sorted for hashing
+  maxUnits: bigint                 // nonnegative inclusive token maximum, not an expected allocation
+  rateNumerator: string            // nonnegative base-10 integer; exact USD per 1,000,000 tokens
+  rateDenominator: string          // positive base-10 integer; never a floating-point rate
+}
+interface CostBound {
+  currency: "USD"; maximumMicros: bigint
+  components: readonly ExactPricedDimension[]
+  requestHash: string; capabilityVersion: string; tariffVersion: string; tariffHash: string
+  quoteHash: string
+}
+interface BoundCall {
+  readonly attemptId: string; readonly binding: TurnBinding; readonly request: SealedProviderRequest
+  readonly requestHash: string; readonly quoteHash: string; readonly credentialScopeID: string
+  readonly capabilityVersion: string; readonly tariffVersion: string; readonly tariffHash: string
+  readonly admissionPeriod: string; readonly budgetScopes: readonly BudgetScope[]
+  readonly maximumMicros: bigint
+}
+interface RouteBlocked {
+  reason: "floor_above_ceiling" | "budget_exposure" | "spend_authorization_required" | "bound_overflow" | "unbounded_endpoint" | "stale_capability" | "provider_unavailable"
+  requiredFloor?: string; eligibleCeiling?: string; scopes?: BudgetScopeRef[]
+  actions: ("revise_task" | "explicit_budget_change" | "owner_enroll" | "wait_or_configured_provider" | "stop")[]
+}
 ```
+
+The adapter seals the endpoint, body and non-secret application headers once before pricing. `Bound` accepts only that immutable `SealedProviderRequest`; `Core.admit` validates its digest and the quote, then atomically persists and reserves the maximum before returning `BoundCall`. Seal API-version, beta and organization/project-routing headers as well as ordinary content headers; reject unsupported headers, duplicate case-insensitive names, control characters, endpoint user-info/fragments and queries in the initial profiles. Header names are lowercase ASCII tokens sorted by byte order; values are the exact validated strings sent. Authentication bytes are excluded from hashes/logs and resolved only from the pinned, still-authorized Core credential version—not a mutable “current key” lookup. Transport-derived Host/Content-Length come from the sealed authority/body. Transport never reserializes or changes this semantic envelope after admission.
+
+Hash bytes are precisely defined, with no canonicalization library: `frame(bytes) = u64be(byteLength) || bytes`; text is valid UTF-8 as-is, without escaping or Unicode normalization. The request preimage is the concatenation of individually framed fields, in order: `router-provider-request/v1`, provider, exact HTTPS authority, model, region, method, exact escaped path, requested service tier, opaque non-secret `credentialScopeID`, `credentialVersion`; then `u32be(headerCount)`, each sorted header's framed name and framed value, then the framed exact body bytes. `requestHash` is lowercase-hex SHA-256 of that preimage.
+
+The quote preimage starts with individually framed `router-cost-quote/v1`, raw 32-byte request hash, capability version, tariff version, tariff hash, `USD`, and canonical-decimal total `maximumMicros`; append `u32be(componentCount)` and the components. Each component is `u32be(classCount)`, its unique class strings sorted by UTF-8 bytes and individually framed, then framed canonical-decimal `maxUnits`, rate numerator and rate denominator. Sort components by their encoded bytes and frame each complete component. Recompute the exact rational total and round upward once; there is no redundant independently rounded component amount. Reject overlapping billable classes, duplicate components, invalid UTF-8, overflow or unsupported fields. Canonical decimals are ASCII `0` or a nonzero digit followed by digits, without sign, leading zero or exponent; denominators are positive. `quoteHash` is lowercase-hex SHA-256 of that preimage. No map iteration, floats or mutable reserialization determines either digest.
+
+Core stores both digests with the immutable hold and verifies the endpoint, credential scope/version, sealed headers and body before `dispatch_intent`; digests provide local integrity/correlation, not provider proof or invoice evidence. The reservation separately stores the admission period, `TurnBinding`, and sorted de-duplicated scope IDs; the pinned credential must belong to that credential/account scope and remain authorized at dispatch. Scopes are colony, agent, credential/account-within-colony, active task/grant budget and every attenuated grant ancestor. A grant conveys narrower authority, not pre-reserved capacity: each attempt checks and holds against every applicable scope in Core's existing `BudgetBook`; no parallel grant-accounting service is introduced.
+
+Illustrative API boundary (not frozen): `ProviderAdapter.Seal(request, credentialScopeID, credentialVersion) -> SealedProviderRequest`, with the non-secret scope/version pair resolved by Core; `ProviderAdapter.Bound(sealedRequest, capability) -> CostBound`; `Core.admit(sealedRequest, quote) -> BoundCall`; `Core.dispatchIntent(boundCall)` durably writes intent/`SENT` before authorizing exactly one physical POST; `Core.settle(attemptId, finalUsage)` idempotently settles complete normalized usage; `Core.releaseUnsent(attemptId)` may release only a still-`reserved` attempt with no intent. Callers never write the ledger directly. A recovered reservation with no intent may be released only because code is forbidden to send before intent; sent/no-final-usage remains unknown and fully held through rollover.
 
 The core creates the protected bindings and scoped transcript below (§6.1). `compile` checks that the transcript and cache plan belong to the decision's context; `observe` records results against the initiating turn even if a view has moved elsewhere. A mismatch fails closed rather than falling back to another context. These are proposed contracts, not implemented APIs. [INFERENCE]
 
@@ -234,7 +282,7 @@ The core creates the protected bindings and scoped transcript below (§6.1). `co
 | **R8** | Context-bound phase events (mode switch, new task, `/clear`) reach the router; an explicit wider configuration change is applied separately to each affected context. | Change points (§9.6). |
 | **R9** | `dwarf-harness` and `dwarf-harness-GUI` show the same notice identifying its agent, context and paused turn, and accept wait, change provider, compact first, or stop. The terminal prints numbered choices; the native GUI presents controls. The core accepts a choice only for its still-valid bound turn, applies it once and publishes the resolved state to both views (`DESIGN-CORE-AND-LAUNCHERS.md` §4). | User-chosen provider changes (§9.8); view focus cannot retarget a pending choice. [INFERENCE] |
 | **R10** | Preserve completed tool effects and enough canonical state for safe retry/handover. Reconcile unfinished calls or uncertain effects through the core's recovery/approval path; never fabricate success or blindly rerun an effect. Target rendering must contain matched tool-call/result pairs; incomplete streamed content is completed or excluded from that render without erasing the audit record. Late results remain with their initiating context. | Safe handover (§9.8) and core §7.4's recovery boundary. [INFERENCE] |
-| **R11** | The core action ledger accepts typed router events, and the router writes them at the moment of observation: `ProviderStatus` transitions (scope, state, cause, `resumesAt`), headroom samples when headroom moves to a different bucket, budget threshold crossings (named scope, fraction, period), and usage attribution per bound context and provider account. The ledger write is a side effect of observation; it never delays or alters the routing decision. | The environmental layer reads only the ledger and must be replayable from it (`DESIGN-UNDERCURRENT.md` §5 and §15.1). In-memory status and the JSONL decision record are not replayable field inputs. [INFERENCE] |
+| **R11** | Core's single per-colony action ledger accepts typed router events. R1 writes `ProviderStatus` transitions, versioned `router-headroom/v1` samples on the exact band/knownness/freshness changes in §5.5, configured budget-exposure threshold crossings, and per-attempt usage attribution at the real provider/account/model/region and bound-context scopes. A headroom sample names metric `requests`, `tokens`, `input_tokens` or `output_tokens`; carries validated `limit`/`remaining`, categorical band, observed ledger time, `validUntil`, and optional provider-reset `renewal` time. It is not a money balance. Exposure includes settled admission-period cost plus every still-open hold for that scope across periods, deduplicated by attempt. Exact usage stays bound to its source context; field projection follows D79 and never changes routing or admission. A `SENT` attempt without final usage retains its hold. R0 emits no R11 events, but this never disables C3's durable reservation, dispatch-intent, usage settlement or recovery path for real paid calls. The ledger write is durable/replayable and does not become a router-local budget store. | Field consumes only canonical ledger data; in-memory status and diagnostic JSONL are not field inputs. [INFERENCE] |
 
 ### 5.5 Relationship to the environmental layer (Undercurrent)
 
@@ -246,11 +294,20 @@ The router and Undercurrent are separate packages inside the Go core with no dir
 | Undercurrent to router | Rendered impressions for the bound context's turn | A tail context module with a declared token budget, placed after the cached prefix | R3 and §6.5 |
 | Neither direction | Routing decisions, budgets, provider choice, permissions, cache planning | Not available to the field layer | — |
 
-**The router owns control; the field layer owns awareness.** The router already acts on provider exhaustion, rate limits and budgets within their scopes (§9.8, §11). Undercurrent turns the same measurements into colony-wide environmental conditions so that agents who are not currently blocked can see pressure building and choose their work accordingly. A field reading never changes a `Plan`, never marks a provider unavailable, never relaxes or tightens a budget and never triggers a provider change. If the two layers ever disagree, the router's state is authoritative, because it reflects the enforced constraint.
+**The router owns control; the field layer owns awareness and disclosure.** Router applies provider availability and configured local budgets (§9.8, §11); a field reading never changes a `Plan`, permission, budget or provider choice. Router records actual measurements at their true provider/account/model/region/metric and originating-context scopes. Exact usage and attributed amounts remain bound to their source context. Other audiences receive only an expressly authorized coarse shared-resource pressure band and freshness, without consumer, task, amount, account or private provider identifier; access requires an explicit scope grant (D79). The router records typed facts; it does not choose who sees them or emit a social/message channel.
 
 **Impressions follow the same binding rules as every other tail module.** A field impression is rendered for the bound agent, context and turn (§5.1). It is volatile content, so it goes in the tail (R3) and does not affect prefix caching. Its token cost is declared through the context-module interface (§6.5) and counted in the turn's accounting like any other module. An impression rendered for one context is never carried into another on a context switch.
 
-**Measurements are written when observed, at their true scope.** A provider status event carries the scope at which the status applies (provider, account, and model or region where relevant), matching `ProviderStatus.scope`. A budget event carries its named scope. An agent's exhausted budget is recorded as that agent's budget event, never as account-wide provider exhaustion, preserving the distinction in §9.8 and §11.
+**Measurements are written when observed, at their true scope.** A provider-status/headroom event carries the scope and supported metric at which it applies; headroom's categorical band is versioned with the adapter/capability (`router-headroom/v1`), not `law-format`. A budget event carries its named local scope and period. An agent's cap or one colony's account-credential budget is never represented as provider-wide exhaustion or a global provider-account cap.
+
+**`router-headroom/v1` normalization and publication.** These are selected R1 producer rules, not `law-format` parameters or measured optimal tuning:
+
+- Parse adapter-supported metrics as nonnegative integers no greater than `2^63−1`; require a positive `limit`. Missing, malformed, negative, overflowing or unsupported values are unknown, never a fabricated healthy reading. For a valid pair, clamp `remaining` to `limit` if larger; this observational normalization is not permission to clamp financial usage or cost. Keep normalized counts protected at their actual scope. Field v1 consumes the band/freshness, not these counts or a reconstructed continuous ratio.
+- For `r = remaining / limit`, choose `empty` at zero, `critical` for `(0, 0.10]`, `low` for `(0.10, 0.25]`, `constrained` for `(0.25, 0.50]`, and `ample` for `(0.50, 1]`. Integer comparisons against `floor(limit/10)`, `floor(limit/4)` and `floor(limit/2)` avoid floating-point boundary drift and multiplication overflow.
+- Convert a valid reset to the Core time domain. Set `validUntil = min(reset, observedAt + 15 minutes)`; without a supplied reset, use `observedAt + 15 minutes`. A malformed supplied reset or a resulting expiry no later than observation yields unknown. Expired evidence is effectively unknown even if its stored band was known.
+- Compare a new observation with the last **durably published** sample for that exact scope/metric. Publish a known sample when none exists, its band changes, the prior evidence has expired/is unknown, expiry extends by at least five minutes, or the old expiry is within five minutes and the new expiry lies beyond five minutes. In particular, fresh same-band evidence after a short reset expiry must publish; the five-minute coalescing threshold cannot suppress it.
+- If a formerly known/supported metric becomes missing or unknown, publish unknown once; repeated unknown or never-observed absent metrics do not emit a stream. Consumers derive expiry locally without inventing a provider sample. Piggyback qualifying samples on existing usage/status commits, retaining a bounded latest sample per configured scope/metric; never persist every raw header observation or make a probe/model call just to refresh the field.
+- `ProviderStatus` remains the separate typed availability state in §6.4. Field's `provider_status/v1` response and freshness lease belong to field law; a field lease expiring never clears a Router block, changes a budget or starts a retry.
 
 **Dependencies on router phases.** Undercurrent's engine is built and tested against synthetic ledgers and does not wait for router code. Two of its capabilities do wait for router phase 1 (§14): validating its `resource_pressure` field against real provider and budget data, which requires R11 events, and showing any impression to an agent, which requires tail context modules. The field layer's other initial kinds, which are drawn from the core's workspace and promotion events, depend on core phase 1 rather than on the router (`DESIGN-UNDERCURRENT.md` §15.2).
 
@@ -328,7 +385,7 @@ type Plan = { route: "no_model"; handler: string } | {
   outputBudget: number                 // hard ceiling on output, including reasoning (§8.4)
   tools: string[]                      // subset of agent policy and this context/turn's authorized surface
   context: { module: string; budgetTokens: number }[]
-  serviceTier: "standard" | "flex" | "batch"
+  serviceTier: "standard"             // initial supported direct-call tier; Fast needs an explicit bounded setting
   permission: "read_only" | "workspace_write" | "full"   // ceiling within core grants, not a grant
   approvalRequired: boolean
   turnNote?: string                    // only when no API parameter can express the intent (T3)
@@ -342,7 +399,7 @@ type Plan = { route: "no_model"; handler: string } | {
 
 Keep one `ContextRouteState` per `(agent_id, context_id)` within its colony, not per execution session or launcher (§5.1). Each owns render history, compaction and continuation records as well as the routing state below. `CacheEntry.scope` describes the provider's cache-isolation boundary; it does not permit pooling local contexts or ledgers. Separate local ledgers do not promise provider-side isolation beyond documented provider boundaries. [INFERENCE]
 
-Provider availability is a separate core registry keyed by the actual provider/account and, where relevant, model/region scope. All affected contexts may consult it without sharing private history. An explicit agent budget or account budget is another independent constraint: exhausting one agent's budget must not mark the entire account unavailable (§9.8 and §11). [INFERENCE]
+Provider availability is a separate Core registry keyed by the actual configured provider/credential and, where relevant, model/region scope. An account budget means calls through that credential in this colony's single Core only; it is not a provider-side or cross-colony spend limit. All affected contexts may consult scoped status without sharing private history. An exhausted agent budget does not mark the account unavailable (§9.8 and §11). [INFERENCE]
 
 ```ts
 interface ContextRouteState {
@@ -353,11 +410,10 @@ interface ContextRouteState {
     contextEffort?: string             // top-level effort, where no cache-safe per-turn control exists
     systemFingerprint: string
   }
-  ledger: CacheEntry[]                 // one per (provider, model, scope); kept after switching away
-  pending: PendingChange[]             // optional cache-breaking changes awaiting a change point
-  continuations: ProviderContinuation[]   // owned by this context; never borrowed on a context switch
-  spend: Map<string, number>           // attributable usage cost by provider; not a budget boundary
-  stats: { callsPerTurn: Ewma; idleGapSeconds: Ewma; outputTokens: Map<string, Ewma> }
+  ledger: CacheEntry[]                 // bounded routing cache metadata, retained per context
+  pending: PendingChange[]             // bounded by validated active config
+  continuations: ProviderContinuation[] // originating context only; never borrowed
+  stats: { callsPerTurn: Ewma; idleGapSeconds: Ewma; outputTokens: Ewma }
 }
 
 interface ProviderContinuation {
@@ -370,11 +426,11 @@ interface ProviderContinuation {
 interface CacheEntry {
   provider: string; model: string
   scope: string                        // the provider's cache-isolation boundary (account, region)
-  segments: {
+  segments: {                           // At most four priced provider breakpoints per entry
     kind: "tools" | "system" | "history"
     fingerprint: string; tokens: number; ttlSeconds: number; lastWriteOrHit: Time
   }[]
-  hitRate: Ewma                        // observed ÷ predicted cached tokens
+  hitRate: Ewma                         // observed ÷ predicted cached tokens
 }
 
 interface PendingChange { field: string; value: unknown; reason: string; since: Time }
@@ -384,8 +440,17 @@ interface ProviderStatus {
   state: "available" | "rate_limited" | "overloaded" | "exhausted" | "denied" | "unreachable"
   cause?: string                       // e.g. "anthropic 429 enforced_spend_limit_reached"
   resumesAt?: Time                     // from retry-after, reset headers, or the error text when it gives a date
-  headroom?: Headroom                  // remaining requests and tokens, from rate-limit headers
+  headroom?: RateHeadroom              // normalized provider rate-limit measurement (§11)
   since: Time
+}
+interface RateHeadroom {
+  scheme: "router-headroom/v1"
+  metric: "requests" | "tokens" | "input_tokens" | "output_tokens"
+  limit?: bigint                      // positive integer ≤ 2^63−1 when known; malformed/overflow is unknown
+  remaining?: bigint                  // nonnegative integer ≤ 2^63−1, then clamped to limit
+  band: "empty" | "critical" | "low" | "constrained" | "ample" | "unknown"
+  observedAt: Time; validUntil: Time; renewal?: Time // next provider reset/renewal, when known
+  scope: { provider: string; accountId: string; model?: string; region?: string }
 }
 ```
 
@@ -397,31 +462,63 @@ interface Classifier {
   cost: { kind: "free" | "local-cpu" | "local-model" | "remote"; typicalLatencyMs: number; typicalTokens?: number; residentMb?: number }
   classify(input: RouteInput, deadlineMs: number): Promise<Partial<Needs> | null>   // null = abstain
 }
-
-interface ContextModule {
-  id: string
-  cost: { typicalTokens: number }      // declared; checked against the decision log
-  wants(needs: Needs, input: RouteInput): boolean
-  render(binding: TurnBinding, budgetTokens: number): Block[]   // scoped tail only; never edits earlier content
+```
+```go
+type AuthorizedSnapshot struct { ID string } // opaque Core-issued handle to an immutable, access-filtered view
+type RenderRequest struct {
+  Binding TurnBinding
+  Snapshot AuthorizedSnapshot
+  ObservationPosition string
+  ObservedAt time.Time
+  TokenAllowance int // maximum declared module estimate; not provider fit or billing usage
+  MaxOutputBytes int  // hard cap on canonical JSON-encoded RenderResult
+}
+type Block struct {
+  ModuleID, Version string
+  Binding TurnBinding
+  Content json.RawMessage
+  Provenance []string
+  EstimatedTokens int
+}
+type RenderResult struct {
+  Blocks []Block
+  EstimatedTokens int
+  OmittedCount int
+  Continuation string // opaque authorized cursor; empty when none or disclosure is not allowed
+}
+type ContextModule interface {
+  ID() string
+  Version() string
+  Required() bool // a required module failure/omission blocks prompt compilation
+  Render(context.Context, AuthorizedReader, RenderRequest) (RenderResult, error)
 }
 
-interface ProviderAdapter {
-  id: string
-  capabilities(model: string): ModelCapabilities           // from the versioned capability file (Appendix B)
-  impact(model: string, change: Change): Invalidation        // "none" | "tail" | "history" | "system" | "all"
-  compile(turn: TurnDecision, transcript: ContextTranscript, cache: CachePlan): ProviderRequest
-  convert(transcript: ContextTranscript, target: ModelRef): { transcript: ContextTranscript; dropped: DroppedArtifact[] }
-  countTokens?(request: ProviderRequest): Promise<number>
-  usage(response: ProviderResponse): {
-    uncached: number; cacheRead: number; cacheWrite: number
-    output: number; reasoning: number; servedTier: string
-    headroom?: Headroom                // parsed from rate-limit headers (§9.8)
-  }
-  classifyError(error: ProviderError): ErrorClass          // §10
+type ProviderAdapter interface {
+  Capabilities(model string) ModelCapabilities // dated endpoint/tariff data (Appendix B)
+  Impact(model string, change Change) Invalidation
+  Seal(request ProviderRequest, credentialScopeID, credentialVersion string) (SealedProviderRequest, error) // Core-resolved binding; serialize once before pricing
+  Bound(request SealedProviderRequest, caps ModelCapabilities) (CostBound, error)
+  Convert(transcript ContextTranscript, target ModelRef) (ContextTranscript, []DroppedArtifact)
+  CountTokens(request ProviderRequest) (int64, error) // optional fit/calibration only
+  Usage(response ProviderResponse) (NormalizedUsage, error)
+  ClassifyError(error ProviderError) ErrorClass
+}
+
+type NormalizedUsage struct {
+  Input  map[InputClass]int64  // mutually exclusive priced classes
+  Output map[OutputClass]int64 // text and reasoning; mutually exclusive
+  ServedTier string
+  Headroom *RateHeadroom
 }
 ```
 
-`ContextModule.render` may read only records authorized for the protected binding; passing an ID does not grant filesystem access. Module caches/results, adapter artifacts and `CachePlan` carry the owning context key and are checked before use. Plugins do not receive the session-wide audit transcript. `convert` returns a target-compatible render with the same context key and a dropped-artifact report; it does not mutate canonical records. [INFERENCE]
+First-party Go classifiers and context modules run in trusted Core code; they are not isolated plugins. Core-side `ContextModule.Render` reads only records authorized for the protected binding; an ID alone grants no filesystem access. External/native modules do not receive `AuthorizedReader` or a host-query RPC: Core materializes only the invocation's immutable, access-filtered snapshot as bounded input in the C10 execution compartment and accepts one bounded result channel. They never receive Core private roots, credentials or general host IPC. Caches/results, adapter artifacts and `CachePlan` remain keyed to and checked against their owning context. `convert` returns a target-compatible render with the same context key and a dropped-artifact report; it does not mutate canonical records. [INFERENCE]
+**External extension boundary (R5; reuses C10).** A child-process boundary alone is not isolation. External plugins/native helpers may run only through C10's existing supported, qualified execution profile after its filesystem/IPC/egress, finite-resource and positive descendant-stop gates pass; do not add a plugin-specific sandbox/service. Each helper configuration must either supply finite positive per-invocation bounds for wall time, CPU, memory, process count, input bytes and output bytes, or bind one complete existing C10 host-limit profile that enforces them; never infer a bound from typical cost/latency/RAM declarations. C10 enforces the profile on the bounded authorized snapshot, result channel and process tree. Validate schema/binding, discard late output, and do not reuse resources until every descendant is positively stopped. Children receive no provider credentials or adapter and have no provider egress; paid/remote classifier work is a Core adapter call with its own exact `CostBound`/admission. Missing or unenforceable profile means disabled. [INFERENCE]
+The router's hot prediction state is bounded: at most 16 `(provider, model, cache-scope)` entries per context and at most four cache segments per entry; fixed-size EWMAs replace per-call histories. Load rejects a configuration that would exceed these active-state bounds. LRU eviction discards prediction and means cold—it never prewarms or removes provider-side cache. Dormant context state is lazy-loaded from its own storage. Active-turn memory still scales with admitted concurrency; durable per-call diagnostics and the D36 ledger grow with workload/retention, so this is not a constant-process or constant-disk claim.
+
+The R1 `context-module` contract is a small standard-library-only Go interface owned by R1 and frozen by the owner before U6 consumes it (D40). Core supplies an access-filtered reader/immutable snapshot, never unrestricted filesystem, ledger or session-transcript access. A `RenderResult` is accepted only when every block carries the request binding, its declared estimates sum exactly to `EstimatedTokens` and do not exceed `TokenAllowance`, and the canonical JSON encoding of the whole result is at most `MaxOutputBytes` (initial default 64 KiB per module invocation). These token estimates bound module contribution only; they are not exact tokenizer output, provider fit or a money bound. Modules return complete blocks; the host never truncates arbitrary JSON. `Blocks=[]`, zero estimates/count and empty continuation is a valid no-op when no authorized/applicable content exists. `OmittedCount>0` explicitly reports partial omission; include an opaque continuation only when authorized. Optional-module timeout/error/oversize is omitted with a diagnostic; a required module failure or omission blocks prompt compilation. The mandatory D25 active-context note comes from an atomic scheduler snapshot and includes titles/counterparts only; it may return the valid no-op when there are no other active contexts. The 512-token allowance and 64-KiB output cap are provisional resource defaults, not benchmarks. No service or general plugin framework is added here.
+Provider `Bound` runs on the compiled request and its versioned endpoint capability/tariff before `Core.admit`. Token-count endpoints and tokenizer estimates may help fit/calibration only; neither is the money bound. Usage normalization produces mutually exclusive billable classes; cumulative stream snapshots replace, not add, earlier snapshots. A final usage response settles the admitted attempt; absent or incomplete usage leaves it unknown and held. For the initial boundable route, only Anthropic Messages and OpenAI Responses text input/output are enabled. Local function-tool schemas/results may be used only when included in request/response token limits and separately bounded per call; provider-hosted tools, extra iterations, images, audio/video, PDFs, search, containers and other separately billed features are refused.
+One Core attempt permits one physical paid HTTP POST. Disable SDK/middleware retries and redirects. Keep HTTP/1.1 keep-alive, set the request body non-rewindable with `GetBody == nil`, send no `Idempotency-Key` or `X-Idempotency-Key`, and disable HTTP/2 (including its retry path). Any alternative transport profile must document and gate the same one-shot property; a timeout/network error after `SENT` is unknown, not a free retry. A physical resend requires a new Core admission and attempt.
 
 ## 7. Classification cascade
 
@@ -478,21 +575,18 @@ Tool-loop continuation dispatch bypasses classification (§7.3). For new turns, 
 
 ### 7.6 Optional classifiers and the value gate
 
-Call a paid or slow classifier only when it can pay for itself: [INFERENCE]
+The optional classifier is off by default. Commands, authorized overrides, continuation reuse, rules and local heuristics run first; tool continuations reuse the original decision and never reclassify. The classifier is called at most once per new user/message turn, never for each tool call or escalation.
+
+Enable a local embedding matcher only if its bounded resident-memory and replay value gates pass; it adds no remote endpoint. A paid/slow classifier is eligible only if a local replay-calibrated expected reduction in misroute loss exceeds its **full** cost (including its own reservation, input/output, latency and CPU/RAM):
 
 ```
-call if  (1 − confidence) × |cost(upper rung) − cost(lower rung)| × expected calls this turn
-         > classifier cost × safety factor
+(1 − confidence) × |expected cost(upper rung) − expected cost(lower rung)| × expected remaining calls
+  > classifier maximum reserved cost × (1 + calibrated value margin)
 ```
 
-The two rungs are those on either side of the heuristic's nearest boundary. LiteLLM deducts the classifier's cost from reported savings after the fact; this gate applies the same accounting before the call is made.
+The estimate is a selection heuristic, never a money bound. Do not add a remote token-count/judge preflight to compute it. When enabled, send only the current input plus at most three previous user inputs / 8,000 characters in this same context; these are finite starting limits, not performance findings. Omit attachments unless the endpoint profile can bound them.
 
-The LLM classifier follows LiteLLM's documented behaviour for its limits, within the harness's selected context:
-
-- Structured output is validated against the `Needs` schema. A timeout, empty output or schema mismatch falls back to the heuristic result.
-- Its context is the current input plus up to 3 prior input turns within 8,000 characters, all from the same agent/context. The count and size limits are LiteLLM's defaults; treating an authorized incoming agent message as input does not permit reading another relationship. Assistant turns are excluded by default. [INFERENCE: context binding]
-- A stable rubric prefix lets the classifier's own prompt be cached. Its history and any continuation/cache hints remain context-bound just like the main call. Mind each model's minimum: Claude Haiku 4.5 caches nothing under 4,096 tokens.
-- Privacy: this sends the selected context's text to a model provider and is opt-in. The proposed default is the same provider as that context's main model; whether to permit an explicit cross-provider classifier remains open (§15), not silently enabled by this sketch.
+Structured output is checked against `Needs`; abstention, invalid output or timeout uses the local heuristic, with no second classifier call. The classifier's call is charged/reserved independently. Its input can disclose private context text: use the same provider as the context's active model unless the owner explicitly grants this exact destination provider for this exact context. A missing, expired or mismatched grant denies that send and retains the local heuristic. Provider changes elsewhere do not grant classifier permission. Any classifier must demonstrate net value on replay after cost, success, latency and device overhead; otherwise it stays off.
 
 ### 7.7 Failure semantics
 
@@ -506,7 +600,7 @@ Any stage may abstain (`null`) or fail (exception, timeout, invalid output). Eit
 - **Effort before tier.** Place effort rungs on a cheaper model before a jump in tier. LiteLLM: "climbing effort on a cheap model is often the cheaper next step and worth exhausting before the tier ladder reaches for a frontier model."
 - **Load-time validation.** Every rung must be satisfiable on every enabled provider: the model exists and supports the effort level. Otherwise loading fails — unless the rung is marked `clamp`, in which case the adapter maps to the nearest supported level and logs it (T8). `effort: default` is a harness sentinel for omitting the effort parameter, not an API value. Anthropic's effort documentation doesn't cover Claude Haiku 4.5, so a rung specifying effort on the Anthropic small tier fails validation until support is confirmed; the omission sentinel remains usable.
 - **Output of the policy.** A range: the floor is the lowest rung that meets the `Needs`; the ceiling is the profile's budget limit. The cache planner picks the final rung within that range (§9.5).
-- **Profiles** give regular users defaults: difficulty floors, visible-output sizes, reasoning reserve per effort level, the service tier for deferrable work, a ceiling rung and an escalation limit. Proposed profiles are `economy`, `balanced` and `quality`; selecting `balanced` as the shipping default remains open (§15).
+**Profiles** give regular users difficulty floors, visible-output targets, an output/reasoning guardrail, service tier, ceiling rung and escalation limit. `balanced` is the selected default; its values in §12 are initial tunables, not measured optimal values. Profiles never select an unconfigured provider/model or make an additional paid call.
 
 ### 8.2 Merge semantics
 
@@ -514,12 +608,12 @@ Any stage may abstain (`null`) or fail (exception, timeout, invalid output). Eit
 |---|---|---|
 | Floor rung | Highest wins | LiteLLM escalates to the highest matched tier "so rule order does not silently change behavior" |
 | Ceiling rung (including the profile's) | Lowest wins | Budget guard |
-| Floor above ceiling | No valid in-range plan; no model dispatch. Owner-facing resolution is still open (§15) | Neither silently lower the capability requirement nor exceed the user's budget |
+| Floor above ceiling | No valid in-range plan. Return `RouteBlocked{reason:"floor_above_ceiling", requiredFloor, eligibleCeiling, authorized scopes, actions:[revise task, owner enrollment or explicit cap/permission change, wait/configured provider, stop]}` and send no model call. No clamp, automatic budget change, reclassification, or hidden approval. | Neither silently lower the capability requirement nor exceed an explicit ceiling |
 | Output ceiling | Largest wins | Avoid truncation |
 | Permission | Most restrictive wins | Safety |
 | An action needs approval or exceeds the permission ceiling | Require approval where already allowed; an out-of-ceiling action remains blocked | An approval is not a ceiling increase; that is a separate core operation |
 | Tools, context modules | Union, then intersected with agent base policy, the bound context/turn's permissions and authorized source records; context is trimmed to budget | Predictable composition without granting cross-context access [INFERENCE] |
-| Service tier | Fastest wins (standard, then flex, then batch) | Interactive work is never deferred by accident |
+| Service tier | Only an explicit, capability-supported request tier is eligible. Standard is the default; an opt-in Fast request uses the maximum applicable Fast/standard tariff when either could serve it. Unknown or unbound tiers return `RouteBlocked` before dispatch; Batch/Flex endpoints are outside the initial hard-bound allowlist. | Service choice never weakens the cost bound |
 
 ### 8.3 When each setting may change, and what it costs the cache
 
@@ -535,10 +629,10 @@ This table is the core of the design. The provider cache columns come from the p
 | Tool definitions | Required additions/revocations immediately; optional edits priced by §9.5 | Invalidates everything. Toggling server web search or citations invalidates system and messages | `tools` is prefix-affecting | Defer optional edits when cheaper; use inline tool addition where supported and its beta flag is on |
 | Effort | New-turn changes and in-turn escalation; optional cache-breaking downgrades priced by §9.5 | A top-level change invalidates messages (and, on some models, system and tools). Per-message effort (beta) keeps the cache on Fable 5.1, Mythos 5.1, Opus 5.5, Opus 5 and Sonnet 5.5 | Request-level `reasoning.effort` is prefix-affecting; `configuration_update` keeps the prefix on GPT-6 models | Required upgrades apply even without a cache-safe control; Anthropic per-message effort requires its beta flag |
 | Verbosity | Per context | No API setting (use a turn note) | `text.verbosity` is prefix-affecting | Sticky |
-| Images | When attached | Adding or removing images anywhere invalidates the messages cache | Not listed as prefix-affecting | Priced by the planner |
+| Images/media | Not in the initial bound route | Cache invalidation is irrelevant to admission | No bound in this profile | Reject attached image/audio/video/PDF or transformation input before dispatch |
 | Model, same provider | New-turn boundaries, or mandatory escalation within a turn (§10) | Each model has its own cache. Replaying a thinking block the target can't read changes the prefix from that block. On Haiku and earlier Opus/Sonnet models, new non-tool user content strips cached thinking blocks | Each model has its own cache; reasoning is reused only within a model family | Priced for the selected context by the planner (§9.5) |
 | Provider | When the user chooses (v1) | Price the target prefix after history conversion; it is cold unless that context's target ledger supports reuse | Price the target prefix after history conversion; it is cold unless that context's target ledger supports reuse | User-initiated only in v1; the router prepares the handover (§9.8) |
-| Service tier | Every call | Switching `speed: "fast"` on or off invalidates system and messages | Not listed as prefix-affecting; reuse across tiers unverified | Flex only with its beta flag; Fast only by opt-in |
+| Service tier | Every call | Fast changes Anthropic system/message cache; OpenAI cross-tier reuse is unverified | No tier change is implied by policy | Standard direct text is the initial allowlist. Flex/Batch are unsupported; Fast requires explicit authorization, an exact bound profile and pinned served-tier tariff |
 | Region | Per context, subject to account configuration | `inference_geo: "us"` costs 1.1× on all token types; rate limits are shared across regions | +10% on eligible models; caches never cross regional boundaries | Configuration |
 | Permission | Every new turn; rechecked on every dispatch | — | — | Immediate; no inherited approval from another context |
 | Turn note | Every new turn | A turn-scoped system message (beta) neither accumulates nor breaks the cache; otherwise appended text stays in history | Appended text stays in history | Only when no parameter exists (T3); stays in this context |
@@ -565,9 +659,7 @@ This table is the core of the design. The provider cache columns come from the p
   - OpenAI: use `allowed_tools`.
   - Anthropic: `tool_removal`/`tool_addition` (beta, behind a flag), for phase-level changes rather than per-turn toggling — each change is appended to history permanently.
 - For large catalogs, the default is lazy-mcp's meta-tool pair. It keeps the tools array fixed on every provider and keeps tool selection in the harness (T10). It moves argument validation into the harness, and the permission gate must inspect `tool_path`.
-- Provider-native deferred loading is an opt-in optimization (§8.5):
-  - Anthropic: the tool search tool with `defer_loading`, or inline `tool_addition` (beta).
-  - OpenAI: `tool_search` (gpt-5.4 and later), which injects loaded tools at the end of context. OpenAI recommends namespaces of fewer than 10 functions.
+- Provider-native tool search/deferred loading is off and outside the hard-bound route; enabling it requires a separately versioned endpoint profile bounding every fee and iteration (§8.5). The harness may continue to use its authorized local tool catalog.
 
 **Context modules**
 
@@ -578,14 +670,9 @@ This table is the core of the design. The provider cache columns come from the p
 
 **Service tier**
 
-- Interactive work: standard.
-- Deferrable work (harness-internal summaries, background research, scheduled jobs):
-  - Sets of independent requests that can wait: Batch, at 50% off on either provider. Anthropic batches stack with caching, and Anthropic recommends the 1-hour cache when batches share context.
-  - OpenAI Flex, only when its beta flag is on: Batch API rates plus caching discounts for single requests, on a limited set of models. A 429 "Resource Unavailable" isn't charged: retry with backoff, or fall back with `service_tier: "auto"`.
-  - Otherwise, standard.
-  - Anthropic has no Flex-style tier. Its tiers are Standard, Priority (existing commitments only) and Batch.
-- Fast mode is opt-in context configuration, tracked separately as `ContextRouteState.active.speed`, not an automatic choice in `Plan.serviceTier`. Anthropic's speed switch invalidates system and message caches, so the planner keeps the choice sticky within each context.
-- Record the tier actually served.
+- The initial hard-bound allowlist is standard Anthropic Messages and OpenAI Responses text calls. Batch endpoints, Flex, automatic tier selection, hosted server tools and any service whose served tier or price cannot be bounded are unavailable; an owner request alone does not make an unsupported path safe.
+- Fast mode may be added only as an explicit supported request setting. `Bound` uses the maximum exact tier/region input and output rates the service could apply (including the documented 2× Fast multiplier); record the served tier and settle against the pinned tariff.
+- All tiers use the one-shot transport rule (§10). A documented no-charge response may settle zero, but no response triggers a hidden retry or fallback.
 
 **Internal jobs**
 
@@ -608,18 +695,20 @@ The harness keeps everything it needs to continue each context's conversation on
 | Function | Harness-owned default | Optional provider feature | Default |
 |---|---|---|---|
 | Conversation history | Scoped rendering from canonical local records (R1); every request carries only its authorized history | OpenAI stored responses and `previous_response_id`, which still bill all prior input tokens; IDs remain owned by the originating context | Off (`store: false`) |
-| Compaction | A context-bound model call with the harness's summary prompt; its plain-text summary remains in that context and works on any provider | Anthropic compaction (beta): a readable summary in a signed block that must be replayed exactly. OpenAI compaction: an item that "is opaque and not intended to be human-interpretable" | Off |
+| Compaction | A context-bound summary call only after its input fits; summary stays in the same context | Anthropic compaction (beta), OpenAI compaction opaque | Off; an unavailable source is never sent full-history for target compaction |
 | Trimming old tool results | At a change point, render stale tool results as short placeholders; the transcript keeps the originals | Anthropic context editing (beta) | Off |
 | Tool narrowing | The harness gate (R4) and a small, stable tool surface | OpenAI `allowed_tools`, which keeps the prefix cached; Anthropic `tool_addition`/`tool_removal` (beta) | `allowed_tools` on; the beta off |
 | Large tool catalogs | lazy-mcp-style meta-tools | Anthropic's tool search tool; OpenAI `tool_search` | Off |
 | Effort changes within a context | Required upgrades immediately; optional cache-breaking changes priced by §9.5 | OpenAI `configuration_update`; Anthropic per-message effort (beta) | `configuration_update` on; the beta off |
 | Web search, code execution | The harness's own tools | Provider-hosted tools | Off |
-| Token counts | Calibrated local estimates (§9.2) | Counting endpoints | Only near a limit |
-| Spend tracking | Reported usage × the capability file's prices (§11) | Usage and cost APIs, which need admin credentials | Off |
+| Token counts | Calibrated local estimates (§9.2) | Counting endpoints | Optional for fit/calibration only; never required for cost admission |
+| Spend tracking | Core-owned per-attempt reported usage × pinned capability tariff, with durable reservation/settlement (§11) | Usage/cost APIs requiring admin credentials | Not an admission or per-attempt settlement substitute |
 | Reasoning continuity | Context ownership checked before replay | Thinking blocks and encrypted reasoning items, kept as opaque attachments (R1) and replayed within the same model family and owning context | On |
 | Prompt caching | Deterministic scoped rendering (R2) and the per-context cache planner (§9) | Anthropic `cache_control`; OpenAI implicit and explicit caching | On |
 
 Each beta has its own flag, off by default (§12).
+
+Optional provider features that can create billable work (web search, containers/code execution, file/vector-store search, advisor sub-inferences, external tool search, media transformation, or stored state) remain off unless a versioned endpoint profile defines a finite maximum for every fee, unit/count, size, duration and iteration. In hard-cap mode, an unknown or unbounded charge means the feature/route is rejected before sending; no generic safety percentage can bound an unlimited number of searches, a session duration or a nested inference. Provider data is an optimization, never the only copy of conversation state. Previous-response IDs can save retransmission but do not make prior input tokens free.
 
 ## 9. Cache planner
 
@@ -629,22 +718,23 @@ Every request renders one selected context as an ordered list of segments: tools
 
 ### 9.2 The ledger
 
-- **Entries.** Within each `ContextRouteState`, one per provider, model and provider cache-isolation scope; OpenAI documents that caches aren't shared across organizations or regional processing boundaries. Each segment records a fingerprint (a hash of its rendered bytes), token count, TTL, and time of last write or hit. Identical authorized shared prefixes may benefit from provider caching, but that is not permission to combine local relationship histories or claim a hit from another context's ledger. [INFERENCE: local ownership]
+- **Context entries.** Within each `ContextRouteState`, one per provider, model and provider cache-isolation scope; OpenAI documents that caches aren't shared across organizations or regional processing boundaries. Each segment records a fingerprint (a hash of its rendered bytes), token count, TTL, and time of last write or hit. Context entries hold only their context's history and context-local segments; the tools-plus-system prefix is tracked only in the separate shared-prefix record. Context entries never borrow another context's history or claim a cross-context history hit. [INFERENCE: local ownership]
+  
+  **Shared-prefix record (D51).** Keep one separate record keyed by provider, model, cache-isolation scope and prefix hash for the tools-plus-system prefix. It may price that shared prefix across contexts that render it identically, but contains no context history and cannot establish a cross-context history hit. The key's cache-isolation scope does not authorize combining local contexts or ledgers.
 - **Prediction.** A segment is warm if its fingerprint matches and it was written or read within its TTL. Reads refresh the TTL on both providers.
-- **Correction.** After every call, read the usage fields and update the segments and `hitRate`:
+- **Correction.** After every call, read the usage fields and update the matching context entries and shared-prefix record, plus `hitRate`:
   - Anthropic: `cache_read_input_tokens` and `cache_creation_input_tokens`.
   - OpenAI: `cached_tokens`.
 
   OpenAI states that keeping a session going "doesn't guarantee a cache hit", and traffic above 15 requests per minute on one prefix can overflow to machines without it. `hitRate` absorbs this.
-- **Token counts.**
-  - Take counts from reported usage.
-  - Estimate new content with a characters-per-token ratio per model family, calibrated from usage, so no tokenizer dependency is needed.
-  - Near a limit — the target's context window or a long-context price threshold — confirm with the provider's counting endpoint when one is available. Anthropic's is free, rate-limited and returns an estimate; OpenAI's accepts the same payload as `responses.create`. Elsewhere, the calibrated estimate plus a margin decides.
-  - Accounting (§11) uses reported usage only. LiteLLM notes that "a local tokenizer or invented message cannot establish a cache hit".
+- Reported, mutually exclusive usage classes update cache observations; segment-level attribution is made only when the provider reports it.
+- Local tokenizer/character estimates are fit and calibration hints only, never conservative bounds. Anthropic counting is an estimate; OpenAI's optional Responses count returns the model-received input count. Neither is needed for money admission.
+- The provider enforces documented context and endpoint input maxima. The router's local fit check may conservatively refuse a candidate, but must not claim an estimate proves acceptance. If the endpoint rejects an oversized request, do not trigger hidden compaction or retry; recovery and any new attempt are explicit.
+- Admission reserves the full supported endpoint maximum at the maximum applicable documented input/output rates (§9.4), independent of predicted cache hits and local estimates. An unbounded or undocumented wrapper/charge makes the route ineligible.
 - **Minimum cacheable length.** Below it nothing is cached, and no error is returned. It's 512 tokens on current Anthropic flagships, 4,096 on Claude Haiku 4.5, and 1,024 on OpenAI GPT-5.6 and later. The planner prices such segments as uncached input, not writes. A short system prompt and tool set may not be cacheable on some models until the history grows. [INFERENCE]
 - **Retention.** Each context keeps its ledger across model/provider changes and while dormant. Returning to that context within the TTL may retain a warm cache, subject to its fingerprints and observed hit rate (T6); another context's activity does not refresh its local timestamps. [INFERENCE]
 
-**Simultaneous turns on a cold shared prefix (D24).** When several of one agent's turns start together while the shared prefix (tools and system instructions) is cold, each may pay the cache-write price. The owner accepted this: there are no staggered starts and no pre-warm requests. Because entries live inside each `ContextRouteState`, the planner can also predict as cold a shared prefix that the agent's other contexts keep warm, and so overprice a write it does not then pay [INFERENCE]. A separate shared-prefix record that would correct this is not decided (§15 question 9). `DECISIONS.md` D24 records the estimated cost of a collision.
+**Simultaneous turns on a cold shared prefix (D24).** When several of one agent's turns start together while the shared prefix (tools and system instructions) is cold, each may pay the cache-write price. The owner accepted this: there are no staggered starts and no pre-warm requests. D51's separate shared-prefix record lets the planner price the shared tools-plus-system prefix using state keyed by provider, model, cache-isolation scope and prefix hash; per-context history/cache state remains separate, and activity on the shared prefix never implies a history hit in another context. Simultaneous cache writes may still each be charged.
 
 ### 9.3 Change impact
 
@@ -652,24 +742,28 @@ Every request renders one selected context as an ordered list of segments: tools
 
 ### 9.4 Cost model
 
-```
-callCost(c, i) = Σ segments  tokens(c) × priceIn(c) × m(segment, c, i)
-                 + expectedOutput(c) × priceOut(c)
+The cache planner's cost is an **expected-cost estimate** for comparing authorized cache/rung choices; it never admits a call:
 
-m = cache read multiplier    if the segment is warm on c at call i
-    cache write multiplier   if it is cold and at or above the minimum cacheable length
-    1                        otherwise (below the minimum, or not marked for caching)
+```
+planCost(c, i) = expected input/output units × expected unit prices
+               + predicted cache read/write price + expected finite feature cost
 ```
 
-- `priceIn` and `priceOut` include service-tier and region multipliers.
-- `expectedOutput` comes from observed usage per (model, effort, kind).
-- An option's cost over the horizon is the sum of `callCost` over n = H × k calls, where H is the expected number of remaining input turns in this context and k its calls per turn (both moving averages). Idle gaps and reuse horizons are measured per context, not by activity elsewhere in the same session. Later calls price a segment as warm only while modeled reuse keeps its TTL valid, adjusted by the observed hit rate (§9.2); a first write does not make it warm for the entire horizon. [INFERENCE: planner scope]
+- Estimates may use observed output usage, calibrated cache-hit ratios, warm/cold state and the per-context horizon. They are optimization hypotheses, not billing bounds.
+- For every candidate request, `Bound` uses the endpoint's documented **inclusive hard input maximum** `M_I`, context maximum `C`, output maximum `M_O`, and exact requested output cap `O_req ≤ M_O` (including reasoning). Set `I_cap = min(M_I, C)`; all billed input classes, including provider-injected tool/system tokens, must fit that inclusive bound. **Do not subtract `O_req` from `I_cap`.** [Anthropic's overflow contract](https://platform.claude.com/docs/en/build-with-claude/context-windows#context-window-overflow-behavior) accepts input plus `max_tokens` beyond the window on 4.5+ and stops generation at the window. For example, 950,000 input tokens with a 128,000 requested cap can be accepted in a 1,000,000-token window; 872,000 is therefore not an input maximum. Missing inclusive bounds or a billable dimension outside them makes the profile unsupported; local token estimates never establish a hard bound.
+- Anthropic input is partitioned into mutually exclusive classes: `I = I_uncached + I_cacheRead + I_write5m + I_write1h ≤ I_cap`. Choose `pI` as the maximum rate among classes that the sealed request can actually incur, after its pinned model/region/allowed-tier modifiers. The documented injected tool prompt—286 tokens for Opus/Sonnet 5.5 `auto|none`, 496 for Haiku 4.5 `auto|none`, 588 for Haiku `any|tool`—is part of inclusive input, not an additional out-of-window fee. It may inform fit diagnostics but is neither subtracted from the hard maximum nor added again to reported usage. The initial allowlist retains the exclusion of Opus/Sonnet forced-tool settings pending complete capability evidence.
+- OpenAI Responses input is likewise `I = I_uncached + I_cached + I_cacheWrite ≤ I_cap`. Choose `pI` as the maximum applicable class rate across every permitted region/service tier and possible short/long threshold. GPT-6's inclusive 922,000-input maximum can exceed the 272,000 threshold, so use long-context rates for the whole bound. Wrappers already included in the documented input total need no separate guessed allowance; an unbounded separately billed wrapper or sub-inference is unsupported.
+- In either provider, `O_text + O_reasoning ≤ O_req`; reasoning is not a second output cap. Let `pO` be the highest applicable output rate. With `pI` and `pO` expressed in **USD per 1,000,000 tokens**, the conservative rectangular bound is `maximumMicros = ceil(I_cap × pI + O_req × pO)`: the per-million-token denominator and million-microdollars-per-dollar conversion cancel. Use checked exact rational arithmetic and one final upward rounding. Input and output maxima need not be simultaneously attainable; this deliberately over-reserves rather than assuming an input/output tradeoff or requiring a preflight call. Separately billed hosted fees, media and nested inferences are unsupported, never assigned a guessed zero.
+- The capability record pins endpoint, model snapshot, input/context/output maxima, exclusive usage schema, cache classes, region/tier modifiers, tariff/source versions and verification date. Missing, stale or ambiguous bounds, currencies, prices or usage classes fail closed. List-tariff settlement is local accounting, not an invoice guarantee; no cross-colony/provider-account cap is claimed.
+- Settlement uses the provider's normalized exclusive usage classes, inclusive of tool/system input exactly once, and the tariff pinned at admission. The normalizer must not add a second fixed-tool-prompt amount to already inclusive counters. Initial text profiles price the inclusive generated-output total; reasoning details are subsets, not additional output units. Likewise, aggregate cache-write/input totals must not be added to their own component counters. A final cumulative stream snapshot replaces earlier snapshots. Actual usage above a genuine inclusive maximum or cost above `maximumMicros` is recorded without clamping and marks the guarantee failed; partial or unnormalizable usage keeps the full hold. Cache predictions never reduce reservation.
+- `max_output_tokens` / `max_tokens` is a generation guardrail, including reasoning where the endpoint defines it; it does not promise reduced spend. Top-level caps do not bound separately billed nested tools/inferences.
+- For hard admission, reserve the full endpoint maximum; no generic percentage, expected cache hit or horizon estimate makes an unsupported/unbounded profile finite. The expected planner horizon starts at `H=3` remaining user turns, `k=2` calls/turn and `downgrade_margin=0.10`; these remain tunable calibration hypotheses only.
 
 ### 9.5 Decision rule
 
 - **Mandatory changes** apply now. They arise when the plan's floor needs more capability, the provider can't serve the current configuration, the user overrides, or authorization removes access. Use the cheapest authorized mechanism: a cache-safe control first (`configuration_update`, or per-message effort and inline tool addition when their beta flags are on), and a cache-breaking one otherwise. A context switch selects that context's own state and re-renders; it never defers isolation to save a warm cache. [INFERENCE: scope/authorization precedence]
 - **Optional changes** — downgrades, trimming tools, removing still-authorized context — apply now only if `cost(apply) × (1 + downgrade_margin) < cost(defer)` over this context's horizon. Otherwise they join its `pending`.
-- **The final rung** is the cheapest option over the horizon within [floor, ceiling], counting the current rung's warm cache. No candidate below the floor is ever considered: cost decides only among options that meet the floor (the vLLM principle). An empty range yields no model dispatch, not a clamped successful `Plan` (§8.2 and §15).
+- **The final rung** is the cheapest expected-cost option over the horizon within [floor, ceiling], counting the selected context's predicted cache state. No candidate below the floor is considered. An empty range returns `RouteBlocked` and no call (§8.2, §11).
 - Appendix A, example A: on a warm 100,000-token history, downgrading from Sonnet 5.5 to Haiku 4.5 pays back only from the 7th call. When the cache has already expired, the same downgrade is 61% cheaper over six calls.
 
 ### 9.6 Pending changes and change points
@@ -702,7 +796,7 @@ On OpenAI, compaction can also keep requests below the long-context price tier.
   - an extra anchor when a tool loop would push the last write more than 20 blocks back. This is Anthropic's lookback window; a run of consecutive `tool_use` or `tool_result` blocks counts as one position.
 
   The volatile tail sits after the last breakpoint.
-- **TTL:** 5 minutes by default. Use 1 hour when the expected gap before the next use exceeds 5 minutes and at least two more reuses are expected: 1-hour writes cost 2× and break even after two reads, versus one read for 5-minute writes. Batches that share context also use 1 hour. Appendix A, example E: with about 8 minutes between turns, 1 hour is 38% cheaper over three turns on a 100,000-token history.
+- **TTL:** 5 minutes by default. Use 1 hour when the expected gap before the next use exceeds 5 minutes and at least two more reuses are expected: 1-hour writes cost 2× and break even after two reads, versus one read for 5-minute writes. Appendix A, example E: with about 8 minutes between turns, 1 hour is 38% cheaper over three turns on a 100,000-token history.
 
 **OpenAI adapter**
 
@@ -726,102 +820,101 @@ The router's part has three pieces.
 
 The bound turn's effective availability also applies explicit agent/account budgets (§11). Reading usage or spend from either provider needs admin credentials, so reported usage provides the local early warning. A budget exhausted for one agent affects that agent's calls, not other agents using the same account; an account limit affects all its callers. Keep those scoped budget decisions separate from observed provider status and private routing state. [INFERENCE]
 
-| Effective state | Typical causes | Clears |
+| ProviderStatus state | Provider-side evidence | Clears |
 |---|---|---|
 | `rate_limited` | 429 with `retry-after` | After the stated wait |
 | `overloaded` | Anthropic 529; OpenAI 503 `server_is_overloaded` | After a backoff |
-| `exhausted` | Anthropic 402 `billing_error`, the spend-cap 429 (`enforced_spend_limit_reached`), or the 400 for a user-set spend limit; OpenAI 429 with `insufficient_quota` codes such as `credit_balance_exhausted`; an explicit local budget reached within its named scope | At the date the error states, after a top-up, or when the user raises the applicable budget |
+| `exhausted` | Anthropic 402 `billing_error`, the spend-cap 429 (`enforced_spend_limit_reached`), or the 400 for a user-set spend limit; OpenAI 429 with `insufficient_quota` codes such as `credit_balance_exhausted` | At the date the error states or after a top-up |
 | `denied` | 401 or 403: key, permission or region | When the user fixes the cause |
-| `unreachable` | Network errors that outlast the transport's retries | On the next successful call |
+| `unreachable` | Network error after the one-shot transport attempt; a `SENT` call without final usage remains unknown and held | After a later successful call or explicit user retry |
+Effective route eligibility also checks the bound turn's `BudgetBook` scopes. Local cap exhaustion returns `RouteBlocked{reason:"budget_exposure"}` only for attempts intersecting that scope; it is not `ProviderStatus` and emits no R11 provider-status transition. [INFERENCE]
 
-**2. Tell the user, with the options priced.** Waits shorter than `rate_limit_wait_seconds` pass silently. Anything else pauses the bound turn and shows its agent/context, the cause and affected availability/budget scope, the resume time if known, and these choices:
+**2. Tell the user, with the options priced.** Waits shorter than `rate_limit_wait_seconds` pass silently. Anything else pauses the bound turn. The owner gets one prompt per cause (D100) rather than one per turn: it lists the paused turns' agents/contexts, the cause and affected availability/budget scope and the resume time if known. Wait or stop is chosen once for every listed turn, with a per-turn override; a turn the same cause pauses later joins the prompt, where an earlier wait covers it and stop applies only to the turns shown. The choices are:
 
 - wait until the resume time;
-- continue this context on another configured provider allowed by the applicable budgets, with its estimated first-call cost priced against this context's retained target ledger — including a cold write where no reusable prefix exists — and a list of what won't carry over;
+- continue this context on another provider only if its exact destination was configured and authorized; show dropped artifacts and the first-call `CostBound`/maximum exposure against this context's retained ledger and every applicable budget scope;
 - compact this context first, then continue there, when the policy allows compaction;
 - stop.
+
+Continuing on another provider and compacting stay per-turn choices, each with its own dropped-artifact report and maximum exposure. The pause also starts the 2-minute service-loss grace of Core §13.11 (D97–D102). Moving all of an agent's work off the failed provider lets its first completed call end its service loss; a single switched turn runs without restoring the agent.
 
 **3. Make the chosen change safe (the handover).**
 
 1. Validate the still-current agent/context/turn binding on the choice, and bring that context's transcript to a resumable state (R10). View focus or activity in another context cannot retarget it.
 2. Render from that context's canonical records for the target: keep authorized portable content, drop foreign reasoning artifacts, translate tool-call formats and ids, and regenerate cache markers. Reuse no response ID or continuation from another context; report what was dropped.
-3. Check the fit. Estimate the tokens; near the target's context window or a long-context price threshold, confirm with the target's counting endpoint (§9.2). If the history is too large, trim stale tool results first (no model call), then consider compaction. A summary request must itself fit the model receiving it; an oversized history cannot simply be sent to the target for compaction.
-4. Compact on the source only while the source is still serving. When it has stopped, target-side compaction requires a fitting input after the preceding step, priced against the target ledger including any cold write. If neither source-side compaction nor a fitting target request is available, the handover remains blocked; the bounded-compaction/reduction mechanism is still open (§15). Compaction in either location loses detail and needs the user's agreement. Compacting first on a warm source was 76% cheaper over six calls in Appendix A, example D.
-5. Map the plan. Rungs are provider-neutral, so the ladder's tiers resolve to the target's models from configuration, validated at load. A rung the target can't satisfy clamps or fails as in §8.1.
+3. Check fit against documented input/context/output maxima and `I_cap` (§9.2, §9.4); an optional count endpoint helps fit only and is not a cost bound. Remove stale tool results deterministically at a change point. If the source is unavailable and the target still cannot fit, offer owner-approved exact truncation of earlier complete turns into a handover excerpt; preserve canonical source history. Never send full history for target summarization or start a chunk-summary cascade. If no approved excerpt fits the target's finite input bound, keep the handover blocked.
+4. Every summary, compaction or target request is its own paid attempt: compute its `CostBound`, reserve all scopes, and persist `dispatch_intent` before the first byte. Compaction loses detail and requires owner agreement; it may receive only a bounded authorized excerpt, never the full canonical history.
+5. Map the plan. Rungs are provider-neutral, so the ladder's tiers resolve to configured models, validated at load. If the target cannot satisfy the required floor or finite bounds, return `RouteBlocked`; never lower the floor implicitly.
 6. Re-price this context's pending changes against the target's actual cache state and apply those justified by §9.5–§9.6. A provider change does not make every edit free when a reusable target prefix remains warm.
-7. Record the change in the context's transcript and the decision log: binding, from, to, reason, dropped artifacts, and the estimated and actual cost of the first call.
+7. Record the change in the context transcript and decision log: binding, from, to, reason, dropped artifacts, first-call maximum `CostBound` and actual settled usage/cost.
 8. Keep the source's ledger entry in this context. When the source serves again (its reset time has passed, or the user says so), the router says so once for the affected context, with the cost of changing back; it doesn't change back by itself. An exhausted provider usually stays out longer than its cache TTL, so changing back is usually cold. [INFERENCE]
 
 Automatic provider switching, on failure or to save money, may come later. It would reuse this handover and the pricing in §9.5.
 
 ## 10. Escalation and failure handling
 
-Failure counters, correction history, escalation ceilings and pinned overrides belong to the bound context/turn. Account/provider errors may update shared availability, but they do not import another context's history or approvals. [INFERENCE]
+Failure counters, correction history, escalation ceilings and pinned overrides belong to the bound context/turn. Account/provider errors update shared availability only at their real scope; they never import another context's history or approval. Every paid retry, escalation or compaction is a separate call with its own `CostBound`, durable reservation and `attemptId`. [INFERENCE]
 
 **Signals within a turn**
 
-- Truncation (Anthropic `stop_reason: "max_tokens"`; OpenAI `status: "incomplete"` with reason `max_output_tokens`) → raise the output ceiling one step. This isn't a rung change.
-- Two or more consecutive schema or argument failures, or the same failing tool result repeated → climb one rung.
-- Context overflow → compaction with an input that fits the summarizing model, then retry. If no such request is available, stop dispatch rather than repeat an oversized call; the unresolved bounded-compaction case is in §9.8 and §15.
+- A final truncated response (Anthropic `stop_reason: "max_tokens"`; OpenAI `status: "incomplete"` with reason `max_output_tokens`) may raise the output ceiling one step only if the new request remains within the profile and spend authorization. It is a new reserved attempt, not a transport retry.
+- Two consecutive schema/argument failures or the same failing tool result may climb one rung, within the configured escalation limit; the next request is separately admitted.
+- Context overflow never triggers blind resend or a hidden summary. Use the bounded handover reduction in §9.8; if nothing authorized fits, return `RouteBlocked`.
+- After the escalation ceiling, or a required floor above the configured ceiling/budget, return `RouteBlocked`; do not clamp the floor or silently rewrite the task.
 
 **Signals across turns in the same context**
 
-- A user correction ("that's wrong", "try again") → that context's next-turn floor becomes its previous rung plus one, for the rest of its phase.
-- An explicit override → pinned in the scope the user selected (§7.2).
-
-**Climbing.** Move to the next ladder rung as a mandatory change (§9.5). Ladder order puts effort before tier. After `maxEscalations` climbs in one turn, the harness stops and asks the user. There's no de-escalation within a turn.
+- A user correction may raise only that context's next-turn floor by one rung for the rest of its phase.
+- An explicit override is pinned only in the scope the user selected (§7.2); grants and parent scopes remain subject to the same budget admission.
 
 **Errors**
 
 | Error | Action |
 |---|---|
-| Anthropic 429 with `retry-after`; OpenAI 429 rate limit with `Retry-After` | Wait if shorter than `rate_limit_wait_seconds`; otherwise mark `rate_limited` and ask the user (§9.8) |
-| OpenAI 429 `slow_down` (the request rate rose too quickly) | Back off, then retry at a steadier rate |
-| Anthropic 529 `overloaded_error`; OpenAI 503 `server_is_overloaded` | The transport retries with backoff, following `Retry-After` when present; if that fails, mark `overloaded` and ask the user |
-| Anthropic 402 `billing_error` | Mark `exhausted`; ask the user; don't retry |
-| Anthropic 429 with `enforced_spend_limit_reached` (no `retry-after`) | Mark `exhausted` until the date in the message; ask the user; don't retry |
-| Anthropic 400 "You have reached your specified API usage limits" (or the workspace variant) | Mark `exhausted` until the time the message states; ask the user |
-| OpenAI 429 with `insufficient_quota`: `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded`, `organization_usage_limit_exceeded` | Mark `exhausted`; ask the user; don't retry. OpenAI: retrying these "won't restore API access" |
-| 401 or 403 on either provider | Mark `denied`; ask the user |
-| OpenAI Flex 429 "Resource Unavailable" (not charged; only with the Flex flag on) | Back off up to N times, then use `service_tier: "auto"` only if standard service is allowed for this job; otherwise surface the inability to serve (§9.8) |
-| OpenAI Fast request served as `service_tier: "default"` (downgraded and billed at standard rates) | Record it; no retry |
-| Router-internal runtime failure (classifier or plugin) | Fall back within the bound context (T7) and log. Invalid configuration/capability data is rejected at load (T8); unsupported settings, authorization or binding failures do not become a fallback call |
-| Network errors and other 5xx | The transport retries; after that, mark `unreachable` and ask the user |
+| Anthropic 429 with `retry-after`; OpenAI 429 rate limit/`slow_down` | Record `rate_limited` and the reset. No transport/SDK retry; wait, then only an explicit retry creates a new attempt and reservation. |
+| Anthropic 529 `overloaded_error`; OpenAI 503 `server_is_overloaded` | Record `overloaded`. Do not replay the paid POST; a user-approved retry is a new admitted attempt. |
+| Anthropic 402 `billing_error`, 429 `enforced_spend_limit_reached`, or documented usage-limit 400 | Record `exhausted` at provider or local scope; show the stated resume time; do not retry automatically. |
+| OpenAI 429 `insufficient_quota` (`credit_balance_exhausted`, organization/project spend or usage limit) | Record `exhausted`; retrying does not restore access; ask the owner to resolve it. |
+| 401 or 403 on either provider | Record `denied`; request owner credential/permission/region correction. |
+| OpenAI Fast request served at `service_tier: "default"` | Record the served tier and settle at its pinned tariff; no retry. |
+| Final provider response has no complete normalized usage, or transport fails after `SENT` | Keep the attempt `unknown` and retain its full maximum. A retry, if the owner chooses one, needs a new attempt and must fit alongside the unknown hold. Settle zero only on a documented final no-charge result. |
+| Router-internal classifier/plugin failure | Continue only with the same context's authorized local fallback. Any fallback provider call requires a fresh Core admission; unsupported settings, authorization or binding failures stop. |
+| Configuration/capability/tariff invalid or unbounded feature | Fail closed before dispatch; no guess, fallback or second model judge. |
+
+The initial transport profile is one-shot for every paid POST: SDK/middleware retries are disabled, redirects return the first response without following it, the body is non-rewindable (`GetBody == nil`), no idempotency-key header is set, and HTTP/2 retry paths are disabled. HTTP/1.1 keep-alive remains enabled. If that profile cannot be established for a transport version, use another explicitly bounded profile and prove one physical send per attempt before enabling paid dispatch.
 
 ## 11. Observability and accounting
 
-**Decision record**, one per call, written locally as JSONL. It stays a separate file, outside the colony log (D33); the router's measurements reach the colony log as R11 events (§5.4). Each record holds:
+**Accounting owner.** Core's existing per-colony durable action ledger and `BudgetBook` exclusively own money admission, holds, settlement, correction and scope rollups. The router's JSONL decision log is diagnostic only; it is not a second ledger or budget store. Every paid model/helper/classifier/compaction attempt, including an owner-authorized retry, reaches this Core path (D22 safeguard 4; D33).
 
-- colony, agent, execution session, context, turn and call index; origin;
-- the cause chain, e.g. `continuation`, or `rule:multi-file-change` followed by `heuristic`;
-- `Needs` and `Plan`;
-- changes applied (with their invalidation class), and changes deferred (with the break-even numbers);
-- predicted cache reads and writes per segment, plus provider-reported aggregate usage; attribute observations to segments only as far as the response supports;
-- estimated and actual cost; baseline cost and signed savings;
-- tier requested and tier served; escalations; latency added by the router;
-- provider state changes and explicit budget scope, with cause and resume time.
+**Per-attempt state.**
 
-**Privacy.** By default the record stores prompt hashes and signals. Prompt text is stored only in debug mode. Logs keep context ownership and access restrictions; neither debug output nor an execution-wide audit is a prompt source for another context. [INFERENCE]
+1. `Core.admit` verifies the immutable quote/request digests, then writes one durable `reserved` record containing the exact `CostBound`, `requestHash`, `quoteHash`, pinned capability/tariff versions and hash, admission period and de-duplicated scope IDs. It returns `BoundCall` only after the maximum hold is durable.
+2. Before transport can write any network byte, it verifies the sealed endpoint/method, credential version, non-secret headers and body against `requestHash` and current authority; Core then durably appends `dispatch_intent` and sets `SENT`. A mismatch fails before intent and is an unsent reservation. This ordering is an invariant, not an estimate of whether bytes left.
+3. On recovery, `reserved` without `dispatch_intent` can release its hold because code is forbidden to send before intent. `SENT` without a final normalized usage response is `unknown` and keeps the entire hold, even if no bytes may have left. Never retry it or infer zero cost.
+4. A complete final response settles the same attempt idempotently using mutually exclusive provider-reported billable units and the tariff pinned at admission; it releases the one hold. Cumulative streaming usage snapshots replace earlier snapshots. If final usage is absent/partial or a separately billed dimension is unnormalized, keep the attempt unknown/held. A documented final no-charge outcome may settle zero.
+5. If actual reported usage/cost exceeds the bound, record the true amount without clamping, mark the finite-bound guarantee failed, and preserve the resulting cap overage. Corrections update the same attempt; duplicate settlements never create another charge or release another hold.
 
-**For users.** `/route` explains the addressed context's last decision in one paragraph. `/route stats` shows that context's cost, predicted versus observed cache hit rate, escalations and savings, with provider availability and explicitly labelled agent/account budget totals. An execution-session aggregate is an optional accounting view, never a merged conversation. [INFERENCE]
+**Budget scopes and periods.** Core's existing `BudgetBook` forms a de-duplicated applicable-scope set for each attempt: colony, agent, configured provider credential/account within that colony, the active task/grant budget, and every attenuated grant ancestor. A delegated grant authorizes narrower work but reserves no capacity in advance; each actual attempt atomically checks and holds its maximum in every scope. Two child grants therefore consume their shared parent ceiling independently when they dispatch. Rollup and session/agent views must not add one attempt twice.
 
-**Savings**, following LiteLLM:
+For a scope `s` and admission period `P`:
 
 ```
-savings = cost(baseline) − cost(actual) − cost(router overhead)
+occupied(s, P) = settled cost whose admission period is P
+               + every still-outstanding hold for s from any admission period
 ```
 
-- The baseline is the profile's default rung on the context's first provider, with no routing. It's priced against that context's shadow ledger, which tracks its own warm and cold history, including TTL expiry.
-- The result is signed, and can be negative after a switch.
-- Like LiteLLM's, it assumes the same outputs would have been produced.
+The hold is deduplicated by attempt. A prior-period unknown call remains in current exposure until final usage resolves it, so calendar rollover cannot release uncertain spend. Late usage settles to the attempt's original admission period and removes that one hold. Scope-period settled cost and exposure are views over the canonical attempts, not additive ledgers.
 
-**Health check.** A persistent gap between predicted and observed cache hits points to stale capability data or a rendering bug (R2).
+**Enrollment and caps.** Missing spend authorization is not unlimited: paid dispatch stays unavailable until the owner explicitly enrolls the credential/task authority with finite ceiling(s) or explicitly chooses `unlimited`. A finite ceiling is enforced against occupied exposure and may warn at 80%; unlimited removes only the configured cap, not endpoint `CostBound`, durable reservation, one-shot transport or accounting. Delegated scopes are attenuated beneath owner authorization and cannot expand it. Provider-account ceilings are local to this colony/Core; separate colonies cannot claim a global invoice cap.
 
-**Local spend and budgets.** The harness attributes reported usage × capability-file prices to each agent/context/turn, and rolls totals up separately by execution session, agent, provider/account, day and month. Context isolation is not a new budget boundary: budgets must explicitly name an agent or provider/account scope. An agent cap continues across its contexts; an account cap covers every agent using that account. Before each call, its maximum cost is reserved against every applicable budget scope; afterwards the reservation is settled against reported usage (D22 safeguard 4). An agent's simultaneous turns therefore cannot together spend past a cap that each would respect alone. Reservations and settlements are colony-log events (D33). The router warns at `warn_at` (80% by default) and blocks further calls only within an exhausted budget's scope, then offers choices that still obey every applicable cap (§9.8). It does not mark a shared provider account exhausted solely because one agent's cap was reached. The provider's own records stay authoritative; the local count is an early warning that works with ordinary API keys. [INFERENCE: accounting scopes]
+**Money and reporting.** Store USD as checked integer microdollars (`1 USD = 1,000,000`), parse cap decimals exactly to at most six places, price exact mutually exclusive usage dimensions with the pinned decimal/rational tariff, sum and round up once per attempt. Never use binary floats or round down for admission. The provider invoice remains authoritative; local list-tariff cost is not a global spend guarantee and excludes unknown taxes/repricing. Warn only against an explicitly finite cap.
+
+The separate decision record may store prompt hashes and signals by default; prompt text is debug-only and remains context-protected. Exact usage and amounts are visible only within their authorized source-context/accounting scope. Other audiences receive only D79-authorized coarse shared-resource band/freshness projections; no task, consumer, amount, account or private provider identifier is projected. `/route stats` may show disjoint views, but a rollup never adds a child attempt again through its parent grant.
 
 ## 12. Extension model
 
-**Proposed eventual defaults [INFERENCE]**, not installed behavior: the `balanced` profile; commands, continuation, rules and heuristic stages; no LLM classifier; explicit effort where supported (§8.1); standard service, with Batch for eligible jobs that can wait; a small, stable tool surface; harness-owned compaction and tool narrowing; the cache planner active after its rollout gate; provider changes only when the user chooses; every provider beta off. The profile choice, offered-provider list and budget defaults remain open (§15).
+**Selected defaults, not implemented behavior:** `balanced` is the default profile; commands, continuation, rules and heuristic stages are on; LLM/embedding classifiers and plugins are off; provider changes are always owner-selected to a configured destination; betas and provider-hosted billable tools are off. The active provider/model and credential are always explicitly configured—there is no implicit vendor/model fallback. Hard-bound paid dispatch requires the supported text endpoint and a finite `CostBound`; missing spend authorization fails closed until the owner chooses finite ceiling(s) or explicit `unlimited` (§11). These are design selections and still require implementation gates.
 
 Illustrative proposed configuration, not a selected shipping configuration (model ids are validated against the capability file at load):
 
@@ -830,7 +923,9 @@ router:
   version: 1
   profile: balanced
   cascade: [commands, continuation, rules, heuristic]    # optional: embedding, llm, plugin:<id>
-
+  active_provider: null                 # owner-selected configured provider; unset/null blocks paid dispatch
+  active_model: null                    # no default model or implicit provider fallback
+  credential_ref: null                  # must be configured and validated before dispatch
   ladder:                            # cheapest → most capable; effort rungs before tier jumps
     - {id: small,    tier: small, effort: default}       # no effort sent; see §8.1 on Haiku 4.5
     - {id: mid-low,  tier: mid,   effort: low}
@@ -844,7 +939,7 @@ router:
       ceiling: large
       visible_output: {short: 1024, medium: 4096, long: 16384}
       reasoning_reserve: learned        # p95 of observed reasoning tokens per (model, effort)
-      deferrable_tier: standard         # batch for jobs that can wait; flex needs its beta flag
+      deferrable_tier: standard         # supported direct text tier only; other endpoints need their own bound
       max_escalations_per_turn: 2
       confidence_threshold: 0.6
 
@@ -862,14 +957,19 @@ router:
     anthropic_ttl: auto                # 5m | 1h | auto
 
   provider_changes:                    # v1: the user decides (§9.8)
-    offer: [anthropic, openai]         # example offer order; shipping choices remain open (§15)
-    rate_limit_wait_seconds: 30        # shorter waits pass without asking
+    # Only an owner-selected destination that is explicitly configured is eligible.
+    rate_limit_wait_seconds: 30        # wait policy; retry is a new bound attempt
 
-  budgets:                             # explicit scopes (§11); this example sets no limits
-    warn_at: 0.8
-    limits: []
-    # - {scope: account, provider: anthropic, account_id: personal, monthly_usd: 50}
-    # - {scope: agent, colony_id: home, agent_id: worker-1, monthly_usd: 10}
+  spend_authorization:
+    mode: unset # fail closed: no paid dispatch until owner chooses finite or unlimited
+    # owner-selected alternatives:
+    # mode: finite
+    # ceilings: [{scope: colony, usd: "50"}]
+    # mode: unlimited
+
+  budgets:                             # Core BudgetBook scope limits (§11)
+    warn_at: 0.8                       # only for an explicitly finite ceiling
+    ceilings: []                       # colony/agent/credential/task/grant scopes; omit means no authorization
 
   beta:                                # each off until judged stable (C5)
     anthropic_per_message_effort: false
@@ -891,13 +991,13 @@ router:
     openai:    {small: gpt-6-luna,       mid: gpt-6-sol,         large: gpt-6-astra}
 ```
 
-- **Plugins** (classifiers and context modules) run as child processes that speak JSON-RPC over stdio, the pattern MCP and LSP use.
-  - They're registered in configuration only and started from local paths.
-  - A plugin can be written in any language. A separate process isolates its address space, not its filesystem access; it is not an OS sandbox. Validate plugin results and apply the configured OS permissions. Its children belong to the core/session lifetime and stop when that session ends, not when a launcher view disconnects (`DESIGN-CORE-AND-LAUNCHERS.md` §3).
-  - A session-lived plugin must still isolate retained state and caches by context, receive only scoped authorized inputs, and return results to the initiating binding. Process lifetime does not make its remembered data safe for the next counterpart (§6.5). [INFERENCE]
-  - Each declares its cost, including resident memory, and the router refuses plugins whose declared cost exceeds configured limits.
-  - Go's native `plugin` package doesn't work on Windows. Child processes are the selected default for isolation and language independence, not the only portable option: sandboxed WASM is another option (`RESEARCH-IMPLEMENTATION-LANGUAGE.md` §5), not a required runtime.
-  - Provider adapters are compiled into the core.
+- **External plugins and helpers** are advanced optional extensions registered in configuration; each executable runs only inside the existing C10-qualified execution compartment (§6.5; `ROADMAP-CORE.md` C10). JSON-RPC uses only its bounded request/result channel. No plugin-specific sandbox, service or unrestricted stdio/IPC is added.
+- First-party Go classifier and context-module implementations remain trusted in-process Core code, not isolated plugins.
+- Core supplies an immutable, access-filtered, context-bound snapshot with finite input bytes; an external module receives no Core `AuthorizedReader`, private roots, credentials or general host IPC. Core validates output binding/schema and finite output bytes; late output is discarded.
+- Each helper config must give finite positive limits for wall time, CPU, memory, process count, input bytes and output bytes, or bind one complete existing C10 host-limit profile that supplies all six; missing, partial or inferred bounds keep it disabled.
+- C10 enforces filesystem/IPC/egress and process/resource limits under its qualified platform profile; cancellation/timeout stops and positively reaps every descendant before the compartment or its resources can be reused.
+- Provider adapters are compiled into Core; remote/paid classifiers are Core-admitted calls. External code receives neither provider credentials nor provider egress.
+- Declared cost, latency and resident memory are eligibility estimates, not runtime caps. A local encoder that must run as a separate native helper uses C10 too; native Go plugins are not the selected mechanism. Record each plugin/helper dependency under D29.
 
   See `RESEARCH-IMPLEMENTATION-LANGUAGE.md` §5 and §8.
 - **Kinds and domains** can be added by advanced users, each with a one-line description (§6.2).
@@ -925,22 +1025,22 @@ The following is proposed evaluation work, not executed verification of a router
 
 These are conditional implementation stages, not completed milestones or approval of the core's proposed broker arrangement; the session/context model they assume is adopted (D21). §12 describes the intended end-state proposal; each stage still needs the applicable §13 gates and core prerequisites.
 
-`ROADMAP-ROUTER.md` tracks these phases as steps R0–R5: R0 is phase 0, R1 is phase 1, and so on to R5, phase 5. R0 waits for the core's agent runtime (core roadmap step C3); each later step waits for the one before. The roadmap adds each step's dependencies, decided items, open questions and status; the exit criteria below remain the steps' exit criteria.
+`ROADMAP-ROUTER.md` tracks these phases as steps R0–R5. R0 waits for core C3; each later step waits for the preceding step. The roadmap records dependencies, resolved choices and status; these gates remain the acceptance criteria.
 
 | Phase | Enables | Exit criterion |
 |---|---|---|
-| 0. Observe | Context-bound router runs in shadow: classifies, plans, predicts the cache and logs while the harness uses a static configuration | Context-switch isolation holds; cache predictions calibrated per context; classifier agreement measured on the labelled subset |
-| 1. Safe per-turn settings and provider awareness | Zero-model commands, output guardrails, tail context modules, Batch for deferrable work, bound permission ceilings and continuation inheritance; scoped provider/budget status and user-chosen provider changes (§9.8); ledger events for status, headroom, budget crossings and usage attribution (R11) | No success regression; measurable savings on internal jobs; bound handover drills pass; every status transition and budget crossing in the drills appears in the action ledger with its correct scope |
-| 2. Effort ladder | Effort changes through cache-safe controls; escalation | Net savings after escalation costs |
-| 3. Cache planner active | Pending changes, change points, TTL selection, scheduled compaction | Observed hit rate at or above the static baseline |
+| 0. Observe | Context-bound router runs in shadow: classifies, plans, predicts the cache and logs while C3 keeps its static configuration and ordinary Core admission | Context-switch isolation holds; cache predictions calibrated per context; classifier agreement measured on the labelled subset. No R11 events are emitted. |
+| 1. Safe per-turn settings and provider awareness | Zero-model commands, output guardrails, tail context modules, bound permission ceilings, continuation inheritance; scoped provider/budget status and user-chosen provider changes (§9.8); one-shot bound-call admission and recovery; R11 events for status, headroom, budget crossings and usage attribution | No success regression; measurable savings on internal jobs; bound handover and crash/retry drills pass; holds, settlements and R11 samples appear once with their correct scope |
+| 2. Effort ladder | Effort changes through cache-safe controls; escalation | Net savings after separately admitted escalation costs |
+| 3. Cache planner active | Pending changes, change points, TTL selection, bounded scheduled compaction | Observed hit rate at or above the static baseline; each paid compaction has its own bound admission |
 | 4. Priced model changes | Priced tier changes within the active provider | Net savings; no conversion failures |
-| 5. Optional modules | LLM and embedding classifiers, provider tool search and meta-tools, a stable plugin protocol | Each passes the value gate on replay |
+| 5. Optional modules | LLM and embedding classifiers under the explicit value/privacy gates; a stable local plugin protocol | Each passes the value gate on replay. Provider-hosted iteration/tools/media remain refused absent a separate finite capability profile and gate. |
 
 Automatic provider switching isn't planned for v1. If it's added later, it reuses the handover in §9.8.
 
-**Phase 1 is a prerequisite for parts of the environmental layer.** Undercurrent's `resource_pressure` field cannot be validated on real data, and no field impression can reach an agent's prompt, until router phase 1 is complete (§5.5; `DESIGN-UNDERCURRENT.md` §15.2). R11 should therefore be built with phase 1 rather than added afterwards: retrofitting it would change every emitting path and leave the ledger without history from before the change. Phase 0 may emit the same events in shadow, which lets the field engine test against real event shapes before phase 1 enables provider awareness. [INFERENCE]
+**Phase 1 is a prerequisite for parts of the environmental layer.** Undercurrent's `resource_pressure` field cannot be validated on real data, and no field impression can reach an agent's prompt, until router phase 1 is complete (§5.5; `DESIGN-UNDERCURRENT.md` §15.2). R11 is an additional R1 measurement stream, not the budget ledger: R0 emits no R11, and this never disables C3's real paid-call Core `BudgetBook` admission, durable hold, settlement or dispatch-intent recovery. R1 emits R11 only after the required ledger contracts are frozen. [INFERENCE]
 
-## 15. Risks and open questions
+## 15. Risks and resolved choices
 
 **Risks**
 
@@ -949,10 +1049,10 @@ Automatic provider switching isn't planned for v1. If it's added later, it reuse
 | Provider behaviour and prices change monthly, and several key controls are betas | Versioned capability data with sources and verification dates; beta flags off by default; the prediction health check (§11) |
 | Misclassified context-dependent follow-ups | Inheritance only within the selected context; escalation; explicit user overrides |
 | One execution session accidentally pools counterpart history or grants | Protected agent/context/turn bindings; separate continuations and ledgers; scoped rendering on every context switch; isolation drills (§13) |
-| A wrong horizon estimate skews break-even decisions | Conservative defaults; lazy de-escalation; calibration from logs |
+| A wrong horizon estimate skews break-even decisions | Treat it only as a tunable expected-cost hypothesis; lazy de-escalation; calibration from logs |
 | Thinking and reasoning artifacts don't port between models or providers | Deterministic dropping at render time, priced as cache loss (§9.8) |
 | A plugin misbehaves | Plugins run as child processes with declared costs, are registered in configuration only, and end with the session |
-| Accounting errors | Reported usage only; signed savings; stated counterfactual limits |
+| Accounting errors, crashes or ambiguous final usage | Core-owned durable holds, dispatch intent before send, unknown/full-hold recovery, idempotent settlement and per-attempt reconciliation (§11); report actual over-bound usage without clamping |
 | A provider stops serving mid-turn | A resumable transcript (R10); the user-chosen handover (§9.8); handover drills (§13) |
 | A provider feature changes or disappears | Every provider feature is optional, with a harness-owned equivalent (§8.5); betas are off by default |
 
@@ -969,17 +1069,23 @@ Automatic provider switching isn't planned for v1. If it's added later, it reuse
 - The owner-defined Grand/Corps roles use the communication policy in `DESIGN-CORE-AND-LAUNCHERS.md` §7. The proposal is one execution session per agent with independent relationship/general/board contexts, not extra sessions per relationship; routing is context-bound and approvals are context/turn-bound (§5.1). Physical IPC is separate from those logical conversations. [INFERENCE: mechanism]
 - There is no StarNet runtime, port or compatibility requirement.
 
-**Open questions for the team**
+**Resolved by D51.** R0 keeps one shared-prefix cache record for the tools-plus-system prefix, keyed by provider, model, cache-isolation scope and prefix hash, separate from per-context history/cache state. It lets the router price the shared prefix without borrowing history or claiming a cross-context history hit. D24's accepted simultaneous cache-write double-payment behavior remains unchanged.
 
-1. Should `balanced` be the default profile for regular users?
-2. May the optional LLM classifier send prompts to a different provider from the main model?
-3. Which providers should the harness offer when the active one stops serving, and should local budgets ship with default values?
-4. Whether and how to reconcile the remaining material in `superceeded-Design.md`, kept in the archive folder `../dwarfharness/`, outside this repository, beyond the three owner-authorized idea sections already incorporated in `DESIGN-CORE-AND-LAUNCHERS.md` §11 and §12.
-5. How should the owner-facing flow resolve a required floor above the budget ceiling? No valid `Plan` means no model dispatch; task revision, an explicit budget change or stopping must not be silently chosen. The blocked-result API shape remains to be designed (§5.3 and §8.2).
-6. What bounded-compaction or owner-approved reduction mechanism handles a history that cannot fit the target while the source is unavailable? A full-history target summary is not a valid fallback in that case (§9.8).
-7. What headroom buckets should adapters use for R11 samples, and should the bucket boundaries live in router configuration or be versioned with the environmental layer's law files (`DESIGN-UNDERCURRENT.md` Q28)?
-8. Which disclosure scope applies to usage attribution in the ledger? Attribution is needed to build consumer-to-resource edges, but who may perceive it is an unresolved field-layer decision (`DESIGN-UNDERCURRENT.md` Q5).
-9. Should the cache ledger keep one record for the shared prefix (tools plus system instructions), keyed by provider, model, cache-isolation scope and prefix hash, separate from the per-context records? Under D22 several of an agent's contexts may keep that prefix warm, and §9.2 would otherwise predict it as cold. The record would hold prefix segments only, never history, so §9.2's rule against claiming a hit from another context's ledger still applies to history [INFERENCE]. D24 left this undecided; it is open in `ROADMAP-ROUTER.md` step R0.
+**Resolved choices (2026-10-05; implementation gates remain)**
+
+| Topic | Selection |
+|---|---|
+| Default profile | `balanced` is selected. Commands, continuation, rules and local heuristics run before optional stages; paid/embedding classifiers and plugins start off. |
+| Provider/model | No implicit provider or model. Paid dispatch requires an owner-selected configured provider/model/credential and current capability record. Provider changes happen only when the owner selects a configured, authorized destination; never auto-failover. |
+| Classifier privacy | At most one paid classification per new user message; tool continuations/escalations never reclassify. Same provider as the selected context by default; cross-provider use requires an explicit grant naming that exact provider and context (§7.3, §7.6). |
+| Spend enrollment | Missing authorization blocks paid dispatch. The owner chooses finite ceiling(s) or explicitly unlimited; both still require a finite per-attempt bound, durable Core hold and settlement (§11). |
+| Admission and recovery | Core `BudgetBook` alone owns admission and money state. Persist reservation and `dispatch_intent`/`SENT` before the first byte; a no-intent reservation can release, but an intent with no final usage remains unknown/full-held. Never retry automatically. |
+| Scope and rollover | Check/hold the de-duplicated colony, agent, credential/account, active task/grant and attenuated ancestor scopes. No grant pre-reserves capacity. All still-open holds survive period rollover; late actual usage charges its original period and releases one hold (§11). |
+| Blocked floor, budget or bound | Return the scoped `RouteBlocked` options in §5.3. Never lower a required floor, increase a budget, edit a task or change a provider without the owner. |
+| Handover when source is unavailable | Remove stale tool payloads deterministically; if needed, offer owner-approved exact truncation of earlier complete turns. Preserve the canonical history. No full-history target summary or chunk cascade; block if nothing approved fits (§9.8). |
+| Headroom and attribution | R1 owns versioned `router-headroom/v1` bands in adapter/capability data, not `law-format`. Exact usage stays with its authorized source context; only D79-authorized coarse band/freshness projections may be shared (§5.5, §11). |
+| Shared-prefix cache | D51: record only the shared tools-plus-system prefix; never merge context histories or claim a cross-context history hit. Accept D24 simultaneous cache-write double payment (§9.2). |
+| Historical archive reconciliation | Out of this router slice and a blocker to no step. Do not inspect or merge archived material; reconsider only under a separate owner-authorized request. |
 
 ## Appendix A — Worked examples
 
@@ -1016,7 +1122,7 @@ These historical examples each describe one provider conversation. Under the cur
 | Each later call | $0.0270 | $0.0042 |
 | Six calls | **$0.4380** | **$0.1035** (76% cheaper) |
 
-The saving comes with lost detail, so compacting before a change needs the user's agreement (§9.8). It also needs the source to be serving. When the change happens because the source stopped, the summary can only run on the target, after a cold write of the history.
+The saving comes with lost detail, so compacting before a change needs the user's agreement (§9.8). It also needs the source to be serving and a bounded excerpt. If the source stops, no full-history target summary is allowed: remove stale tool payloads and, if necessary, hand over only an owner-approved exact truncation of earlier complete turns; preserve the canonical history or block.
 
 **E. Choosing the cache TTL.** A 100,000-token history on Sonnet 5.5, with about 8 minutes between user turns, and three turns of two calls each.
 
@@ -1024,9 +1130,43 @@ The saving comes with lost detail, so compacting before a change needs the user'
 - With 1-hour caching: $0.5000, which is 38% cheaper.
 - This ignores the small amount of new content per turn, which is written at 2× with a 1-hour TTL and 1.25× with a 5-minute one.
 
-## Appendix B — Provider capability data (initial values, verified 2026-09-28)
+## Appendix B — Provider capability evidence
 
-These values belong in the versioned capability file, each with its source and verification date. The router reads them; it never hard-codes them.
+The initial hard-bound direct-text allowlist below uses vendor documentation verified 2026-10-05. The remaining provider rows are historical observations verified 2026-09-28: useful background, not current authority. Before enabling a model/tier, snapshot and revalidate its complete maxima, exclusive usage schema, prices, modifiers and source in the versioned capability file; the router does not hard-code prices.
+
+### Current hard-bound direct text allowlist (verified 2026-10-05)
+
+Supported requests are standard Anthropic Messages and OpenAI Responses text calls only. Unsupported media, billable dimensions outside documented token maxima, provider-hosted tools/iterations, unbounded features, Batch/Flex endpoints and unknown service tiers are rejected before dispatch. Reserve the independent inclusive maxima in §9.4; token counting is an optional fit/calibration aid only.
+
+| Anthropic model | Context | Maximum input | Maximum output |
+|---|---:|---:|---:|
+| Claude Opus 5.5 | 1,000,000 | 1,000,000 | 128,000 |
+| Claude Sonnet 5.5 | 1,000,000 | 1,000,000 | 128,000 |
+| Claude Haiku 4.5 | 200,000 | 200,000 | 64,000 |
+
+Anthropic standard USD per million tokens (input / 5-minute cache write / 1-hour cache write / cache read / output): Opus 5.5 `4 / 5 / 8 / 0.20 / 20`; Sonnet 5.5 `2 / 2.50 / 4 / 0.20 / 10`; Haiku 4.5 `1 / 1.25 / 2 / 0.10 / 5`. US inference is 1.1× all token categories for eligible Claude 4.6+ models (Opus/Sonnet here); other regions/tier modifiers require a separately pinned capability.
+
+With local tools, Anthropic documents these injected tool-system-prompt input counts: Opus 5.5/Sonnet 5.5 `286` for `tool_choice:auto|none`; Haiku 4.5 `496` for `auto|none` and `588` for `any|tool`. These consume the inclusive input/context allowance and are counted once in normalized usage; do not add them again to the full-input bound or settlement. The initial allowlist excludes Opus/Sonnet `any|tool` without complete capability evidence. Normal tool definitions/results are also input; text and reasoning share the output cap. No provider-hosted tool is in this allowlist.
+
+| OpenAI Responses model | Context | Maximum input | Maximum output |
+|---|---:|---:|---:|
+| GPT-6 Luna | 1,050,000 | 922,000 | 128,000 |
+| GPT-6 Sol | 1,050,000 | 922,000 | 128,000 |
+| GPT-6 Astra | 1,050,000 | 922,000 | 128,000 |
+
+OpenAI USD per million tokens; each row is input / cached input / cache write / output. Standard short-context price applies through 272,000 input tokens; the long-context price applies above 272,000 to all input/cache/output classes. Since the hard-bound maximum can exceed the threshold, reserve at the long rate for the entire maximum.
+
+| Model | Short-context | Long-context (`>272K`) |
+|---|---|---|
+| GPT-6 Luna | `0.10 / 0.01 / 0.125 / 0.50` | `0.20 / 0.02 / 0.25 / 0.75` |
+| GPT-6 Sol | `2 / 0.20 / 2.50 / 10` | `4 / 0.40 / 5 / 15` |
+| GPT-6 Astra | `10 / 1 / 12.50 / 50` | `20 / 2 / 25 / 75` |
+
+Eligible OpenAI regional processing adds 10% per model capability; Fast is 2× and may be served at standard rates. The initial supported profile is standard; only a separately enabled Fast profile may use it, with the maximum possible served-tier rate reserved. Text and reasoning share the output cap; any tier, region, token class or wrapper not exactly bounded is refused.
+
+### Historical provider capability observations (verified 2026-09-28)
+
+These values belong in the versioned capability file only after current revalidation. The router reads that file; it never hard-codes them.
 
 ### Anthropic
 
@@ -1078,7 +1218,7 @@ These values belong in the versioned capability file, each with its source and v
 
 ## Appendix C — Tunables
 
-Proposed starting values, not calibrated shipping defaults. Historical source values and worked-example inputs remain dated as above; unresolved product defaults are listed in §15.
+Proposed starting values, not calibrated shipping defaults or correctness bounds. `balanced` is selected; other tunables remain hypotheses. Resolved choices and owner-authorized spend enrollment are in §15 and §11.
 
 | Tunable | Initial value | Calibrate from |
 |---|---|---|
@@ -1089,11 +1229,9 @@ Proposed starting values, not calibrated shipping defaults. Historical source va
 | Heuristic weights and boundaries | LiteLLM's defaults (§7.5) | Labelled subset |
 | `max_escalations_per_turn` | 2 | Escalation success rate |
 | Anthropic TTL (`auto`) | 1 hour when the expected gap exceeds 5 minutes and at least 2 reuses are expected | Observed idle gaps per context |
-| Flex retries before falling back to standard (only with the Flex flag on) | 2 | 429 frequency |
-| `rate_limit_wait_seconds` | 30 | User tolerance |
+| `rate_limit_wait_seconds` | 30 seconds | Owner tolerance; no paid-request retries |
 | Reasoning reserve per effort | Learned (95th percentile) | Usage logs |
 | Budget warning threshold (`warn_at`) | 0.8 | User preference |
-| Margin for confirming token counts with a counting endpoint | Within 10% of a limit | Observed estimate error |
 
 ## Appendix D — Sources
 
@@ -1119,11 +1257,16 @@ Projects and specifications:
 - TensorZero (archived) — <https://github.com/tensorzero/tensorzero>
 - NVIDIA llm-router (deprecated) — <https://github.com/NVIDIA-AI-Blueprints/llm-router>
 - MCP sampling, 2026-07-28 specification — <https://modelcontextprotocol.io/specification/2026-07-28/client/sampling>
+- Go 1.26 `net/http.Transport` retry eligibility and idempotency conditions — <https://github.com/golang/go/blob/go1.26.0/src/net/http/transport.go#L89-L96>, <https://github.com/golang/go/blob/go1.26.0/src/net/http/transport.go#L815-L855>
 
 Anthropic documentation:
 
 - Prompt caching — <https://platform.claude.com/docs/en/build-with-claude/prompt-caching>
 - Pricing — <https://platform.claude.com/docs/en/about-claude/pricing>
+- Models overview — <https://platform.claude.com/docs/en/models/overview>
+- Context windows — <https://platform.claude.com/docs/en/build-with-claude/context-windows>
+- Models list API — <https://platform.claude.com/docs/en/api/models/list>
+- Streaming usage — <https://platform.claude.com/docs/en/build-with-claude/streaming>
 - Mid-conversation system messages — <https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages>
 - Effort — <https://platform.claude.com/docs/en/build-with-claude/effort>
 - Rate limits — <https://platform.claude.com/docs/en/api/rate-limits>
@@ -1142,6 +1285,10 @@ OpenAI documentation:
 
 - Prompt caching — <https://developers.openai.com/api/docs/guides/prompt-caching>
 - Pricing — <https://developers.openai.com/api/docs/pricing>
+- GPT-6 Luna model — <https://developers.openai.com/api/docs/models/gpt-6-luna>
+- GPT-6 Sol model — <https://developers.openai.com/api/docs/models/gpt-6-sol>
+- GPT-6 Astra model — <https://developers.openai.com/api/docs/models/gpt-6-astra>
+- Responses token counting — <https://developers.openai.com/api/docs/guides/token-counting>
 - Reasoning — <https://developers.openai.com/api/docs/guides/reasoning>
 - Tool search — <https://developers.openai.com/api/docs/guides/tools-tool-search>
 - Flex processing — <https://developers.openai.com/api/docs/guides/flex-processing>
