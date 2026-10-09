@@ -1,0 +1,405 @@
+{
+  "format": "dwarf-harness.art-provenance.v1",
+  "statement": "Original DwarfHarness project art. Project agents wrote every pixel map, the palette, the color choices, the outfits, the room and the seeds as text; the generator below rendered them. No image editor, image-generation model or model call, pre-existing character kit, Dwarf Fortress asset or third-party sprite was used.",
+  "licence": {
+    "path": "LICENCE.txt",
+    "sha256": "f4fffc1b3faf7e8949fe24c5f9af0ffbcdadf965e4c4a69b47c258a82217bc3d"
+  },
+  "generator": {
+    "package": "github.com/Darius-PJ/dwarf-harness/tools/artgen",
+    "sourceSha256": "3d752ec15e5df03eecb1b725735a833c242cc9ceb355ae9adc666f983fd6bafa",
+    "command": "GOTOOLCHAIN=local CGO_ENABLED=0 go run ./tools/artgen"
+  },
+  "toolchain": "go1.27.2",
+  "modules": [],
+  "seeds": [
+    {
+      "sprite": "tile.floor_a",
+      "seed": 101
+    },
+    {
+      "sprite": "tile.floor_b",
+      "seed": 102
+    },
+    {
+      "sprite": "tile.rock_a",
+      "seed": 201
+    },
+    {
+      "sprite": "tile.rock_b",
+      "seed": 202
+    }
+  ],
+  "inputs": [
+    {
+      "path": "LICENCE.txt",
+      "sha256": "f4fffc1b3faf7e8949fe24c5f9af0ffbcdadf965e4c4a69b47c258a82217bc3d"
+    },
+    {
+      "path": "colors.txt",
+      "sha256": "e9abdab1960f5ee0a90ddeabe27cc0b953e48b6cb53ed5b6013b9f4152921c1b"
+    },
+    {
+      "path": "outfits.txt",
+      "sha256": "5f44d2e4d96a4de80979c6119ead289c9dc992046b835df8f905c2820bd643c3"
+    },
+    {
+      "path": "palette.txt",
+      "sha256": "836f5b83afe39967ea4353039efb9b853eb2356c42f280f62e18cbeb28c5bd9c"
+    },
+    {
+      "path": "room.txt",
+      "sha256": "0b1ab2d000aca5b43186eb5cf596469e347c536b14d8fb413019486e5157bdcb"
+    },
+    {
+      "path": "rpg/back_accessory.pack.pxm",
+      "sha256": "ce39f24f2409003c68ccdeb4bfe88e29b0497a1bb39fcfe5f5ef1a2f221b3235"
+    },
+    {
+      "path": "rpg/body.stout.pxm",
+      "sha256": "dcd7a684fce1392042c76602783ba775e3259bea7a8b4d5754823a81e2a5ee4b"
+    },
+    {
+      "path": "rpg/front_accessory.pick.pxm",
+      "sha256": "833c548c4e497f9ff28073dc77324491c47040a29ebfa2b808478595197682bf"
+    },
+    {
+      "path": "rpg/hair_beard.braided.pxm",
+      "sha256": "5cf12272141b92410f6b15ce7182a861dd9340cf20e0e48cd658470b7c60c0bf"
+    },
+    {
+      "path": "rpg/hair_beard.topknot.pxm",
+      "sha256": "1dbf7fa9ff4261b8167ab1b0c0f0d0063b9cbeba7a2e46a7ac066cfadfd7096f"
+    },
+    {
+      "path": "rpg/headwear.hat.pxm",
+      "sha256": "9ee201ef3fc4ac31c12751a7209f6b8a479677f28d67264e99867ce0b0c81cc7"
+    },
+    {
+      "path": "rpg/legwear.trousers.pxm",
+      "sha256": "5f052bd1c260170fc95343cad35479f9c5c6598b593bf9eab9ac76c26315a6cc"
+    },
+    {
+      "path": "rpg/shoes.boots.pxm",
+      "sha256": "e470f76a5b54c6d0650f346c0c5e77844364d0fda3d5b78546d06103645003bd"
+    },
+    {
+      "path": "rpg/torso_clothing.tunic.pxm",
+      "sha256": "f84099a3b123888f9e927e61b902b48f781d6328226b8788421087f0932e49dc"
+    },
+    {
+      "path": "rpg/torso_clothing.vest.pxm",
+      "sha256": "58a17c5591f923de5c7247882961ee7e3bc553707d4fc157b3dc322a54e55640"
+    },
+    {
+      "path": "world/animal.dog.pxm",
+      "sha256": "27c7cbd923f499e1e15dc8be4f8b2bbcf93c287f8d66b15bad5315275528557e"
+    },
+    {
+      "path": "world/animal.horse_wheelbarrow.pxm",
+      "sha256": "584367cc280ea4661056ad62f2470779f6f786e76412d83d258b5be596aff50b"
+    },
+    {
+      "path": "world/back_accessory.pack.pxm",
+      "sha256": "6cb242e16ea82b53fc83c54ec84fdeb1777ab338fb14e529e670b89edf1365ed"
+    },
+    {
+      "path": "world/badge.diplomat.pxm",
+      "sha256": "937e66680f6694ee3ecf93f23ec246e1bad5d78a427aa62d17cfec556ec4768d"
+    },
+    {
+      "path": "world/badge.grand_diplomat.pxm",
+      "sha256": "392d6c0766ee0952c5ba8e7b39ecff17b040cf162d85eabf787a5433a11d9fb3"
+    },
+    {
+      "path": "world/badge.grand_griot.pxm",
+      "sha256": "b8f714b01242a60d68ccfd1ae6ecff73004bdc3bcb289f9adb1dd95d02c5e81a"
+    },
+    {
+      "path": "world/badge.grand_orchestrator.pxm",
+      "sha256": "c73fbeef3fce291881727f151f353f01d2496c6e589a243b70ce5c0331e90aae"
+    },
+    {
+      "path": "world/badge.griot.pxm",
+      "sha256": "51b4d6d2a4ca04a0bc4c1428a1edca13a4d7275d1b1467c94718251c1edc9402"
+    },
+    {
+      "path": "world/badge.orchestrator.pxm",
+      "sha256": "3e9ca85c89a9589eca177d1b86470084628f09690acb97f79951e771f439c964"
+    },
+    {
+      "path": "world/badge.worker.pxm",
+      "sha256": "96b32f2d4ec79a3a6a2790c64648d553c62bb4621d6e79209c7cdc05cc71cf9a"
+    },
+    {
+      "path": "world/body.stout.pxm",
+      "sha256": "d93e49ffd89d27639113d70ed95d49c19694e89cce47b9d5392ece967314155a"
+    },
+    {
+      "path": "world/front_accessory.pick.pxm",
+      "sha256": "ae5ad4fbacc226f2f6d1d7b8aa88fb15787da433fd1d00cb864ff0f93eb81988"
+    },
+    {
+      "path": "world/hair_beard.braided.pxm",
+      "sha256": "1ebff32cf55dfce64bb836fabd95ad81ec4d87ed08e04b3a5cd45245e9fa5a3e"
+    },
+    {
+      "path": "world/hair_beard.topknot.pxm",
+      "sha256": "a141aa2cb80ed04190cf50bcb6e1afe2f957441ecc2e92d1facd8165901ce251"
+    },
+    {
+      "path": "world/headwear.hat.pxm",
+      "sha256": "a3e5952c2d109637b258c5d276c219e886ca74623f30aaafbadefd921f511439"
+    },
+    {
+      "path": "world/legwear.trousers.pxm",
+      "sha256": "0995ffa507c81cac831fb0c10173fda59cdfa1895cf7d3e3cf70b55f83a50dd0"
+    },
+    {
+      "path": "world/overlay.trim.pxm",
+      "sha256": "4a3e964bbca090315fa6585889a014ec2d7ffee2e592e98c6aab740c6582147a"
+    },
+    {
+      "path": "world/shoes.boots.pxm",
+      "sha256": "d34f1fee7831c369d743ab4ce04b11743e9ab89bcab8d7efc874aaa69ca9f139"
+    },
+    {
+      "path": "world/tile.door.pxm",
+      "sha256": "c710463aa4389672ccb244e7c0dc75cff36e6e4143a8ab3492add834f8dcc0f9"
+    },
+    {
+      "path": "world/tile.floor_a.pxm",
+      "sha256": "637f1f6ecd2d794e39538bd17a7d7f234861d570851cd77528d93d5786166837"
+    },
+    {
+      "path": "world/tile.floor_b.pxm",
+      "sha256": "99acce4801fb26f12ea4e07c6aa7460ef53467747bce67b688f846e920be12d5"
+    },
+    {
+      "path": "world/tile.rail_ew.pxm",
+      "sha256": "67a0411ca7e04cfe55103cb9d7c4747486073268d3371ee45cfbb6de9d915280"
+    },
+    {
+      "path": "world/tile.rock_a.pxm",
+      "sha256": "35f00b1d34734c5db0c1560390559b62ad5f5f2db737a1e804abde8d9b6a125c"
+    },
+    {
+      "path": "world/tile.rock_b.pxm",
+      "sha256": "7cf649a80f3346ba7fd858cbf8d832809e93f85bd0ec393061b14883329b74f5"
+    },
+    {
+      "path": "world/tile.stockpile.pxm",
+      "sha256": "79e8fa8677d3337cc8e74795d94abd99d28b22eec04abe9a4b87b39da2d0d5de"
+    },
+    {
+      "path": "world/tile.wall_face.pxm",
+      "sha256": "9903a0311bd53e682ff80aabe6a1ae80431cae419f3c6f89afa4b7ec1916181b"
+    },
+    {
+      "path": "world/tile.wall_top.pxm",
+      "sha256": "f38067ea269ad4de385b32d9cd73d6619616e6e1df8311fce8e304bae1fb3d95"
+    },
+    {
+      "path": "world/tile.workbench.pxm",
+      "sha256": "c9c89f8bcdbc9be6762448ca80cda92905aaa72624fb30335a65a3e651b39e6c"
+    },
+    {
+      "path": "world/torso_clothing.tunic.pxm",
+      "sha256": "29f76f4e4554f0c45d2c35d7da0bd86dd81249ad7062702ed076c28888d15c01"
+    },
+    {
+      "path": "world/torso_clothing.vest.pxm",
+      "sha256": "065d95bba4037a9e4c067082e0cffdb63d3de592bc8981ea965e7ccfcb9fe7d7"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "LICENCE.txt",
+      "sha256": "f4fffc1b3faf7e8949fe24c5f9af0ffbcdadf965e4c4a69b47c258a82217bc3d"
+    },
+    {
+      "path": "rpg/back_accessory.pack.png",
+      "sha256": "ecd3b64e6588781bac3bc5f93d569353f94abbbcacab1c9c8bba27c9c8163b4f"
+    },
+    {
+      "path": "rpg/body.stout.png",
+      "sha256": "5db4f17bb9de76781b1bd832ce8c8173624ce5a908f72e044e9e17d355c2a73f"
+    },
+    {
+      "path": "rpg/front_accessory.pick.png",
+      "sha256": "1de88f758c0a4eb55891f1c8e08115c7c20df402a1838f3cff5bec601787878b"
+    },
+    {
+      "path": "rpg/hair_beard.braided.png",
+      "sha256": "d72d9ace49082e891b7899dea1209952dbb6663cdc96a5b8f3fae9ff2f256112"
+    },
+    {
+      "path": "rpg/hair_beard.topknot.png",
+      "sha256": "1b798c592cd801aac6e4ce30d8ba011a0b86fb8e29fd0db1f1fa0bc1d41cd0d8"
+    },
+    {
+      "path": "rpg/headwear.hat.png",
+      "sha256": "6837c7be519a26e36e56c1f2d6e79f5d083ecc66a87f802481d15eea62b796fc"
+    },
+    {
+      "path": "rpg/legwear.trousers.png",
+      "sha256": "d5dbd84f495b28579a6b9bf3e5d7bd5f5f09967ca854927682242d4dfbf95836"
+    },
+    {
+      "path": "rpg/shoes.boots.png",
+      "sha256": "6735d7ede641550eb3cd871879b8e9e652d56bda0a073f4c31454e65beb91053"
+    },
+    {
+      "path": "rpg/torso_clothing.tunic.png",
+      "sha256": "2b44875d40bf31924bf8b0a8db6c26cadcf4466b69cde732f471879373515308"
+    },
+    {
+      "path": "rpg/torso_clothing.vest.png",
+      "sha256": "d23ba104887106ab3f8cb7ab1340722363fa9a9a5088ed03084d52a265cbb1f2"
+    },
+    {
+      "path": "sample.json",
+      "sha256": "22f096946fa0e010a501a6cd6be3b47d71c23b6356f234391251782d7a694057"
+    },
+    {
+      "path": "sheets/character-1x.png",
+      "sha256": "5414479828d4e1dbf48ebb021bc48660fb4a1df35d4480cb0796c68bce3c26cf"
+    },
+    {
+      "path": "sheets/character-4x.png",
+      "sha256": "435038a723eac96c4694d8d5a2540f68389e6df130e045601a73fd91baf53984"
+    },
+    {
+      "path": "sheets/index.tsv",
+      "sha256": "e213c7c334f78204272421408e8eb99f0c5954be86da3fed2a560febdb519ca5"
+    },
+    {
+      "path": "sheets/map-1x.png",
+      "sha256": "f163d5369da2f3e9baddfd4b04d7726f52bc3006437de60c4a6fffb451551b8d"
+    },
+    {
+      "path": "sheets/map-4x.png",
+      "sha256": "c2131423deb2fae1d56eb38833b026862137d02aaa3d20704bc0f11d8375aeb9"
+    },
+    {
+      "path": "world/animal.dog.png",
+      "sha256": "9ed7101ea226862dee5e8e34f872d34223b456d1a1b62da4ed266237f635ba3a"
+    },
+    {
+      "path": "world/animal.horse_wheelbarrow.png",
+      "sha256": "457813235c037b1c09b24dbb519380717b21b9364a0c5a78e2428d5be8ea1648"
+    },
+    {
+      "path": "world/back_accessory.pack.png",
+      "sha256": "2e38dc333fbfbdeb0636b298846a5b4bc658849fb93e1d51713f4426791d0547"
+    },
+    {
+      "path": "world/badge.diplomat.png",
+      "sha256": "c86e19a7284e6175c71c2371fc521f0fe34c0aa36c08cf668c196df663538b4a"
+    },
+    {
+      "path": "world/badge.grand_diplomat.png",
+      "sha256": "514dc3ac32b7c81c9924c35844551194e15134945290bcd97ab1a951d95644e3"
+    },
+    {
+      "path": "world/badge.grand_griot.png",
+      "sha256": "9a8f66b5a967839a2fdeb62b3ca8ae9f38a720639e849bcc84425f4c524f905b"
+    },
+    {
+      "path": "world/badge.grand_orchestrator.png",
+      "sha256": "9102865ae478c86ed09c13532da3d9056348a20c6a6a80e93710d205b3793f58"
+    },
+    {
+      "path": "world/badge.griot.png",
+      "sha256": "d78e3c57c630ef8e0cfb6a3910ae97b651adb18f2ce2e36b66c52c110a05dd71"
+    },
+    {
+      "path": "world/badge.orchestrator.png",
+      "sha256": "890a46754a0cee37fe7135cf8b7d49aa154051cebad89a4a89366fb18a5a340f"
+    },
+    {
+      "path": "world/badge.worker.png",
+      "sha256": "5582d36ad0a7fc432bd25bcfbcafca88ccefef4e78fa8566176f6190bbbf1706"
+    },
+    {
+      "path": "world/body.stout.png",
+      "sha256": "be1543d8ad57b015a9801e709a265bb6eaacbf56d976b3bfa8a9df6ec813043f"
+    },
+    {
+      "path": "world/front_accessory.pick.png",
+      "sha256": "8697570e2f27ba042f803aefb23eead74388c001682c1eb8bd320230c9f3261b"
+    },
+    {
+      "path": "world/hair_beard.braided.png",
+      "sha256": "398fdbf4fb40aa0d720690cb86b48efb2a2b918f8fdc6c1851b2e54014a45291"
+    },
+    {
+      "path": "world/hair_beard.topknot.png",
+      "sha256": "5ec938d136d18ed39ad518442ac32f6034616c1010aeff2d36d5424a9e7fd5bc"
+    },
+    {
+      "path": "world/headwear.hat.png",
+      "sha256": "3e24937c3769c694967d8e637adeac65954f901a421d5d90e0ff77e504cffde6"
+    },
+    {
+      "path": "world/legwear.trousers.png",
+      "sha256": "bb9ed747f0df3cb5979c1b8bb63ce2ecd05317f0f495154f22211fa088bde9f1"
+    },
+    {
+      "path": "world/overlay.trim.png",
+      "sha256": "7bbf7889609e517238d20462579628aa27ebdce2bad324fe03f5afb8e6dd2c77"
+    },
+    {
+      "path": "world/shoes.boots.png",
+      "sha256": "e19030f11a702982b49ba592c6ae04c7411ca6e3bb8ed6328110cb948e756206"
+    },
+    {
+      "path": "world/tile.door.png",
+      "sha256": "4eff83218a72f4dc12452ef27d2f8e8685c3da68d4ca1b76347b944c281e2795"
+    },
+    {
+      "path": "world/tile.floor_a.png",
+      "sha256": "faf3633ce426697d02e3d94add7a11ccc51ea80892dc1b9e3791ab0f495a9b57"
+    },
+    {
+      "path": "world/tile.floor_b.png",
+      "sha256": "be8f9a285786be38e229473aca201d12efbfc3a5ce0acfb42466c344fe4c692a"
+    },
+    {
+      "path": "world/tile.rail_ew.png",
+      "sha256": "432274005c5ad5205761269b933e1c9754f721f675aad15c805ddfa7d491938c"
+    },
+    {
+      "path": "world/tile.rock_a.png",
+      "sha256": "e538d11840727fd0a0d4c5c40dd164e962c4ab217511a12b350eea98c010385c"
+    },
+    {
+      "path": "world/tile.rock_b.png",
+      "sha256": "c083b1a93584bfa24a7395b875a08a7e1e5654113d8145a39b1478ff161a09a6"
+    },
+    {
+      "path": "world/tile.stockpile.png",
+      "sha256": "fab709b41ebec63569fc6e11a6e7e22b46042a8254db5ee231965b35dd4ad833"
+    },
+    {
+      "path": "world/tile.wall_face.png",
+      "sha256": "f03e27f2dadf2038bcd493cbbfb2793d11f9528d184edee8f54f465865f3383f"
+    },
+    {
+      "path": "world/tile.wall_top.png",
+      "sha256": "829714a816c32981dfdffbf6370fb13f21372337352dc5c87c880ff6ef32f8d2"
+    },
+    {
+      "path": "world/tile.workbench.png",
+      "sha256": "4a5cbb19b810ce820478d358135bd9ec1d8f0c71b6d891aab7081dc41eaa4559"
+    },
+    {
+      "path": "world/torso_clothing.tunic.png",
+      "sha256": "06e11ba27fa01347cddc92e523e12ca2605957cc39b5554c5b7fe9f996b3d346"
+    },
+    {
+      "path": "world/torso_clothing.vest.png",
+      "sha256": "62ccaf718d4c1ee3c10ec74b74a7a128ede2612ccc53038465e5ef11f39913d1"
+    }
+  ]
+}

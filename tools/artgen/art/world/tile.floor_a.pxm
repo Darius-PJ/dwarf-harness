@@ -1,0 +1,22 @@
+// tile.floor_a, world grid: one flagstone with a hairline crack.
+canvas 16 16
+anchor 8 16
+category floor
+seed 101
+frame idle 0
+777777777777777F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~FF~~~~~~~~~F
+7~~~~~FF~~~~~~~F
+7~~~~~~~F~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+FFFFFFFFFFFFFFFF

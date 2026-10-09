@@ -1,0 +1,21 @@
+// tile.wall_face, world grid: the lit vertical face of a wall, in strata.
+canvas 16 16
+anchor 8 16
+category wall
+frame idle 0
+RRRRRRRRRRRRRRRR
+6666666666666666
+6666666666666666
+r66666rr66666666
+rrrrrrrrrrrr66rr
+RRrrrrrrrrrrrrrR
+6666666666666666
+66666rr666666666
+rrrrrrrrrrrrrrrr
+RRRRrrrrrRRRRRRR
+6666666666666666
+666666666666r666
+rrrr66rrrrrrrrrr
+rrrrrrrrrrrrrrrr
+RRRRRRRRRRRRRRRR
+################

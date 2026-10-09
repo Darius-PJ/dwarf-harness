@@ -1,0 +1,26 @@
+// Sample room: a worker's workshop sideroom (fortress spec 2), 10 x 8 cells.
+cell R tile.rock_a idle 0
+cell Q tile.rock_b idle 0
+cell T tile.wall_top idle 0
+cell E tile.wall_face idle 0
+cell D tile.door open 0
+cell , tile.floor_a idle 0
+cell ; tile.floor_b idle 0
+grid 10 8
+RQRRRQRRQR
+RTTTTTTTTR
+QTEEEEDETQ
+RT,;,,,;TR
+RT;,,;,,TR
+QT,,;,,;TQ
+RTTTTTTTTR
+RRQRRRQRRR
+place 2 3 tile.workbench working 0
+place 3 3 tile.stockpile ready 0
+place 4 3 tile.rail_ew traffic 0
+place 5 3 tile.rail_ew link 0
+place 6 3 tile.rail_ew link 0
+place 3 5 animal.dog idle 0
+place 7 5 animal.horse_wheelbarrow rest 0
+dwarf 2 4 miner worker 0
+dwarf 5 4 scribe diplomat 0

@@ -1,0 +1,21 @@
+// tile.wall_top, world grid: the dressed top of a wall seen from above.
+canvas 16 16
+anchor 8 16
+category wall
+frame idle 0
+6666666666666666
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+6rrrrrrrrrrrrrrR
+RRRRRRRRRRRRRRRR

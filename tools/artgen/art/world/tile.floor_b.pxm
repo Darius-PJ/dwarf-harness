@@ -1,0 +1,22 @@
+// tile.floor_b, world grid: three flagstones, the lower two offset.
+canvas 16 16
+anchor 8 16
+category floor
+seed 102
+frame idle 0
+777777777777777F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+7~~~~~~~~~~~~~~F
+FFFFFFFFFFFFFFFF
+7777777F7777777F
+7~~~~~~F7~~~~~~F
+7~~~~~~F7~~~~~~F
+7~~~~~~F7~~~~~~F
+7~~~~~~F7~~~~~~F
+7~~~~~~F7~~~~~~F
+7~~~~~~F7~~~~~~F
+FFFFFFFFFFFFFFFF

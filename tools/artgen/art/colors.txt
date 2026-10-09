@@ -1,0 +1,18 @@
+// Color choices: <id> then one rrggbb per mask entry, shadow to light.
+skin.fair a8664a dc9a70 f4c8a0
+skin.tan 8a5232 b87848 dca070
+skin.deep 4e2c1c 74462c 9e6a44
+hair.auburn 5a2618 8e3e22 c0642e
+hair.black 2a2430 3e3846 58526a
+hair.grey 6a6870 9e9ca4 d0ced4
+clothing.blue 2c3c6a 44609a 6c8cc4
+clothing.brown 4a3424 6e5034 967048
+clothing.red 5e1e22 8e3034 ba4e4a
+clothing.grey 40404a 64646e 8c8c96
+role.worker 2e6e34 4caa50
+role.orchestrator 9a5a10 e08a1e
+role.griot 54307e 8a58c4
+role.diplomat 1e6e7a 3cc0cc
+role.grand_orchestrator 9a7a10 f0c830
+role.grand_griot 8a1e6a d040a8
+role.grand_diplomat 1e3a8a 3a6ae0

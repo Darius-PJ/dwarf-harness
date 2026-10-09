@@ -1,0 +1,56 @@
+// tile.rail_ew, world grid: an east-west rail on sleepers; traffic runs a
+// loaded minecart along it.
+canvas 16 16
+anchor 8 16
+category rail
+frame link 0
+................
+................
+................
+................
+................
+................
+................
+................
+ww..ww..ww..ww..
+5555555555555555
+MMMMMMMMMMMMMMMM
+WW..WW..WW..WW..
+WW..WW..WW..WW..
+5555555555555555
+MMMMMMMMMMMMMMMM
+WW..WW..WW..WW..
+frame traffic 0
+................
+................
+..############..
+..#5555555555#..
+..#6r66r6r66r#..
+..#5mmmmmmmmM#..
+..#4ww4ww4wwW#..
+..#4ww4ww4wwW#..
+ww#MmmmmmmmmM#..
+55############55
+MM#m5#MMMM#m5#MM
+WW#Mm#..WW#Mm#..
+WW.##W..WW.##W..
+5555555555555555
+MMMMMMMMMMMMMMMM
+WW..WW..WW..WW..
+frame traffic 1
+................
+................
+...############.
+...#5555555555#.
+...#6r66r6r66r#.
+...#5mmmmmmmmM#.
+...#4ww4ww4wwW#.
+...#4ww4ww4wwW#.
+ww.#MmmmmmmmmM#.
+555############5
+MMM#m5#MMMM#m5#M
+WW.#Mm#.WW.#Mm#.
+WW..##..WW..##..
+5555555555555555
+MMMMMMMMMMMMMMMM
+WW..WW..WW..WW..

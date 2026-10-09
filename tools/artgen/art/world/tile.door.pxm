@@ -1,0 +1,39 @@
+// tile.door, world grid: a plank door with metal bands set in a wall face;
+// open shows the leaf swung back and the dark passage beyond.
+canvas 16 16
+anchor 8 16
+category door
+frame closed 0
+RRRRRRRRRRRRRRRR
+666##########666
+666#4w4w4w4w#666
+r66#4w4w4w4w#666
+rrr#5mmmmmmM#6rr
+RRr#4w4w4w4w#rrR
+666#4w4w4w4w#666
+666#4w4w4w4w#666
+rrr#4w4w4w5w#rrr
+RRR#4w4w4w4w#RRR
+666#4w4w4w4w#666
+666#5mmmmmmM#666
+rrr#4w4w4w4w#rrr
+rrr#4w4w4w4w#rrr
+RRR#4w4w4w4w#RRR
+####WWWWWWWW####
+frame open 0
+RRRRRRRRRRRRRRRR
+666##########666
+666#4wRRRRRR#666
+r66#4wRRRRRR#666
+rrr#5MRRRRRR#6rr
+RRr#4wRRRRRR#rrR
+666#4wRRRRRR#666
+666#4wRRRRRR#666
+rrr#4wRRRRRR#rrr
+RRR#4wRRRRRR#RRR
+666#4wRRRRRR#666
+666#5MRRRRRR#666
+rrr#4wRRRRRR#rrr
+rrr#4wFFFFFF#rrr
+RRR#4wffffff#RRR
+####W7777777####

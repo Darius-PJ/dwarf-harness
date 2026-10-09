@@ -1,0 +1,1 @@
+The pixel maps, palette, colour choices, outfits, room layout and every other input under tools/artgen/art, and the sample rendered from them under tools/artgen/sample, are original work of the DwarfHarness project. They are licensed under the Apache License, Version 2.0 (decision D107); the full text is in LICENSE at the repository root.

@@ -1,0 +1,22 @@
+// tile.rock_b, world grid: rough rock with cracks meeting in a V.
+canvas 16 16
+anchor 8 16
+category rock
+seed 202
+frame idle 0
+6r66r6R66r6r66rR
+6%%%%%%%%%%%%%%r
+r%%%%%%%%%%%%%%R
+6%%%%%%%%%%%%%%r
+###%%%%%%%%%%%%R
+66#%%%%%%%%%%%%r
+6%%#6%%%%%%%%%%R
+r%%%#6%%%%%%%%%r
+6%%%#6%%%%%#6%%R
+r%%%%#6%%%#6%%%r
+6%%%%#6%%#6%%%%R
+r%%%%%###6%%%%%r
+6%%%%%%#6%%%%%%R
+r%%%%%%#6%%%%%%r
+6%%%%%%#6%%%%%%R
+RRrRRrR#RrRRrRRR

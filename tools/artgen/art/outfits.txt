@@ -1,0 +1,31 @@
+// Example outfits. The first outfit dresses every role in the map sheet's
+// "roles, one outfit" section; "varied outfits" cycles through all of them.
+outfit miner skin=skin.fair hair=hair.auburn clothing=clothing.blue
+part back_accessory.pack clothing=clothing.brown
+part body.stout
+part shoes.boots clothing=clothing.brown
+part legwear.trousers clothing=clothing.brown
+part torso_clothing.tunic
+part hair_beard.braided
+part headwear.hat clothing=clothing.red
+part front_accessory.pick
+outfit smith skin=skin.deep hair=hair.black clothing=clothing.grey
+part body.stout
+part shoes.boots clothing=clothing.brown
+part legwear.trousers
+part torso_clothing.vest clothing=clothing.red
+part hair_beard.topknot
+outfit scribe skin=skin.tan hair=hair.grey clothing=clothing.blue
+part body.stout
+part shoes.boots clothing=clothing.grey
+part legwear.trousers clothing=clothing.grey
+part torso_clothing.tunic
+part hair_beard.topknot
+part headwear.hat
+outfit carter skin=skin.fair hair=hair.black clothing=clothing.brown
+part back_accessory.pack
+part body.stout
+part shoes.boots
+part legwear.trousers clothing=clothing.grey
+part torso_clothing.vest clothing=clothing.blue
+part hair_beard.braided

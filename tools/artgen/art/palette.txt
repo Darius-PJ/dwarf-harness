@@ -1,0 +1,42 @@
+// DwarfHarness art palette, in palette-index order.
+// entry <char> <name> <mask> <rrggbbaa>   mask: - skin hair clothing role
+// texture <char> <entry>:<weight> ...     rock and floor tiles only
+// Within a ramp, uppercase is the darkest step, lowercase the next and a digit
+// the lightest. See ../STYLE.md.
+entry . transparent - 00000000
+entry x occlude - ff00ff00
+entry # outline - 1c1626ff
+entry * light - f2ead6ff
+entry S skin.shadow skin 9c5a3cff
+entry s skin.base skin d08a5cff
+entry 1 skin.light skin f0bb8aff
+entry H hair.shadow hair 5a2618ff
+entry h hair.base hair 8e3e22ff
+entry 2 hair.light hair c0642eff
+entry C clothing.shadow clothing 2c3c6aff
+entry c clothing.base clothing 44609aff
+entry 3 clothing.light clothing 6c8cc4ff
+entry T role.shadow role 5e5e66ff
+entry t role.base role 9a9aa4ff
+entry W wood.shadow - 4a2e1eff
+entry w wood.base - 7a4e2eff
+entry 4 wood.light - a87444ff
+entry M metal.shadow - 3c4250ff
+entry m metal.base - 6c7484ff
+entry 5 metal.light - a8b0bcff
+entry R stone.shadow - 2e2a34ff
+entry r stone.base - 4a4552ff
+entry 6 stone.light - 6a6474ff
+entry F floor.shadow - 4e4034ff
+entry f floor.base - 6c5a48ff
+entry 7 floor.light - 8c7860ff
+entry D fur.shadow - 4a3020ff
+entry d fur.base - 7a5232ff
+entry 8 fur.light - a87a4eff
+entry O coat.shadow - 4a4048ff
+entry o coat.base - 6e646cff
+entry 9 coat.light - 9a9096ff
+entry Y spark.base - e0a020ff
+entry y spark.light - ffe070ff
+texture % stone.shadow:1 stone.base:2 stone.light:1
+texture ~ floor.shadow:1 floor.base:4 floor.light:1

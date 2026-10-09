@@ -1,0 +1,117 @@
+sheet	section	x	y	w	h	content
+map	tiles	4	4	16	16	tile.door closed 0
+map	tiles	24	4	16	16	tile.door open 0
+map	tiles	44	4	16	16	tile.floor_a idle 0
+map	tiles	64	4	16	16	tile.floor_b idle 0
+map	tiles	84	4	16	16	tile.rail_ew link 0
+map	tiles	104	4	16	16	tile.rail_ew traffic 0
+map	tiles	124	4	16	16	tile.rail_ew traffic 1
+map	tiles	144	4	16	16	tile.rock_a idle 0
+map	tiles	164	4	16	16	tile.rock_b idle 0
+map	tiles	184	4	16	16	tile.stockpile ready 0
+map	tiles	204	4	16	16	tile.stockpile blocked 0
+map	tiles	224	4	16	16	tile.wall_face idle 0
+map	tiles	244	4	16	16	tile.wall_top idle 0
+map	tiles	264	4	16	16	tile.workbench idle 0
+map	tiles	284	4	16	16	tile.workbench working 0
+map	tiles	304	4	16	16	tile.workbench working 1
+map	animals	4	32	16	16	animal.dog idle 0
+map	animals	24	32	16	16	animal.dog idle 1
+map	animals	44	32	16	16	animal.dog running 0
+map	animals	64	32	16	16	animal.dog running 1
+map	animals	84	32	32	16	animal.horse_wheelbarrow rest 0
+map	animals	120	32	32	16	animal.horse_wheelbarrow walk 0
+map	animals	156	32	32	16	animal.horse_wheelbarrow walk 1
+map	parts	4	60	16	16	back_accessory.pack idle 0
+map	parts	24	60	16	16	back_accessory.pack idle 1
+map	parts	44	60	16	16	body.stout idle 0
+map	parts	64	60	16	16	body.stout idle 1
+map	parts	84	60	16	16	shoes.boots idle 0
+map	parts	104	60	16	16	shoes.boots idle 1
+map	parts	124	60	16	16	legwear.trousers idle 0
+map	parts	144	60	16	16	legwear.trousers idle 1
+map	parts	164	60	16	16	torso_clothing.tunic idle 0
+map	parts	184	60	16	16	torso_clothing.tunic idle 1
+map	parts	204	60	16	16	torso_clothing.vest idle 0
+map	parts	224	60	16	16	torso_clothing.vest idle 1
+map	parts	244	60	16	16	hair_beard.braided idle 0
+map	parts	264	60	16	16	hair_beard.braided idle 1
+map	parts	284	60	16	16	hair_beard.topknot idle 0
+map	parts	304	60	16	16	hair_beard.topknot idle 1
+map	parts	4	80	16	16	headwear.hat idle 0
+map	parts	24	80	16	16	headwear.hat idle 1
+map	parts	44	80	16	16	front_accessory.pick idle 0
+map	parts	64	80	16	16	front_accessory.pick idle 1
+map	parts	84	80	16	16	overlay.trim idle 0
+map	parts	104	80	16	16	overlay.trim idle 1
+map	parts	124	80	16	16	badge.worker idle 0
+map	parts	144	80	16	16	badge.worker idle 1
+map	parts	164	80	16	16	badge.orchestrator idle 0
+map	parts	184	80	16	16	badge.orchestrator idle 1
+map	parts	204	80	16	16	badge.griot idle 0
+map	parts	224	80	16	16	badge.griot idle 1
+map	parts	244	80	16	16	badge.diplomat idle 0
+map	parts	264	80	16	16	badge.diplomat idle 1
+map	parts	284	80	16	16	badge.grand_orchestrator idle 0
+map	parts	304	80	16	16	badge.grand_orchestrator idle 1
+map	parts	4	100	16	16	badge.grand_griot idle 0
+map	parts	24	100	16	16	badge.grand_griot idle 1
+map	parts	44	100	16	16	badge.grand_diplomat idle 0
+map	parts	64	100	16	16	badge.grand_diplomat idle 1
+map	roles	4	128	16	16	dwarf miner worker idle 0
+map	roles	24	128	16	16	dwarf miner worker idle 1
+map	roles	44	128	16	16	dwarf miner orchestrator idle 0
+map	roles	64	128	16	16	dwarf miner orchestrator idle 1
+map	roles	84	128	16	16	dwarf miner griot idle 0
+map	roles	104	128	16	16	dwarf miner griot idle 1
+map	roles	124	128	16	16	dwarf miner diplomat idle 0
+map	roles	144	128	16	16	dwarf miner diplomat idle 1
+map	roles	164	128	16	16	dwarf miner grand_orchestrator idle 0
+map	roles	184	128	16	16	dwarf miner grand_orchestrator idle 1
+map	roles	204	128	16	16	dwarf miner grand_griot idle 0
+map	roles	224	128	16	16	dwarf miner grand_griot idle 1
+map	roles	244	128	16	16	dwarf miner grand_diplomat idle 0
+map	roles	264	128	16	16	dwarf miner grand_diplomat idle 1
+map	roles-varied	4	156	16	16	dwarf miner worker idle 0
+map	roles-varied	24	156	16	16	dwarf miner worker idle 1
+map	roles-varied	44	156	16	16	dwarf smith orchestrator idle 0
+map	roles-varied	64	156	16	16	dwarf smith orchestrator idle 1
+map	roles-varied	84	156	16	16	dwarf scribe griot idle 0
+map	roles-varied	104	156	16	16	dwarf scribe griot idle 1
+map	roles-varied	124	156	16	16	dwarf carter diplomat idle 0
+map	roles-varied	144	156	16	16	dwarf carter diplomat idle 1
+map	roles-varied	164	156	16	16	dwarf miner grand_orchestrator idle 0
+map	roles-varied	184	156	16	16	dwarf miner grand_orchestrator idle 1
+map	roles-varied	204	156	16	16	dwarf smith grand_griot idle 0
+map	roles-varied	224	156	16	16	dwarf smith grand_griot idle 1
+map	roles-varied	244	156	16	16	dwarf scribe grand_diplomat idle 0
+map	roles-varied	264	156	16	16	dwarf scribe grand_diplomat idle 1
+map	roles-gray	4	184	16	16	dwarf-gray miner worker idle 0
+map	roles-gray	24	184	16	16	dwarf-gray miner worker idle 1
+map	roles-gray	44	184	16	16	dwarf-gray miner orchestrator idle 0
+map	roles-gray	64	184	16	16	dwarf-gray miner orchestrator idle 1
+map	roles-gray	84	184	16	16	dwarf-gray miner griot idle 0
+map	roles-gray	104	184	16	16	dwarf-gray miner griot idle 1
+map	roles-gray	124	184	16	16	dwarf-gray miner diplomat idle 0
+map	roles-gray	144	184	16	16	dwarf-gray miner diplomat idle 1
+map	roles-gray	164	184	16	16	dwarf-gray miner grand_orchestrator idle 0
+map	roles-gray	184	184	16	16	dwarf-gray miner grand_orchestrator idle 1
+map	roles-gray	204	184	16	16	dwarf-gray miner grand_griot idle 0
+map	roles-gray	224	184	16	16	dwarf-gray miner grand_griot idle 1
+map	roles-gray	244	184	16	16	dwarf-gray miner grand_diplomat idle 0
+map	roles-gray	264	184	16	16	dwarf-gray miner grand_diplomat idle 1
+map	room	4	212	160	128	room
+character	parts	4	4	64	64	back_accessory.pack idle 0
+character	parts	72	4	64	64	body.stout idle 0
+character	parts	140	4	64	64	shoes.boots idle 0
+character	parts	208	4	64	64	legwear.trousers idle 0
+character	parts	4	72	64	64	torso_clothing.tunic idle 0
+character	parts	72	72	64	64	torso_clothing.vest idle 0
+character	parts	140	72	64	64	hair_beard.braided idle 0
+character	parts	208	72	64	64	hair_beard.topknot idle 0
+character	parts	4	140	64	64	headwear.hat idle 0
+character	parts	72	140	64	64	front_accessory.pick idle 0
+character	examples	4	216	64	64	dwarf miner idle 0
+character	examples	72	216	64	64	dwarf smith idle 0
+character	examples	140	216	64	64	dwarf scribe idle 0
+character	examples	208	216	64	64	dwarf carter idle 0

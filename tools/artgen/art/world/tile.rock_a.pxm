@@ -1,0 +1,22 @@
+// tile.rock_a, world grid: rough rock split by two cracks.
+canvas 16 16
+anchor 8 16
+category rock
+seed 201
+frame idle 0
+66r6r66R6r66r6rR
+6%%%%%%#6%%%%%%R
+r%%%%%%#6%%%%%%r
+6%%%%%#%%%%%%%%R
+r%%%%#6%%%%%%%%r
+6%%%#6%%%%%%%%%R
+####6%%%%%%%%%%r
+66r6%%%%%%%%%%%R
+6%%%%%%%%%%%%%%r
+r%%%%%%%%%%%####
+6%%%%%%%%%%#66r6
+r%%%%%%%%%#6%%%R
+6%%%%%%%%%#%%%%r
+r%%%%%%%%#6%%%%R
+6%%%%%%%%#%%%%%r
+RrRRrRRRR#RrRRrR
