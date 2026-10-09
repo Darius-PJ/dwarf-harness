@@ -1,6 +1,6 @@
 # 03: Verify retained bodies and recover old command identities
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
@@ -42,3 +42,5 @@ Canonical sections: Core roadmap C1; its cited controlling Core design and lates
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-09 — Claimed for the staged build now that ticket 02 is resolved. A designer drafts the implementation brief for the advisor's ruling; the coder then works on its own branch and worktree (D41). This ticket ends C1 with the F0 freeze request (OG2).
