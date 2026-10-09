@@ -1,6 +1,6 @@
 # 02: Durably append and recover colony history
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
@@ -42,3 +42,5 @@ Canonical sections: Core roadmap C1; its cited controlling Core design and lates
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-09 — Claimed for wave 2 of the staged build. A designer drafts the implementation brief for the advisor's ruling; the coder then works on its own branch and worktree (D41).

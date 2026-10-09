@@ -1,6 +1,6 @@
 # 88: Generate a minimal original layered art sample with the Go art generator
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Published: 2026-10-08
 Spec: [DwarfHarness system specification](../spec.md); feature: [fortress GUI specification](../../fortress-gui/spec.md)
@@ -62,3 +62,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-08 — D104 rework: the owner adopted the two proposed controls and widened the review ([D104](../../../docs/DECISIONS.md#d104-default-fortress-art-pixel-maps-and-owner-review-of-generated-sprites)). Shapes now come from pixel maps, the generator writes contact sheets of the map and the character sprites, and the generator code is approved only after he approves both. Review rounds may learn from open-source projects without copying their art. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.
 
 2026-10-08 — D105 rework: the generator may now use Go modules from outside the standard library that assist sprite generation, each with its D29 record and a pinned version ([D105](../../../docs/DECISIONS.md#d105-default-fortress-art-go-modules-for-sprite-generation-and-art-rounds-before-the-gui)); reproducibility and provenance now include module versions. Ticket [137](137-improve-the-generated-map-and-character-sprites-before-the-native-gui-exists.md) continues the review rounds after this ticket, before the native GUI exists. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.
+
+2026-10-09 — Claimed for wave 2 of the staged build. A designer drafts the implementation brief for the advisor's ruling; the coder then works on its own branch and worktree (D41).
