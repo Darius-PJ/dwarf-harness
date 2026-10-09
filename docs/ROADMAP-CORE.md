@@ -1,6 +1,6 @@
 # Core roadmap
 
-**Status:** 2026-10-08 (D97–D102 ordinary service-loss procedure; D96 pre-alpha design consolidation 2026-10-07; prior Core status/evidence 2026-10-05). No code exists yet. This roadmap orders Core work in steps C0 to C10; GUI work is specified in [`ROADMAP-GUI.md`](ROADMAP-GUI.md). A selected requirement is not implementation, a frozen contract or a passed gate.
+**Status:** 2026-10-09 (C0 Done through ticket 01; D106 toolchain go1.27.2); 2026-10-08 (D97–D102 ordinary service-loss procedure; D96 pre-alpha design consolidation 2026-10-07; prior Core status/evidence 2026-10-05). The only code so far is C0's check, `tools/check`. This roadmap orders Core work in steps C0 to C10; GUI work is specified in [`ROADMAP-GUI.md`](ROADMAP-GUI.md). A selected requirement is not implementation, a frozen contract or a passed gate.
 
 **Consolidated design, D89–D96:** the [fortress/RPG design](../.scratch/fortress-gui/spec.md) now binds C3 runtime eligibility/tasks, C6 relationship/evidence/publication, C8 creation/Purpose/alignment/succession, C9 backend pinned skills and C7 shared launcher/presentation handoffs. [D96](DECISIONS.md#d96-pre-alpha-fortress-alignment-and-consolidation-boundary) authorizes this pre-alpha stopping point; reconciliation no longer awaits owner confirmation. D97–D102 add the ordinary service-loss and officer-recovery procedure (Core §13.11). Exact attenuation/rubric/encoding, presentation persistence and producer schemas remain explicit work. All step statuses, contract freezes, D52 approval and unrun evidence gates remain unchanged.
 
@@ -154,13 +154,13 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 **Delivers.**
 
-- `go.mod` with module path `github.com/Darius-PJ/dwarf-harness` (D43), `go 1.27` and `toolchain go1.27.1` (D28, D45). Its `tool` lines pin staticcheck 2026.2.1 and govulncheck (D42).
-- The package layout in D45: `cmd/dwarf-harness/`, `contract/{ledger,launcher,module,law}/`, `internal/{core,router,undercurrent}/`, `tools/check/`, `docs/`. C0 creates the directories that have content at C0 (`cmd/dwarf-harness`, `tools/check`); every other package is created by the step that owns it (D41: no placeholders). The nested `gui/` module and `go.work` arrive with the GUI roadmap (D44).
+- `go.mod` with module path `github.com/Darius-PJ/dwarf-harness` (D43), `go 1.27` and `toolchain go1.27.2` (D28, D45, D106). Its `tool` lines pin staticcheck 2026.2.1 and govulncheck v1.8.0 (D42, B17).
+- The package layout in D45: `cmd/dwarf-harness/`, `contract/{ledger,launcher,module,law}/`, `internal/{core,router,undercurrent}/`, `tools/check/`, `docs/`. C0 creates only `tools/check`, the one directory with content at C0; `cmd/dwarf-harness` and every other package are created by the first step that gives them real content (D41: no placeholders; B17). The nested `gui/` module and `go.work` arrive with the GUI roadmap (D44).
 - The import-boundary test, which runs `go list -deps` for every package and fails on any import outside D45's table.
 - `tools/check`, run as `go run ./tools/check` (D42): gofmt, `go vet`, staticcheck and govulncheck; the import-boundary test; tests with `CGO_ENABLED=0`; the tests again with `-race`, with `CC` set explicitly to the pinned compiler (D28); Linux and macOS builds with `CGO_ENABLED=0`.
-- Test conventions (D42): `testing/synctest`, Go's native fuzzing, rapid v1.3.0 as a test-only dependency, and golden samples for contracts. D42 records staticcheck, govulncheck and rapid under D29.
-- `CLAUDE.md`, written following `skill://writing-for-agents`. It holds the reading order from `ROADMAPS.md`; the working rules in `ROADMAPS.md` (D41, D42, D46); the working principles at the top of this roadmap; D45's layout and import table; D29's rule on when to write code ourselves and when to use a recorded library; and the commit rules (Conventional Commits with the package as the scope; commit on your own branch when the tests you touched pass; the full check passes before `main` moves; never push without the owner).
-- The toolchain on the owner's machine (D28): go1.27.1 from the official installer, and llvm-mingw 20260922 (clang 23.1.2, UCRT, x86_64 host), pinned and installed outside `PATH`.
+- Test conventions (D42): `testing/synctest`, Go's native fuzzing, rapid v1.3.0 as a test-only dependency, added to `go.mod` with the first test that imports it (B17), and golden samples for contracts. D42 records staticcheck, govulncheck and rapid under D29.
+- `AGENTS.md`, the canonical agent instructions, which `CLAUDE.md` imports (B17), written following `skill://writing-for-agents`. It states the workspace, check, commit, sign-off, layer, dependency and Go-command rules every coding turn needs, and points to the reading order and working rules in `ROADMAPS.md` (D41, D42, D46), the working principles at the top of this roadmap, D45's import table as encoded in `tools/check`, and D29's rule on when to write code ourselves and when to use a recorded library.
+- The toolchain on the owner's machine (D28, D106): go1.27.2 from the official installer, and llvm-mingw 20260922 (clang 23.1.2, UCRT, x86_64 host), pinned and installed outside `PATH`.
 - Already in place since 2026-10-02: the repository, `docs/` with the design documents and `DECISIONS.md` (D30, D31), and `.gitattributes` (B1).
 
 | Definition | Meaning |
@@ -180,7 +180,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 | Decided | Source |
 |---|---|
-| Go version and minimum toolchain: go1.27.1 from the official installer; `go 1.27` in `go.mod` | D28 |
+| Go version and minimum toolchain: go1.27.2 from the official installer; `go 1.27` in `go.mod` | D28, D106 |
 | The core and the terminal program never use cgo. Every build states `CGO_ENABLED`, because Go's default switches cgo on when a C compiler is on `PATH` | D28; core Appendix A.9 |
 | C compiler: llvm-mingw 20260922 outside `PATH`, reached through `CC` only for race-detector test builds and the GUI build. Not TDM-GCC or Microsoft's compiler | D28; core Appendix A.9 |
 | Import boundaries are enforced by the import-boundary test, against the per-layer allowlist | D29 |
@@ -202,10 +202,10 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 | Windows race-check compiler | Owner supplies the absolute pinned `DWARF_CC` path; missing/mismatched toolchain fails the race check without installing or guessing, while ordinary cgo-free checks remain available |
 | Linux/macOS CI compiler | Linux uses image-pinned `/usr/bin/gcc`; macOS obtains its native compiler through `xcrun` only for relevant cgo checks; record versions |
 | Vulnerability database | Use the official online database or an explicit unpacked official snapshot with manifest/source/digest and provisional seven-day age cap; unavailable/expired data cannot pass |
-| Proof | The real C0 full check and planted import-boundary failure have not been run by this documentation change |
-**Exit criterion.** The module builds with `CGO_ENABLED=0`. `go run ./tools/check` passes on Windows, including the `-race` tests. The import-boundary test exists, passes, and fails on a planted forbidden import. `CLAUDE.md` is present. `DECISIONS.md` contains every decision in §1, which has been true since 2026-10-02.
+| Proof | Run on 2026-10-09 on Windows with go1.27.2 and llvm-mingw 20260922 (ticket 01): the full check passed, including `-race`; a planted forbidden import and a Linux-only cgo file each failed the import-boundary step |
+**Exit criterion.** The module builds with `CGO_ENABLED=0`. `go run ./tools/check` passes on Windows, including the `-race` tests. The import-boundary test exists, passes, and fails on a planted forbidden import. `AGENTS.md` holds the build section, and `CLAUDE.md` imports it (B17). `DECISIONS.md` contains every decision in §1, which has been true since 2026-10-02.
 
-**Status.** Ready.
+**Status.** Done (2026-10-09, ticket 01). Linux and macOS native check runs wait for C3's CI, and the vulnerability database is online-only (B17).
 
 ### C1. Action ledger and body store
 
@@ -270,10 +270,10 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 | Retention and replay | Operational replay facts stay in the never-compacted ledger; explicit body collection respects reachability/pins and records unavailable bodies. C7's bounded presentation persistence/retry-expiry mechanism remains separate producer work, not an immortal edit catalogue. Measure configured budgets/replay triggers; no constant-space claim |
 | Event catalogue | Freeze F0 after C1's owner-approved `ledger-format`/reader/appender review; add F2–F6 and later producer families only before their corresponding producer implementation (B2) |
 | Workload evidence | Measure cold/warm recovery, peak memory, durable-write latency and disk against 12/20 every-change contexts and the actual larger enrolled population. Appendix A.8's 0.52 ms historical single-event commit is not concurrent colony throughput (D78) |
-| Status | C1 remains Waiting for C0 and owner contract freeze; no C1 contract is frozen by this roadmap |
+| Status | C1 is Ready now that C0 is Done. No C1 contract is frozen by this roadmap; C1 ends with the owner freeze request |
 **Exit criterion.** C1's implementation writes, reads, replays and truncation-recovers every F0 catalogue record; unknown types are skipped, consumed unsupported versions fail clearly, and the golden fixture generator reproduces F0 exactly. Record actual cold/warm replay, durable-write, peak-memory and disk evidence at 12/20 every-change contexts plus the declared larger workload. Request the owner freeze for F0 `ledger-format`, `ledger-reader` and `ledger-appender`; later event families are frozen before their own producers, not pulled into F0. Nothing here claims the contracts are frozen or those measurements pass.
 
-**Status.** Waiting.
+**Status.** Ready.
 
 ### C2. Workspaces, observation, promotion, temporary scratch
 
@@ -967,7 +967,7 @@ Remaining prerequisites, explicit pre-alpha producer work and evidence are liste
 
 | Step | Prerequisites and unproven gates |
 |---|---|
-| C0 | Owner supplies the absolute pinned `DWARF_CC` path for Windows race checks; Linux/macOS compiler handling and official online or manifest-verified ≤7-day vulnerability database inputs are specified. The real full check and planted import-boundary failure remain unrun |
+| C0 | Done 2026-10-09 on Windows (ticket 01): the full check passed with `DWARF_CC` set, including `-race`, and planted violations failed the import-boundary step. Linux and macOS native runs wait for C3's CI, and the vulnerability database is online-only (B17) |
 | C1 | Owner D40 freeze of F0 and platform flush/lock/rename proof; operational retention/reachability rules remain. Catalogue C7 presentation records only after its bounded persistence/retry mechanism is specified; no permanent cosmetic edit log. Real event-load/replay measurements remain |
 | C2 | Formal D52 owner approval, frozen C1 F0/dependencies, full-tree capture and D74–D78 boundary proof; every-change workload/capacity evidence and real interruption/recovery |
 | C3 | C2 and remote/CI, credentials, adapter/runtime/replay, generic eligibility guards/task facts, the Core §13.11 service-loss state and context isolation. No backward R1/C8/C9/GUI dependency; workload/quiescence proof remains |

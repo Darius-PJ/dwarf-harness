@@ -386,7 +386,7 @@ Make the ordinary path easy to use correctly: authoritative mutations carry thei
 
 ### Core runtime and authority
 
-5. **Portable development boundary.** Use Go 1.27 with the pinned Go 1.27.1 toolchain; keep Core and terminal cgo-free and state CGO_ENABLED for every build. Enforce the package import allowlist from the first owned package, use one check command for formatting, static analysis, vulnerability checks, import-boundary validation, tests and supported builds, and add dependencies only through the recorded approval process. C0 is configuration and proof, not placeholder packages.
+5. **Portable development boundary.** Use Go 1.27 with the pinned Go 1.27.2 toolchain (D106); keep Core and terminal cgo-free and state CGO_ENABLED for every build. Enforce the package import allowlist from the first owned package, use one check command for formatting, static analysis, vulnerability checks, import-boundary validation, tests and supported builds, and add dependencies only through the recorded approval process. C0 is configuration and proof, not placeholder packages.
 
 6. **One durable operational colony ledger.** Use one append-only, typed, versioned colony ledger and one Core-owned serialized appender; operational records receive a gapless colony sequence, hash-chain identity and committed durability before acknowledgment. Store large bodies by content hash, preserve operational replay facts and command deduplication in authoritative segments, rebuild indexes, and make body collection explicit without deleting or compacting operational event history. Separate durable ledger cursors from ephemeral per-turn text deltas. Freeze only producer-ready families as each owner approves them. D90–D96 instead require bounded/replaceable presentation state and per-run cosmetic undo under decision 60, not immortal cosmetic-edit history or a second GUI store.
 
@@ -688,7 +688,7 @@ The Router roadmap and D24 explicitly select no prewarm requests and no staggere
 
 | Capability | Required ordering and stop boundary |
 |---|---|
-| Repository foundation | C0 is the currently Ready step; its real toolchain/check/import-boundary proof remains to be built and run |
+| Repository foundation | C0 is Done (2026-10-09, ticket 01): the full check passed on Windows, including `-race`, and C1 is Ready |
 | Ledger and contracts | C1 follows C0; freeze only specified producer-ready families, not placeholder schemas |
 | Agent workspace and runtime | C2 requires its C1 freezes and explicit D52 approval; C3 follows C2 and its owner prerequisites |
 | Validated real work | C4 follows C3 and frozen U1.L law-format, not U1.E; all pre-C4 agent work stays testing-only until the full C4 gate passes |
@@ -757,3 +757,7 @@ The owner interview in ticket 87 specified the procedure that D96 left open, rec
 ### 2026-10-08 — Go modules and art rounds before the GUI (D105)
 
 [D105](../../docs/DECISIONS.md#d105-default-fortress-art-go-modules-for-sprite-generation-and-art-rounds-before-the-gui) allows the art generator to use Go modules from outside the standard library that assist sprite generation, each with its D29 record, and confirms D104's other readings. Implementation decision 58 states it. Ticket 137 was published so that review rounds can improve the art before the native GUI exists; ticket 88 was reworked for modules, and tickets 107 and 108 gained cross-links. No D52 approval, contract freeze, readiness status or unrun gate is advanced.
+
+### 2026-10-09 — Toolchain go1.27.2 (D106)
+
+Implementation decision 5 now names the go1.27.2 toolchain the owner approved after C0's vulnerability scan ([D106](../../docs/DECISIONS.md#d106-toolchain-go1272)). No other decision changes.
