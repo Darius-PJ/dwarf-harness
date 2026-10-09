@@ -288,6 +288,48 @@ func TestRoleToolOnlyDuringItsAction(t *testing.T) {
 	if tools == 0 {
 		t.Fatal("no member plays an action that has a tool")
 	}
+
+	// No sample tool frame overlaps the pennant, so a fixture does: the
+	// worker's ready frame gains a spark pixel on every pixel the pennant
+	// draws in that frame. The tool is drawn after the marker, so every such
+	// pixel must show the spark.
+	t.Run("tool over the pennant", func(t *testing.T) {
+		m := realArt(t)
+		_, flag := frameRows(t, m, tqPennant, "frame act_worker 0")
+		n, rows := frameRows(t, m, tqTool, "frame act_worker 0")
+		ls := lines(t, m, tqTool)
+		overlap := 0
+		for y, row := range rows {
+			b := []byte(row)
+			for x := range b {
+				if flag[y][x] != '.' {
+					b[x] = 'Y'
+					overlap++
+				}
+			}
+			ls[n+y] = string(b)
+		}
+		setLines(m, tqTool, ls)
+		fixture, err := load(m)
+		if err != nil {
+			t.Fatalf("load the fixture: %v", err)
+		}
+		if overlap == 0 {
+			t.Fatal("the pennant draws no pixel in act_worker 0, so the fixture proves nothing")
+		}
+		spark := fixture.pal.entries[fixture.pal.glyphs['Y']].color
+		for _, c := range fixture.roster.corps {
+			img := fixture.compose(viewThreeQuarter, "act_worker", 0, fixture.outfits[0], "worker", c)
+			for y, row := range flag {
+				for x := range len(row) {
+					if row[x] != '.' && img.NRGBAAt(x, y) != spark {
+						t.Errorf("Corps %s, act_worker 0 (%d,%d) = %v; the tool's %v lies over the marker there", c.name, x, y, img.NRGBAAt(x, y), spark)
+						return
+					}
+				}
+			}
+		}
+	})
 }
 
 func TestCorpsMarkerDrawnOverSlots(t *testing.T) {
