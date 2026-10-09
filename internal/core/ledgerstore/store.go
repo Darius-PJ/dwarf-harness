@@ -1,18 +1,28 @@
 // Package ledgerstore is Core's store for one colony's ledger (D50): the
-// colony directory and its colony.json, the writer lock, and the sequencer,
-// writer and recovery behind appender.Appender.
+// colony directory and its colony.json, the writer lock, the sequencer,
+// writer and recovery behind appender.Appender, and the body store with its
+// pins and explicit collection.
 //
 // # Directory
 //
-// A colony directory holds colony.json, lock and log (D38). log is the
-// segment directory of package ledger's format. Directories are created with
-// mode 0o700 and files with 0o600; Windows ignores the modes, and the ACL the
-// directory inherits applies. colony.json is exactly
+// A colony directory holds colony.json, lock, log and bodies (D38). log is
+// the segment directory of package ledger's format. Directories are created
+// with mode 0o700 and files with 0o600; Windows ignores the modes, and the
+// ACL the directory inherits applies. colony.json is exactly
 // {"format":1,"colony_id":"<UUIDv7>"} and LF, published through a flushed
 // temporary file and a durable rename, so it is either absent or complete.
 // lock has no content. One Store holds the operating system's lock on it from
 // Create or Open until Close or the holder's death; nothing ever steals it,
 // whatever its age or holder (Core:829).
+//
+// bodies is the body store. Each body is the file bodies/<hh>/<digest>, named
+// by its SHA-256 as 64 lowercase hex digits in the fan-out directory named by
+// the first two; Create makes all 256 fan-out directories. bodies/.tmp holds
+// publications in progress, and Open empties it. In bodies and in each
+// fan-out directory names beginning with a dot are ignored, and any other
+// entry the store did not put there fails closed with ErrBodyStore wherever
+// the store lists the directory. A body file is never renamed or rewritten
+// once published; only Collect deletes it.
 //
 // # Writing
 //
@@ -36,14 +46,65 @@
 // disk. A failure to start a new segment poisons the store as well, but no
 // commit bytes were written, so that Append returns appender.ErrPoisoned.
 //
+// # Bodies
+//
+// PublishBody copies a body into a temporary file, hashing and counting it,
+// refuses one over MaxBodyBytes, flushes the file and publishes it under its
+// name with a durable rename. A body is acknowledged only once its bytes and
+// its name are flushed, and only then may a record reference it: Append
+// refuses, with appender.ErrRefused and ErrBodyUnpublished, a draft whose
+// body_refs names a body the store does not hold. A body is immutable, so
+// publishing it again writes nothing; in particular it does not refresh the
+// body's age, because collection ages a referenced body by its newest
+// reference, not by its publication. A body that collection takes after its
+// producer published it but before the producer's Append lands is refused
+// that way; the producer publishes it again and retries.
+//
+// On Windows, a handle that another program holds on the temporary file,
+// such as a real-time virus scanner's or an indexer's, can fail the rename
+// with a sharing violation. PublishBody returns that error and nothing is
+// published; the store never retries, and the caller may.
+//
+// ReadBody reads a whole body and returns it only after verifying it against
+// its digest, so no caller sees unverified bytes. An absent body is
+// classified from the ledger.bodies_collected records: collected, with the
+// record's sequence, or missing, which fails closed. PublishBody and ReadBody
+// do not take the writer turn, so they keep working while the store is
+// poisoned.
+//
+// One sync.RWMutex orders the body store. Reads and reference checks share
+// it; the final step of a publication, each collection batch and Close take
+// it alone. On Windows a file that is open for reading cannot be removed or
+// replaced, and on Linux and macOS a renamed file is visible before its
+// directory is flushed, so neither a deletion nor a reference check meets a
+// read or a publication in progress. The mutex prefers a waiting writer:
+// while a large ReadBody runs, a waiting publication or collection batch
+// holds back every later read and publication.
+//
+// # Pins and collection
+//
+// A ledger.body_pin record pins the bodies its body_refs lists until a
+// ledger.body_unpin with the same pin ID releases them, and Collect never
+// takes a pinned body. The store holds the active pins in memory, bounded at
+// 65,536 (pin, body) pairs: Append refuses a commit holding a pin that
+// would pass the bound, and always accepts unpins.
+//
+// Collect deletes bodies only when a caller orders it, under the explicit
+// policy it is given; the store never collects on its own. Each referenced
+// body it deletes is first listed in a durable ledger.bodies_collected record,
+// so history keeps every body it ever referenced, available or collected.
+// A policy's byte target counts as present bytes the sizes of every body in
+// the store when Collect lists it, pinned and ineligible bodies included,
+// less those it deletes.
+//
 // # Opening
 //
 // Open takes the lock, verifies the whole log with ledger.Check, truncates a
 // torn final commit and flushes the segment and both directories. It fails
-// closed, changing no byte, on anything Check rejects. Open keeps a complete,
-// valid commit that was on disk when a writer died, because it cannot know
-// whether the commit was acknowledged; that is why appender.ErrUncertain means
-// unknown rather than not written.
+// closed, changing no byte, on anything Check rejects, and on a missing body
+// store. Open keeps a complete, valid commit that was on disk when a writer
+// died, because it cannot know whether the commit was acknowledged; that is
+// why appender.ErrUncertain means unknown rather than not written.
 package ledgerstore
 
 import (
@@ -55,6 +116,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"uuid"
@@ -92,36 +154,54 @@ type Recovery struct {
 // replace them for deterministic regressions of the writer's state machine;
 // they prove no platform behaviour.
 type deps struct {
-	clock         func() time.Time
-	newID         func() uuid.UUID // the colony ID at Create, and each commit ID
-	files         fileSystem
-	segmentTarget int64
+	clock            func() time.Time
+	newID            func() uuid.UUID // the colony ID at Create, and each commit ID
+	files            fileSystem
+	segmentTarget    int64
+	maxBodyBytes     int64  // MaxBodyBytes
+	maxPinned        int    // the bound on active (pin, body) pairs
+	collectBatch     int    // the bodies one collection batch takes at most
+	afterCollectScan func() // called after Collect's first read of the log; nil in production
 }
 
 func realDeps() deps {
-	return deps{clock: time.Now, newID: uuid.NewV7, files: osFiles{}, segmentTarget: segmentTarget}
+	return deps{
+		clock: time.Now, newID: uuid.NewV7, files: osFiles{}, segmentTarget: segmentTarget,
+		maxBodyBytes: MaxBodyBytes, maxPinned: maxPinned, collectBatch: collectBatch,
+	}
 }
 
 // Store is one colony's open ledger. It holds the colony lock until Close and
 // is safe for concurrent use.
 type Store struct {
-	dir, logDir string
-	colony      uuid.UUID
-	cat         ledger.Catalogue
-	deps        deps
-	lock        *durable.Lock
+	dir, logDir, bodiesDir string
+	colony                 uuid.UUID
+	cat                    ledger.Catalogue
+	deps                   deps
+	lock                   *durable.Lock
+
+	// collectMu serializes Collect calls. It is taken before the turn.
+	collectMu sync.Mutex
 
 	// turn is the writer turn, a 1-slot semaphore: a goroutine holds the turn
 	// while its token is in the channel. It guards the fields below.
 	turn chan struct{}
 
-	closed   bool
 	poison   error        // why the store is poisoned; nil if it is not
 	rotation string       // when a new segment failed to start, its name
 	chain    ledger.Chain // the end of the last acknowledged commit
 	seg      segmentFile  // the current segment's file; nil if none or after a failure
 	segName  string       // the current segment's name; "" if there is none
 	size     int64        // the current segment's acknowledged bytes
+	pins     pinSet       // the active pins
+
+	// bodiesMu orders body publication, reads, reference checks, collection
+	// batches and Close. A goroutine that holds both it and the turn took
+	// the turn first. The fields below change only under both the turn and
+	// its write lock, so either one guards reading them.
+	bodiesMu  sync.RWMutex
+	closed    bool
+	collected []uint64 // the commit ends of the ledger.bodies_collected records, ascending
 
 	acked atomic.Uint64 // chain.Seq, readable without the turn
 }
@@ -194,6 +274,9 @@ func createLocked(dir string, cat ledger.Catalogue, d deps, lock *durable.Lock) 
 	case err != nil:
 		return nil, err
 	}
+	if err := createBodies(filepath.Join(dir, bodiesName), d.files); err != nil {
+		return nil, err
+	}
 	if err := d.files.syncDir(dir); err != nil {
 		return nil, err
 	}
@@ -264,6 +347,9 @@ func openLocked(dir string, cat ledger.Catalogue, d deps, lock *durable.Lock) (*
 		return nil, Recovery{}, err
 	}
 	s := newStore(dir, id, cat, d, lock)
+	if err := openBodies(s.bodiesDir); err != nil {
+		return nil, Recovery{}, err
+	}
 	res, err := ledger.Check(s.logDir, id)
 	if err != nil {
 		return nil, Recovery{}, err
@@ -306,14 +392,16 @@ func lockColony(dir string) (*durable.Lock, error) {
 
 func newStore(dir string, id uuid.UUID, cat ledger.Catalogue, d deps, lock *durable.Lock) *Store {
 	return &Store{
-		dir:    dir,
-		logDir: filepath.Join(dir, logName),
-		colony: id,
-		cat:    cat,
-		deps:   d,
-		lock:   lock,
-		turn:   make(chan struct{}, 1),
-		chain:  ledger.Genesis(),
+		dir:       dir,
+		logDir:    filepath.Join(dir, logName),
+		bodiesDir: filepath.Join(dir, bodiesName),
+		colony:    id,
+		cat:       cat,
+		deps:      d,
+		lock:      lock,
+		turn:      make(chan struct{}, 1),
+		chain:     ledger.Genesis(),
+		pins:      newPinSet(),
 	}
 }
 
@@ -330,10 +418,12 @@ func (s *Store) LogDir() string { return s.logDir }
 func (s *Store) Durable() uint64 { return s.acked.Load() }
 
 // Append commits drafts as one commit and returns its sequence range once the
-// commit is completely written and flushed. A draft whose type version is not
-// in the store's catalogue, or that ledger.EncodeCommit rejects, is refused
-// with appender.ErrRefused. ctx bounds only the wait for the writer turn. See
-// package appender for the other errors.
+// commit is completely written and flushed. It refuses with
+// appender.ErrRefused a draft whose type version is not in the store's
+// catalogue, that breaks a rule of its F0 record type, that references a
+// body the body store does not hold, or that ledger.EncodeCommit rejects.
+// ctx bounds only the wait for the writer turn. See package appender for the
+// other errors.
 func (s *Store) Append(ctx context.Context, drafts []ledger.Draft) (appender.Committed, error) {
 	// select chooses at random between a free turn and an ended ctx, so an
 	// ended ctx is checked first and never takes the turn.
@@ -357,6 +447,27 @@ func (s *Store) Append(ctx context.Context, drafts []ledger.Draft) (appender.Com
 			return appender.Committed{}, fmt.Errorf("%w: draft %d: type %s version %d is not in the catalogue", appender.ErrRefused, i, d.Type, d.TypeVersion)
 		}
 	}
+	plan, err := s.pins.plan(drafts, s.deps.maxPinned)
+	if err != nil {
+		return appender.Committed{}, fmt.Errorf("%w: %w", appender.ErrRefused, err)
+	}
+	if err := s.checkReferences(drafts); err != nil {
+		return appender.Committed{}, err
+	}
+	c, err := s.commit(drafts)
+	if err != nil {
+		return appender.Committed{}, err
+	}
+	s.pins.apply(plan)
+	return c, nil
+}
+
+// commit stamps drafts with one event time, encodes them as one commit,
+// writes it and flushes it, under the writer turn. Only then do the chain
+// and Durable advance. An encoding refusal returns appender.ErrRefused, a
+// failure to start a segment appender.ErrPoisoned, and a failed write or
+// flush poisons the store and returns appender.ErrUncertain.
+func (s *Store) commit(drafts []ledger.Draft) (appender.Committed, error) {
 	h := ledger.CommitHeader{ColonyID: s.colony, CommitID: s.deps.newID(), EventTimeNS: s.deps.clock().UnixNano()}
 	if h.EventTimeNS < s.chain.EventTimeNS {
 		h.EventTimeNS, h.ClockHeld = s.chain.EventTimeNS, true
@@ -496,12 +607,15 @@ func (s *Store) reopenSegment() (segmentFile, string, int64, error) {
 	return f, s.segName, s.size, nil
 }
 
-// Close waits for the writer turn, closes the current segment, releases the
-// colony lock and marks the store closed. Append then returns
-// appender.ErrClosed, and a second Close returns nil.
+// Close waits for the writer turn and then for body reads and publications
+// in their final step to finish, closes the current segment, releases the
+// colony lock and marks the store closed. Append, Collect, PublishBody and
+// ReadBody then return appender.ErrClosed, and a second Close returns nil.
 func (s *Store) Close() error {
 	s.turn <- struct{}{}
 	defer s.release()
+	s.bodiesMu.Lock()
+	defer s.bodiesMu.Unlock()
 	if s.closed {
 		return nil
 	}

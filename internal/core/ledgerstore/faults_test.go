@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -21,10 +23,14 @@ var errFault = errors.New("injected fault")
 // goroutine that does.
 type faultFiles struct {
 	osFiles
-	onCreate  func(path string) (segmentFile, error)
-	onWriteAt func(f segmentFile, b []byte, off int64) (int, error)
-	onSync    func(f segmentFile) error
-	onSyncDir func(dir string) error
+	onCreate   func(path string) (segmentFile, error)
+	onWriteAt  func(f segmentFile, b []byte, off int64) (int, error)
+	onSync     func(f segmentFile) error
+	onSyncDir  func(dir string) error
+	onTempSync func(f bodyFile) error
+	onRename   func(from, to string) error
+	onRemove   func(path string) error
+	onOpenBody func(path string) (io.ReadCloser, error)
 }
 
 func (ff *faultFiles) createSegment(path string) (segmentFile, error) {
@@ -71,6 +77,49 @@ func (f faultFile) Sync() error {
 		return f.ff.onSync(f.segmentFile)
 	}
 	return f.segmentFile.Sync()
+}
+
+func (ff *faultFiles) createTemp(dir string) (bodyFile, error) {
+	f, err := ff.osFiles.createTemp(dir)
+	if err != nil {
+		return nil, err
+	}
+	return faultBodyFile{f, ff}, nil
+}
+
+func (ff *faultFiles) rename(from, to string) error {
+	if ff.onRename != nil {
+		return ff.onRename(from, to)
+	}
+	return ff.osFiles.rename(from, to)
+}
+
+func (ff *faultFiles) remove(path string) error {
+	if ff.onRemove != nil {
+		return ff.onRemove(path)
+	}
+	return ff.osFiles.remove(path)
+}
+
+func (ff *faultFiles) openBody(path string) (io.ReadCloser, error) {
+	if ff.onOpenBody != nil {
+		return ff.onOpenBody(path)
+	}
+	return ff.osFiles.openBody(path)
+}
+
+// faultBodyFile is a real temporary body file subject to its faultFiles'
+// hooks.
+type faultBodyFile struct {
+	bodyFile
+	ff *faultFiles
+}
+
+func (f faultBodyFile) Sync() error {
+	if f.ff.onTempSync != nil {
+		return f.ff.onTempSync(f.bodyFile)
+	}
+	return f.bodyFile.Sync()
 }
 
 type appendResult struct {
@@ -179,6 +228,12 @@ func TestAppendFailurePoisonsUntilRecover(t *testing.T) {
 				t.Errorf("Append after the failure = %v, want ErrPoisoned", err)
 			}
 			assertSnapshot(t, s.LogDir(), before)
+			// Bodies do not take the writer turn, so they keep working.
+			if dg, _, err := s.PublishBody(context.Background(), strings.NewReader("while poisoned")); err != nil {
+				t.Errorf("PublishBody while poisoned = %v", err)
+			} else if data, err := s.ReadBody(context.Background(), dg); err != nil || string(data) != "while poisoned" {
+				t.Errorf("ReadBody while poisoned = %q, %v", data, err)
+			}
 
 			if err := s.Recover(); err != nil {
 				t.Fatalf("Recover = %v", err)

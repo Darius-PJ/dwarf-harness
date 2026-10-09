@@ -167,18 +167,19 @@
 // type with an Encode method, which validates the value and emits compact
 // JSON with its keys in the order tabled below, and a Decode function. Their
 // errors wrap ErrInvalid. A decoder refuses a payload that is not a JSON
-// object; a missing required key, a key repeated at any depth, or a null; an
-// ID that is not a canonical lowercase UUIDv7; a digest that is not 64
-// lowercase hex digits or is zero; an integer with a sign, fraction or
-// exponent, or out of range; and any value or ordering rule broken. Keys it
-// does not know are ignored, at the top level and inside the elements of
-// bodies, so that a type version can gain optional keys by addition.
-// Encoding a decoded payload reproduces the bytes that Encode produced.
+// object; a missing required key, a key repeated at any depth, or a known
+// key that is null; an ID that is not a canonical lowercase UUIDv7; a digest
+// that is not 64 lowercase hex digits or is zero; an integer with a sign,
+// fraction or exponent, or out of range; and any value or ordering rule
+// broken. Keys it does not know are ignored, at the top level and inside the
+// elements of bodies, so that a type version can gain optional keys by
+// addition. Encoding a decoded payload reproduces the bytes that Encode
+// produced.
 //
 // Core's writer guarantees the record rules stated under each type: it
-// refuses a draft that would break one (see package appender), and it fails
-// closed on a log that breaks one. Check, Reader and EncodeCommit do not
-// apply them.
+// refuses a draft that would break one (see package appender), and, when it
+// opens a log, it fails closed on a record that breaks a rule the records
+// themselves show. Check, Reader and EncodeCommit do not apply them.
 //
 // ledger.command v1 (Command) is the identity tombstone of D58: the record
 // that a command, named by its immutable command ID, was submitted. It

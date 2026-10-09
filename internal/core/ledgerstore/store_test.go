@@ -24,16 +24,21 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/core/durable"
 )
 
-// allFixtures consumes every type version of testCatalogue.
+// allFixtures consumes every fixture type version of testCatalogue.
 var allFixtures = ledger.Consumption{"fixture.sample": {1, 2}, "fixture.other": {1}}
 
-// testCatalogue holds package ledger's reserved fixture types.
+// testCatalogue holds package ledger's reserved fixture types and the F0
+// types of ledger.Defined.
 func testCatalogue(t testing.TB) ledger.Catalogue {
 	t.Helper()
 	cat, err := ledger.NewCatalogue(
 		ledger.TypeVersion{Type: "fixture.sample", Version: 1},
 		ledger.TypeVersion{Type: "fixture.sample", Version: 2},
 		ledger.TypeVersion{Type: "fixture.other", Version: 1},
+		ledger.TypeVersion{Type: ledger.TypeCommand, Version: 1},
+		ledger.TypeVersion{Type: ledger.TypeBodyPin, Version: 1},
+		ledger.TypeVersion{Type: ledger.TypeBodyUnpin, Version: 1},
+		ledger.TypeVersion{Type: ledger.TypeBodiesCollected, Version: 1},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -312,27 +317,22 @@ func TestCreateAndOpenLayout(t *testing.T) {
 }
 
 func TestWriterReproducesGolden(t *testing.T) {
-	// The catalogue log holds the F0 types beside one fixture type.
-	catalogueTypes, err := ledger.NewCatalogue(
-		ledger.TypeVersion{Type: "fixture.sample", Version: 1},
-		ledger.TypeVersion{Type: ledger.TypeCommand, Version: 1},
-		ledger.TypeVersion{Type: ledger.TypeBodyPin, Version: 1},
-		ledger.TypeVersion{Type: ledger.TypeBodyUnpin, Version: 1},
-		ledger.TypeVersion{Type: ledger.TypeBodiesCollected, Version: 1},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, tc := range []struct {
 		name      string
 		goldenDir string
 		colony    uuid.UUID
-		cat       ledger.Catalogue
+		bodies    []string       // published before the first commit
+		collected map[int]uint64 // body index -> the seq of the record that collects it
 	}{
-		{"f0", "../../../contract/ledger/testdata/f0/log", uuid.MustParse("0199c000-0000-7000-8000-000000000001"), testCatalogue(t)},
-		{"catalogue", "../../../contract/ledger/testdata/f0/catalogue/log", uuid.MustParse("0199c000-0000-7000-8000-000000000002"), catalogueTypes},
+		{name: "f0", goldenDir: "../../../contract/ledger/testdata/f0/log", colony: uuid.MustParse("0199c000-0000-7000-8000-000000000001")},
+		{
+			name: "catalogue", goldenDir: "../../../contract/ledger/testdata/f0/catalogue/log", colony: uuid.MustParse("0199c000-0000-7000-8000-000000000002"),
+			bodies:    []string{"golden body one\n", "golden body two\n", "golden body three\n"},
+			collected: map[int]uint64{0: 5, 1: 7},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
 			commits := readCommits(t, tc.goldenDir, tc.colony, ledger.ToEnd)
 			golden := snapshot(t, tc.goldenDir)
 			first, err := os.Stat(filepath.Join(tc.goldenDir, ledger.SegmentName(1)))
@@ -364,18 +364,46 @@ func TestWriterReproducesGolden(t *testing.T) {
 				return time.Unix(0, at)
 			}
 			d.segmentTarget = first.Size()
-			s, err := create(filepath.Join(t.TempDir(), "colony"), tc.cat, d)
-			if err != nil {
-				t.Fatalf("create = %v", err)
+			s := newColony(t, d)
+			var digests []ledger.Digest
+			for _, b := range tc.bodies {
+				dg, _, err := s.PublishBody(ctx, strings.NewReader(b))
+				if err != nil {
+					t.Fatalf("PublishBody = %v", err)
+				}
+				digests = append(digests, dg)
 			}
-			t.Cleanup(func() { s.Close() })
 			for _, c := range commits {
+				// The store writes collection records itself, under the
+				// policy each one states.
+				if r := c.Records[0]; r.Type == ledger.TypeBodiesCollected {
+					p, err := ledger.DecodeBodiesCollected(r.Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					rep, err := s.Collect(ctx, CollectPolicy{Actor: r.Actor, BeforeNS: p.BeforeNS, KeepBytes: p.KeepBytes})
+					if err != nil || !slices.Equal(rep.Records, []uint64{c.First}) {
+						t.Fatalf("Collect = %+v, %v; want the record at seq %d", rep, err, c.First)
+					}
+					continue
+				}
 				var drafts []ledger.Draft
 				for _, r := range c.Records {
 					drafts = append(drafts, r.Draft)
 				}
 				if got := mustAppend(t, s, drafts...); got != (appender.Committed{First: c.First, Last: c.Last}) {
 					t.Fatalf("Append = %+v, want %d-%d", got, c.First, c.Last)
+				}
+			}
+			for i, dg := range digests {
+				data, err := s.ReadBody(ctx, dg)
+				var ue *BodyUnavailableError
+				if seq, ok := tc.collected[i]; ok {
+					if !errors.As(err, &ue) || *ue != (BodyUnavailableError{Digest: dg, Seq: seq}) {
+						t.Errorf("ReadBody(body %d) = %v, want it collected at seq %d", i, err, seq)
+					}
+				} else if err != nil || string(data) != tc.bodies[i] {
+					t.Errorf("ReadBody(body %d) = %q, %v; want %q", i, data, err, tc.bodies[i])
 				}
 			}
 			if err := s.Close(); err != nil {
@@ -517,8 +545,8 @@ func TestRefusedAppendConsumesNothing(t *testing.T) {
 		t.Errorf("second Close = %v, want nil", err)
 	}
 
-	// The production catalogue defines no record type yet, so it refuses
-	// the fixture types.
+	// The production catalogue holds only the F0 types, so it refuses the
+	// fixture types.
 	prod, err := Create(filepath.Join(t.TempDir(), "colony"), ledger.Defined())
 	if err != nil {
 		t.Fatal(err)
