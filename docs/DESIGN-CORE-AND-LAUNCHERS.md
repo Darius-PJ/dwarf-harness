@@ -619,7 +619,7 @@ Every dependency also states its token implications and device/build cost. Rows 
 | Provider adapters | Hand-written on `net/http` (§8.3) | — | Adapter-only prototype: 6.86 MB |
 | Native UI | Fyne v2.8.1 selected under B11 (§6, §13.7) | Verify GUI-A–D build and accessibility gates | Not measured |
 | Local attachment channel | B11 selects a local-only named pipe on Windows and private per-colony Unix socket (§13.7) | C7/GUI-A/B authenticated attach, discovery and reconnect gates | Not measured |
-| Windows job objects and named pipes | `golang.org/x/sys`; x tier, so it needs a decision-log entry (D29) | BSD-3-Clause | Not measured separately; `golang.org/x/term` already brings it |
+| Windows job objects and named pipes | `golang.org/x/sys`; x tier, so it needs a decision-log entry (D29) | BSD-3-Clause | Not measured separately; already a direct requirement through the durability adapter (record below) |
 | WASM, only if future in-process plugins need it | `github.com/tetratelabs/wazero` ([source](https://github.com/tetratelabs/wazero)) | Apache-2.0 | Not measured |
 | Static analysis (tool) | staticcheck 2026.2.1 (`honnef.co/go/tools` v0.8.1), a go.mod `tool` line (D42, B17) | MIT | None; ships in no program |
 | Vulnerability check (tool) | govulncheck v1.8.0 (`golang.org/x/vuln`), a go.mod `tool` line (D42, B17) | BSD-3-Clause | None; ships in no program |
@@ -634,10 +634,10 @@ Every dependency also states its token implications and device/build cost. Rows 
 **`golang.org/x/sys` record (D29, B3).** C1's OS durability and locking adapter, `internal/core/durable`, uses module `golang.org/x/sys` v0.48.0, released 2026-08-31 (BSD-3-Clause, with a PATENTS file; minimum Go 1.26.0; it requires no other module). On Windows it calls `LockFileEx`, `UnlockFileEx`, `CreateFile`, `FlushFileBuffers`, `CloseHandle` and `MoveFileEx`; on Linux and macOS it calls `Flock`. The module was already in the graph as a tool-only requirement through govulncheck and `golang.org/x/telemetry`; C1 makes it a direct production requirement.
 
 - **Scope:** B3 confines it to that adapter. `tools/check` admits `golang.org/x/...` for every `internal/core/...` package, so the narrower rule is held by review, which lists the module's importers for each build target.
-- **Binary-size change:** measured on two probe programs that lock a file, flush a directory and rename, built with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"` as in Appendix A.8. Against the same program on the standard `syscall` package, windows/amd64 grows by 134,144 bytes (2,003,968 against 1,869,824, +7.2%), linux/amd64 is unchanged at 1,675,424 bytes, and darwin/arm64 grows by 80 bytes.
+- **Binary-size change:** measured on two probe programs that lock a file, flush a directory and rename, built with go1.27.2 and `CGO_ENABLED=0 -trimpath -ldflags="-s -w"` as in Appendix A.8. Against the same program on the standard `syscall` package, windows/amd64 grows by 134,144 bytes (2,003,968 against 1,869,824, +7.2%), linux/amd64 is unchanged at 1,675,424 bytes, and darwin/arm64 grows by 80 bytes.
 - **Maintenance:** its repository, `golang/sys`, is not archived, was last changed on 2026-10-06, and v0.48.0 is its newest tag.
 - **Removal:** call `LockFileEx`, `UnlockFileEx` and `MoveFileExW` through `syscall.NewLazyDLL("kernel32.dll")` on Windows (`CreateFile`, `FlushFileBuffers` and `CloseHandle` already exist in `syscall`), use `syscall.Flock` on Linux and macOS, then run `go mod tidy`.
-- **Platform status:** Windows behaviour is tested on NTFS; Linux and macOS are only compiled until C3's CI exists (D42). This is not a power-loss guarantee (B3).
+- **Platform status:** Windows behaviour is verified on NTFS on this machine; other file systems and network shares are unverified. Linux and macOS are only compiled until C3's CI exists (D42). This is not a power-loss guarantee (B3).
 
 The core needs no embedded scripting engine to reuse another project's implementation. Child-process plugins remain the default extensibility boundary; accepting a C toolchain does not change their permission or trust model.
 
