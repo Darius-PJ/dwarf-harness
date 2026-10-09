@@ -50,3 +50,5 @@ Ticket 02's share of C1 is built ([B18](../../../docs/DECISIONS.md#b18-c1-ledger
 2026-10-09 — Claimed for wave 2 of the staged build. A designer drafts the implementation brief for the advisor's ruling; the coder then works on its own branch and worktree (D41).
 
 2026-10-09 — Slice S1 (`contract/ledger`: the draft ledger-format and ledger-reader) and its status changes reached `main` at commit 458a2d8, after the build advisor approved them and the full check passed on that exact commit. S1 adds no dependency, so it needed no owner sign-off (D41). Slices S2 and S3 stay on branch `build/02-ledger` until the owner signs off `golang.org/x/sys` (OG1).
+
+2026-10-09 — Resolved: the build advisor approved slices S2–S4 and the second-pass documents, and `main` fast-forwarded to commit dfadf53 after the full check and the `-count=20` concurrency, durability and killed-writer runs passed on that exact commit. The owner signed off `golang.org/x/sys` (OG1) under D41. One optional advisor nit stays open: if a directory disappears between Open's pre-check and the lock, Open returns the raw not-exist error rather than `ErrNotColony`.
