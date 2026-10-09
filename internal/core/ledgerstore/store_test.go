@@ -243,13 +243,13 @@ func TestCreateAndOpenLayout(t *testing.T) {
 		if _, _, err := Open(dir, cat); !errors.Is(err, ErrNotColony) {
 			t.Errorf("Open = %v, want ErrNotColony", err)
 		}
-		assertUnlocked(t, dir)
 		missing := filepath.Join(dir, "missing")
 		if _, _, err := Open(missing, cat); !errors.Is(err, ErrNotColony) {
 			t.Errorf("Open of a missing directory = %v, want ErrNotColony", err)
 		}
-		if _, err := os.Lstat(missing); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("Open created the missing directory: %v", err)
+		// Open leaves nothing behind, not even a lock file.
+		if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+			t.Errorf("directory after Open: %v, %v; want it empty", entries, err)
 		}
 	})
 

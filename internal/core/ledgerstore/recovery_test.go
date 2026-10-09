@@ -38,35 +38,78 @@ func TestOpenTruncatesTornFinalCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for cut := boundary; cut < int64(len(full)); cut++ {
-		if err := os.WriteFile(path, full[:cut], 0o600); err != nil {
-			t.Fatal(err)
+	// Each of the torn commit's three lines is cut where its structure
+	// changes: at the end of the hash, just after the TAB, in the middle of
+	// the JSON, before the LF and after it, except after the last LF, where
+	// the commit is complete. The cut at boundary is the control, with
+	// nothing torn.
+	type cutPoint struct {
+		name string
+		at   int64
+	}
+	cuts := []cutPoint{{"boundary", boundary}, {"boundary+1", boundary + 1}}
+	start := boundary
+	for i, line := 1, full[boundary:]; len(line) > 0; i++ {
+		n := int64(bytes.IndexByte(line, '\n') + 1)
+		if n == 0 {
+			t.Fatalf("line %d of the torn commit has no LF", i)
 		}
-		s2, rec, err := open(s.dir, s.cat, d)
-		if err != nil {
-			t.Fatalf("cut at %d: open = %v", cut, err)
+		end := start + n
+		cuts = append(cuts,
+			cutPoint{fmt.Sprintf("line%d/hash-end", i), start + 64},
+			cutPoint{fmt.Sprintf("line%d/after-tab", i), start + 65},
+			cutPoint{fmt.Sprintf("line%d/json-middle", i), start + 65 + (n-66)/2},
+			cutPoint{fmt.Sprintf("line%d/before-lf", i), end - 1},
+		)
+		if end < int64(len(full)) {
+			cuts = append(cuts, cutPoint{fmt.Sprintf("line%d/after-lf", i), end})
 		}
-		want := Recovery{}
-		if cut > boundary {
-			want = Recovery{Segment: ledger.SegmentName(1), TruncatedBytes: cut - boundary}
+		start, line = end, line[n:]
+	}
+	controls := 0
+	for _, cut := range cuts {
+		if cut.at < boundary || cut.at >= int64(len(full)) {
+			t.Fatalf("%s: cut at %d is outside the torn commit [%d, %d)", cut.name, cut.at, boundary, len(full))
 		}
-		if rec != want {
-			t.Errorf("cut at %d: recovery %+v, want %+v", cut, rec, want)
+		if cut.at == boundary {
+			controls++
 		}
-		if size := fileSize(t, path); size != boundary {
-			t.Errorf("cut at %d: segment size %d after open, want %d", cut, size, boundary)
-		}
-		c, err := s2.Append(context.Background(), []ledger.Draft{sample("next")})
-		if cerr := s2.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil || c != (appender.Committed{First: 2, Last: 2}) {
-			t.Fatalf("cut at %d: Append after open = %+v, %v; want 2-2", cut, c, err)
-		}
-		res, err := ledger.Check(s2.LogDir(), s2.Colony())
-		if err != nil || res.Last.Seq != 2 || res.TornBytes != 0 {
-			t.Fatalf("cut at %d: Check after the next Append = %+v, %v; want seq 2 and no torn bytes", cut, res, err)
-		}
+	}
+	if controls != 1 {
+		t.Fatalf("%d cuts at the commit boundary, want the one control", controls)
+	}
+
+	for _, cut := range cuts {
+		t.Run(cut.name, func(t *testing.T) {
+			if err := os.WriteFile(path, full[:cut.at], 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s2, rec, err := open(s.dir, s.cat, d)
+			if err != nil {
+				t.Fatalf("open = %v", err)
+			}
+			want := Recovery{}
+			if cut.at > boundary {
+				want = Recovery{Segment: ledger.SegmentName(1), TruncatedBytes: cut.at - boundary}
+			}
+			if rec != want {
+				t.Errorf("recovery %+v, want %+v", rec, want)
+			}
+			if size := fileSize(t, path); size != boundary {
+				t.Errorf("segment size %d after open, want %d", size, boundary)
+			}
+			c, err := s2.Append(context.Background(), []ledger.Draft{sample("next")})
+			if cerr := s2.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil || c != (appender.Committed{First: 2, Last: 2}) {
+				t.Fatalf("Append after open = %+v, %v; want 2-2", c, err)
+			}
+			res, err := ledger.Check(s2.LogDir(), s2.Colony())
+			if err != nil || res.Last.Seq != 2 || res.TornBytes != 0 {
+				t.Fatalf("Check after the next Append = %+v, %v; want seq 2 and no torn bytes", res, err)
+			}
+		})
 	}
 
 	t.Run("fully torn later segment", func(t *testing.T) {

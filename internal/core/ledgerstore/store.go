@@ -223,10 +223,11 @@ func checkNoColony(dir string) error {
 // the log and colony directories, so that entries left by a process that died
 // before flushing them are durable before anything builds on them.
 //
-// Open creates the lock file if it is missing, but never a colony or its log
-// directory: a directory without colony.json, or no directory, is
-// ErrNotColony, and a colony without its log directory fails closed. Every
-// error releases the lock.
+// Open never creates a colony or its log directory, and leaves nothing in a
+// directory that is not a colony: a directory without colony.json, or no
+// directory, is ErrNotColony, and a colony without its log directory fails
+// closed. In a colony, Open creates the lock file if it is missing. Every
+// error after the lock is taken releases it.
 func Open(dir string, cat ledger.Catalogue) (*Store, Recovery, error) {
 	return open(dir, cat, realDeps())
 }
@@ -236,10 +237,16 @@ func open(dir string, cat ledger.Catalogue, d deps) (*Store, Recovery, error) {
 	if err != nil {
 		return nil, Recovery{}, err
 	}
-	lock, err := lockColony(dir)
-	if errors.Is(err, fs.ErrNotExist) {
+	// colony.json is looked for before the lock is taken, so that the lock
+	// file is never created outside a colony. readColony, under the lock,
+	// stays the authoritative read.
+	switch _, err := os.Lstat(filepath.Join(dir, colonyFile)); {
+	case errors.Is(err, fs.ErrNotExist):
 		return nil, Recovery{}, fmt.Errorf("%w: %w", ErrNotColony, err)
+	case err != nil:
+		return nil, Recovery{}, err
 	}
+	lock, err := lockColony(dir)
 	if err != nil {
 		return nil, Recovery{}, err
 	}
@@ -445,7 +452,7 @@ func (s *Store) Recover() error {
 	// The open file saw the failure. Its close error adds nothing: the
 	// truncation and flush below, through a fresh file, settle the outcome.
 	_ = s.closeSegment()
-	f, name, size, err := s.reopen()
+	f, name, size, err := s.reopenSegment()
 	if err != nil {
 		return err
 	}
@@ -465,11 +472,11 @@ func (s *Store) Recover() error {
 	return nil
 }
 
-// reopen opens the segment that is current after recovery and returns it
-// with its name and acknowledged size: the new segment a failed rotation
+// reopenSegment opens the segment that is current after recovery and returns
+// it with its name and acknowledged size: the new segment a failed rotation
 // created, which holds no commit, or else the current segment. It returns a
 // nil file if there is neither.
-func (s *Store) reopen() (segmentFile, string, int64, error) {
+func (s *Store) reopenSegment() (segmentFile, string, int64, error) {
 	if s.rotation != "" {
 		f, err := s.deps.files.openSegment(filepath.Join(s.logDir, s.rotation))
 		if err == nil {
