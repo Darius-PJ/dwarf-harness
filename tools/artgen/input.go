@@ -1082,7 +1082,6 @@ const (
 type loop struct {
 	name string
 	ms   []int
-	line int
 }
 
 // parseAnimations parses animations.txt (§3.4 of the round-2 brief).
@@ -1098,12 +1097,12 @@ func parseAnimations(r *report, p string, lines []textLine) []loop {
 			r.add(p, l.n, "unknown keyword %q; want anim", f[0])
 			continue
 		}
-		isFirst := first
-		first = false
 		if len(f) < 2 {
 			r.add(p, l.n, "want anim <name> <ms> <ms> ...")
 			continue
 		}
+		isFirst := first
+		first = false
 		name := f[1]
 		role, act := strings.CutPrefix(name, "act_")
 		switch {
@@ -1120,7 +1119,7 @@ func parseAnimations(r *report, p string, lines []textLine) []loop {
 			r.add(p, l.n, "loop %s has %d frames; a loop has at least 2", name, len(f)-2)
 			continue
 		}
-		lp := loop{name: name, line: l.n}
+		lp := loop{name: name}
 		for _, s := range f[2:] {
 			v, ok := number(s, maxFrameMs)
 			if !ok || v < minFrameMs || v%10 != 0 {

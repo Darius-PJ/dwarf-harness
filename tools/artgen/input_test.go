@@ -568,6 +568,15 @@ func TestMalformedInputsFailWithLocation(t *testing.T) {
 			setLines(m, animationsPath, ls)
 			return animationsPath, n
 		}},
+		{"bare anim line before idle", func(t *testing.T, m fstest.MapFS) (string, int) {
+			p, n := insert(t, m, animationsPath, lineOf(t, m, animationsPath, "anim idle"), "anim")
+			// One mistake, one error: the idle line after it is still the first loop.
+			var list errorList
+			if _, err := generate(m); errors.As(err, &list) && len(list) != 1 {
+				t.Errorf("errors:\n%v\nwant only the one at %s:%d", list, p, n)
+			}
+			return p, n
+		}},
 		{"loop for no role", func(t *testing.T, m fstest.MapFS) (string, int) {
 			ls := lines(t, m, animationsPath)
 			setLines(m, animationsPath, append(ls, "anim act_smith 300 300"))

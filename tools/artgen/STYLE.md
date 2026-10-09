@@ -99,6 +99,9 @@ text.
   a role action it holds the role's tool or makes the action's gesture, and a front
   accessory held in that hand is stowed on the back, across the pack, in that
   action's frames; only the pixels that show from the front are drawn.
+  A stowed accessory lies across the pack and assumes it: give an outfit with such an
+  accessory the pack too, until ticket 108 settles how a stowed accessory reads
+  without one.
 - Layers keep their order in every frame. Where the near arm or hand must pass in
   front of a later layer (beard, hat, front accessory), that later layer leaves
   those pixels empty in that frame so the arm shows. Pose actions so such crossings
@@ -125,7 +128,11 @@ text.
   few pixels per frame.
 - Every layer has every frame. A layer that does not move repeats its rows exactly;
   layers that ride on the body (clothing, beard, hat, pack, pennant, emblem) move
-  with it by the same amount so seams stay closed (collar, belt, brim, pole).
+  with it by the same amount so seams stay closed (collar, belt, brim, pole). Where
+  the canvas edge or another layer stops a riding layer short, it moves as far as it
+  can and its seam hides behind another layer: in the bow the pennant moves (+2,+2)
+  against the shoulders' (+4,+4), the finial at the canvas edge and the flag clear
+  of the hat crown, with the pole's base behind the bowed head.
 - Keep volumes: a part keeps its size from frame to frame unless the pose changes
   it, and its outline stays closed in every frame.
 - No smears, motion blur, sub-pixel in-betweens or anti-aliasing.

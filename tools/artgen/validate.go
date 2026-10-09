@@ -100,8 +100,8 @@ func (s *artSet) ids(v string) []string {
 	return slices.Sorted(maps.Keys(s.sprites[v]))
 }
 
-// layerAnims returns the animation list, names and frame counts, that every
-// layer of view v has: the first overworld part's, the front still, or
+// layerAnims returns the animations, as in a layer's strip, that every layer
+// of view v has: the first overworld part's, the front still, or
 // animations.txt's loops.
 func (s *artSet) layerAnims(v string) []anim {
 	switch v {
@@ -109,8 +109,10 @@ func (s *artSet) layerAnims(v string) []anim {
 		return []anim{{name: "still", frames: 1}}
 	case viewThreeQuarter:
 		var out []anim
+		first := 0
 		for _, l := range s.loops {
-			out = append(out, anim{name: l.name, first: len(out), frames: len(l.ms)})
+			out = append(out, anim{name: l.name, first: first, frames: len(l.ms)})
+			first += len(l.ms)
 		}
 		return out
 	}

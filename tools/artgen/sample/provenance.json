@@ -7,7 +7,7 @@
   },
   "generator": {
     "package": "github.com/Darius-PJ/dwarf-harness/tools/artgen",
-    "sourceSha256": "68fb3804bf0af9ad12806a6ee938b93b2318b5e345fe6b2e5ac804a91de59726",
+    "sourceSha256": "82ba059fc79b3c027309663184af6c75ac75b37715b8cee68352386991ccfebd",
     "command": "GOTOOLCHAIN=local CGO_ENABLED=0 go run ./tools/artgen"
   },
   "toolchain": "go1.27.2",
@@ -117,7 +117,7 @@
     },
     {
       "path": "rpg/three_quarter/banner.pennant.pxm",
-      "sha256": "78e7697f3f1300e997633902b88a6664b48dd5b6f3b6ec0a2d9637f6f23c23af"
+      "sha256": "96eb33279412846f67a17d0957b793adf2dfb0a0488282bf9d07d86c7c218317"
     },
     {
       "path": "rpg/three_quarter/body.stout.pxm",
