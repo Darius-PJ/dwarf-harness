@@ -44,3 +44,5 @@ Canonical sections: Core roadmap C1; its cited controlling Core design and lates
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-09 — Claimed for wave 2 of the staged build. A designer drafts the implementation brief for the advisor's ruling; the coder then works on its own branch and worktree (D41).
+
+2026-10-09 — Slice S1 (`contract/ledger`: the draft ledger-format and ledger-reader) and its status changes reached `main` at commit 458a2d8, after the build advisor approved them and the full check passed on that exact commit. S1 adds no dependency, so it needed no owner sign-off (D41). Slices S2 and S3 stay on branch `build/02-ledger` until the owner signs off `golang.org/x/sys` (OG1).
