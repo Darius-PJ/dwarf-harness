@@ -6,8 +6,8 @@
 //
 // A colony directory holds colony.json, lock and log (D38). log is the
 // segment directory of package ledger's format. Directories are created with
-// mode 0o700 and files with 0o600; Windows ignores the modes, and the
-// directory's per-user ACL applies. colony.json is exactly
+// mode 0o700 and files with 0o600; Windows ignores the modes, and the ACL the
+// directory inherits applies. colony.json is exactly
 // {"format":1,"colony_id":"<UUIDv7>"} and LF, published through a flushed
 // temporary file and a durable rename, so it is either absent or complete.
 // lock has no content. One Store holds the operating system's lock on it from
