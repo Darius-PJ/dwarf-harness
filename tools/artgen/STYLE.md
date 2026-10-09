@@ -78,12 +78,14 @@ text.
   bottom edge. In the front still the crown's top outline is on row 14 and the
   shoulder line on row 30; the arms reach row 47, the legs fill rows 48-55 and the
   feet rows 56-62, with the sole outline on row 63. Hair and beard run from row 13
-  (a hair cap) to row 46 (the braids' outline); a topknot bun and a hat rise to
-  row 5, and the hat brim covers rows 16-20. A bedroll pack spans rows 19-29 beside
-  the head. The stout body is 36 px wide with its arms (x 14-49), centred on x = 32.
+  (a hair cap) to row 46 (the braids' outline), and a topknot bun rises to row 5. A
+  hat's top outline is on row 9, its x pixels cover rows 5-8 above it, and its brim
+  covers rows 16-20. A bedroll pack spans rows 19-29 beside the head. The stout body
+  is 36 px wide with its arms (x 14-49), centred on x = 32.
 - Both views show the same dwarf as the overworld sprite: same parts, same mask use
   and the same silhouette features (beard shape, braids, bun, hat brim, pack). The
-  three-quarter view keeps the front still's rows within 1 px.
+  three-quarter idle frames keep the rows listed above within 1 px; a held accessory
+  and the pennant pole may end lower, as the turned pose needs.
 - The 64 px sprites carry no role trim, badge or crest in either view. The page's
   role action shows the role; rosters show it as text.
 - Front still: straight on, rest pose, arms at the sides, weight on both feet, a
