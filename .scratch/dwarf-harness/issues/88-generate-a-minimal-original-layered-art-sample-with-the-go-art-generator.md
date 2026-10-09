@@ -71,3 +71,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-09 — The build advisor approved the generator code at commit 1d7a91d (code, tests, determinism, provenance, scope). Under D104 and D105 the code counts as approved only after the owner approves both sheets.
 
 2026-10-09 — D108 rework: the owner asked for animation-ready character sprites in two views with Corps emblems and colours ([D108](../../../docs/DECISIONS.md#d108-character-sprites-a-still-front-view-an-animated-three-quarter-view-and-corps-emblems-and-colours)). A new criterion covers them, and the character-sheet criterion now names views and Corps markers. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.
+
+2026-10-09 — Owner clarification ([D109](../../../docs/DECISIONS.md#d109-character-sprites-carry-no-role-marker)): the 64-pixel sprites carry no role trim, badge or crest; the page's role action loop and the roster's role text show the role, and the 16-pixel map sprites keep their role markers. Number and blockers are unchanged.
