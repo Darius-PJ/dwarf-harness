@@ -27,12 +27,13 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 ## Acceptance criteria
 
 - [ ] The generator deterministically produces a small dwarf part set as separate transparent layers covering every baseline slot (back accessory, body, shoes, legwear, torso clothing, hair/beard, headwear, front accessory), including a hat that occludes hair, skin/hair/clothing palette masks and the reserved overworld role overlay, on 16-pixel overworld and 64-pixel RPG grids.
+- [ ] The 64-pixel sprites are animation-ready in two views (D108): every part and the assembled dwarves exist straight on, as the still roster frame, and in three-quarter profile with an idle loop and representative role action loops. At least two example Corps show an emblem on a field of their colour, and every view and frame registers with the other layers.
 - [ ] Every part, variant and frame takes its shape from a pixel map kept in the repository: a text grid in which each character is one pixel. Code rules supply only colors, palette masks, combinations of variants and small seeded texture in rock and floor tiles, so a review comment changes only the parts it names.
 - [ ] The sample also contains a few rock, floor, wall and door tiles, one station, one stockpile, one rail segment, a dog, and a horse with wheelbarrow, each with a bounded set of motion frames.
 - [ ] The generator writes transparent untrimmed per-layer PNG frames, or an atlas with explicit source rectangles and offsets, plus JSON metadata giving each frame's rectangle, anchor and layer slot; re-running it with the same inputs, pinned toolchain and module versions reproduces the same files or a documented, explained difference.
 - [ ] The output's registration, anchors and offsets are inspected and recorded, together with the toolchain version and generator command, as evidence for the importer freeze.
 - [ ] Licence and provenance records identify the art as original project work produced by the recorded generator version, module versions, inputs and seeds.
-- [ ] The generator writes two contact sheets, each at 1x and at an integer zoom. The map sheet shows the 16-pixel tiles, props, animals and overworld dwarves in every role, plus a small sample room built from the tiles; the character sheet shows every 64-pixel part, variant and frame, plus assembled example dwarves.
+- [ ] The generator writes two contact sheets, each at 1x and at an integer zoom. The map sheet shows the 16-pixel tiles, props, animals and overworld dwarves in every role, plus a small sample room built from the tiles; the character sheet shows every 64-pixel part, variant, view and frame, plus assembled example dwarves in both views with their Corps markers.
 - [ ] The owner reviews both contact sheets, and agents turn his comments into changes to pixel maps or rules before they run the generator again. The generator code is approved only after he approves both sheets, and his approval is recorded under Comments.
 
 ## Verification boundary
@@ -49,7 +50,7 @@ Exercise the actual consumer-visible boundary and effects named above. Preserve 
 Canonical sections (resolved through the parent specification’s reading map):
 - Fortress GUI spec §6 steps 1–3 and §12
 - GUI roadmap fortress and RPG layer
-- Decision log B16, D29, D45, D90, D91, D103, D104, D105
+- Decision log B16, D29, D45, D90, D91, D103, D104, D105, D108
 
 ## Comments
 
@@ -64,3 +65,9 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-08 — D105 rework: the generator may now use Go modules from outside the standard library that assist sprite generation, each with its D29 record and a pinned version ([D105](../../../docs/DECISIONS.md#d105-default-fortress-art-go-modules-for-sprite-generation-and-art-rounds-before-the-gui)); reproducibility and provenance now include module versions. Ticket [137](137-improve-the-generated-map-and-character-sprites-before-the-native-gui-exists.md) continues the review rounds after this ticket, before the native GUI exists. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.
 
 2026-10-09 — Claimed for wave 2 of the staged build. A designer drafts the implementation brief for the advisor's ruling; the coder then works on its own branch and worktree (D41).
+
+2026-10-09 — Owner review, round 1. Reviewed sheets (sample at commit 1d7a91d; `contentSha256` fe44f979b28b99c4c53086db35fbbda44141ebe1e1f4efe947c23a8a6199e46a; generator `sourceSha256` 3d752ec15e5df03eecb1b725735a833c242cc9ceb355ae9adc666f983fd6bafa; toolchain go1.27.2; command `GOTOOLCHAIN=local CGO_ENABLED=0 go run ./tools/artgen`): map-1x f163d5369da2f3e9baddfd4b04d7726f52bc3006437de60c4a6fffb451551b8d, map-4x c2131423deb2fae1d56eb38833b026862137d02aaa3d20704bc0f11d8375aeb9, character-1x 5414479828d4e1dbf48ebb021bc48660fb4a1df35d4480cb0796c68bce3c26cf, character-4x 435038a723eac96c4694d8d5a2540f68389e6df130e045601a73fd91baf53984. The owner approved the map sheet only, noting for the ArtGen coder that the RPG character sheet needs animation-ready sprites: straight-on in the roster screen and an animated three-quarter view on each character's page showing its Corps and role; he kept the black hair unchanged and chose Deep as the default skin. The map sheet is approved; the character sheet is not yet. Round 2 makes the palette's default skin deep, which changes only the bare-body cells of the map sheet, and the owner confirms those cells together with the new character sheet.
+
+2026-10-09 — The build advisor approved the generator code at commit 1d7a91d (code, tests, determinism, provenance, scope). Under D104 and D105 the code counts as approved only after the owner approves both sheets.
+
+2026-10-09 — D108 rework: the owner asked for animation-ready character sprites in two views with Corps emblems and colours ([D108](../../../docs/DECISIONS.md#d108-character-sprites-a-still-front-view-an-animated-three-quarter-view-and-corps-emblems-and-colours)). A new criterion covers them, and the character-sheet criterion now names views and Corps markers. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.

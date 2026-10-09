@@ -49,3 +49,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-08 — Published from the [fortress GUI specification](../../fortress-gui/spec.md) after the owner approved publishing tickets 87–129 in the consolidated breakdown review. These tickets join 01–86 in this tracker so one team works a single frontier. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-09 — Consolidation cross-link: under [D108](../../../docs/DECISIONS.md#d108-character-sprites-a-still-front-view-an-animated-three-quarter-view-and-corps-emblems-and-colours), the 64-pixel outfit exists in two views, so the Appearance preview can show both. The Corps emblem and colour belong to the Corps, not to a dwarf's outfit. These extensions add no blocker or criterion to this ticket.
