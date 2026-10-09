@@ -99,10 +99,11 @@ func mustAppend(t testing.TB, s *Store, drafts ...ledger.Draft) appender.Committ
 	return c
 }
 
-// readCommits reads every commit of the log through seq through.
+// readCommits reads every commit of the log through seq through, with all
+// its records; types outside allFixtures are returned unchecked.
 func readCommits(t testing.TB, logDir string, colony uuid.UUID, through uint64) []ledger.Commit {
 	t.Helper()
-	r, err := ledger.OpenReader(logDir, ledger.ReadOptions{Colony: colony, Through: through, Consume: allFixtures})
+	r, err := ledger.OpenReader(logDir, ledger.ReadOptions{Colony: colony, Through: through, Consume: allFixtures, AllTypes: true})
 	if err != nil {
 		t.Fatalf("OpenReader = %v", err)
 	}
@@ -311,60 +312,85 @@ func TestCreateAndOpenLayout(t *testing.T) {
 }
 
 func TestWriterReproducesGolden(t *testing.T) {
-	const goldenDir = "../../../contract/ledger/testdata/f0/log"
-	goldenColony := uuid.MustParse("0199c000-0000-7000-8000-000000000001")
-	commits := readCommits(t, goldenDir, goldenColony, ledger.ToEnd)
-	golden := snapshot(t, goldenDir)
-	first, err := os.Stat(filepath.Join(goldenDir, ledger.SegmentName(1)))
+	// The catalogue log holds the F0 types beside one fixture type.
+	catalogueTypes, err := ledger.NewCatalogue(
+		ledger.TypeVersion{Type: "fixture.sample", Version: 1},
+		ledger.TypeVersion{Type: ledger.TypeCommand, Version: 1},
+		ledger.TypeVersion{Type: ledger.TypeBodyPin, Version: 1},
+		ledger.TypeVersion{Type: ledger.TypeBodyUnpin, Version: 1},
+		ledger.TypeVersion{Type: ledger.TypeBodiesCollected, Version: 1},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	ids := []uuid.UUID{goldenColony}
-	var times []int64
-	for i, c := range commits {
-		ids = append(ids, c.ID)
-		at := c.Records[0].EventTimeNS
-		if c.Records[0].ClockHeld {
-			// The clock reads before the previous commit, so the writer
-			// must hold the time and mark it.
-			at = commits[i-1].Records[0].EventTimeNS - 1
-		}
-		times = append(times, at)
-	}
-	d := realDeps()
-	d.newID = func() uuid.UUID {
-		id := ids[0]
-		ids = ids[1:]
-		return id
-	}
-	d.clock = func() time.Time {
-		at := times[0]
-		times = times[1:]
-		return time.Unix(0, at)
-	}
-	d.segmentTarget = first.Size()
-	s := newColony(t, d)
-	for _, c := range commits {
-		var drafts []ledger.Draft
-		for _, r := range c.Records {
-			drafts = append(drafts, r.Draft)
-		}
-		if got := mustAppend(t, s, drafts...); got != (appender.Committed{First: c.First, Last: c.Last}) {
-			t.Fatalf("Append = %+v, want %d-%d", got, c.First, c.Last)
-		}
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	got := snapshot(t, s.LogDir())
-	if !maps.EqualFunc(got, golden, bytes.Equal) {
-		t.Errorf("writer log = %v, want the golden segments %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(golden)))
-		for name, data := range golden {
-			if !bytes.Equal(got[name], data) {
-				t.Errorf("%s differs:\n got %q\nwant %q", name, got[name], data)
+	for _, tc := range []struct {
+		name      string
+		goldenDir string
+		colony    uuid.UUID
+		cat       ledger.Catalogue
+	}{
+		{"f0", "../../../contract/ledger/testdata/f0/log", uuid.MustParse("0199c000-0000-7000-8000-000000000001"), testCatalogue(t)},
+		{"catalogue", "../../../contract/ledger/testdata/f0/catalogue/log", uuid.MustParse("0199c000-0000-7000-8000-000000000002"), catalogueTypes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commits := readCommits(t, tc.goldenDir, tc.colony, ledger.ToEnd)
+			golden := snapshot(t, tc.goldenDir)
+			first, err := os.Stat(filepath.Join(tc.goldenDir, ledger.SegmentName(1)))
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
+
+			ids := []uuid.UUID{tc.colony}
+			var times []int64
+			for i, c := range commits {
+				ids = append(ids, c.ID)
+				at := c.Records[0].EventTimeNS
+				if c.Records[0].ClockHeld {
+					// The clock reads before the previous commit, so the
+					// writer must hold the time and mark it.
+					at = commits[i-1].Records[0].EventTimeNS - 1
+				}
+				times = append(times, at)
+			}
+			d := realDeps()
+			d.newID = func() uuid.UUID {
+				id := ids[0]
+				ids = ids[1:]
+				return id
+			}
+			d.clock = func() time.Time {
+				at := times[0]
+				times = times[1:]
+				return time.Unix(0, at)
+			}
+			d.segmentTarget = first.Size()
+			s, err := create(filepath.Join(t.TempDir(), "colony"), tc.cat, d)
+			if err != nil {
+				t.Fatalf("create = %v", err)
+			}
+			t.Cleanup(func() { s.Close() })
+			for _, c := range commits {
+				var drafts []ledger.Draft
+				for _, r := range c.Records {
+					drafts = append(drafts, r.Draft)
+				}
+				if got := mustAppend(t, s, drafts...); got != (appender.Committed{First: c.First, Last: c.Last}) {
+					t.Fatalf("Append = %+v, want %d-%d", got, c.First, c.Last)
+				}
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			got := snapshot(t, s.LogDir())
+			if !maps.EqualFunc(got, golden, bytes.Equal) {
+				t.Errorf("writer log = %v, want the golden segments %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(golden)))
+				for name, data := range golden {
+					if !bytes.Equal(got[name], data) {
+						t.Errorf("%s differs:\n got %q\nwant %q", name, got[name], data)
+					}
+				}
+			}
+		})
 	}
 }
 

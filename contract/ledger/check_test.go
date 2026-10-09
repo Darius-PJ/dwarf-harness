@@ -317,7 +317,7 @@ func TestCheckFailsClosed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := copyGolden(t)
+			dir := copyLog(t, goldenDir)
 			tt.setup(t, dir)
 			before := snapshot(t, dir)
 			colony := goldenColony
@@ -349,7 +349,7 @@ func TestCheckFailsClosed(t *testing.T) {
 	}
 
 	t.Run("dot entries are ignored", func(t *testing.T) {
-		dir := copyGolden(t)
+		dir := copyLog(t, goldenDir)
 		writeFile(t, filepath.Join(dir, ".DS_Store"), []byte("x"))
 		res, err := Check(dir, goldenColony)
 		if err != nil || res.Last != g.end() || res.TornBytes != 0 {
@@ -360,6 +360,52 @@ func TestCheckFailsClosed(t *testing.T) {
 		res, err := Check(t.TempDir(), goldenColony)
 		if err != nil || res != (CheckResult{Last: Genesis()}) {
 			t.Errorf("Check = %+v, %v; want Genesis() with no segment", res, err)
+		}
+	})
+
+	// body_refs on the catalogue log's last record, which has none, re-hashed
+	// so that the reference set is the only error.
+	c := mustCatalogue(t)
+	tip := c.record(c.end().Seq)
+	ds := sortedDigests(goldenB1, goldenB2)
+	lo, hi := `"`+ds[0].String()+`"`, `"`+ds[1].String()+`"`
+	upper := strings.ToUpper(lo)
+	if upper == lo {
+		t.Fatal("the digest has no letter to uppercase")
+	}
+	withRefs := func(t *testing.T, refs string) string {
+		t.Helper()
+		dir := copyLog(t, catalogueDir)
+		path := filepath.Join(dir, tip.seg)
+		data := readFile(t, path)[:tip.off]
+		writeFile(t, path, append(data, rehash(t, tip.line, sub(`,"payload":`, `,"body_refs":`+refs+`,"payload":`))...))
+		return dir
+	}
+	for _, tc := range []struct{ name, refs string }{
+		{"empty", `[]`},
+		{"null", `null`},
+		{"a string", lo},
+		{"a number element", `[1]`},
+		{"unsorted", `[` + hi + `,` + lo + `]`},
+		{"repeated", `[` + lo + `,` + lo + `]`},
+		{"uppercase", `[` + upper + `]`},
+		{"short", `[` + lo[:64] + `"]`},
+		{"zero", `["` + ZeroHash + `"]`},
+	} {
+		t.Run("body_refs "+tc.name, func(t *testing.T) {
+			dir := withRefs(t, tc.refs)
+			before := snapshot(t, dir)
+			_, err := Check(dir, catalogueColony)
+			assertUnchanged(t, dir, before)
+			if ce := errorsAsCorrupt(t, err); ce.Segment != tip.seg || ce.Offset != tip.off {
+				t.Errorf("error = %v, want it located at %s offset %d", err, tip.seg, tip.off)
+			}
+		})
+	}
+	t.Run("body_refs valid", func(t *testing.T) {
+		res, err := Check(withRefs(t, `[`+lo+`,`+hi+`]`), catalogueColony)
+		if err != nil || res.Last.Seq != tip.seq || res.TornBytes != 0 {
+			t.Errorf("Check = %+v, %v; want the whole log and no error", res, err)
 		}
 	})
 }

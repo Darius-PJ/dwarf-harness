@@ -30,4 +30,18 @@ func TestNewCatalogue(t *testing.T) {
 			t.Errorf("Contains(%v) = %v, want %v", tv, got, want)
 		}
 	}
+
+	// Defined is F0's catalogue, exactly the four F0 types at version 1, so
+	// that a production writer can write F0 records and refuses fixture
+	// records.
+	def := Defined()
+	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected} {
+		if !def.Contains(TypeVersion{typ, 1}) || def.Contains(TypeVersion{typ, 2}) {
+			t.Errorf("Defined() holds %s at version 1: %v, at version 2: %v; want true, false",
+				typ, def.Contains(TypeVersion{typ, 1}), def.Contains(TypeVersion{typ, 2}))
+		}
+	}
+	if len(def.set) != 4 || def.Contains(TypeVersion{"fixture.sample", 1}) {
+		t.Errorf("Defined() holds %v, want only the four F0 type versions", def.set)
+	}
 }

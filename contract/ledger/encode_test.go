@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -29,6 +30,10 @@ func TestEncodeCommitRefuses(t *testing.T) {
 		at := func(t int64, held bool) CommitHeader {
 			return CommitHeader{ColonyID: goldenColony, CommitID: fid("c1"), EventTimeNS: t, ClockHeld: held}
 		}
+
+		ds := sortedDigests(goldenB1, goldenB2)
+		lo, hi := ds[0], ds[1]
+		refs := func(rs ...Digest) []Draft { return with(func(d *Draft) { d.BodyRefs = rs }) }
 
 		tests := []struct {
 			name   string
@@ -62,6 +67,10 @@ func TestEncodeCommitRefuses(t *testing.T) {
 			{"clock held at seq 1", Genesis(), at(100, true), []Draft{ok}},
 			{"clock held at another time", after, at(101, true), []Draft{ok}},
 			{"after not a log position", Chain{Seq: 3, EventTimeNS: 100}, header, []Draft{ok}},
+			{"body_refs unsorted", after, header, refs(hi, lo)},
+			{"body_refs repeated", after, header, refs(lo, lo)},
+			{"body_refs zero", after, header, refs(Digest{})},
+			{"body_refs zero before a valid digest", after, header, refs(Digest{}, lo)},
 		}
 		for _, tt := range tests {
 			if data, err := encode(tt.after, tt.header, tt.drafts); !errors.Is(err, ErrInvalid) || data != nil {
@@ -73,6 +82,17 @@ func TestEncodeCommitRefuses(t *testing.T) {
 		// previous time, are valid.
 		if _, err := encode(after, at(100, true), payload(`{"a":{"x":1},"b":{"x":1},"c":[{"x":1},{"x":2}],"x":0}`)); err != nil {
 			t.Errorf("EncodeCommit of a valid commit = %v", err)
+		}
+
+		// nil and empty BodyRefs both mean absent: no body_refs key, which
+		// readers would reject as [].
+		none, err := encode(after, header, refs([]Digest{}...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		nilRefs, err := encode(after, header, []Draft{ok})
+		if err != nil || !bytes.Equal(none, nilRefs) || bytes.Contains(none, []byte(`body_refs`)) {
+			t.Errorf("EncodeCommit with empty and nil BodyRefs = %q and %q, %v; want the same line without body_refs", none, nilRefs, err)
 		}
 	})
 

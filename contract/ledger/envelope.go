@@ -47,8 +47,8 @@ func (a Actor) valid() bool {
 	return false
 }
 
-// Draft is what a producer supplies for one record. A zero ID and an empty
-// MeasurementPath mean the field is absent.
+// Draft is what a producer supplies for one record. A zero ID, an empty
+// MeasurementPath and an empty BodyRefs mean the field is absent.
 type Draft struct {
 	Type               string
 	TypeVersion        int
@@ -59,6 +59,7 @@ type Draft struct {
 	TurnID             uuid.UUID
 	OperationID        uuid.UUID
 	MeasurementPath    string
+	BodyRefs           []Digest        // strictly ascending, none zero
 	Payload            json.RawMessage // a JSON object
 }
 
@@ -85,7 +86,9 @@ type Record struct {
 }
 
 // wireRecord fixes the emitted key order (the package documentation's
-// table). Optional fields are omitted when zero.
+// table). Optional fields are omitted when zero. BodyRefs uses omitempty,
+// not omitzero, because omitzero would emit an empty non-nil slice as [],
+// which readers reject.
 type wireRecord struct {
 	Format             int             `json:"format"`
 	Seq                uint64          `json:"seq"`
@@ -105,6 +108,7 @@ type wireRecord struct {
 	TurnID             uuid.UUID       `json:"turn_id,omitzero"`
 	OperationID        uuid.UUID       `json:"operation_id,omitzero"`
 	MeasurementPath    string          `json:"measurement_path,omitzero"`
+	BodyRefs           []Digest        `json:"body_refs,omitempty"`
 	Payload            json.RawMessage `json:"payload"`
 }
 
@@ -130,6 +134,7 @@ func encodeLine(e *Envelope) (line []byte, hash string, err error) {
 		TurnID:             e.TurnID,
 		OperationID:        e.OperationID,
 		MeasurementPath:    e.MeasurementPath,
+		BodyRefs:           e.BodyRefs,
 		Payload:            e.Payload,
 	})
 	if err != nil {
@@ -197,6 +202,7 @@ const (
 	keyTurnID
 	keyOperationID
 	keyMeasurementPath
+	keyBodyRefs
 	keyPayload
 
 	keysRequired = keyFormat | keySeq | keyCommitID | keyCommitIndex | keyCommitCount | keyPrevHash |
@@ -207,7 +213,8 @@ const (
 var envelopeKeys = [...]string{
 	"format", "seq", "commit_id", "commit_index", "commit_count", "prev_hash", "event_time_ns",
 	"clock_held", "colony_id", "type", "type_version", "actor", "agent_id",
-	"execution_session_id", "context_id", "turn_id", "operation_id", "measurement_path", "payload",
+	"execution_session_id", "context_id", "turn_id", "operation_id", "measurement_path", "body_refs",
+	"payload",
 }
 
 // keyBit returns the bit of an envelope key, or 0 for an unknown key.
@@ -361,6 +368,12 @@ func (e *Envelope) set(bit int, raw json.RawMessage) error {
 			return errors.New("is not true")
 		}
 		e.ClockHeld = true
+	case keyBodyRefs:
+		refs, err := parseDigests(raw)
+		if err != nil {
+			return err
+		}
+		e.BodyRefs = refs
 	default:
 		s, ok := parseString(raw)
 		if !ok {

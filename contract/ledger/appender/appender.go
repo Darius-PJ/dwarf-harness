@@ -23,6 +23,12 @@
 //     Nothing was written. ctx bounds only that wait: once writing starts,
 //     the commit completes or fails whatever ctx does.
 //
+// A draft's BodyRefs may name only bodies already published to the colony's
+// body store. The writer refuses, with ErrRefused, a draft that names an
+// unpublished body or breaks a rule of its record type, including the F0
+// types that only the writer itself produces (ledger.command and
+// ledger.bodies_collected).
+//
 // The writer serializes commits and promises no fairness among waiting
 // callers. Priority for control commits (AC06) belongs to Core's concrete
 // writer, as a separate method or interface, so that this contract does not

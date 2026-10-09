@@ -34,7 +34,15 @@ func NewCatalogue(tvs ...TypeVersion) (Catalogue, error) {
 // Contains reports whether tv is in the catalogue.
 func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 
-// Defined returns the record type versions this contract version defines:
-// none yet, because F0's record types produced by Core are specified by
-// later steps. It never contains a type in the reserved fixture namespace.
-func Defined() Catalogue { return Catalogue{} }
+// Defined returns the record type versions this contract version defines,
+// F0's catalogue: TypeCommand, TypeBodyPin, TypeBodyUnpin and
+// TypeBodiesCollected, each at version 1. It never contains a type in the
+// reserved fixture namespace.
+func Defined() Catalogue {
+	return Catalogue{set: map[TypeVersion]bool{
+		{TypeCommand, 1}:         true,
+		{TypeBodyPin, 1}:         true,
+		{TypeBodyUnpin, 1}:       true,
+		{TypeBodiesCollected, 1}: true,
+	}}
+}

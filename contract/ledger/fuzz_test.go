@@ -43,12 +43,11 @@ func (g *goldenLog) goldenLasts(last uint64) []uint64 {
 	return s
 }
 
-// resetLog writes the golden log into dir with segment name's bytes replaced
-// by data. One directory serves every execution of a fuzz target, because
-// creating and removing one per execution dominates its cost on Windows.
-func resetLog(t *testing.T, dir, name string, data []byte) {
+// reset writes g into dir with segment name's bytes replaced by data. One
+// directory serves every execution of a fuzz target, because creating and
+// removing one per execution dominates its cost on Windows.
+func (g *goldenLog) reset(t *testing.T, dir, name string, data []byte) {
 	t.Helper()
-	g := mustGolden(t)
 	for _, n := range g.names {
 		b := g.files[n]
 		if n == name {
@@ -59,9 +58,22 @@ func resetLog(t *testing.T, dir, name string, data []byte) {
 }
 
 func FuzzCheckTruncation(f *testing.F) {
-	g := mustGolden(f)
-	for i, name := range g.names {
-		for _, b := range g.boundaries(name) {
+	// The cut segments: both of the golden log's, then the catalogue log's
+	// one, each log in its own directory.
+	type target struct {
+		g    *goldenLog
+		name string
+		dir  string
+	}
+	var targets []target
+	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f)} {
+		dir := f.TempDir()
+		for _, name := range g.names {
+			targets = append(targets, target{g: g, name: name, dir: dir})
+		}
+	}
+	for i, tg := range targets {
+		for _, b := range tg.g.boundaries(tg.name) {
 			for _, d := range []int64{-1, 0, 1} {
 				if cut := b + d; cut >= 0 {
 					f.Add(uint8(i), uint32(cut))
@@ -69,14 +81,14 @@ func FuzzCheckTruncation(f *testing.F) {
 			}
 		}
 	}
-	dir := f.TempDir()
 	f.Fuzz(func(t *testing.T, segIndex uint8, cut uint32) {
-		name := g.names[int(segIndex)%len(g.names)]
+		tg := targets[int(segIndex)%len(targets)]
+		g, name, dir := tg.g, tg.name, tg.dir
 		size := int64(len(g.files[name]))
 		at := int64(cut) % (size + 1)
-		resetLog(t, dir, name, g.files[name][:at])
-		res, err := Check(dir, goldenColony)
-		commits, _, rerr := readAll(dir, ReadOptions{Colony: goldenColony, Through: ToEnd, Consume: allFixtures})
+		g.reset(t, dir, name, g.files[name][:at])
+		res, err := Check(dir, g.colony)
+		commits, _, rerr := readAll(dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})
 
 		if name != g.final() {
 			if at == size {
@@ -98,10 +110,10 @@ func FuzzCheckTruncation(f *testing.F) {
 		}
 		want := CheckResult{Last: g.chainAt(name, boundary), Segment: name, Size: boundary, TornBytes: at - boundary}
 		if err != nil || res != want {
-			t.Fatalf("final segment cut at %d: Check = %+v, %v; want %+v", at, res, err, want)
+			t.Fatalf("%s: final segment cut at %d: Check = %+v, %v; want %+v", g.dir, at, res, err, want)
 		}
 		if got := lasts(commits); rerr != nil || !slices.Equal(got, g.goldenLasts(want.Last.Seq)) {
-			t.Fatalf("final segment cut at %d: read %v, %v; want %v", at, got, rerr, g.goldenLasts(want.Last.Seq))
+			t.Fatalf("%s: final segment cut at %d: read %v, %v; want %v", g.dir, at, got, rerr, g.goldenLasts(want.Last.Seq))
 		}
 	})
 }
@@ -126,7 +138,7 @@ func FuzzCheckTornTail(f *testing.F) {
 	dir := f.TempDir()
 	final := g.files[g.final()]
 	f.Fuzz(func(t *testing.T, tail []byte) {
-		resetLog(t, dir, g.final(), append(slices.Clip(final), tail...))
+		g.reset(t, dir, g.final(), append(slices.Clip(final), tail...))
 		res, err := Check(dir, goldenColony)
 		if err != nil {
 			if !errors.Is(err, ErrCorrupt) {
@@ -182,7 +194,7 @@ func FuzzCheckCorruption(f *testing.F) {
 		}
 		data := bytes.Clone(g.files[name])
 		data[off] ^= mask
-		resetLog(t, dir, name, data)
+		g.reset(t, dir, name, data)
 		res, err := Check(dir, goldenColony)
 		if name != g.final() {
 			if !errors.Is(err, ErrCorrupt) {

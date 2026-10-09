@@ -89,6 +89,38 @@ func TestReaderConsumption(t *testing.T) {
 	}
 }
 
+func TestReaderAllTypes(t *testing.T) {
+	sample := Consumption{"fixture.sample": {1}}
+
+	// With AllTypes, every record of every commit is returned, and the
+	// unconsumed F0 types are not version-checked.
+	commits, cursor, err := readAll(catalogueDir, ReadOptions{Colony: catalogueColony, Through: ToEnd, Consume: sample, AllTypes: true})
+	if err != nil || cursor != 7 || !slices.Equal(seqs(commits), []uint64{1, 2, 3, 4, 5, 6, 7}) || !slices.Equal(lasts(commits), []uint64{1, 2, 4, 5, 6, 7}) {
+		t.Fatalf("AllTypes read: records %v in commits %v, cursor %d, error %v; want 7 records in 6 commits", seqs(commits), lasts(commits), cursor, err)
+	}
+	if pin := commits[1].Records[0]; pin.Type != TypeBodyPin || !slices.Equal(pin.BodyRefs, []Digest{goldenB2}) {
+		t.Errorf("seq 2 = %s with BodyRefs %v, want %s referencing B2", pin.Type, pin.BodyRefs, TypeBodyPin)
+	}
+
+	// Without it, the F0 records are skipped.
+	commits, cursor, err = readAll(catalogueDir, ReadOptions{Colony: catalogueColony, Through: ToEnd, Consume: sample})
+	if err != nil || cursor != 7 || !slices.Equal(seqs(commits), []uint64{1, 4}) || !slices.Equal(lasts(commits), []uint64{1, 4}) {
+		t.Errorf("read without AllTypes: records %v in commits %v, cursor %d, error %v; want [1 4] in [1 4], 7", seqs(commits), lasts(commits), cursor, err)
+	}
+
+	// A consumed type is still version-checked: fixture.sample v2 at seq 4
+	// stops the reader, after fixture.other at seq 3 was returned unchecked.
+	commits, cursor, err = readAll(goldenDir, ReadOptions{Colony: goldenColony, Through: ToEnd, Consume: sample, AllTypes: true})
+	want := &UnsupportedVersionError{Seq: 4, Type: "fixture.sample", Version: 2, Supported: []int{1}}
+	var ue *UnsupportedVersionError
+	if !errors.As(err, &ue) || !reflect.DeepEqual(ue, want) {
+		t.Errorf("AllTypes read of %s: error %v, want %v", goldenDir, err, want)
+	}
+	if !slices.Equal(seqs(commits), []uint64{1, 2, 3}) || cursor != 3 {
+		t.Errorf("AllTypes read of %s: records %v, cursor %d; want [1 2 3], 3", goldenDir, seqs(commits), cursor)
+	}
+}
+
 func TestReaderCursorAndBound(t *testing.T) {
 	full, _, err := readAll(goldenDir, ReadOptions{Colony: goldenColony, Through: ToEnd, Consume: allFixtures})
 	if err != nil {
@@ -168,7 +200,7 @@ func TestReaderCursorAndBound(t *testing.T) {
 
 func TestReadingHasNoEffects(t *testing.T) {
 	g := mustGolden(t)
-	dir := copyGolden(t)
+	dir := copyLog(t, goldenDir)
 	next, _, err := EncodeCommit(g.end(), CommitHeader{ColonyID: goldenColony, CommitID: fid("c5"), EventTimeNS: 1791000002000000000}, []Draft{
 		{Type: "fixture.sample", TypeVersion: 1, Actor: ActorCore, Payload: json.RawMessage(`{"n":7}`)},
 		{Type: "fixture.sample", TypeVersion: 1, Actor: ActorCore, Payload: json.RawMessage(`{"n":8}`)},

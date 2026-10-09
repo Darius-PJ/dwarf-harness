@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,19 +17,53 @@ import (
 	"uuid"
 )
 
-var update = flag.Bool("update", false, "rewrite the golden F0 log in testdata")
+var update = flag.Bool("update", false, "rewrite the golden F0 logs in testdata")
 
-// goldenDir holds the golden F0 log, a two-segment log directory.
-const goldenDir = "testdata/f0/log"
+const (
+	// goldenDir holds the golden F0 log, a two-segment log directory.
+	goldenDir = "testdata/f0/log"
+	// catalogueDir holds the golden catalogue log, a one-segment log
+	// directory holding every F0 record type.
+	catalogueDir = "testdata/f0/catalogue/log"
+)
 
 // fid returns a fixed fixture UUIDv7 ending in suffix.
 func fid(suffix string) uuid.UUID {
 	return uuid.MustParse("0199c000-0000-7000-8000-0000000000" + suffix)
 }
 
-var goldenColony = fid("01")
+var (
+	goldenColony    = fid("01")
+	catalogueColony = fid("02")
+)
 
-// goldenCommit is one commit of the golden log's fixed inputs.
+// The bodies and the submission that the catalogue log references.
+var (
+	bodyOne          = []byte("golden body one\n")
+	bodyTwo          = []byte("golden body two\n")
+	bodyThree        = []byte("golden body three\n")
+	goldenB1         = Digest(sha256.Sum256(bodyOne))
+	goldenB2         = Digest(sha256.Sum256(bodyTwo))
+	goldenB3         = Digest(sha256.Sum256(bodyThree))
+	goldenSubmission = Digest(sha256.Sum256([]byte("golden submission\n")))
+)
+
+// sortedDigests returns ds in ascending order.
+func sortedDigests(ds ...Digest) []Digest {
+	return slices.SortedFunc(slices.Values(ds), func(a, b Digest) int { return bytes.Compare(a[:], b[:]) })
+}
+
+// mustEncode returns the payload p encodes. The golden inputs are fixed, so
+// an error is a bug in the inputs or the encoder.
+func mustEncode(p payload) json.RawMessage {
+	js, err := p.Encode()
+	if err != nil {
+		panic(err)
+	}
+	return js
+}
+
+// goldenCommit is one commit of a golden log's fixed inputs.
 type goldenCommit struct {
 	header     CommitHeader
 	newSegment bool // the commit starts a new segment
@@ -62,7 +97,52 @@ func goldenInputs() []goldenCommit {
 	}
 }
 
-// goldenRecord locates one record of the golden log.
+// catalogueInputs covers every F0 type version, body references on fixture,
+// pin and command-commit records, a command commit with an effect, both
+// states of keep_bytes and a pin's release. Its two collection records are
+// the ones Core's collection must produce at their policies.
+func catalogueInputs() []goldenCommit {
+	header := func(commit string, t int64) CommitHeader {
+		return CommitHeader{ColonyID: catalogueColony, CommitID: fid(commit), EventTimeNS: t}
+	}
+	return []goldenCommit{
+		{header: header("c5", 1791000010000000000), drafts: []Draft{
+			{
+				Type: "fixture.sample", TypeVersion: 1, Actor: ActorAgent, ContextID: fid("d1"),
+				BodyRefs: sortedDigests(goldenB1, goldenB2, goldenB3),
+				Payload:  json.RawMessage(`{"n":1}`),
+			},
+		}},
+		{header: header("c6", 1791000011000000000), drafts: []Draft{
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{goldenB2}, Payload: mustEncode(BodyPin{PinID: fid("21")})},
+		}},
+		{header: header("c7", 1791000012000000000), drafts: []Draft{
+			{
+				Type: TypeCommand, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("d1"),
+				Payload: mustEncode(Command{CommandID: fid("31"), SubmissionSHA256: goldenSubmission}),
+			},
+			{Type: "fixture.sample", TypeVersion: 1, Actor: ActorCore, BodyRefs: []Digest{goldenB3}, Payload: json.RawMessage(`{"n":4}`)},
+		}},
+		{header: header("c8", 1791000013000000000), drafts: []Draft{
+			{Type: TypeBodiesCollected, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(BodiesCollected{
+				BeforeNS: 1791000011500000000,
+				Bodies:   []CollectedBody{{SHA256: goldenB1, Bytes: int64(len(bodyOne))}},
+			})},
+		}},
+		{header: header("c9", 1791000014000000000), drafts: []Draft{
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(BodyUnpin{PinID: fid("21")})},
+		}},
+		{header: header("ca", 1791000015000000000), drafts: []Draft{
+			{Type: TypeBodiesCollected, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(BodiesCollected{
+				BeforeNS:  1791000014500000000,
+				KeepBytes: 20,
+				Bodies:    []CollectedBody{{SHA256: goldenB2, Bytes: int64(len(bodyTwo))}},
+			})},
+		}},
+	}
+}
+
+// goldenRecord locates one record of a golden log.
 type goldenRecord struct {
 	seq  uint64
 	seg  string
@@ -80,6 +160,10 @@ type goldenBoundary struct {
 }
 
 type goldenLog struct {
+	dir     string            // the testdata directory holding the log
+	colony  uuid.UUID         // the log's colony
+	consume Consumption       // every type version of the log
+	inputs  []goldenCommit    // the fixed inputs it encodes
 	names   []string          // segment names in order
 	files   map[string][]byte // segment name -> bytes
 	records []goldenRecord    // in seq order
@@ -94,12 +178,12 @@ func (g *goldenLog) end() Chain { return g.commits[len(g.commits)-1].after }
 // final returns the name of the final golden segment.
 func (g *goldenLog) final() string { return g.names[len(g.names)-1] }
 
-// buildGolden encodes the golden inputs with EncodeCommit, the one encoder.
-func buildGolden() (*goldenLog, error) {
-	g := &goldenLog{files: map[string][]byte{}}
+// buildLog encodes inputs with EncodeCommit, the one encoder.
+func buildLog(dir string, colony uuid.UUID, consume Consumption, inputs []goldenCommit) (*goldenLog, error) {
+	g := &goldenLog{dir: dir, colony: colony, consume: consume, inputs: inputs, files: map[string][]byte{}}
 	chain := Genesis()
 	var seg string
-	for i, c := range goldenInputs() {
+	for i, c := range inputs {
 		if i == 0 || c.newSegment {
 			seg = SegmentName(chain.Seq + 1)
 			g.names = append(g.names, seg)
@@ -121,23 +205,48 @@ func buildGolden() (*goldenLog, error) {
 	return g, nil
 }
 
-var golden = sync.OnceValues(buildGolden)
+// allFixtures consumes every fixture type version of the golden log.
+var allFixtures = Consumption{"fixture.sample": {1, 2}, "fixture.other": {1}}
+
+// catalogueTypes consumes every type version of the catalogue log.
+var catalogueTypes = Consumption{
+	"fixture.sample": {1}, TypeCommand: {1}, TypeBodyPin: {1}, TypeBodyUnpin: {1}, TypeBodiesCollected: {1},
+}
+
+var (
+	golden = sync.OnceValues(func() (*goldenLog, error) {
+		return buildLog(goldenDir, goldenColony, allFixtures, goldenInputs())
+	})
+	catalogueLog = sync.OnceValues(func() (*goldenLog, error) {
+		return buildLog(catalogueDir, catalogueColony, catalogueTypes, catalogueInputs())
+	})
+)
 
 func mustGolden(t testing.TB) *goldenLog {
 	t.Helper()
-	g, err := golden()
+	return mustBuild(t, golden)
+}
+
+func mustCatalogue(t testing.TB) *goldenLog {
+	t.Helper()
+	return mustBuild(t, catalogueLog)
+}
+
+func mustBuild(t testing.TB, build func() (*goldenLog, error)) *goldenLog {
+	t.Helper()
+	g, err := build()
 	if err != nil {
 		t.Fatalf("encoding the golden inputs: %v", err)
 	}
 	return g
 }
 
-// copyGolden copies the golden testdata log into a fresh directory and
-// returns the copy's path.
-func copyGolden(t testing.TB) string {
+// copyLog copies the testdata log in src into a fresh directory and returns
+// the copy's path.
+func copyLog(t testing.TB, src string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "log")
-	if err := os.CopyFS(dir, os.DirFS(goldenDir)); err != nil {
+	if err := os.CopyFS(dir, os.DirFS(src)); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -205,91 +314,120 @@ func readAll(dir string, opts ReadOptions) ([]Commit, uint64, error) {
 	}
 }
 
-// allFixtures consumes every fixture type version of the golden log.
-var allFixtures = Consumption{"fixture.sample": {1, 2}, "fixture.other": {1}}
-
 func TestGoldenF0(t *testing.T) {
-	g := mustGolden(t)
-	if *update {
-		if err := os.MkdirAll(goldenDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		for name, data := range g.files {
-			if err := os.WriteFile(filepath.Join(goldenDir, name), data, 0o644); err != nil {
+	for _, tc := range []struct {
+		g       *goldenLog
+		lastSeq uint64
+	}{
+		{mustGolden(t), 6},
+		{mustCatalogue(t), 7},
+	} {
+		g := tc.g
+		if *update {
+			if err := os.MkdirAll(g.dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
+			for name, data := range g.files {
+				if err := os.WriteFile(filepath.Join(g.dir, name), data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 		}
-	}
-	stored := snapshot(t, goldenDir)
-	if got, want := slices.Sorted(maps.Keys(stored)), g.names; !slices.Equal(got, want) {
-		t.Fatalf("golden files = %v, want %v", got, want)
-	}
-	for _, name := range g.names {
-		if !bytes.Equal(stored[name], g.files[name]) {
-			t.Errorf("%s differs from the encoding of the golden inputs; run go test -run '^TestGoldenF0$' -update only for an intended format change", name)
+		stored := snapshot(t, g.dir)
+		if got, want := slices.Sorted(maps.Keys(stored)), g.names; !slices.Equal(got, want) {
+			t.Fatalf("%s files = %v, want %v", g.dir, got, want)
 		}
-	}
+		for _, name := range g.names {
+			if !bytes.Equal(stored[name], g.files[name]) {
+				t.Errorf("%s/%s differs from the encoding of the golden inputs; run go test -run '^TestGoldenF0$' -update only for an intended format change", g.dir, name)
+			}
+		}
 
-	res, err := Check(goldenDir, goldenColony)
-	if err != nil {
-		t.Fatalf("Check(golden) = %v", err)
-	}
-	want := CheckResult{Last: g.end(), Segment: g.final(), Size: int64(len(g.files[g.final()]))}
-	if res != want || res.Last.Seq != 6 {
-		t.Errorf("Check(golden) = %+v, want %+v with Last.Seq 6", res, want)
+		res, err := Check(g.dir, g.colony)
+		if err != nil {
+			t.Fatalf("Check(%s) = %v", g.dir, err)
+		}
+		want := CheckResult{Last: g.end(), Segment: g.final(), Size: int64(len(g.files[g.final()]))}
+		if res != want || res.Last.Seq != tc.lastSeq {
+			t.Errorf("Check(%s) = %+v, want %+v with Last.Seq %d", g.dir, res, want, tc.lastSeq)
+		}
 	}
 }
 
 func TestGoldenDecodes(t *testing.T) {
-	g := mustGolden(t)
-	commits, cursor, err := readAll(goldenDir, ReadOptions{Colony: goldenColony, Through: ToEnd, Consume: allFixtures})
-	if err != nil {
-		t.Fatalf("reading the golden log: %v", err)
-	}
-	if cursor != 6 {
-		t.Errorf("Cursor() = %d, want 6", cursor)
+	for _, tc := range []struct {
+		g *goldenLog
+		// payloads are the stored payloads by seq, with json.Marshal's
+		// compaction and HTML escaping; nil when they equal the inputs'.
+		payloads []string
+	}{
+		{mustGolden(t), []string{
+			`{"n":1}`,
+			`{"n":2,"text":"dwarf ⚒ \u003c\u0026\u003e"}`,
+			`{}`,
+			`{"n":4,"note":"v2"}`,
+			`{}`,
+			`{"n":6}`,
+		}},
+		{mustCatalogue(t), nil},
+	} {
+		g := tc.g
+		commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})
+		if err != nil {
+			t.Fatalf("reading %s: %v", g.dir, err)
+		}
+		if want := g.end().Seq; cursor != want {
+			t.Errorf("%s: Cursor() = %d, want %d", g.dir, cursor, want)
+		}
+
+		var want []Commit
+		chain := Genesis()
+		for _, in := range g.inputs {
+			c := Commit{ID: in.header.CommitID, First: chain.Seq + 1, Last: chain.Seq + uint64(len(in.drafts))}
+			for i, d := range in.drafts {
+				seq := chain.Seq + 1
+				rec := g.record(seq)
+				js := rec.line[65 : len(rec.line)-1]
+				if tc.payloads != nil {
+					d.Payload = json.RawMessage(tc.payloads[seq-1])
+				}
+				c.Records = append(c.Records, Record{
+					Envelope: Envelope{
+						Format:      1,
+						Seq:         seq,
+						CommitID:    in.header.CommitID,
+						CommitIndex: i,
+						CommitCount: len(in.drafts),
+						PrevHash:    chain.Hash,
+						EventTimeNS: in.header.EventTimeNS,
+						ClockHeld:   in.header.ClockHeld,
+						ColonyID:    g.colony,
+						Draft:       d,
+					},
+					Hash: string(rec.line[:64]),
+					JSON: js,
+				})
+				chain = Chain{Seq: seq, Hash: string(rec.line[:64]), EventTimeNS: in.header.EventTimeNS}
+			}
+			want = append(want, c)
+		}
+		if !reflect.DeepEqual(commits, want) {
+			t.Fatalf("%s commits:\n got %+v\nwant %+v", g.dir, commits, want)
+		}
 	}
 
-	// The stored payloads, with json.Marshal's compaction and HTML escaping.
-	payloads := []string{
-		`{"n":1}`,
-		`{"n":2,"text":"dwarf ⚒ \u003c\u0026\u003e"}`,
-		`{}`,
-		`{"n":4,"note":"v2"}`,
-		`{}`,
-		`{"n":6}`,
+	// Body references decode as listed, and an absent body_refs as nil.
+	commits, _, err := readAll(catalogueDir, ReadOptions{Colony: catalogueColony, Through: ToEnd, Consume: catalogueTypes})
+	if err != nil {
+		t.Fatal(err)
 	}
-	var want []Commit
-	chain := Genesis()
-	for _, in := range goldenInputs() {
-		c := Commit{ID: in.header.CommitID, First: chain.Seq + 1, Last: chain.Seq + uint64(len(in.drafts))}
-		for i, d := range in.drafts {
-			seq := chain.Seq + 1
-			rec := g.record(seq)
-			js := rec.line[65 : len(rec.line)-1]
-			d.Payload = json.RawMessage(payloads[seq-1])
-			c.Records = append(c.Records, Record{
-				Envelope: Envelope{
-					Format:      1,
-					Seq:         seq,
-					CommitID:    in.header.CommitID,
-					CommitIndex: i,
-					CommitCount: len(in.drafts),
-					PrevHash:    chain.Hash,
-					EventTimeNS: in.header.EventTimeNS,
-					ClockHeld:   in.header.ClockHeld,
-					ColonyID:    goldenColony,
-					Draft:       d,
-				},
-				Hash: string(rec.line[:64]),
-				JSON: js,
-			})
-			chain = Chain{Seq: seq, Hash: string(rec.line[:64]), EventTimeNS: in.header.EventTimeNS}
+	refs := map[uint64]int{1: 3, 2: 1, 4: 1}
+	for _, c := range commits {
+		for _, r := range c.Records {
+			if n, ok := refs[r.Seq]; ok && len(r.BodyRefs) != n || !ok && r.BodyRefs != nil {
+				t.Errorf("seq %d: BodyRefs %v, want %d digests (nil for none)", r.Seq, r.BodyRefs, n)
+			}
 		}
-		want = append(want, c)
-	}
-	if !reflect.DeepEqual(commits, want) {
-		t.Fatalf("golden commits:\n got %+v\nwant %+v", commits, want)
 	}
 }
 

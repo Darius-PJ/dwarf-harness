@@ -129,5 +129,8 @@ func checkDraft(d *Draft) error {
 			return fmt.Errorf("%s %s is not a UUIDv7", id.name, id.id)
 		}
 	}
+	if err := checkDigests(d.BodyRefs); err != nil {
+		return fmt.Errorf("body_refs %w", err)
+	}
 	return checkPayload(d.Payload)
 }

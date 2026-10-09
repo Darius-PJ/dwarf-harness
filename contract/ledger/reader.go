@@ -26,6 +26,13 @@ type ReadOptions struct {
 	After   uint64      // last sequence already consumed; 0 = from the start
 	Through uint64      // last sequence to read: the writer's durable mark, or ToEnd
 	Consume Consumption // the consumed types; records of other types are skipped
+
+	// AllTypes also returns the records of types absent from Consume, for
+	// their envelope fields. Their versions are not checked, and their
+	// payloads are not the consumer's to decode: a consumer decodes only the
+	// payloads of the type versions it consumes. Types in Consume are still
+	// version-checked.
+	AllTypes bool
 }
 
 // Commit is one complete commit as a Reader returns it.
@@ -33,7 +40,7 @@ type Commit struct {
 	ID      uuid.UUID
 	First   uint64   // seq of the commit's first record
 	Last    uint64   // seq of its last record
-	Records []Record // its consumed records only, in seq order
+	Records []Record // its consumed records, or all with AllTypes, in seq order
 }
 
 // Reader returns the complete commits of a log in order, verifying every
@@ -78,7 +85,7 @@ func OpenReader(logDir string, opts ReadOptions) (*Reader, error) {
 	}
 	keep := func(e *Envelope) bool {
 		_, ok := opts.Consume[e.Type]
-		return ok
+		return ok || opts.AllTypes
 	}
 	return &Reader{
 		opts:   opts,
@@ -136,13 +143,14 @@ func lastRecord(dir string, seg segment, colony uuid.UUID) (Chain, error) {
 	return Chain{Seq: e.Seq, Hash: string(line[:2*sha256.Size]), EventTimeNS: e.EventTimeNS}, nil
 }
 
-// Next returns the next commit with a consumed record. Commits with none are
-// skipped, and Cursor still advances past them. It returns io.EOF after
-// Through, or with ToEnd after the last complete commit; a torn final commit
-// is not returned. It returns an *UnsupportedVersionError for a consumed type
-// at an undeclared version, ErrCursor when After or Through falls inside a
-// commit or After lies beyond the log, and ErrCorrupt when the log fails
-// closed or ends before a numeric Through. Errors are final.
+// Next returns the next commit with a consumed record, or with AllTypes the
+// next commit. Commits with none are skipped, and Cursor still advances past
+// them. It returns io.EOF after Through, or with ToEnd after the last
+// complete commit; a torn final commit is not returned. It returns an
+// *UnsupportedVersionError for a consumed type at an undeclared version,
+// ErrCursor when After or Through falls inside a commit or After lies beyond
+// the log, and ErrCorrupt when the log fails closed or ends before a numeric
+// Through. Errors are final.
 func (r *Reader) Next() (Commit, error) {
 	if r.err != nil {
 		return Commit{}, r.err
@@ -187,7 +195,7 @@ func (r *Reader) next() (Commit, error) {
 			return Commit{}, fmt.Errorf("%w: Through %d is inside commit %d-%d", ErrCursor, r.opts.Through, c.First, c.Last)
 		}
 		for _, rec := range c.Records {
-			if vs := r.opts.Consume[rec.Type]; !slices.Contains(vs, rec.TypeVersion) {
+			if vs, ok := r.opts.Consume[rec.Type]; ok && !slices.Contains(vs, rec.TypeVersion) {
 				return Commit{}, &UnsupportedVersionError{Seq: rec.Seq, Type: rec.Type, Version: rec.TypeVersion, Supported: slices.Clone(vs)}
 			}
 		}

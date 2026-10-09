@@ -20,8 +20,11 @@ func SegmentName(first uint64) string {
 	return fmt.Sprintf("%0*d%s", segmentDigits, first, segmentSuffix)
 }
 
-// parseSegmentName returns the first sequence named by a segment file name.
-func parseSegmentName(name string) (uint64, bool) {
+// ParseSegmentName returns the first sequence that a segment file name
+// names; it is the inverse of SegmentName. It returns false for a name that
+// is not 20 decimal digits followed by ".jsonl", or whose digits exceed the
+// range of uint64.
+func ParseSegmentName(name string) (first uint64, ok bool) {
 	digits, ok := strings.CutSuffix(name, segmentSuffix)
 	if !ok || len(digits) != segmentDigits {
 		return 0, false
@@ -53,7 +56,7 @@ func listSegments(dir string) ([]segment, error) {
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		first, ok := parseSegmentName(name)
+		first, ok := ParseSegmentName(name)
 		if !ok || !e.Type().IsRegular() {
 			return nil, &CorruptError{Segment: name, Reason: "not a segment file"}
 		}

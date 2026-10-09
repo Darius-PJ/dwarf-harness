@@ -34,11 +34,21 @@
 //	turn_id               UUIDv7        optional
 //	operation_id          UUIDv7        optional   links a start and its end
 //	measurement_path      string        optional   ^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$
+//	body_refs             digest array  optional   non-empty; strictly ascending, hence distinct
 //	payload               object        required   the type's payload; {} when it has no fields
 //
 // IDs are canonical lowercase dashed UUIDv7 strings. Integers are plain JSON
 // integers with no sign, fraction or exponent; seq and event_time_ns exceed
-// 2^53 and are exact only for decoders that preserve 64-bit integers.
+// 2^53 and are exact only for decoders that preserve 64-bit integers. A
+// digest is the SHA-256 of some bytes as 64 lowercase hex digits, never all
+// zero (Digest).
+//
+// body_refs lists the bodies in the colony's body store that the record
+// references. They are the record's only body references: a hash inside a
+// payload, such as a private-content hash, a check digest or a Git object ID,
+// is not one. A record family whose payload names a stored body must also
+// list it in body_refs, and says so in its own payload rules, because readers
+// do not check payload interiors.
 //
 // A record is invalid if its first key is not format; if a key repeats or a
 // known key is null; if a required key is missing; if an optional key is
@@ -47,9 +57,9 @@
 // *UnsupportedFormatError; every other invalid record fails closed. Keys
 // this version does not know are ignored, so the envelope can gain optional
 // keys by addition; Record.JSON keeps them. An absent optional key decodes
-// to its type's zero value: a zero uuid.UUID, an empty MeasurementPath,
-// ClockHeld false. Present and absent are never ambiguous, because a present
-// value is never empty, and no default is ever guessed.
+// to its type's zero value: a zero uuid.UUID, an empty MeasurementPath, a
+// nil BodyRefs, ClockHeld false. Present and absent are never ambiguous,
+// because a present value is never empty, and no default is ever guessed.
 //
 // A payload must be a JSON object with no repeated key in any object at any
 // depth. EncodeCommit refuses one that is not; readers do not re-verify
@@ -77,13 +87,13 @@
 // # Segments
 //
 // The log directory holds segment files named by the sequence of their
-// first record as 20 zero-padded decimal digits and ".jsonl" (SegmentName).
-// The first segment is 00000000000000000001.jsonl, and each later one is
-// named by the previous segment's last seq plus 1. A segment holds whole
-// commits only, and only the newest may be empty or end in a torn commit.
-// Entries whose names begin with a dot are ignored; any other entry that is
-// not a regular file with a segment name fails closed. Compressed segments
-// are not recognised; adding them needs a name rule.
+// first record as 20 zero-padded decimal digits and ".jsonl" (SegmentName,
+// ParseSegmentName). The first segment is 00000000000000000001.jsonl, and
+// each later one is named by the previous segment's last seq plus 1. A
+// segment holds whole commits only, and only the newest may be empty or end
+// in a torn commit. Entries whose names begin with a dot are ignored; any
+// other entry that is not a regular file with a segment name fails closed.
+// Compressed segments are not recognised; adding them needs a name rule.
 //
 // # Torn tails and failing closed
 //
@@ -124,8 +134,13 @@
 // consumed or not: hash, chain, sequence, commit framing, colony and time.
 // Types absent from ReadOptions.Consume are skipped; a consumed type at an
 // undeclared version stops the reader with an *UnsupportedVersionError.
-// Cursor advances past every commit fully processed, skipped or returned,
-// and stays at the last one on any error, so a consumer may persist it.
+// With ReadOptions.AllTypes the reader also returns the records of
+// unconsumed types, for their envelope fields, such as body_refs. Their
+// versions are not checked, and their payloads are not the consumer's to
+// decode: a consumer decodes only the payloads of the type versions it
+// consumes, so that skipping an unknown type stays safe. Cursor advances
+// past every commit fully processed, skipped or returned, and stays at the
+// last one on any error, so a consumer may persist it.
 //
 // A reader resuming after a cursor starts in the segment holding the next
 // record and first verifies the link from the last line of the segment
@@ -140,8 +155,82 @@
 // # Catalogue
 //
 // A Catalogue lists the record type versions a writer may append. Defined
-// returns those this contract version defines: none yet, because the F0
-// record types produced by Core are specified by later steps. The type
-// namespace "fixture." is reserved for this contract's golden fixtures and
-// tests: no record family may use it, and Defined never contains it.
+// returns those this contract version defines: the four F0 record types
+// below, each at version 1. The type namespace "ledger." is reserved for F0
+// record types: no other record family may use it. The namespace "fixture."
+// is reserved for this contract's golden fixtures and tests: no record
+// family may use it, and Defined never contains it.
+//
+// # F0 record types
+//
+// Core's ledger store produces the F0 record types. Each payload has a Go
+// type with an Encode method, which validates the value and emits compact
+// JSON with its keys in the order tabled below, and a Decode function. Their
+// errors wrap ErrInvalid. A decoder refuses a payload that is not a JSON
+// object; a missing required key, a key repeated at any depth, or a null; an
+// ID that is not a canonical lowercase UUIDv7; a digest that is not 64
+// lowercase hex digits or is zero; an integer with a sign, fraction or
+// exponent, or out of range; and any value or ordering rule broken. Keys it
+// does not know are ignored, at the top level and inside the elements of
+// bodies, so that a type version can gain optional keys by addition.
+// Encoding a decoded payload reproduces the bytes that Encode produced.
+//
+// Core's writer guarantees the record rules stated under each type: it
+// refuses a draft that would break one (see package appender), and it fails
+// closed on a log that breaks one. Check, Reader and EncodeCommit do not
+// apply them.
+//
+// ledger.command v1 (Command) is the identity tombstone of D58: the record
+// that a command, named by its immutable command ID, was submitted. It
+// carries no request content; the command families (Core step C3) carry the
+// request. Only the digest is compared when a command ID is submitted
+// again, so the caller's submission_sha256 must cover everything that binds
+// the request: its content, its candidate and its context. Any binding the
+// digest leaves out could change under the same ID without the mismatch
+// that D58 requires, which would make its mismatch rule hollow.
+//
+//	key                type    presence  rule
+//	command_id         UUIDv7  required  the caller's immutable command ID (D37)
+//	submission_sha256  digest  required  SHA-256 of the caller's canonical immutable submission bytes
+//
+// Record rules: it is the record at commit_index 0 of the commit that holds
+// the command's effect, and a commit holds at most one; a log holds at most
+// one record per command_id; body_refs is absent. Only Core's store writes
+// it, when a command is submitted; the writer refuses it through Append.
+//
+// ledger.body_pin v1 (BodyPin) pins the bodies its body_refs lists, so that
+// collection keeps them, until a ledger.body_unpin with the same pin_id.
+//
+//	key     type    presence  rule
+//	pin_id  UUIDv7  required  names the pin; the pinned bodies are the record's body_refs
+//
+// Record rules: body_refs is present, and every body it lists was published
+// when the record was written; pin_id was not active. A pin ID released
+// earlier starts a new pin.
+//
+// ledger.body_unpin v1 (BodyUnpin) releases every body of an active pin.
+//
+//	key     type    presence  rule
+//	pin_id  UUIDv7  required  an active pin
+//
+// Record rules: body_refs is absent; pin_id was active.
+//
+// ledger.bodies_collected v1 (BodiesCollected) is the unavailable-body
+// history: it records that an explicit collection, ordered by its actor
+// under the policy its payload states, made the bodies it lists
+// unavailable.
+//
+//	key         type              presence  rule
+//	before_ns   integer           required  the policy's age cutoff in event-time nanoseconds; above 0
+//	keep_bytes  integer           optional  the policy's byte target; above 0 when present
+//	bodies      array of objects  required  non-empty; strictly ascending by sha256
+//
+// Each element of bodies is {"sha256": digest, "bytes": integer}: a
+// collected body's digest and its size, at least 0.
+//
+// Record rules: body_refs is absent, because the bodies it lists are payload
+// values, not references; actor is owner or core. Only Core's store writes
+// it, during an explicit collection; the writer refuses it through Append.
+// It lists only bodies that an earlier record referenced and that no active
+// pin held.
 package ledger
