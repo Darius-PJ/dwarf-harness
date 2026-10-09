@@ -30,6 +30,7 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 - [ ] Final review enumerates the exact Corps and agents, role destinations, clone inheritance, cosmetic-copy choice, grants and budgets; changing reviewed facts invalidates approval, and partial failures and retries stay visible without duplicating births.
 - [ ] Create and Create and activate both warn that the first alignment turn starts immediately and incurs model usage, and refused or pending admission is shown.
 - [ ] With manual planning off, approved creation applies a deterministic template; with it on, unbuilt rooms join the Build TODO; every step is keyboard operable.
+- [ ] Creating a Corps also sets its colour and emblem ([D108](../../../docs/DECISIONS.md#d108-character-sprites-a-still-front-view-an-animated-three-quarter-view-and-corps-emblems-and-colours), [D110](../../../docs/DECISIONS.md#d110-corps-colour-and-emblem-are-chosen-at-corps-creation)), with an unused pair suggested; the pair is saved as presentation data, survives restarts and never enters Core state, prompts or routing, and a Corps created outside the GUI shows a fixed default pair.
 
 ## Verification boundary
 
@@ -49,3 +50,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-08 — Published from the [fortress GUI specification](../../fortress-gui/spec.md) after the owner approved publishing tickets 87–129 in the consolidated breakdown review. These tickets join 01–86 in this tracker so one team works a single frontier. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-09 — D110 rework: the owner placed the choice of a new Corps's colour and emblem in this ticket, at creation ([D110](../../../docs/DECISIONS.md#d110-corps-colour-and-emblem-are-chosen-at-corps-creation)); one criterion is added. Changing an existing Corps's pair later needs a later ticket. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.
