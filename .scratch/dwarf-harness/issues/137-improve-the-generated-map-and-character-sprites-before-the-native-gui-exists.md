@@ -1,6 +1,6 @@
 # 137: Improve the generated map and character sprites before the native GUI exists
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Published: 2026-10-08
 Spec: [DwarfHarness system specification](../spec.md); feature: [fortress GUI specification](../../fortress-gui/spec.md)
@@ -59,3 +59,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-08 — Published under [D105](../../../docs/DECISIONS.md#d105-default-fortress-art-go-modules-for-sprite-generation-and-art-rounds-before-the-gui) after the owner asked for a ticket to improve the art before the GUI is finished. This adopts the ticket for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-09 — Cross-link from ticket [88](88-generate-a-minimal-original-layered-art-sample-with-the-go-art-generator.md)'s closing: the sample format of its second round, with two character views, animation loops and Corps pennants ([B19](../../../docs/DECISIONS.md#b19-art-generator-round-2-character-views-page-loops-and-corps-pennants)), is the format later rounds keep. This ticket's criterion that every role stays distinguishable by silhouette or trim and a non-colour badge concerns the map sheet, because the 64-pixel sprites carry no role marker ([D109](../../../docs/DECISIONS.md#d109-character-sprites-carry-no-role-marker)). With ticket 88 resolved, this ticket starts from the generator as approved there. This adds no blocker or criterion to this ticket.
+
+2026-10-09 — Claimed for the staged build. The owner chose that the first round begins with a team proposal. A designer studies open-source pixel-art technique and proposes specific improvements to the current sprites; the owner approves or changes the plan before any pixel changes, and the work then runs on its own branch and worktree (D41).
