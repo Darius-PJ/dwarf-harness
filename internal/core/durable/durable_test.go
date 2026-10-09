@@ -39,11 +39,14 @@ func TestLockIsExclusive(t *testing.T) {
 
 // TestSyncDirAndRenameBeyondMaxPath runs SyncDir and Rename, by absolute and
 // relative paths, in a directory whose path exceeds the 260-character
-// Windows limit, and checks that their errors are returned. Where Windows
-// long paths are enabled the calls would succeed without the \\?\ form too;
-// there the test checks that the form is built correctly.
+// Windows limit, and checks that their errors are returned. The working
+// directory stays short, because Windows may refuse a longer one, and the
+// relative paths resolve beyond the limit. Where Windows long paths are
+// enabled the calls would succeed without the \\?\ form too; there the test
+// checks that the form is built correctly.
 func TestSyncDirAndRenameBeyondMaxPath(t *testing.T) {
-	dir := t.TempDir()
+	root := t.TempDir()
+	dir := root
 	for len(dir) <= 300 {
 		dir = filepath.Join(dir, strings.Repeat("d", 40))
 	}
@@ -51,6 +54,15 @@ func TestSyncDirAndRenameBeyondMaxPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	tmp, target := filepath.Join(dir, "colony.json.tmp"), filepath.Join(dir, "colony.json")
+	// rel returns path relative to root.
+	rel := func(path string) string {
+		t.Helper()
+		r, err := filepath.Rel(root, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
 	write := func(path, data string) {
 		t.Helper()
 		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
@@ -78,14 +90,14 @@ func TestSyncDirAndRenameBeyondMaxPath(t *testing.T) {
 		t.Fatalf("SyncDir = %v", err)
 	}
 
-	t.Chdir(dir)
+	t.Chdir(root)
 	write(tmp, "newer")
-	if err := durable.Rename("colony.json.tmp", "colony.json"); err != nil {
+	if err := durable.Rename(rel(tmp), rel(target)); err != nil {
 		t.Fatalf("Rename by relative paths = %v", err)
 	}
 	assertTarget("newer")
-	if err := durable.SyncDir("."); err != nil {
-		t.Fatalf("SyncDir(.) = %v", err)
+	if err := durable.SyncDir(rel(dir)); err != nil {
+		t.Fatalf("SyncDir by relative path = %v", err)
 	}
 
 	if err := durable.SyncDir(filepath.Join(dir, "missing")); !errors.Is(err, fs.ErrNotExist) {

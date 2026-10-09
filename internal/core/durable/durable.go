@@ -16,8 +16,8 @@
 // use flock, fsync of the directory (F_FULLFSYNC on macOS) and rename(2).
 //
 // On Windows, SyncDir and Rename make their paths absolute and pass them in
-// the extended-length \\?\ form, so neither is limited to MAX_PATH; LockFile
-// opens its file through package os, which applies the same rule.
+// the extended-length \\?\ form, so neither is limited to MAX_PATH. LockFile
+// opens its file through package os, which handles long paths itself.
 //
 // Every error is returned; nothing falls back silently. None of this is a
 // power-loss guarantee: it relies on the file system and the device honouring
