@@ -3,6 +3,8 @@ package ledger
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -133,6 +135,34 @@ func TestReaderCursorAndBound(t *testing.T) {
 	got, cursor, err = readAll(goldenDir, ReadOptions{Colony: goldenColony, Through: 7, Consume: allFixtures})
 	if !errors.Is(err, ErrCorrupt) || len(got) != 4 || cursor != 6 {
 		t.Errorf("Through 7: commits %v, cursor %d, error %v; want all 4, 6, ErrCorrupt", lasts(got), cursor, err)
+	}
+
+	// After Close, Next fails with os.ErrClosed, unless the reader had
+	// already failed or reached its end, whose result stays.
+	for _, tc := range []struct {
+		name    string
+		through uint64
+		reads   int // Next calls before Close
+		want    error
+	}{
+		{"before reading", ToEnd, 0, os.ErrClosed},
+		{"mid-read", ToEnd, 1, os.ErrClosed},
+		{"at the end", 3, 3, io.EOF},
+		{"after a failure", 2, 2, ErrCursor},
+	} {
+		r, err := OpenReader(goldenDir, ReadOptions{Colony: goldenColony, Through: tc.through, Consume: allFixtures})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range tc.reads {
+			r.Next()
+		}
+		if err := r.Close(); err != nil {
+			t.Errorf("%s: Close = %v", tc.name, err)
+		}
+		if _, err := r.Next(); !errors.Is(err, tc.want) {
+			t.Errorf("%s: Next after Close = %v, want %v", tc.name, err, tc.want)
+		}
 	}
 }
 
