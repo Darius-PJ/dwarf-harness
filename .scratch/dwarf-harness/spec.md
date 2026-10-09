@@ -688,7 +688,7 @@ The Router roadmap and D24 explicitly select no prewarm requests and no staggere
 
 | Capability | Required ordering and stop boundary |
 |---|---|
-| Repository foundation | C0 is Done (2026-10-09, ticket 01): the full check passed on Windows, including `-race`, and C1 is Ready |
+| Repository foundation | C0 is Done (2026-10-09, ticket 01): the full check passed on Windows, including `-race`, and C1 is In progress (ticket 02) |
 | Ledger and contracts | C1 follows C0; freeze only specified producer-ready families, not placeholder schemas |
 | Agent workspace and runtime | C2 requires its C1 freezes and explicit D52 approval; C3 follows C2 and its owner prerequisites |
 | Validated real work | C4 follows C3 and frozen U1.L law-format, not U1.E; all pre-C4 agent work stays testing-only until the full C4 gate passes |

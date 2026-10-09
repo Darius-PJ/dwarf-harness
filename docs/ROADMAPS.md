@@ -1,6 +1,6 @@
 # Roadmaps: index, dependencies and working rules
 
-**Status:** 2026-10-09 (C0 Done through ticket 01; D106 moves the toolchain to go1.27.2); 2026-10-08 (D97–D102 ordinary service-loss procedure; D96 pre-alpha consolidation of D89–D95 2026-10-07; prior coordination update 2026-10-05). Apart from C0's check, this index records no implementation, contract freeze or completed gate. It is the entry point for anyone, human or agent, assigned a roadmap step. It holds the step format, cross-roadmap dependencies, status board and rules for parallel work (D19, D41). The roadmaps order work; they do not approve designs that source documents mark as proposals.
+**Status:** 2026-10-09 (C0 Done through ticket 01; D106 moves the toolchain to go1.27.2); 2026-10-08 (D97–D102 ordinary service-loss procedure; D96 pre-alpha consolidation of D89–D95 2026-10-07; prior coordination update 2026-10-05). Apart from C0's check and C1's draft ledger contracts (in progress), this index records no implementation, contract freeze or completed gate. It is the entry point for anyone, human or agent, assigned a roadmap step. It holds the step format, cross-roadmap dependencies, status board and rules for parallel work (D19, D41). The roadmaps order work; they do not approve designs that source documents mark as proposals.
 
 ## Start here
 
@@ -166,7 +166,7 @@ Notes on the edges:
 | Step | Title | Waits for | Status |
 |---|---|---|---|
 | C0 | Repository, toolchain, check command, decision log | Nothing; every owner input has arrived (D43–D46) | Done |
-| C1 | Action ledger and body store | C0 | Ready |
+| C1 | Action ledger and body store | C0 | In progress |
 | C2 | Workspaces, observation, promotion, temporary scratch | C1; frozen `ledger-format`/`ledger-appender`; explicit D52 owner approval of integrated Core C2 boundary | Waiting |
 | C3 | Agent runtime | C2; owner: private remote with CI (D42) | Waiting |
 | C4 | Validation runner and promotion gate; real-work gate | C3; U1.L and frozen `law-format` (D47); approved D52 boundary | Waiting |
