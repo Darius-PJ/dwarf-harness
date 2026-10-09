@@ -1,5 +1,5 @@
 // DwarfHarness art palette, in palette-index order.
-// entry <char> <name> <mask> <rrggbbaa>   mask: - skin hair clothing role
+// entry <char> <name> <mask> <rrggbbaa>   mask: - skin hair clothing role corps
 // texture <char> <entry>:<weight> ...     rock and floor tiles only
 // Within a ramp, uppercase is the darkest step, lowercase the next and a digit
 // the lightest. See ../STYLE.md.
@@ -7,9 +7,9 @@ entry . transparent - 00000000
 entry x occlude - ff00ff00
 entry # outline - 1c1626ff
 entry * light - f2ead6ff
-entry S skin.shadow skin 9c5a3cff
-entry s skin.base skin d08a5cff
-entry 1 skin.light skin f0bb8aff
+entry S skin.shadow skin 4e2c1cff
+entry s skin.base skin 74462cff
+entry 1 skin.light skin 9e6a44ff
 entry H hair.shadow hair 5a2618ff
 entry h hair.base hair 8e3e22ff
 entry 2 hair.light hair c0642eff
@@ -38,5 +38,7 @@ entry o coat.base - 6e646cff
 entry 9 coat.light - 9a9096ff
 entry Y spark.base - e0a020ff
 entry y spark.light - ffe070ff
+entry B corps.shadow corps 6a1a1eff
+entry b corps.base corps a8302cff
 texture % stone.shadow:1 stone.base:2 stone.light:1
 texture ~ floor.shadow:1 floor.base:4 floor.light:1

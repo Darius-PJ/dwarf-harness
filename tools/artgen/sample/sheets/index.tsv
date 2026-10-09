@@ -101,17 +101,144 @@ map	roles-gray	224	184	16	16	dwarf-gray miner grand_griot idle 1
 map	roles-gray	244	184	16	16	dwarf-gray miner grand_diplomat idle 0
 map	roles-gray	264	184	16	16	dwarf-gray miner grand_diplomat idle 1
 map	room	4	212	160	128	room
-character	parts	4	4	64	64	back_accessory.pack idle 0
-character	parts	72	4	64	64	body.stout idle 0
-character	parts	140	4	64	64	shoes.boots idle 0
-character	parts	208	4	64	64	legwear.trousers idle 0
-character	parts	4	72	64	64	torso_clothing.tunic idle 0
-character	parts	72	72	64	64	torso_clothing.vest idle 0
-character	parts	140	72	64	64	hair_beard.braided idle 0
-character	parts	208	72	64	64	hair_beard.topknot idle 0
-character	parts	4	140	64	64	headwear.hat idle 0
-character	parts	72	140	64	64	front_accessory.pick idle 0
-character	examples	4	216	64	64	dwarf miner idle 0
-character	examples	72	216	64	64	dwarf smith idle 0
-character	examples	140	216	64	64	dwarf scribe idle 0
-character	examples	208	216	64	64	dwarf carter idle 0
+character	front	4	4	64	64	front back_accessory.pack still 0
+character	front	72	4	64	64	front body.stout still 0
+character	front	140	4	64	64	front shoes.boots still 0
+character	front	208	4	64	64	front legwear.trousers still 0
+character	front	276	4	64	64	front torso_clothing.tunic still 0
+character	front	344	4	64	64	front torso_clothing.vest still 0
+character	front	412	4	64	64	front hair_beard.braided still 0
+character	front	4	72	64	64	front hair_beard.topknot still 0
+character	front	72	72	64	64	front headwear.hat still 0
+character	front	140	72	64	64	front front_accessory.pick still 0
+character	front	208	72	64	64	front banner.pennant still 0
+character	front	276	72	64	64	front emblem.crescent still 0
+character	front	344	72	64	64	front emblem.mountain still 0
+character	three_quarter	4	148	64	64	three_quarter back_accessory.pack idle 0
+character	three_quarter	72	148	64	64	three_quarter back_accessory.pack idle 1
+character	three_quarter	140	148	64	64	three_quarter back_accessory.pack act_worker 0
+character	three_quarter	208	148	64	64	three_quarter back_accessory.pack act_worker 1
+character	three_quarter	276	148	64	64	three_quarter back_accessory.pack act_worker 2
+character	three_quarter	344	148	64	64	three_quarter back_accessory.pack act_diplomat 0
+character	three_quarter	412	148	64	64	three_quarter back_accessory.pack act_diplomat 1
+character	three_quarter	4	216	64	64	three_quarter body.stout idle 0
+character	three_quarter	72	216	64	64	three_quarter body.stout idle 1
+character	three_quarter	140	216	64	64	three_quarter body.stout act_worker 0
+character	three_quarter	208	216	64	64	three_quarter body.stout act_worker 1
+character	three_quarter	276	216	64	64	three_quarter body.stout act_worker 2
+character	three_quarter	344	216	64	64	three_quarter body.stout act_diplomat 0
+character	three_quarter	412	216	64	64	three_quarter body.stout act_diplomat 1
+character	three_quarter	4	284	64	64	three_quarter shoes.boots idle 0
+character	three_quarter	72	284	64	64	three_quarter shoes.boots idle 1
+character	three_quarter	140	284	64	64	three_quarter shoes.boots act_worker 0
+character	three_quarter	208	284	64	64	three_quarter shoes.boots act_worker 1
+character	three_quarter	276	284	64	64	three_quarter shoes.boots act_worker 2
+character	three_quarter	344	284	64	64	three_quarter shoes.boots act_diplomat 0
+character	three_quarter	412	284	64	64	three_quarter shoes.boots act_diplomat 1
+character	three_quarter	4	352	64	64	three_quarter legwear.trousers idle 0
+character	three_quarter	72	352	64	64	three_quarter legwear.trousers idle 1
+character	three_quarter	140	352	64	64	three_quarter legwear.trousers act_worker 0
+character	three_quarter	208	352	64	64	three_quarter legwear.trousers act_worker 1
+character	three_quarter	276	352	64	64	three_quarter legwear.trousers act_worker 2
+character	three_quarter	344	352	64	64	three_quarter legwear.trousers act_diplomat 0
+character	three_quarter	412	352	64	64	three_quarter legwear.trousers act_diplomat 1
+character	three_quarter	4	420	64	64	three_quarter torso_clothing.tunic idle 0
+character	three_quarter	72	420	64	64	three_quarter torso_clothing.tunic idle 1
+character	three_quarter	140	420	64	64	three_quarter torso_clothing.tunic act_worker 0
+character	three_quarter	208	420	64	64	three_quarter torso_clothing.tunic act_worker 1
+character	three_quarter	276	420	64	64	three_quarter torso_clothing.tunic act_worker 2
+character	three_quarter	344	420	64	64	three_quarter torso_clothing.tunic act_diplomat 0
+character	three_quarter	412	420	64	64	three_quarter torso_clothing.tunic act_diplomat 1
+character	three_quarter	4	488	64	64	three_quarter torso_clothing.vest idle 0
+character	three_quarter	72	488	64	64	three_quarter torso_clothing.vest idle 1
+character	three_quarter	140	488	64	64	three_quarter torso_clothing.vest act_worker 0
+character	three_quarter	208	488	64	64	three_quarter torso_clothing.vest act_worker 1
+character	three_quarter	276	488	64	64	three_quarter torso_clothing.vest act_worker 2
+character	three_quarter	344	488	64	64	three_quarter torso_clothing.vest act_diplomat 0
+character	three_quarter	412	488	64	64	three_quarter torso_clothing.vest act_diplomat 1
+character	three_quarter	4	556	64	64	three_quarter hair_beard.braided idle 0
+character	three_quarter	72	556	64	64	three_quarter hair_beard.braided idle 1
+character	three_quarter	140	556	64	64	three_quarter hair_beard.braided act_worker 0
+character	three_quarter	208	556	64	64	three_quarter hair_beard.braided act_worker 1
+character	three_quarter	276	556	64	64	three_quarter hair_beard.braided act_worker 2
+character	three_quarter	344	556	64	64	three_quarter hair_beard.braided act_diplomat 0
+character	three_quarter	412	556	64	64	three_quarter hair_beard.braided act_diplomat 1
+character	three_quarter	4	624	64	64	three_quarter hair_beard.topknot idle 0
+character	three_quarter	72	624	64	64	three_quarter hair_beard.topknot idle 1
+character	three_quarter	140	624	64	64	three_quarter hair_beard.topknot act_worker 0
+character	three_quarter	208	624	64	64	three_quarter hair_beard.topknot act_worker 1
+character	three_quarter	276	624	64	64	three_quarter hair_beard.topknot act_worker 2
+character	three_quarter	344	624	64	64	three_quarter hair_beard.topknot act_diplomat 0
+character	three_quarter	412	624	64	64	three_quarter hair_beard.topknot act_diplomat 1
+character	three_quarter	4	692	64	64	three_quarter headwear.hat idle 0
+character	three_quarter	72	692	64	64	three_quarter headwear.hat idle 1
+character	three_quarter	140	692	64	64	three_quarter headwear.hat act_worker 0
+character	three_quarter	208	692	64	64	three_quarter headwear.hat act_worker 1
+character	three_quarter	276	692	64	64	three_quarter headwear.hat act_worker 2
+character	three_quarter	344	692	64	64	three_quarter headwear.hat act_diplomat 0
+character	three_quarter	412	692	64	64	three_quarter headwear.hat act_diplomat 1
+character	three_quarter	4	760	64	64	three_quarter front_accessory.pick idle 0
+character	three_quarter	72	760	64	64	three_quarter front_accessory.pick idle 1
+character	three_quarter	140	760	64	64	three_quarter front_accessory.pick act_worker 0
+character	three_quarter	208	760	64	64	three_quarter front_accessory.pick act_worker 1
+character	three_quarter	276	760	64	64	three_quarter front_accessory.pick act_worker 2
+character	three_quarter	344	760	64	64	three_quarter front_accessory.pick act_diplomat 0
+character	three_quarter	412	760	64	64	three_quarter front_accessory.pick act_diplomat 1
+character	three_quarter	4	828	64	64	three_quarter banner.pennant idle 0
+character	three_quarter	72	828	64	64	three_quarter banner.pennant idle 1
+character	three_quarter	140	828	64	64	three_quarter banner.pennant act_worker 0
+character	three_quarter	208	828	64	64	three_quarter banner.pennant act_worker 1
+character	three_quarter	276	828	64	64	three_quarter banner.pennant act_worker 2
+character	three_quarter	344	828	64	64	three_quarter banner.pennant act_diplomat 0
+character	three_quarter	412	828	64	64	three_quarter banner.pennant act_diplomat 1
+character	three_quarter	4	896	64	64	three_quarter emblem.crescent idle 0
+character	three_quarter	72	896	64	64	three_quarter emblem.crescent idle 1
+character	three_quarter	140	896	64	64	three_quarter emblem.crescent act_worker 0
+character	three_quarter	208	896	64	64	three_quarter emblem.crescent act_worker 1
+character	three_quarter	276	896	64	64	three_quarter emblem.crescent act_worker 2
+character	three_quarter	344	896	64	64	three_quarter emblem.crescent act_diplomat 0
+character	three_quarter	412	896	64	64	three_quarter emblem.crescent act_diplomat 1
+character	three_quarter	4	964	64	64	three_quarter emblem.mountain idle 0
+character	three_quarter	72	964	64	64	three_quarter emblem.mountain idle 1
+character	three_quarter	140	964	64	64	three_quarter emblem.mountain act_worker 0
+character	three_quarter	208	964	64	64	three_quarter emblem.mountain act_worker 1
+character	three_quarter	276	964	64	64	three_quarter emblem.mountain act_worker 2
+character	three_quarter	344	964	64	64	three_quarter emblem.mountain act_diplomat 0
+character	three_quarter	412	964	64	64	three_quarter emblem.mountain act_diplomat 1
+character	three_quarter	4	1032	64	64	three_quarter tool.worker act_worker 0
+character	three_quarter	72	1032	64	64	three_quarter tool.worker act_worker 1
+character	three_quarter	140	1032	64	64	three_quarter tool.worker act_worker 2
+character	corps	4	1108	64	64	corps peak front still 0
+character	corps	72	1108	64	64	corps peak three_quarter idle 0
+character	corps	140	1108	64	64	corps-gray peak front still 0
+character	corps	208	1108	64	64	corps-gray peak three_quarter idle 0
+character	corps	4	1176	64	64	corps moon front still 0
+character	corps	72	1176	64	64	corps moon three_quarter idle 0
+character	corps	140	1176	64	64	corps-gray moon front still 0
+character	corps	208	1176	64	64	corps-gray moon three_quarter idle 0
+character	roster	4	1252	64	64	dwarf miner worker moon front still 0
+character	roster	72	1252	64	64	dwarf smith worker peak front still 0
+character	roster	140	1252	64	64	dwarf scribe diplomat moon front still 0
+character	roster	208	1252	64	64	dwarf carter diplomat peak front still 0
+character	roster-gray	4	1328	64	64	dwarf-gray miner worker moon front still 0
+character	roster-gray	72	1328	64	64	dwarf-gray smith worker peak front still 0
+character	roster-gray	140	1328	64	64	dwarf-gray scribe diplomat moon front still 0
+character	roster-gray	208	1328	64	64	dwarf-gray carter diplomat peak front still 0
+character	page	4	1404	64	64	dwarf miner worker moon three_quarter idle 0
+character	page	72	1404	64	64	dwarf miner worker moon three_quarter idle 1
+character	page	140	1404	64	64	dwarf miner worker moon three_quarter act_worker 0
+character	page	208	1404	64	64	dwarf miner worker moon three_quarter act_worker 1
+character	page	276	1404	64	64	dwarf miner worker moon three_quarter act_worker 2
+character	page	4	1472	64	64	dwarf smith worker peak three_quarter idle 0
+character	page	72	1472	64	64	dwarf smith worker peak three_quarter idle 1
+character	page	140	1472	64	64	dwarf smith worker peak three_quarter act_worker 0
+character	page	208	1472	64	64	dwarf smith worker peak three_quarter act_worker 1
+character	page	276	1472	64	64	dwarf smith worker peak three_quarter act_worker 2
+character	page	4	1540	64	64	dwarf scribe diplomat moon three_quarter idle 0
+character	page	72	1540	64	64	dwarf scribe diplomat moon three_quarter idle 1
+character	page	140	1540	64	64	dwarf scribe diplomat moon three_quarter act_diplomat 0
+character	page	208	1540	64	64	dwarf scribe diplomat moon three_quarter act_diplomat 1
+character	page	4	1608	64	64	dwarf carter diplomat peak three_quarter idle 0
+character	page	72	1608	64	64	dwarf carter diplomat peak three_quarter idle 1
+character	page	140	1608	64	64	dwarf carter diplomat peak three_quarter act_diplomat 0
+character	page	208	1608	64	64	dwarf carter diplomat peak three_quarter act_diplomat 1

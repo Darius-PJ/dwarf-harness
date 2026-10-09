@@ -18,16 +18,23 @@ var slots = []string{"back_accessory", "body", "shoes", "legwear", "torso_clothi
 var roles = []string{"worker", "orchestrator", "griot", "diplomat", "grand_orchestrator", "grand_griot", "grand_diplomat"}
 
 // masks lists the palette masks in the order sample.json reports them.
-var masks = []string{"skin", "hair", "clothing", "role"}
+var masks = []string{"skin", "hair", "clothing", "role", "corps"}
 
 // categories lists the draft tile categories: FS:136's set that the sample
 // uses, plus wall and stockpile (P7).
 var categories = []string{"rock", "floor", "wall", "door", "station", "stockpile", "rail"}
 
-// The grids, by directory name.
+// The grids, by name.
 const (
 	gridWorld = "world"
 	gridRPG   = "rpg"
+)
+
+// The views, by name (§3.1 of the round-2 brief).
+const (
+	viewOverworld    = "overworld"
+	viewFront        = "front"
+	viewThreeQuarter = "three_quarter"
 )
 
 // The sprite kinds.
@@ -37,7 +44,22 @@ const (
 	kindBadge   = "badge"
 	kindTile    = "tile"
 	kindAnimal  = "animal"
+	kindBanner  = "banner"
+	kindEmblem  = "emblem"
+	kindTool    = "tool"
 )
+
+// kindViews lists the views in which each kind may have a map.
+var kindViews = map[string][]string{
+	kindPart:    {viewOverworld, viewFront, viewThreeQuarter},
+	kindOverlay: {viewOverworld},
+	kindBadge:   {viewOverworld},
+	kindTile:    {viewOverworld},
+	kindAnimal:  {viewOverworld},
+	kindBanner:  {viewFront, viewThreeQuarter},
+	kindEmblem:  {viewFront, viewThreeQuarter},
+	kindTool:    {viewThreeQuarter},
+}
 
 // maxCoord bounds every size, coordinate and frame index in the inputs.
 const maxCoord = 65535
@@ -287,7 +309,7 @@ func parsePalette(r *report, p string, lines []textLine) *palette {
 			case taken:
 				r.add(p, l.n, "entry name %q is already defined", name)
 			case mask != "-" && !slices.Contains(masks, mask):
-				r.add(p, l.n, "mask %q; want -, skin, hair, clothing or role", mask)
+				r.add(p, l.n, "mask %q; want - or one of %s", mask, strings.Join(masks, ", "))
 			case !isHex(hex, 8):
 				r.add(p, l.n, "color %q; want lowercase rrggbbaa", hex)
 			default:
@@ -353,6 +375,12 @@ func parsePalette(r *report, p string, lines []textLine) *palette {
 	}
 	if pal.occlude < 0 {
 		r.add(p, 0, "no entry named occlude")
+	}
+	// The Corps colour guard measures against outline and light.
+	for _, name := range []string{"outline", "light"} {
+		if !slices.ContainsFunc(pal.entries, func(e entry) bool { return e.name == name }) {
+			r.add(p, 0, "no entry named %s", name)
+		}
 	}
 	for _, m := range masks {
 		ramp := pal.ramps[m]
@@ -435,7 +463,7 @@ func parseColors(r *report, p string, lines []textLine) []*choice {
 		seen[id] = true
 		out = append(out, c)
 	}
-	for _, m := range masks[:3] {
+	for _, m := range []string{"skin", "hair", "clothing", "corps"} {
 		if !slices.ContainsFunc(out, func(c *choice) bool { return c.mask == m }) {
 			r.add(p, 0, "no %s choice", m)
 		}
@@ -706,12 +734,12 @@ type anim struct {
 	frames int
 }
 
-// pixmap is one parsed <grid>/<id>.pxm.
+// pixmap is one parsed <view directory>/<id>.pxm.
 type pixmap struct {
-	path, id, grid string
+	path, id, view string
 	kind           string
 	slot           string // parts
-	role           string // badges
+	role           string // badges and tools
 	category       string // tiles
 	w, h           int
 	ax, ay         int
@@ -721,16 +749,20 @@ type pixmap struct {
 	rows           [][]string // per frame, h rows of w characters
 	frameLines     []int
 	header         map[string]int // keyword to line
-	px             [][]uint8      // per frame, w*h palette indices; set after validation
+	px             [][]uint8      // per frame, w*h palette indices; set once every file parses
 }
 
 // textured reports whether the map uses a texture character.
 func (m *pixmap) textured() bool { _, ok := m.header["seed"]; return ok }
 
-// layered reports whether the sprite is a dwarf layer: a part, the trim or a
-// badge.
+// layered reports whether the sprite is a layer that registers with the
+// parts of its view: a part, the trim, a badge, the banner or an emblem.
 func (m *pixmap) layered() bool {
-	return m.kind == kindPart || m.kind == kindOverlay || m.kind == kindBadge
+	switch m.kind {
+	case kindPart, kindOverlay, kindBadge, kindBanner, kindEmblem:
+		return true
+	}
+	return false
 }
 
 // frame returns the strip index of frame i of animation name.
@@ -743,7 +775,8 @@ func (m *pixmap) frame(name string, i int) (int, bool) {
 	return 0, false
 }
 
-// kindOf sets the kind and the slot or role that the map's ID names (§3.7).
+// kindOf sets the kind and the slot or role that the map's ID names, and
+// checks that the kind may exist in the map's view (§3.6).
 func (m *pixmap) kindOf(r *report) bool {
 	if !isID(m.id) {
 		r.add(m.path, 0, "file name must be <slot-or-kind>.<name>.pxm in [a-z0-9_]")
@@ -759,16 +792,26 @@ func (m *pixmap) kindOf(r *report) bool {
 			r.add(m.path, 0, "the only overlay is overlay.trim")
 			return false
 		}
-	case first == kindBadge:
-		m.kind, m.role = kindBadge, name
-		if !slices.Contains(roles, name) {
-			r.add(m.path, 0, "badge %q names no role", name)
+	case first == kindBanner:
+		m.kind = kindBanner
+		if name != "pennant" {
+			r.add(m.path, 0, "the only banner is banner.pennant")
 			return false
 		}
-	case first == kindTile || first == kindAnimal:
+	case first == kindBadge || first == kindTool:
+		m.kind, m.role = first, name
+		if !slices.Contains(roles, name) {
+			r.add(m.path, 0, "%s %q names no role", first, name)
+			return false
+		}
+	case first == kindTile || first == kindAnimal || first == kindEmblem:
 		m.kind = first
 	default:
-		r.add(m.path, 0, "%q is no slot and no kind (overlay, badge, tile, animal)", first)
+		r.add(m.path, 0, "%q is no slot and no kind (overlay, badge, tile, animal, banner, emblem, tool)", first)
+		return false
+	}
+	if !slices.Contains(kindViews[m.kind], m.view) {
+		r.add(m.path, 0, "%s maps belong in the %s view only, not %s", m.kind, strings.Join(kindViews[m.kind], " and "), m.view)
 		return false
 	}
 	return true
@@ -789,20 +832,24 @@ func (m *pixmap) refuse(pal *palette, c byte) string {
 	e := pal.entries[i]
 	switch m.kind {
 	case kindPart:
-		if e.mask == "role" {
-			return "role characters belong to overlay.trim"
+		if e.mask == "role" || e.mask == "corps" {
+			return "role and Corps characters belong to overlay.trim and banner.pennant"
 		}
 	case kindOverlay:
 		if i != 0 && e.mask != "role" {
 			return "overlay.trim uses transparent and role characters only"
 		}
-	case kindBadge:
+	case kindBadge, kindEmblem:
 		if e.name != "transparent" && e.name != "outline" && e.name != "light" {
-			return "badges use transparent, outline and light only"
+			return "badges and emblems use transparent, outline and light only"
 		}
-	case kindTile, kindAnimal:
+	case kindBanner:
+		if e.mask != "" && e.mask != "corps" || i == pal.occlude {
+			return "banner.pennant uses Corps and unmasked characters only, without occlude"
+		}
+	case kindTile, kindAnimal, kindTool:
 		if e.mask != "" {
-			return "mask characters only in parts and overlay.trim"
+			return "mask characters only in parts, overlay.trim and banner.pennant"
 		}
 		if i == pal.occlude {
 			return "occlude only in parts"
@@ -813,9 +860,9 @@ func (m *pixmap) refuse(pal *palette, c byte) string {
 
 // parsePixmap parses one pixel map (§3.6, §3.7). It returns nil after
 // reporting a violation.
-func parsePixmap(r *report, pal *palette, p, grid, id string, lines []textLine) *pixmap {
+func parsePixmap(r *report, pal *palette, p, view, id string, lines []textLine) *pixmap {
 	start := r.count()
-	m := &pixmap{path: p, id: id, grid: grid, header: map[string]int{}}
+	m := &pixmap{path: p, id: id, view: view, header: map[string]int{}}
 	if !m.kindOf(r) {
 		return nil
 	}
@@ -1020,4 +1067,154 @@ func (m *pixmap) checkHeader(r *report) bool {
 		r.add(p, 0, "tiles need a category")
 	}
 	return true
+}
+
+// Bounds of a three-quarter frame duration. GIF delays count hundredths of a
+// second, so durations are multiples of 10 ms. These are generator input
+// rules; ticket 107 may set the pack's own.
+const (
+	minFrameMs = 50
+	maxFrameMs = 2000
+)
+
+// loop is one animation line of animations.txt: the three-quarter view's
+// animation and its frame durations in milliseconds.
+type loop struct {
+	name string
+	ms   []int
+	line int
+}
+
+// parseAnimations parses animations.txt (§3.4 of the round-2 brief).
+func parseAnimations(r *report, p string, lines []textLine) []loop {
+	var out []loop
+	first := true
+	for _, l := range lines {
+		if l.skip() {
+			continue
+		}
+		f := strings.Fields(l.text)
+		if f[0] != "anim" {
+			r.add(p, l.n, "unknown keyword %q; want anim", f[0])
+			continue
+		}
+		isFirst := first
+		first = false
+		if len(f) < 2 {
+			r.add(p, l.n, "want anim <name> <ms> <ms> ...")
+			continue
+		}
+		name := f[1]
+		role, act := strings.CutPrefix(name, "act_")
+		switch {
+		case isFirst && name != "idle":
+			r.add(p, l.n, "the first loop must be idle, not %s", name)
+			continue
+		case !isFirst && (!act || !slices.Contains(roles, role)):
+			r.add(p, l.n, "%s is no act_<role> loop", name)
+			continue
+		case slices.ContainsFunc(out, func(o loop) bool { return o.name == name }):
+			r.add(p, l.n, "loop %s is already defined", name)
+			continue
+		case len(f) < 4:
+			r.add(p, l.n, "loop %s has %d frames; a loop has at least 2", name, len(f)-2)
+			continue
+		}
+		lp := loop{name: name, line: l.n}
+		for _, s := range f[2:] {
+			v, ok := number(s, maxFrameMs)
+			if !ok || v < minFrameMs || v%10 != 0 {
+				r.add(p, l.n, "duration %q; want a multiple of 10 from %d to %d ms", s, minFrameMs, maxFrameMs)
+				break
+			}
+			lp.ms = append(lp.ms, int(v))
+		}
+		if len(lp.ms) == len(f)-2 {
+			out = append(out, lp)
+		}
+	}
+	if first {
+		r.add(p, 0, "no anim line")
+	}
+	return out
+}
+
+// corpsExample is one example Corps of roster.txt: a colour choice and an
+// emblem sprite.
+type corpsExample struct {
+	name, color, emblem string
+	line                int
+}
+
+// member is one roster dwarf of roster.txt.
+type member struct {
+	outfit, role, corps string
+	line                int
+}
+
+// roster is roster.txt: sheet examples, not pack data.
+type roster struct {
+	corps   []*corpsExample
+	members []member
+}
+
+// corpsNamed returns the example Corps called name, or nil.
+func (rs *roster) corpsNamed(name string) *corpsExample {
+	for _, c := range rs.corps {
+		if c.name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// parseRoster parses roster.txt (§3.5 of the round-2 brief).
+func parseRoster(r *report, p string, lines []textLine) *roster {
+	rs := &roster{}
+	members := false // a member line has been read
+	for _, l := range lines {
+		if l.skip() {
+			continue
+		}
+		f := strings.Fields(l.text)
+		switch f[0] {
+		case "corps":
+			color, ok1 := strings.CutPrefix(f[min(2, len(f)-1)], "color=")
+			emblem, ok2 := strings.CutPrefix(f[len(f)-1], "emblem=")
+			switch {
+			case members:
+				r.add(p, l.n, "corps after member; corps lines come first")
+			case len(f) != 4 || !ok1 || !ok2 || !isName(f[1]):
+				r.add(p, l.n, "want corps <name> color=<corps choice> emblem=<emblem id>")
+			case !isID(color) || !strings.HasPrefix(color, "corps."):
+				r.add(p, l.n, "color %q is no corps.<name> choice ID", color)
+			case !isID(emblem) || !strings.HasPrefix(emblem, kindEmblem+"."):
+				r.add(p, l.n, "emblem %q is no emblem.<name> ID", emblem)
+			case rs.corpsNamed(f[1]) != nil:
+				r.add(p, l.n, "corps %s is already defined", f[1])
+			default:
+				rs.corps = append(rs.corps, &corpsExample{f[1], color, emblem, l.n})
+			}
+		case "member":
+			members = true
+			switch {
+			case len(f) != 4 || !isName(f[1]):
+				r.add(p, l.n, "want member <outfit> <role> <corps>")
+			case !slices.Contains(roles, f[2]):
+				r.add(p, l.n, "role %q; want one of %s", f[2], strings.Join(roles, ", "))
+			case rs.corpsNamed(f[3]) == nil:
+				r.add(p, l.n, "corps %s is not defined above", f[3])
+			case slices.ContainsFunc(rs.members, func(m member) bool { return m.outfit == f[1] }):
+				r.add(p, l.n, "outfit %s already has a member", f[1])
+			default:
+				rs.members = append(rs.members, member{f[1], f[2], f[3], l.n})
+			}
+		default:
+			r.add(p, l.n, "unknown keyword %q; want corps or member", f[0])
+		}
+	}
+	if len(rs.members) == 0 {
+		r.add(p, 0, "no member")
+	}
+	return rs
 }

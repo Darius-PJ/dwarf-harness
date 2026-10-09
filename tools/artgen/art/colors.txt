@@ -16,3 +16,5 @@ role.diplomat 1e6e7a 3cc0cc
 role.grand_orchestrator 9a7a10 f0c830
 role.grand_griot 8a1e6a d040a8
 role.grand_diplomat 1e3a8a 3a6ae0
+corps.crimson 6a1a1e a8302c
+corps.slate 2e3846 4a5a6e

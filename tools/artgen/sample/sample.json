@@ -1,9 +1,9 @@
 {
-  "format": "dwarf-harness.art-sample.v1",
+  "format": "dwarf-harness.art-sample.v2",
   "pack": "dwarf-harness.sample",
   "licence": "LICENCE.txt",
   "provenance": "provenance.json",
-  "contentSha256": "fe44f979b28b99c4c53086db35fbbda44141ebe1e1f4efe947c23a8a6199e46a",
+  "contentSha256": "7d21cdab34684db1b331c187746b96c8f800170813407c5b0569c1757c5bd60e",
   "grids": [
     {
       "grid": "world",
@@ -12,6 +12,140 @@
     {
       "grid": "rpg",
       "cell": 64
+    }
+  ],
+  "views": [
+    {
+      "view": "overworld",
+      "grid": "world",
+      "facing": "front",
+      "canvas": [
+        16,
+        16
+      ],
+      "anchor": [
+        8,
+        16
+      ],
+      "layers": [
+        "back_accessory",
+        "body",
+        "shoes",
+        "legwear",
+        "torso_clothing",
+        "hair_beard",
+        "headwear",
+        "front_accessory",
+        "overlay",
+        "badge"
+      ],
+      "animations": [
+        {
+          "name": "idle",
+          "frameCount": 2
+        }
+      ]
+    },
+    {
+      "view": "front",
+      "grid": "rpg",
+      "facing": "front",
+      "canvas": [
+        64,
+        64
+      ],
+      "anchor": [
+        32,
+        64
+      ],
+      "layers": [
+        "back_accessory",
+        "body",
+        "shoes",
+        "legwear",
+        "torso_clothing",
+        "hair_beard",
+        "headwear",
+        "front_accessory",
+        "banner",
+        "emblem"
+      ],
+      "animations": [
+        {
+          "name": "still",
+          "frameCount": 1
+        }
+      ]
+    },
+    {
+      "view": "three_quarter",
+      "grid": "rpg",
+      "facing": "three_quarter_right",
+      "canvas": [
+        64,
+        64
+      ],
+      "anchor": [
+        32,
+        64
+      ],
+      "layers": [
+        "back_accessory",
+        "body",
+        "shoes",
+        "legwear",
+        "torso_clothing",
+        "hair_beard",
+        "headwear",
+        "front_accessory",
+        "banner",
+        "emblem",
+        "tool"
+      ],
+      "animations": [
+        {
+          "name": "idle",
+          "frameCount": 2,
+          "durationsMs": [
+            900,
+            600
+          ]
+        },
+        {
+          "name": "act_worker",
+          "frameCount": 3,
+          "durationsMs": [
+            300,
+            300,
+            200
+          ]
+        },
+        {
+          "name": "act_diplomat",
+          "frameCount": 2,
+          "durationsMs": [
+            700,
+            900
+          ]
+        }
+      ],
+      "states": [
+        {
+          "state": "idle",
+          "animation": "idle"
+        },
+        {
+          "state": "working",
+          "role": "worker",
+          "animation": "act_worker",
+          "tool": "tool.worker"
+        },
+        {
+          "state": "working",
+          "role": "diplomat",
+          "animation": "act_diplomat"
+        }
+      ]
     }
   ],
   "slots": [
@@ -48,17 +182,17 @@
     {
       "index": 4,
       "name": "skin.shadow",
-      "rgba": "9c5a3cff"
+      "rgba": "4e2c1cff"
     },
     {
       "index": 5,
       "name": "skin.base",
-      "rgba": "d08a5cff"
+      "rgba": "74462cff"
     },
     {
       "index": 6,
       "name": "skin.light",
-      "rgba": "f0bb8aff"
+      "rgba": "9e6a44ff"
     },
     {
       "index": 7,
@@ -199,6 +333,16 @@
       "index": 34,
       "name": "spark.light",
       "rgba": "ffe070ff"
+    },
+    {
+      "index": 35,
+      "name": "corps.shadow",
+      "rgba": "6a1a1eff"
+    },
+    {
+      "index": 36,
+      "name": "corps.base",
+      "rgba": "a8302cff"
     }
   ],
   "occluder": 1,
@@ -232,6 +376,13 @@
       "indices": [
         13,
         14
+      ]
+    },
+    {
+      "mask": "corps",
+      "indices": [
+        35,
+        36
       ]
     }
   ],
@@ -381,6 +532,22 @@
         "1e3a8a",
         "3a6ae0"
       ]
+    },
+    {
+      "id": "corps.crimson",
+      "mask": "corps",
+      "rgb": [
+        "6a1a1e",
+        "a8302c"
+      ]
+    },
+    {
+      "id": "corps.slate",
+      "mask": "corps",
+      "rgb": [
+        "2e3846",
+        "4a5a6e"
+      ]
     }
   ],
   "roleOverlay": {
@@ -423,6 +590,14 @@
       }
     ]
   },
+  "corpsMarker": {
+    "banner": "banner.pennant",
+    "mask": "corps",
+    "emblems": [
+      "emblem.crescent",
+      "emblem.mountain"
+    ]
+  },
   "sprites": [
     {
       "id": "animal.dog",
@@ -430,8 +605,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/animal.dog.png",
-          "sha256": "9ed7101ea226862dee5e8e34f872d34223b456d1a1b62da4ed266237f635ba3a",
+          "sha256": "5643924dad518a8a3094d194358419010cf430c1ce61e588afaddd9e88ba8dd4",
           "canvas": [
             16,
             16
@@ -486,8 +662,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/animal.horse_wheelbarrow.png",
-          "sha256": "457813235c037b1c09b24dbb519380717b21b9364a0c5a78e2428d5be8ea1648",
+          "sha256": "18afb7616f0c1963b8d9190834e26960b95ddfafc18a9e4ab20dd91bfb6443ec",
           "canvas": [
             32,
             16
@@ -537,8 +714,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/back_accessory.pack.png",
-          "sha256": "2e38dc333fbfbdeb0636b298846a5b4bc658849fb93e1d51713f4426791d0547",
+          "sha256": "2b325808cb75d0a1a9e2a727f5725876a3c7b718480d03a3861b4dffea08afc0",
           "canvas": [
             16,
             16
@@ -572,8 +750,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/back_accessory.pack.png",
-          "sha256": "ecd3b64e6588781bac3bc5f93d569353f94abbbcacab1c9c8bba27c9c8163b4f",
+          "view": "front",
+          "path": "rpg/front/back_accessory.pack.png",
+          "sha256": "2c1ef1fdae0babab12f91527109558741bdb022b3116b29cffcef9d6aee73651",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "clothing"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/back_accessory.pack.png",
+          "sha256": "f3853cd913aceeb035627218ee50c694f8a319b7c9eda5109d797f3b0e9d0911",
           "canvas": [
             64,
             64
@@ -594,6 +803,52 @@
                   0,
                   64,
                   64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
+                  0,
+                  64,
+                  64
                 ]
               ]
             }
@@ -608,8 +863,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/badge.diplomat.png",
-          "sha256": "c86e19a7284e6175c71c2371fc521f0fe34c0aa36c08cf668c196df663538b4a",
+          "sha256": "53995f8350b478dae97bf72bee86a167ea700b291229970eb968cd6b8aa11282",
           "canvas": [
             16,
             16
@@ -648,8 +904,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/badge.grand_diplomat.png",
-          "sha256": "514dc3ac32b7c81c9924c35844551194e15134945290bcd97ab1a951d95644e3",
+          "sha256": "d60693599c87d1311501c02f499e8e2474d102341ab7bb7eb0c9b2bcd91c4160",
           "canvas": [
             16,
             16
@@ -688,8 +945,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/badge.grand_griot.png",
-          "sha256": "9a8f66b5a967839a2fdeb62b3ca8ae9f38a720639e849bcc84425f4c524f905b",
+          "sha256": "7e5d46e21568f18f79ba312e72829b05bc73e0a1e31dd3e65b3b507bb4870705",
           "canvas": [
             16,
             16
@@ -728,8 +986,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/badge.grand_orchestrator.png",
-          "sha256": "9102865ae478c86ed09c13532da3d9056348a20c6a6a80e93710d205b3793f58",
+          "sha256": "b97865e42e664bdbad78a35378175a56aee15f6cbc09e4a6fa3fe21fbae96400",
           "canvas": [
             16,
             16
@@ -768,8 +1027,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/badge.griot.png",
-          "sha256": "d78e3c57c630ef8e0cfb6a3910ae97b651adb18f2ce2e36b66c52c110a05dd71",
+          "sha256": "d562e7b8f40cc923ff2e38ad2cbe42d07065f4e5d1c759fe627f95b8f370eade",
           "canvas": [
             16,
             16
@@ -808,8 +1068,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/badge.orchestrator.png",
-          "sha256": "890a46754a0cee37fe7135cf8b7d49aa154051cebad89a4a89366fb18a5a340f",
+          "sha256": "7498cdc949a238d63c4e643726ef6a3b6a2ac851b4e35ee00eaf7728c9ea5323",
           "canvas": [
             16,
             16
@@ -848,8 +1109,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/badge.worker.png",
-          "sha256": "5582d36ad0a7fc432bd25bcfbcafca88ccefef4e78fa8566176f6190bbbf1706",
+          "sha256": "9f0a7b8048d00db1469c48bfd28452bba6f50a2892c759ba1070c383a153342b",
           "canvas": [
             16,
             16
@@ -882,14 +1144,127 @@
       ]
     },
     {
+      "id": "banner.pennant",
+      "kind": "banner",
+      "images": [
+        {
+          "grid": "rpg",
+          "view": "front",
+          "path": "rpg/front/banner.pennant.png",
+          "sha256": "d8b836a057c1ac0adfb57813ba77e54d69dd8014a0873097b6193561ae4a9d25",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "corps"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/banner.pennant.png",
+          "sha256": "99f1e09cf32fd08763cd11550008277215270725862d5e55faac1cbbc25a9c03",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "corps"
+          ],
+          "animations": [
+            {
+              "name": "idle",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "body.stout",
       "kind": "part",
       "slot": "body",
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/body.stout.png",
-          "sha256": "be1543d8ad57b015a9801e709a265bb6eaacbf56d976b3bfa8a9df6ec813043f",
+          "sha256": "1e73108c3a2e3e5b7156a2eb00451d7d1af997f8d7d2fa6146d9d9e1f36ed2dd",
           "canvas": [
             16,
             16
@@ -923,8 +1298,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/body.stout.png",
-          "sha256": "5db4f17bb9de76781b1bd832ce8c8173624ce5a908f72e044e9e17d355c2a73f",
+          "view": "front",
+          "path": "rpg/front/body.stout.png",
+          "sha256": "c318eeb73b0e473143214a125ae71c956ef564391d8887ef8112cd1eacb525d2",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "skin"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/body.stout.png",
+          "sha256": "202d055e454991f7c83289dd58d7d7776ce7460143e114a5e3bc98e07ed2d7d8",
           "canvas": [
             64,
             64
@@ -942,6 +1348,268 @@
               "frames": [
                 [
                   0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "emblem.crescent",
+      "kind": "emblem",
+      "images": [
+        {
+          "grid": "rpg",
+          "view": "front",
+          "path": "rpg/front/emblem.crescent.png",
+          "sha256": "8c9983aa2e54c993b51ef1cb3c9acd64d726e51f658753f03e600f69925bfa0f",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/emblem.crescent.png",
+          "sha256": "c474226effa9489afd345e1a1a864ea2dd67940279645de8299e11c3e5f00d59",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [],
+          "animations": [
+            {
+              "name": "idle",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "emblem.mountain",
+      "kind": "emblem",
+      "images": [
+        {
+          "grid": "rpg",
+          "view": "front",
+          "path": "rpg/front/emblem.mountain.png",
+          "sha256": "bffa85c9321d7ec0d12f7bf016a36c16460a414cac24daf613710f8befbc12b7",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/emblem.mountain.png",
+          "sha256": "a0db9b1292b60a97944414934fcd74ddbc7927b64108f60484731b91d2d5d82d",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [],
+          "animations": [
+            {
+              "name": "idle",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
                   0,
                   64,
                   64
@@ -959,8 +1627,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/front_accessory.pick.png",
-          "sha256": "8697570e2f27ba042f803aefb23eead74388c001682c1eb8bd320230c9f3261b",
+          "sha256": "e6065c78d064661268c3e24a53c52da6312c61970a6d1ccc6702ffa98e207e4f",
           "canvas": [
             16,
             16
@@ -994,8 +1663,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/front_accessory.pick.png",
-          "sha256": "1de88f758c0a4eb55891f1c8e08115c7c20df402a1838f3cff5bec601787878b",
+          "view": "front",
+          "path": "rpg/front/front_accessory.pick.png",
+          "sha256": "a5bd98c630823828986203eb6ac9b13417125c35fa5835dc506d5ab92eea2e7b",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "skin"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/front_accessory.pick.png",
+          "sha256": "ecf7564f9eccb2bf963a61fb346e619f9e214d2310315eb9d2fe136b391fb993",
           "canvas": [
             64,
             64
@@ -1013,6 +1713,52 @@
               "frames": [
                 [
                   0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
                   0,
                   64,
                   64
@@ -1030,8 +1776,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/hair_beard.braided.png",
-          "sha256": "398fdbf4fb40aa0d720690cb86b48efb2a2b918f8fdc6c1851b2e54014a45291",
+          "sha256": "8c8b07b726692a14938600fe2a8a570b181d5c00f8b1c7048ea588120a47b64c",
           "canvas": [
             16,
             16
@@ -1065,8 +1812,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/hair_beard.braided.png",
-          "sha256": "d72d9ace49082e891b7899dea1209952dbb6663cdc96a5b8f3fae9ff2f256112",
+          "view": "front",
+          "path": "rpg/front/hair_beard.braided.png",
+          "sha256": "c7d1e982336f0dedc794bb8c129a26cedec981b2a1dcc2f8525ca1bec6027b3b",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "hair"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/hair_beard.braided.png",
+          "sha256": "6dfdac66b9e55b40243fcf4fee19c3052888bd4760817ddc916ff57144f445a5",
           "canvas": [
             64,
             64
@@ -1087,6 +1865,52 @@
                   0,
                   64,
                   64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
+                  0,
+                  64,
+                  64
                 ]
               ]
             }
@@ -1101,8 +1925,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/hair_beard.topknot.png",
-          "sha256": "5ec938d136d18ed39ad518442ac32f6034616c1010aeff2d36d5424a9e7fd5bc",
+          "sha256": "cfc50596049db4dc4b966588b2a8f7f1f03944d50def6084ff62660c5d95f702",
           "canvas": [
             16,
             16
@@ -1136,8 +1961,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/hair_beard.topknot.png",
-          "sha256": "1b798c592cd801aac6e4ce30d8ba011a0b86fb8e29fd0db1f1fa0bc1d41cd0d8",
+          "view": "front",
+          "path": "rpg/front/hair_beard.topknot.png",
+          "sha256": "a9d742558c59261865897a3b360c1c310ca0394ce01bf2a0bb7c6cd8a3c18867",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "hair"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/hair_beard.topknot.png",
+          "sha256": "4ace2e2f6ebbb848723c128387d77341632623f0e53cd5522c73fe560df23552",
           "canvas": [
             64,
             64
@@ -1155,6 +2011,52 @@
               "frames": [
                 [
                   0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
                   0,
                   64,
                   64
@@ -1175,8 +2077,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/headwear.hat.png",
-          "sha256": "3e24937c3769c694967d8e637adeac65954f901a421d5d90e0ff77e504cffde6",
+          "sha256": "8a6c1b1e2e90470710ae9de3a8a65610b77a66e01dbbc170abf5832f8cb1375c",
           "canvas": [
             16,
             16
@@ -1210,8 +2113,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/headwear.hat.png",
-          "sha256": "6837c7be519a26e36e56c1f2d6e79f5d083ecc66a87f802481d15eea62b796fc",
+          "view": "front",
+          "path": "rpg/front/headwear.hat.png",
+          "sha256": "6a89e705bac4deadc8bdd8cb73ad9182c949a1c3762b9efe8d5b3e8d93860dd1",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "clothing"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/headwear.hat.png",
+          "sha256": "19150845445089541500a276c41c27b53c08a6bf21442d892bd94c2cf0f52b7c",
           "canvas": [
             64,
             64
@@ -1229,6 +2163,52 @@
               "frames": [
                 [
                   0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
                   0,
                   64,
                   64
@@ -1246,8 +2226,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/legwear.trousers.png",
-          "sha256": "bb9ed747f0df3cb5979c1b8bb63ce2ecd05317f0f495154f22211fa088bde9f1",
+          "sha256": "3a324e5f920ce25ed2519cdcb067d2bf23574df9691de81bba83c7b5a164d443",
           "canvas": [
             16,
             16
@@ -1281,8 +2262,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/legwear.trousers.png",
-          "sha256": "d5dbd84f495b28579a6b9bf3e5d7bd5f5f09967ca854927682242d4dfbf95836",
+          "view": "front",
+          "path": "rpg/front/legwear.trousers.png",
+          "sha256": "d1b4d79d6a92c442a6263d77ab6c58729501f19313ab20275be71b2230b63b44",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "clothing"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/legwear.trousers.png",
+          "sha256": "949a3769b0d7484d84aaa3c01f4be8719a5bc3d142fafbada8b70fa4004f3b6f",
           "canvas": [
             64,
             64
@@ -1303,6 +2315,52 @@
                   0,
                   64,
                   64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
+                  0,
+                  64,
+                  64
                 ]
               ]
             }
@@ -1316,8 +2374,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/overlay.trim.png",
-          "sha256": "7bbf7889609e517238d20462579628aa27ebdce2bad324fe03f5afb8e6dd2c77",
+          "sha256": "5c80ec403b30caca152b48f5ea651a2b06bd3e75038c10341f8e7611776351a7",
           "canvas": [
             16,
             16
@@ -1358,8 +2417,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/shoes.boots.png",
-          "sha256": "e19030f11a702982b49ba592c6ae04c7411ca6e3bb8ed6328110cb948e756206",
+          "sha256": "a661367b7068017dbe3445b3f6b6d3820eba64df8b943312dc9f9ec7323413e1",
           "canvas": [
             16,
             16
@@ -1393,8 +2453,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/shoes.boots.png",
-          "sha256": "6735d7ede641550eb3cd871879b8e9e652d56bda0a073f4c31454e65beb91053",
+          "view": "front",
+          "path": "rpg/front/shoes.boots.png",
+          "sha256": "ab5e021b21f1cb9694ecf7c6db635429f598b13be734709a90803836d42af7a5",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "clothing"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/shoes.boots.png",
+          "sha256": "644c651de244e9801036338a4d08e555ecb5a13afb4f6474a4daf939b973778d",
           "canvas": [
             64,
             64
@@ -1415,6 +2506,52 @@
                   0,
                   64,
                   64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
+                  0,
+                  64,
+                  64
                 ]
               ]
             }
@@ -1429,8 +2566,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.door.png",
-          "sha256": "4eff83218a72f4dc12452ef27d2f8e8685c3da68d4ca1b76347b944c281e2795",
+          "sha256": "e6a400cff71e739df7f9e0f8d1f4b93256badbbb9bce333b8ef80ad05057ce59",
           "canvas": [
             16,
             16
@@ -1474,8 +2612,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.floor_a.png",
-          "sha256": "faf3633ce426697d02e3d94add7a11ccc51ea80892dc1b9e3791ab0f495a9b57",
+          "sha256": "dc98c1574f4aea973241a36cfb7b7cb93d54ea9d9913d872f76385ac5a052658",
           "canvas": [
             16,
             16
@@ -1508,8 +2647,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.floor_b.png",
-          "sha256": "be8f9a285786be38e229473aca201d12efbfc3a5ce0acfb42466c344fe4c692a",
+          "sha256": "eb2d2f6c933e8ffd40be42b04a788764d6f0f59a044b120dc0bb2763732d8aaf",
           "canvas": [
             16,
             16
@@ -1542,8 +2682,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.rail_ew.png",
-          "sha256": "432274005c5ad5205761269b933e1c9754f721f675aad15c805ddfa7d491938c",
+          "sha256": "f2f879513d2a65dbfbfa80772bba050906566688049823d8d50be6c2b59c857f",
           "canvas": [
             16,
             16
@@ -1593,8 +2734,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.rock_a.png",
-          "sha256": "e538d11840727fd0a0d4c5c40dd164e962c4ab217511a12b350eea98c010385c",
+          "sha256": "25558ea8e6449718f462987a95a3b790e2501e4f1ac4186a01160617654670b7",
           "canvas": [
             16,
             16
@@ -1627,8 +2769,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.rock_b.png",
-          "sha256": "c083b1a93584bfa24a7395b875a08a7e1e5654113d8145a39b1478ff161a09a6",
+          "sha256": "76fca9360ed56dc21376dcebd6c83c61dade080eb32c648129c85ec2b120b926",
           "canvas": [
             16,
             16
@@ -1661,8 +2804,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.stockpile.png",
-          "sha256": "fab709b41ebec63569fc6e11a6e7e22b46042a8254db5ee231965b35dd4ad833",
+          "sha256": "1f895c847f20a310c529a4f934f0bfa344fff4f2291e66568a4ec91153d7895c",
           "canvas": [
             16,
             16
@@ -1706,8 +2850,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.wall_face.png",
-          "sha256": "f03e27f2dadf2038bcd493cbbfb2793d11f9528d184edee8f54f465865f3383f",
+          "sha256": "3d4b54fbea01f9264d758fe20ea7aaad40548e7cbed669a612552736279be774",
           "canvas": [
             16,
             16
@@ -1740,8 +2885,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.wall_top.png",
-          "sha256": "829714a816c32981dfdffbf6370fb13f21372337352dc5c87c880ff6ef32f8d2",
+          "sha256": "1e5b2d6cff157b0c17284320d1c00a34024db266a0dd1e8831b8ef95748a5921",
           "canvas": [
             16,
             16
@@ -1774,8 +2920,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/tile.workbench.png",
-          "sha256": "4a5cbb19b810ce820478d358135bd9ec1d8f0c71b6d891aab7081dc41eaa4559",
+          "sha256": "07d77d1f6eb3cc58f760dd8c142b88a564ed6dc94c7a6242aad50bb022470fe0",
           "canvas": [
             16,
             16
@@ -1819,14 +2966,62 @@
       ]
     },
     {
+      "id": "tool.worker",
+      "kind": "tool",
+      "role": "worker",
+      "images": [
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/tool.worker.png",
+          "sha256": "c81c2e48486285efb1b787c45d89d02a4fe937e48d095df8deca11f1f59518c5",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [],
+          "animations": [
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "torso_clothing.tunic",
       "kind": "part",
       "slot": "torso_clothing",
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/torso_clothing.tunic.png",
-          "sha256": "06e11ba27fa01347cddc92e523e12ca2605957cc39b5554c5b7fe9f996b3d346",
+          "sha256": "d3dc9312654262d44906db301824329540f22e15693769288dcaf8809bec900b",
           "canvas": [
             16,
             16
@@ -1860,8 +3055,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/torso_clothing.tunic.png",
-          "sha256": "2b44875d40bf31924bf8b0a8db6c26cadcf4466b69cde732f471879373515308",
+          "view": "front",
+          "path": "rpg/front/torso_clothing.tunic.png",
+          "sha256": "c06ecaac2985c228e013f12d406e9e6376d90d1c93facd794b48eb78e31b622a",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "clothing"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/torso_clothing.tunic.png",
+          "sha256": "47d7e059eb53d1dd84cabfe163cc1cfcae3e1d63a404ef018d70e95c24a02f47",
           "canvas": [
             64,
             64
@@ -1882,6 +3108,52 @@
                   0,
                   64,
                   64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
+                  0,
+                  64,
+                  64
                 ]
               ]
             }
@@ -1896,8 +3168,9 @@
       "images": [
         {
           "grid": "world",
+          "view": "overworld",
           "path": "world/torso_clothing.vest.png",
-          "sha256": "62ccaf718d4c1ee3c10ec74b74a7a128ede2612ccc53038465e5ef11f39913d1",
+          "sha256": "94f465605960306b67a15276a3819a201f98fac88c02ae43dfb9c6948d459b86",
           "canvas": [
             16,
             16
@@ -1931,8 +3204,39 @@
         },
         {
           "grid": "rpg",
-          "path": "rpg/torso_clothing.vest.png",
-          "sha256": "d23ba104887106ab3f8cb7ab1340722363fa9a9a5088ed03084d52a265cbb1f2",
+          "view": "front",
+          "path": "rpg/front/torso_clothing.vest.png",
+          "sha256": "e40414448d50ba735be39ac2b58b4379ed7cbd9c74d7f65b3d21a430a2a95b5f",
+          "canvas": [
+            64,
+            64
+          ],
+          "anchor": [
+            32,
+            64
+          ],
+          "masks": [
+            "clothing"
+          ],
+          "animations": [
+            {
+              "name": "still",
+              "frames": [
+                [
+                  0,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "grid": "rpg",
+          "view": "three_quarter",
+          "path": "rpg/three_quarter/torso_clothing.vest.png",
+          "sha256": "028fc0b17846a0144bb794d4107e7f0a6b825cbc53546269eedd26491e149817",
           "canvas": [
             64,
             64
@@ -1950,6 +3254,52 @@
               "frames": [
                 [
                   0,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  64,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_worker",
+              "frames": [
+                [
+                  128,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  192,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  256,
+                  0,
+                  64,
+                  64
+                ]
+              ]
+            },
+            {
+              "name": "act_diplomat",
+              "frames": [
+                [
+                  320,
+                  0,
+                  64,
+                  64
+                ],
+                [
+                  384,
                   0,
                   64,
                   64

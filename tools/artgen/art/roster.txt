@@ -1,0 +1,9 @@
+// Example Corps and roster for the character sheet; not pack data.
+// corps <name> color=<corps choice> emblem=<emblem id>
+// member <outfit> <role> <corps>: one roster dwarf, in sheet order.
+corps peak color=corps.crimson emblem=emblem.mountain
+corps moon color=corps.slate emblem=emblem.crescent
+member miner worker moon
+member smith worker peak
+member scribe diplomat moon
+member carter diplomat peak

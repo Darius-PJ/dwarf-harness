@@ -1,0 +1,7 @@
+// Three-quarter loops, in strip order: anim <name>, then one duration in
+// milliseconds per frame, frame 0 first. idle plays while the agent is idle;
+// act_<role> plays while an agent of that role works. Core's actual work
+// status chooses the loop; the art never sets it.
+anim idle 900 600
+anim act_worker 300 300 200
+anim act_diplomat 700 900

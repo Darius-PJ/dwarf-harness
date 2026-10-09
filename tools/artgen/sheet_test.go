@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"slices"
 	"strconv"
@@ -45,8 +47,8 @@ func crop(img *image.NRGBA, r image.Rectangle) *image.NRGBA {
 	return out
 }
 
-// luma is the gray copy's formula (§3.13).
-func luma(c color.NRGBA) color.NRGBA {
+// grayTone is the gray copy's formula (§3.13).
+func grayTone(c color.NRGBA) color.NRGBA {
 	y := uint8((299*int(c.R) + 587*int(c.G) + 114*int(c.B) + 500) / 1000)
 	return color.NRGBA{y, y, y, c.A}
 }
@@ -56,11 +58,9 @@ const sheetZoom = 4
 
 var cellColor = color.NRGBA{0x8c, 0x8c, 0x98, 0xff}
 
-func TestSheetsIndexEveryFrame(t *testing.T) {
-	out := outputs(t)
-	doc := sampleOf(t, out)
-	s := loaded(t)
-
+// readIndex parses sheets/index.tsv.
+func readIndex(t *testing.T, out map[string][]byte) []indexCell {
+	t.Helper()
 	ls := strings.Split(strings.TrimSuffix(string(out["sheets/index.tsv"]), "\n"), "\n")
 	if ls[0] != "sheet\tsection\tx\ty\tw\th\tcontent" {
 		t.Fatalf("index.tsv header %q", ls[0])
@@ -81,6 +81,14 @@ func TestSheetsIndexEveryFrame(t *testing.T) {
 		}
 		cells = append(cells, indexCell{f[0], f[1], image.Rect(n[0], n[1], n[0]+n[2], n[1]+n[3]), f[6]})
 	}
+	return cells
+}
+
+func TestSheetsIndexEveryFrame(t *testing.T) {
+	out := outputs(t)
+	doc := sampleOf(t, out)
+	s := loaded(t)
+	cells := readIndex(t, out)
 
 	sheets := map[string]*image.NRGBA{}
 	for _, name := range []string{"map", "character"} {
@@ -101,10 +109,17 @@ func TestSheetsIndexEveryFrame(t *testing.T) {
 			}
 		}
 	}
+	frameCount := 0
+	for _, l := range readAnimations(t) {
+		frameCount += len(l.ms)
+	}
+	if got, want := sheets["character"].Rect.Dx(), 4+68*frameCount; got != want {
+		t.Errorf("character sheet is %d px wide; want 4 + 68 x %d frames = %d", got, frameCount, want)
+	}
 
 	wantSections := map[string][]string{
 		"map":       {"tiles", "animals", "parts", "roles", "roles-varied", "roles-gray", "room"},
-		"character": {"parts", "examples"},
+		"character": {"front", "three_quarter", "corps", "roster", "roster-gray", "page"},
 	}
 	gotSections := map[string][]string{}
 	for i, c := range cells {
@@ -130,24 +145,21 @@ func TestSheetsIndexEveryFrame(t *testing.T) {
 		}
 	}
 
-	// Every frame of every sprite, cut from its strip.
+	// Every frame of every sprite, cut from its strip by its rectangle and
+	// keyed "<view> <id> <anim> <frame>".
 	type frameRef struct {
 		img    *image.NRGBA
 		anchor image.Point
 	}
-	frames := map[string]frameRef{} // "<grid> <id> <anim> <frame>"
-	partAnchor := map[string]image.Point{}
+	frames := map[string]frameRef{}
 	for _, sp := range doc.Sprites {
 		for _, im := range sp.Images {
 			strip := decodeNRGBA(t, out[im.Path])
 			for _, a := range im.Animations {
 				for k, r := range a.Frames {
-					key := im.Grid + " " + sp.ID + " " + a.Name + " " + strconv.Itoa(k)
+					key := fmt.Sprintf("%s %s %s %d", im.View, sp.ID, a.Name, k)
 					frames[key] = frameRef{crop(strip, image.Rect(r[0], r[1], r[0]+r[2], r[1]+r[3])), image.Pt(im.Anchor[0], im.Anchor[1])}
 				}
-			}
-			if sp.Kind == kindPart {
-				partAnchor[im.Grid] = image.Pt(im.Anchor[0], im.Anchor[1])
 			}
 		}
 	}
@@ -175,8 +187,15 @@ func TestSheetsIndexEveryFrame(t *testing.T) {
 		}
 	}
 	same := func(c color.NRGBA) color.NRGBA { return c }
+	toneOf := func(word string) func(color.NRGBA) color.NRGBA {
+		if strings.HasSuffix(word, "-gray") {
+			return grayTone
+		}
+		return same
+	}
 
 	seen := map[string]int{}
+	rows := map[string][]indexCell{} // a three-quarter sprite's or a member's cells
 	var room *indexCell
 	for i, c := range cells {
 		f := strings.Fields(c.content)
@@ -190,33 +209,60 @@ func TestSheetsIndexEveryFrame(t *testing.T) {
 		switch {
 		case c.content == "room":
 			room = &cells[i]
-		case f[0] == "dwarf" && c.sheet == "character" && len(f) == 4:
-			checkCell(c, s.compose(gridRPG, frame(f[3]), s.outfit[f[1]], ""), same)
-		case (f[0] == "dwarf" || f[0] == "dwarf-gray") && c.sheet == "map" && len(f) == 5:
-			tone := same
-			if f[0] == "dwarf-gray" {
-				tone = luma
+		case c.sheet == "map" && (f[0] == "dwarf" || f[0] == "dwarf-gray"):
+			checkCell(c, s.compose(viewOverworld, f[3], frame(f[4]), s.outfit[f[1]], f[2], nil), toneOf(f[0]))
+		case c.section == "corps":
+			checkCell(c, s.marker(f[2], f[3], frame(f[4]), s.roster.corpsNamed(f[1])), toneOf(f[0]))
+		case c.section == "roster" || c.section == "roster-gray" || c.section == "page":
+			view := viewFront
+			if c.section == "page" {
+				view = viewThreeQuarter
 			}
-			checkCell(c, s.compose(gridWorld, frame(f[4]), s.outfit[f[1]], f[2]), tone)
+			if f[4] != view {
+				t.Errorf("%s cell %q is in view %s; want %s", c.section, c.content, f[4], view)
+			}
+			checkCell(c, s.compose(f[4], f[5], frame(f[6]), s.outfit[f[1]], f[2], s.roster.corpsNamed(f[3])), toneOf(f[0]))
+			if c.section == "page" {
+				rows["page "+f[1]] = append(rows["page "+f[1]], c)
+			}
 		default:
-			grid := gridWorld
-			if c.sheet == "character" {
-				grid = gridRPG
+			key := c.content
+			if c.sheet == "map" {
+				key = viewOverworld + " " + key
+			} else if f[0] != c.section {
+				t.Errorf("character cell %q lies in section %s", c.content, c.section)
 			}
-			key := grid + " " + c.content
 			ref, ok := frames[key]
 			if !ok {
-				t.Errorf("%s cell %q names no %s frame", c.sheet, c.content, grid)
+				t.Errorf("%s cell %q names no frame", c.sheet, c.content)
 				continue
 			}
 			seen[key]++
 			checkCell(c, ref.img, same)
+			if f[0] == viewThreeQuarter {
+				rows[f[1]] = append(rows[f[1]], c)
+			}
 		}
 	}
 	for key := range frames {
 		if seen[key] != 1 {
 			t.Errorf("frame %s appears %d times on its sheet; want once", key, seen[key])
 		}
+	}
+	// A three-quarter sprite's frames share one row in strip order; a
+	// member's page cells share one row, idle frames first.
+	for name, row := range rows {
+		for i, c := range row {
+			if c.r.Min.Y != row[0].r.Min.Y || i > 0 && c.r.Min.X <= row[i-1].r.Min.X {
+				t.Errorf("%s: cell %q at %v leaves the row of %q at %v", name, c.content, c.r.Min, row[0].content, row[0].r.Min)
+			}
+		}
+		if strings.HasPrefix(name, "page ") && !strings.Contains(row[0].content, " idle 0") {
+			t.Errorf("%s starts with %q; want its idle frames first", name, row[0].content)
+		}
+	}
+	if len(s.roster.members) == 0 || len(rows) != len(s.roster.members)+len(s.sprites[viewThreeQuarter]) {
+		t.Errorf("%d page and three-quarter rows; want one per member and per three-quarter sprite", len(rows))
 	}
 
 	if room == nil {
@@ -230,13 +276,14 @@ func TestSheetsIndexEveryFrame(t *testing.T) {
 		line int
 	}
 	var all []placed
+	ow := viewOf(viewOverworld)
 	for _, pl := range s.room.placements {
 		var img *image.NRGBA
 		var anchor image.Point
 		if pl.dwarf {
-			img, anchor = s.compose(gridWorld, pl.frame, s.outfit[pl.outfit], pl.role), partAnchor[gridWorld]
+			img, anchor = s.compose(viewOverworld, "idle", pl.frame, s.outfit[pl.outfit], pl.role, nil), image.Pt(ow.ax, ow.ay)
 		} else {
-			ref := frames[gridWorld+" "+pl.sprite+" "+pl.anim+" "+strconv.Itoa(pl.frame)]
+			ref := frames[fmt.Sprintf("%s %s %s %d", viewOverworld, pl.sprite, pl.anim, pl.frame)]
 			img, anchor = ref.img, ref.anchor
 		}
 		all = append(all, placed{img, image.Pt(pl.col*cell+cell/2, pl.row*cell+cell).Sub(anchor), pl.line})
@@ -262,5 +309,83 @@ func TestSheetsIndexEveryFrame(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestLoopPreviewsMatchPageCells(t *testing.T) {
+	out := outputs(t)
+	doc := sampleOf(t, out)
+	s := loaded(t)
+	big := decodeNRGBA(t, out["sheets/character-4x.png"])
+	pages := map[string]image.Rectangle{}
+	for _, c := range readIndex(t, out) {
+		if c.section == "page" {
+			pages[c.content] = c.r
+		}
+	}
+	durations := map[string][]int{}
+	for _, v := range doc.Views {
+		if v.View == viewThreeQuarter {
+			for _, a := range v.Animations {
+				durations[a.Name] = a.DurationsMs
+			}
+		}
+	}
+
+	var want []string
+	for _, m := range s.roster.members {
+		for _, an := range []string{"idle", "act_" + m.role} {
+			ms, ok := durations[an]
+			if !ok {
+				continue
+			}
+			p := fmt.Sprintf("sheets/page-%s-%s-4x.gif", m.outfit, an)
+			want = append(want, p)
+			g, err := gif.DecodeAll(bytes.NewReader(out[p]))
+			if err != nil {
+				t.Errorf("%s: %v", p, err)
+				continue
+			}
+			if len(g.Image) != len(ms) || g.LoopCount != 0 {
+				t.Errorf("%s has %d frames and loop count %d; want %d frames looping forever", p, len(g.Image), g.LoopCount, len(ms))
+				continue
+			}
+			for k, frame := range g.Image {
+				if g.Delay[k]*10 != ms[k] {
+					t.Errorf("%s frame %d delay %d cs; animations.txt gives %d ms", p, k, g.Delay[k], ms[k])
+				}
+				r, ok := pages[fmt.Sprintf("dwarf %s %s %s %s %s %d", m.outfit, m.role, m.corps, viewThreeQuarter, an, k)]
+				if !ok {
+					t.Errorf("%s frame %d has no page cell", p, k)
+					continue
+				}
+				cellImg := crop(big, image.Rectangle{r.Min.Mul(sheetZoom), r.Max.Mul(sheetZoom)})
+				if frame.Rect.Size() != cellImg.Rect.Size() {
+					t.Errorf("%s frame %d is %v; the 4x page cell is %v", p, k, frame.Rect.Size(), cellImg.Rect.Size())
+					continue
+				}
+			pixels:
+				for y := range frame.Rect.Dy() {
+					for x := range frame.Rect.Dx() {
+						got := color.NRGBAModel.Convert(frame.At(frame.Rect.Min.X+x, frame.Rect.Min.Y+y)).(color.NRGBA)
+						if got != cellImg.NRGBAAt(x, y) {
+							t.Errorf("%s frame %d (%d,%d) = %v; the 4x page cell has %v", p, k, x, y, got, cellImg.NRGBAAt(x, y))
+							break pixels
+						}
+					}
+				}
+			}
+		}
+	}
+	var got []string
+	for p := range out {
+		if strings.HasSuffix(p, ".gif") {
+			got = append(got, p)
+		}
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if len(want) == 0 || !slices.Equal(got, want) {
+		t.Errorf("previews %v; want one per member and loop: %v", got, want)
 	}
 }

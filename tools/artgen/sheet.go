@@ -7,14 +7,13 @@ import (
 	"strings"
 )
 
-// Contact sheet layout (§3.17).
+// Contact sheet layout (§3.17; §3.13 of the round-2 brief).
 const (
-	mapSheetWidth       = 324 // 16 world cells per row
-	characterSheetWidth = 276 // 4 rpg cells per row
-	sheetMargin         = 4
-	sectionGap          = 12
-	zoom                = 4
-	maxMapCell          = mapSheetWidth - 2*sheetMargin // the widest cell the map sheet holds
+	mapSheetWidth = 324 // 16 world cells per row
+	sheetMargin   = 4
+	sectionGap    = 12
+	zoom          = 4
+	maxMapCell    = mapSheetWidth - 2*sheetMargin // the widest cell the map sheet holds
 )
 
 var (
@@ -54,11 +53,18 @@ func (sh *sheet) begin(section string) {
 	sh.section = section
 }
 
+// row starts a new row when the current one holds a cell.
+func (sh *sheet) row() {
+	if sh.x > sheetMargin {
+		sh.x, sh.y, sh.rowH = sheetMargin, sh.y+sh.rowH+sheetMargin, 0
+	}
+}
+
 // add places a cell.
 func (sh *sheet) add(img *image.NRGBA, format string, args ...any) {
 	w, h := img.Rect.Dx(), img.Rect.Dy()
-	if sh.x > sheetMargin && sh.x+w+sheetMargin > sh.width {
-		sh.x, sh.y, sh.rowH = sheetMargin, sh.y+sh.rowH+sheetMargin, 0
+	if sh.x+w+sheetMargin > sh.width {
+		sh.row()
 	}
 	sh.cells = append(sh.cells, sheetCell{sh.section, sh.x, sh.y, img, fmt.Sprintf(format, args...)})
 	sh.x += w + sheetMargin
@@ -103,64 +109,88 @@ func scale(src *image.NRGBA, k int) *image.NRGBA {
 	return dst
 }
 
-// frames adds every frame of m in the given colors.
-func (sh *sheet) frames(m *pixmap, colors []color.NRGBA) {
+// frames adds every frame of m in the given colors; each cell's content is
+// prefix followed by "<id> <anim> <frame>".
+func (sh *sheet) frames(m *pixmap, colors []color.NRGBA, prefix string) {
 	for _, a := range m.anims {
 		for k := range a.frames {
-			sh.add(frameImage(m, a.first+k, colors), "%s %s %d", m.id, a.name, k)
+			sh.add(frameImage(m, a.first+k, colors), "%s%s %s %d", prefix, m.id, a.name, k)
 		}
 	}
 }
 
-// parts adds every part of a grid in slot order, by ID within a slot.
-func (s *artSet) parts(sh *sheet, grid string) {
-	colors := s.paint()
+// layers returns the layers of view v in sheet order: the parts in slot
+// order, by ID within a slot, then the banner, the emblems by ID and the
+// tools in role order.
+func (s *artSet) layers(v string) []*pixmap {
+	sprites := s.sprites[v]
+	ids := s.ids(v)
+	var out []*pixmap
 	for _, slot := range slots {
-		for _, id := range s.ids(grid) {
-			if m := s.sprites[grid][id]; m.slot == slot {
-				sh.frames(m, colors)
+		for _, id := range ids {
+			if m := sprites[id]; m.kind == kindPart && m.slot == slot {
+				out = append(out, m)
 			}
 		}
 	}
+	if m := sprites[bannerID]; m != nil {
+		out = append(out, m)
+	}
+	for _, id := range ids {
+		if m := sprites[id]; m.kind == kindEmblem {
+			out = append(out, m)
+		}
+	}
+	for _, role := range roles {
+		if m := sprites["tool."+role]; m != nil {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // mapSheet lays out the 16-pixel sheet.
 func (s *artSet) mapSheet() *sheet {
 	sh := newSheet("map", mapSheetWidth)
-	world := s.sprites[gridWorld]
+	world := s.sprites[viewOverworld]
 	colors := s.paint()
 	for _, sec := range []struct{ name, kind string }{{"tiles", kindTile}, {"animals", kindAnimal}} {
 		sh.begin(sec.name)
-		for _, id := range s.ids(gridWorld) {
+		for _, id := range s.ids(viewOverworld) {
 			if m := world[id]; m.kind == sec.kind {
-				sh.frames(m, colors)
+				sh.frames(m, colors, "")
 			}
 		}
 	}
 	sh.begin("parts")
-	s.parts(sh, gridWorld)
-	sh.frames(world["overlay.trim"], colors)
-	for _, role := range roles {
-		sh.frames(world["badge."+role], colors)
+	for _, m := range s.layers(viewOverworld) {
+		sh.frames(m, colors, "")
 	}
-	idle := s.idleFrames(gridWorld)
+	sh.frames(world["overlay.trim"], colors, "")
+	for _, role := range roles {
+		sh.frames(world["badge."+role], colors, "")
+	}
+	idle := s.idleFrames()
+	dwarf := func(f int, o *outfit, role string) *image.NRGBA {
+		return s.compose(viewOverworld, "idle", f, o, role, nil)
+	}
 	sh.begin("roles")
 	for _, role := range roles {
 		for f := range idle {
-			sh.add(s.compose(gridWorld, f, s.outfits[0], role), "dwarf %s %s idle %d", s.outfits[0].name, role, f)
+			sh.add(dwarf(f, s.outfits[0], role), "dwarf %s %s idle %d", s.outfits[0].name, role, f)
 		}
 	}
 	sh.begin("roles-varied")
 	for i, role := range roles {
 		o := s.outfits[i%len(s.outfits)]
 		for f := range idle {
-			sh.add(s.compose(gridWorld, f, o, role), "dwarf %s %s idle %d", o.name, role, f)
+			sh.add(dwarf(f, o, role), "dwarf %s %s idle %d", o.name, role, f)
 		}
 	}
 	sh.begin("roles-gray")
 	for _, role := range roles {
 		for f := range idle {
-			sh.add(grayed(s.compose(gridWorld, f, s.outfits[0], role)), "dwarf-gray %s %s idle %d", s.outfits[0].name, role, f)
+			sh.add(grayed(dwarf(f, s.outfits[0], role)), "dwarf-gray %s %s idle %d", s.outfits[0].name, role, f)
 		}
 	}
 	sh.begin("room")
@@ -168,15 +198,67 @@ func (s *artSet) mapSheet() *sheet {
 	return sh
 }
 
-// characterSheet lays out the 64-pixel sheet.
+// memberLoops returns the three-quarter loops a roster member plays: idle,
+// then its role's action when animations.txt has one.
+func (s *artSet) memberLoops(m member) []*loop {
+	out := []*loop{s.loopNamed("idle")}
+	if l := s.loopNamed("act_" + m.role); l != nil {
+		out = append(out, l)
+	}
+	return out
+}
+
+// page draws roster member m in the three-quarter view at frame k of loop an.
+func (s *artSet) page(m member, an string, k int) *image.NRGBA {
+	return s.compose(viewThreeQuarter, an, k, s.outfit[m.outfit], m.role, s.roster.corpsNamed(m.corps))
+}
+
+// characterSheet lays out the 64-pixel sheet (§3.13 of the round-2 brief).
+// It is as wide as one layer's three-quarter frames.
 func (s *artSet) characterSheet() *sheet {
-	sh := newSheet("character", characterSheetWidth)
-	sh.begin("parts")
-	s.parts(sh, gridRPG)
-	sh.begin("examples")
-	for _, o := range s.outfits {
-		for f := range s.idleFrames(gridRPG) {
-			sh.add(s.compose(gridRPG, f, o, ""), "dwarf %s idle %d", o.name, f)
+	tq := viewOf(viewThreeQuarter)
+	n := 0
+	for _, l := range s.loops {
+		n += len(l.ms)
+	}
+	sh := newSheet("character", sheetMargin+n*(tq.w+sheetMargin))
+	colors := s.paint()
+	sh.begin(viewFront)
+	for _, m := range s.layers(viewFront) {
+		sh.frames(m, colors, viewFront+" ")
+	}
+	sh.begin(viewThreeQuarter)
+	for _, m := range s.layers(viewThreeQuarter) {
+		sh.row()
+		sh.frames(m, colors, viewThreeQuarter+" ")
+	}
+	sh.begin("corps")
+	for _, c := range s.roster.corps {
+		sh.row()
+		front, back := s.marker(viewFront, "still", 0, c), s.marker(viewThreeQuarter, "idle", 0, c)
+		sh.add(front, "corps %s %s still 0", c.name, viewFront)
+		sh.add(back, "corps %s %s idle 0", c.name, viewThreeQuarter)
+		sh.add(grayed(front), "corps-gray %s %s still 0", c.name, viewFront)
+		sh.add(grayed(back), "corps-gray %s %s idle 0", c.name, viewThreeQuarter)
+	}
+	still := func(m member) *image.NRGBA {
+		return s.compose(viewFront, "still", 0, s.outfit[m.outfit], m.role, s.roster.corpsNamed(m.corps))
+	}
+	sh.begin("roster")
+	for _, m := range s.roster.members {
+		sh.add(still(m), "dwarf %s %s %s %s still 0", m.outfit, m.role, m.corps, viewFront)
+	}
+	sh.begin("roster-gray")
+	for _, m := range s.roster.members {
+		sh.add(grayed(still(m)), "dwarf-gray %s %s %s %s still 0", m.outfit, m.role, m.corps, viewFront)
+	}
+	sh.begin("page")
+	for _, m := range s.roster.members {
+		sh.row()
+		for _, l := range s.memberLoops(m) {
+			for k := range l.ms {
+				sh.add(s.page(m, l.name, k), "dwarf %s %s %s %s %s %d", m.outfit, m.role, m.corps, viewThreeQuarter, l.name, k)
+			}
 		}
 	}
 	return sh
@@ -186,7 +268,7 @@ func (s *artSet) characterSheet() *sheet {
 // order, each with its anchor on its cell's ground point.
 func (s *artSet) roomImage() *image.NRGBA {
 	rm := s.room
-	world := s.sprites[gridWorld]
+	world := s.sprites[viewOverworld]
 	colors := s.paint()
 	img := image.NewNRGBA(image.Rect(0, 0, rm.cols*cell, rm.rows*cell))
 	at := func(src *image.NRGBA, ax, ay, col, row int) {
@@ -200,10 +282,10 @@ func (s *artSet) roomImage() *image.NRGBA {
 			at(frameImage(m, f, colors), m.ax, m.ay, col, row)
 		}
 	}
-	dwarf := layerRegistration[gridWorld]
+	dwarf := viewOf(viewOverworld)
 	for _, pl := range rm.placements {
 		if pl.dwarf {
-			at(s.compose(gridWorld, pl.frame, s.outfit[pl.outfit], pl.role), dwarf.ax, dwarf.ay, pl.col, pl.row)
+			at(s.compose(viewOverworld, "idle", pl.frame, s.outfit[pl.outfit], pl.role, nil), dwarf.ax, dwarf.ay, pl.col, pl.row)
 			continue
 		}
 		m := world[pl.sprite]

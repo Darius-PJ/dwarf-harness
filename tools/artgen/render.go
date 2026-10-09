@@ -100,28 +100,28 @@ func draw(dst *image.NRGBA, px []uint8, colors []color.NRGBA, hidden []bool) {
 	}
 }
 
-// compose draws a dwarf at idle frame f (§3.13): the outfit's parts in slot
-// order, each in its colors and without the pixels that an occluding part
-// hides, then on the world grid the role's trim and badge when role is set.
-func (s *artSet) compose(grid string, f int, o *outfit, role string) *image.NRGBA {
-	reg := layerRegistration[grid]
-	img := image.NewNRGBA(image.Rect(0, 0, reg.w, reg.h))
+// compose draws a dwarf in view v at frame k of animation an (§3.10 of the
+// round-2 brief): the outfit's parts in slot order, each in its colors and
+// without the pixels that an occluding part hides; then on the overworld the
+// role's trim and badge when role is set; then in an RPG view the Corps
+// marker, the pennant in c's colour and c's emblem, when c is set; then in
+// the three-quarter view the role's tool while the role's own action plays.
+func (s *artSet) compose(v, an string, k int, o *outfit, role string, c *corpsExample) *image.NRGBA {
+	vw := viewOf(v)
+	sprites := s.sprites[v]
+	img := image.NewNRGBA(image.Rect(0, 0, vw.w, vw.h))
 	parts := slices.Clone(o.parts)
 	slices.SortFunc(parts, func(a, b outfitPart) int { return slices.Index(slots, a.slot) - slices.Index(slots, b.slot) })
-	layer := func(m *pixmap) []uint8 {
-		i, _ := m.frame("idle", f)
-		return m.px[i]
-	}
 	hidden := map[string][]bool{}
 	for _, part := range parts {
-		m := s.sprites[grid][part.id]
+		m := sprites[part.id]
 		for _, slot := range m.occludes {
 			h := hidden[slot]
 			if h == nil {
-				h = make([]bool, reg.w*reg.h)
+				h = make([]bool, vw.w*vw.h)
 				hidden[slot] = h
 			}
-			for i, idx := range layer(m) {
+			for i, idx := range frameOf(m, an, k) {
 				if int(idx) == s.pal.occlude {
 					h[i] = true
 				}
@@ -134,17 +134,49 @@ func (s *artSet) compose(grid string, f int, o *outfit, role string) *image.NRGB
 			clothing = part.clothing
 		}
 		colors := s.paint(s.choice[o.skin], s.choice[o.hair], s.choice[clothing])
-		draw(img, layer(s.sprites[grid][part.id]), colors, hidden[part.slot])
+		draw(img, frameOf(sprites[part.id], an, k), colors, hidden[part.slot])
 	}
-	if grid == gridWorld && role != "" {
-		draw(img, layer(s.sprites[grid]["overlay.trim"]), s.paint(s.choice["role."+role]), nil)
-		draw(img, layer(s.sprites[grid]["badge."+role]), s.paint(), nil)
+	if vw.grid == gridWorld && role != "" {
+		draw(img, frameOf(sprites["overlay.trim"], an, k), s.paint(s.choice["role."+role]), nil)
+		draw(img, frameOf(sprites["badge."+role], an, k), s.paint(), nil)
+	}
+	if vw.grid == gridRPG && c != nil {
+		s.drawMarker(img, v, an, k, c)
+	}
+	if t := sprites["tool."+role]; v == viewThreeQuarter && an == "act_"+role && t != nil {
+		draw(img, frameOf(t, an, k), s.paint(), nil)
 	}
 	return img
 }
 
+// marker draws Corps c's marker alone in view v at frame k of animation an.
+func (s *artSet) marker(v, an string, k int, c *corpsExample) *image.NRGBA {
+	vw := viewOf(v)
+	img := image.NewNRGBA(image.Rect(0, 0, vw.w, vw.h))
+	s.drawMarker(img, v, an, k, c)
+	return img
+}
+
+// drawMarker draws the pennant in c's colour, then c's emblem in default
+// colours.
+func (s *artSet) drawMarker(img *image.NRGBA, v, an string, k int, c *corpsExample) {
+	draw(img, frameOf(s.sprites[v][bannerID], an, k), s.paint(s.choice[c.color]), nil)
+	draw(img, frameOf(s.sprites[v][c.emblem], an, k), s.paint(), nil)
+}
+
+// frameOf returns m's pixels at frame k of animation an.
+func frameOf(m *pixmap, an string, k int) []uint8 {
+	i, _ := m.frame(an, k)
+	return m.px[i]
+}
+
+// luma returns the gray level of c, Y = (299R + 587G + 114B + 500) / 1000.
+func luma(c color.NRGBA) int {
+	return (299*int(c.R) + 587*int(c.G) + 114*int(c.B) + 500) / 1000
+}
+
 // grayed returns a copy of src in which every opaque pixel is replaced by its
-// luma, Y = (299R + 587G + 114B + 500) / 1000 (§3.13).
+// luma (§3.13).
 func grayed(src *image.NRGBA) *image.NRGBA {
 	dst := image.NewNRGBA(src.Rect)
 	copy(dst.Pix, src.Pix)
@@ -153,7 +185,7 @@ func grayed(src *image.NRGBA) *image.NRGBA {
 		if p[3] != 0xff {
 			continue
 		}
-		y := uint8((299*int(p[0]) + 587*int(p[1]) + 114*int(p[2]) + 500) / 1000)
+		y := uint8(luma(color.NRGBA{p[0], p[1], p[2], p[3]}))
 		p[0], p[1], p[2] = y, y, y
 	}
 	return dst

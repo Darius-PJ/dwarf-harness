@@ -22,7 +22,36 @@ const (
 	wallTopMap  = "world/tile.wall_top.pxm"
 	wallFaceMap = "world/tile.wall_face.pxm"
 	dogMap      = "world/animal.dog.pxm"
+
+	frontBody    = "rpg/front/body.stout.pxm"
+	frontPennant = "rpg/front/banner.pennant.pxm"
+	frontEmblem  = "rpg/front/emblem.mountain.pxm"
+	tqBody       = "rpg/three_quarter/body.stout.pxm"
+	tqHat        = "rpg/three_quarter/headwear.hat.pxm"
+	tqPennant    = "rpg/three_quarter/banner.pennant.pxm"
+	tqMountain   = "rpg/three_quarter/emblem.mountain.pxm"
+	tqCrescent   = "rpg/three_quarter/emblem.crescent.pxm"
+	tqTool       = "rpg/three_quarter/tool.worker.pxm"
 )
+
+// frameRows returns the frame line and the pixel rows of frame header of p.
+func frameRows(t *testing.T, m fstest.MapFS, p, header string) (int, []string) {
+	t.Helper()
+	n := lineOf(t, m, p, header)
+	ls := lines(t, m, p)
+	end := n
+	for end < len(ls) && !strings.HasPrefix(ls[end], "frame ") {
+		end++
+	}
+	return n, ls[n:end]
+}
+
+// truncate deletes the line of p that starts with prefix and every line
+// after it.
+func truncate(t *testing.T, m fstest.MapFS, p, prefix string) {
+	t.Helper()
+	setLines(m, p, lines(t, m, p)[:lineOf(t, m, p, prefix)-1])
+}
 
 // lines returns the lines of p without their LFs.
 func lines(t *testing.T, m fstest.MapFS, p string) []string {
@@ -530,6 +559,149 @@ func TestMalformedInputsFailWithLocation(t *testing.T) {
 			setLines(m, roomPath, lines(t, m, roomPath)[:lineOf(t, m, roomPath, "grid ")-1])
 			return roomPath, 0
 		}},
+
+		// animations.txt (§3.4 of the round-2 brief).
+		{"first loop not idle", func(t *testing.T, m fstest.MapFS) (string, int) {
+			n := lineOf(t, m, animationsPath, "anim ")
+			ls := lines(t, m, animationsPath)
+			ls[n-1], ls[n] = ls[n], ls[n-1]
+			setLines(m, animationsPath, ls)
+			return animationsPath, n
+		}},
+		{"loop for no role", func(t *testing.T, m fstest.MapFS) (string, int) {
+			ls := lines(t, m, animationsPath)
+			setLines(m, animationsPath, append(ls, "anim act_smith 300 300"))
+			return animationsPath, len(ls) + 1
+		}},
+		{"second loop of a role", func(t *testing.T, m fstest.MapFS) (string, int) {
+			ls := lines(t, m, animationsPath)
+			setLines(m, animationsPath, append(ls, "anim act_worker 300 300 200"))
+			return animationsPath, len(ls) + 1
+		}},
+		{"loop of one frame", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, animationsPath, lineOf(t, m, animationsPath, "anim act_diplomat"), "anim act_diplomat 700")
+		}},
+		{"duration not a multiple of 10", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, animationsPath, lineOf(t, m, animationsPath, "anim act_diplomat"), "anim act_diplomat 700 55")
+		}},
+		{"duration below 50", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, animationsPath, lineOf(t, m, animationsPath, "anim act_diplomat"), "anim act_diplomat 700 40")
+		}},
+		{"duration above 2000", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, animationsPath, lineOf(t, m, animationsPath, "anim act_diplomat"), "anim act_diplomat 700 2010")
+		}},
+		{"duration not a number", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, animationsPath, lineOf(t, m, animationsPath, "anim act_diplomat"), "anim act_diplomat 700 x")
+		}},
+		{"unknown animations keyword", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return rewrite(t, m, animationsPath, "anim ", func(l string) string { return "loop" + strings.TrimPrefix(l, "anim") })
+		}},
+		{"missing animations.txt", func(t *testing.T, m fstest.MapFS) (string, int) {
+			delete(m, animationsPath)
+			return animationsPath, 0
+		}},
+		{"animations.txt without anim lines", func(t *testing.T, m fstest.MapFS) (string, int) {
+			m[animationsPath] = &fstest.MapFile{Data: []byte("// no loops\n")}
+			return animationsPath, 0
+		}},
+
+		// roster.txt (§3.5 of the round-2 brief).
+		{"unknown roster keyword", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return insert(t, m, rosterPath, lineOf(t, m, rosterPath, "member "), "team peak")
+		}},
+		{"corps without emblem", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return rewrite(t, m, rosterPath, "corps peak", func(l string) string { return l[:strings.LastIndex(l, " ")] })
+		}},
+		{"corps colour of another mask", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return swap(t, m, rosterPath, "corps peak", "color=corps.crimson", "color=clothing.red")
+		}},
+		{"corps after the members", func(t *testing.T, m fstest.MapFS) (string, int) {
+			ls := lines(t, m, rosterPath)
+			setLines(m, rosterPath, append(ls, "corps hill color=corps.slate emblem=emblem.crescent"))
+			return rosterPath, len(ls) + 1
+		}},
+		{"duplicate corps name", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return insert(t, m, rosterPath, lineOf(t, m, rosterPath, "corps peak")+1, "corps peak color=corps.slate emblem=emblem.crescent")
+		}},
+		{"second member of an outfit", func(t *testing.T, m fstest.MapFS) (string, int) {
+			ls := lines(t, m, rosterPath)
+			setLines(m, rosterPath, append(ls, "member miner diplomat peak"))
+			return rosterPath, len(ls) + 1
+		}},
+		{"member of an undefined Corps", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return swap(t, m, rosterPath, "member miner", " moon", " hill")
+		}},
+		{"member of three fields", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return rewrite(t, m, rosterPath, "member miner", func(l string) string { return l[:strings.LastIndex(l, " ")] })
+		}},
+		{"no member", func(t *testing.T, m fstest.MapFS) (string, int) {
+			for strings.Contains(string(m[rosterPath].Data), "\nmember ") {
+				remove(t, m, rosterPath, "member ")
+			}
+			return rosterPath, 0
+		}},
+		{"missing roster.txt", func(t *testing.T, m fstest.MapFS) (string, int) {
+			delete(m, rosterPath)
+			return rosterPath, 0
+		}},
+
+		// Kinds, views and characters (§3.6 of the round-2 brief).
+		{"Corps character in a part", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return editRow(t, m, frontBody, func(r string) string { return "b" + r[1:] })
+		}},
+		{"Corps character in a tile", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return editRow(t, m, wallTopMap, func(r string) string { return "B" + r[1:] })
+		}},
+		{"Corps character in an emblem", func(t *testing.T, m fstest.MapFS) (string, int) {
+			n := rowWith(t, m, frontEmblem, "*")
+			return replace(t, m, frontEmblem, n, strings.Replace(lines(t, m, frontEmblem)[n-1], "*", "b", 1))
+		}},
+		{"skin character in a tool", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return editRow(t, m, tqTool, func(r string) string { return "s" + r[1:] })
+		}},
+		{"skin character in the pennant", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return editRow(t, m, frontPennant, func(r string) string { return "s" + r[1:] })
+		}},
+		{"occlude character in the pennant", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return editRow(t, m, frontPennant, func(r string) string { return "x" + r[1:] })
+		}},
+		{"banner other than the pennant", func(t *testing.T, m fstest.MapFS) (string, int) {
+			copyFile(m, frontPennant, "rpg/front/banner.flag.pxm")
+			return "rpg/front/banner.flag.pxm", 0
+		}},
+		{"tool naming no role", func(t *testing.T, m fstest.MapFS) (string, int) {
+			copyFile(m, tqTool, "rpg/three_quarter/tool.smith.pxm")
+			return "rpg/three_quarter/tool.smith.pxm", 0
+		}},
+		{"banner on the overworld", func(t *testing.T, m fstest.MapFS) (string, int) {
+			copyFile(m, frontPennant, "world/banner.pennant.pxm")
+			return "world/banner.pennant.pxm", 0
+		}},
+		{"tool in the front view", func(t *testing.T, m fstest.MapFS) (string, int) {
+			copyFile(m, tqTool, "rpg/front/tool.worker.pxm")
+			return "rpg/front/tool.worker.pxm", 0
+		}},
+		{"palette without corps entries", func(t *testing.T, m fstest.MapFS) (string, int) {
+			remove(t, m, palettePath, "entry B ")
+			remove(t, m, palettePath, "entry b ")
+			return palettePath, 0
+		}},
+		{"palette without light", func(t *testing.T, m fstest.MapFS) (string, int) {
+			remove(t, m, palettePath, "entry * light")
+			return palettePath, 0
+		}},
+		{"no corps choice", func(t *testing.T, m fstest.MapFS) (string, int) {
+			for strings.Contains(string(m[colorsPath].Data), "\ncorps.") {
+				remove(t, m, colorsPath, "corps.")
+			}
+			return colorsPath, 0
+		}},
+		{"canvas beyond the coordinate limit", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, bodyMap, lineOf(t, m, bodyMap, "canvas"), "canvas 65536 16")
+		}},
+		{"transparent with a mask", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return swap(t, m, palettePath, "entry . transparent", " - ", " skin ")
+		}},
 	})
 }
 
@@ -549,9 +721,8 @@ func TestInconsistentArtIsRejected(t *testing.T) {
 			p := "world/legwear.trousers.pxm"
 			return replace(t, m, p, lineOf(t, m, p, "anchor"), "anchor 7 16")
 		}},
-		{"rpg part with another anchor", func(t *testing.T, m fstest.MapFS) (string, int) {
-			p := "rpg/body.stout.pxm"
-			return replace(t, m, p, lineOf(t, m, p, "anchor"), "anchor 31 64")
+		{"three-quarter part with another anchor", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, tqBody, lineOf(t, m, tqBody, "anchor"), "anchor 31 64")
 		}},
 		{"layer with another canvas", func(t *testing.T, m fstest.MapFS) (string, int) {
 			p := "world/badge.diplomat.pxm"
@@ -580,21 +751,26 @@ func TestInconsistentArtIsRejected(t *testing.T) {
 			setLines(m, p, strings.Split(strings.ReplaceAll(strings.Join(lines(t, m, p), "\n"), "frame idle ", "frame rest "), "\n"))
 			return p, 0
 		}},
-		{"rpg map of a part deleted", func(t *testing.T, m fstest.MapFS) (string, int) {
-			delete(m, "rpg/shoes.boots.pxm")
-			return "rpg/shoes.boots.pxm", 0
+		{"front map of a part deleted", func(t *testing.T, m fstest.MapFS) (string, int) {
+			delete(m, "rpg/front/shoes.boots.pxm")
+			return "rpg/front/shoes.boots.pxm", 0
+		}},
+		{"three-quarter map of a part deleted", func(t *testing.T, m fstest.MapFS) (string, int) {
+			delete(m, "rpg/three_quarter/shoes.boots.pxm")
+			return "rpg/three_quarter/shoes.boots.pxm", 0
 		}},
 		{"world map of a part deleted", func(t *testing.T, m fstest.MapFS) (string, int) {
 			delete(m, "world/shoes.boots.pxm")
 			return "world/shoes.boots.pxm", 0
 		}},
-		{"rpg map that is not a part", func(t *testing.T, m fstest.MapFS) (string, int) {
-			copyFile(m, doorMap, "rpg/tile.door.pxm")
-			return "rpg/tile.door.pxm", 0
+		{"tile in the front view", func(t *testing.T, m fstest.MapFS) (string, int) {
+			copyFile(m, doorMap, "rpg/front/tile.door.pxm")
+			return "rpg/front/tile.door.pxm", 0
 		}},
 		{"slot without a part", func(t *testing.T, m fstest.MapFS) (string, int) {
 			delete(m, "world/front_accessory.pick.pxm")
-			delete(m, "rpg/front_accessory.pick.pxm")
+			delete(m, "rpg/front/front_accessory.pick.pxm")
+			delete(m, "rpg/three_quarter/front_accessory.pick.pxm")
 			return gridWorld, 0
 		}},
 		{"badge deleted", func(t *testing.T, m fstest.MapFS) (string, int) {
@@ -725,6 +901,110 @@ func TestInconsistentArtIsRejected(t *testing.T) {
 				f[2] = "8"
 				return strings.Join(f, " ")
 			})
+		}},
+		{"three-quarter emblem on a wider canvas", func(t *testing.T, m fstest.MapFS) (string, int) {
+			ls := lines(t, m, tqMountain)
+			for i := lineOf(t, m, tqMountain, "frame "); i <= len(ls); i++ {
+				if !strings.HasPrefix(ls[i-1], "frame ") {
+					ls[i-1] += strings.Repeat(".", 64)
+				}
+			}
+			setLines(m, tqMountain, ls)
+			return replace(t, m, tqMountain, lineOf(t, m, tqMountain, "canvas"), "canvas 128 64")
+		}},
+		{"front map with a second still frame", func(t *testing.T, m fstest.MapFS) (string, int) {
+			_, rows := frameRows(t, m, frontBody, "frame still 0")
+			setLines(m, frontBody, append(append(lines(t, m, frontBody), "frame still 1"), rows...))
+			return frontBody, 0
+		}},
+		{"front map naming idle", func(t *testing.T, m fstest.MapFS) (string, int) {
+			replace(t, m, frontBody, lineOf(t, m, frontBody, "frame still 0"), "frame idle 0")
+			return frontBody, 0
+		}},
+		{"three-quarter part without act_diplomat", func(t *testing.T, m fstest.MapFS) (string, int) {
+			truncate(t, m, tqBody, "frame act_diplomat 0")
+			return tqBody, 0
+		}},
+		{"three-quarter part with a third idle frame", func(t *testing.T, m fstest.MapFS) (string, int) {
+			_, rows := frameRows(t, m, tqBody, "frame idle 1")
+			at := lineOf(t, m, tqBody, "frame act_worker 0") - 1
+			setLines(m, tqBody, slices.Insert(lines(t, m, tqBody), at, append([]string{"frame idle 2"}, rows...)...))
+			return tqBody, 0
+		}},
+		{"tool without its last frame", func(t *testing.T, m fstest.MapFS) (string, int) {
+			truncate(t, m, tqTool, "frame act_worker 2")
+			return tqTool, 0
+		}},
+		{"tool for a role without a loop", func(t *testing.T, m fstest.MapFS) (string, int) {
+			p := "rpg/three_quarter/tool.griot.pxm"
+			m[p] = &fstest.MapFile{Data: []byte(strings.ReplaceAll(string(m[tqTool].Data), "frame act_worker", "frame act_griot"))}
+			return p, 0
+		}},
+		{"tool loop removed from animations.txt", func(t *testing.T, m fstest.MapFS) (string, int) {
+			remove(t, m, animationsPath, "anim act_worker")
+			return tqTool, 0
+		}},
+		{"three-quarter pennant deleted", func(t *testing.T, m fstest.MapFS) (string, int) {
+			delete(m, tqPennant)
+			return tqPennant, 0
+		}},
+		{"front crescent deleted", func(t *testing.T, m fstest.MapFS) (string, int) {
+			delete(m, "rpg/front/emblem.crescent.pxm")
+			return "rpg/front/emblem.crescent.pxm", 0
+		}},
+		{"every front emblem deleted", func(t *testing.T, m fstest.MapFS) (string, int) {
+			for p := range m {
+				if strings.HasPrefix(p, "rpg/front/emblem.") {
+					delete(m, p)
+				}
+			}
+			return "rpg/front", 0
+		}},
+		{"emblem copied over another", func(t *testing.T, m fstest.MapFS) (string, int) {
+			copyFile(m, tqMountain, tqCrescent)
+			return tqMountain, lineOf(t, m, tqMountain, "frame ")
+		}},
+		{"emblem off the pennant's field", func(t *testing.T, m fstest.MapFS) (string, int) {
+			n, rows := frameRows(t, m, tqMountain, "frame act_diplomat 1")
+			for i, r := range rows {
+				if strings.Contains(r, "#") {
+					return replace(t, m, tqMountain, n+1+i, r[20:]+r[:20])
+				}
+			}
+			t.Fatalf("%s act_diplomat 1 has no glyph", tqMountain)
+			return "", 0
+		}},
+		{"views disagreeing on occlusion", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, tqHat, lineOf(t, m, tqHat, "occludes"), "occludes hair_beard torso_clothing")
+		}},
+		{"map directly under rpg", func(t *testing.T, m fstest.MapFS) (string, int) {
+			copyFile(m, frontBody, "rpg/body.stout.pxm")
+			return "rpg/body.stout.pxm", 0
+		}},
+		{"unknown view directory", func(t *testing.T, m fstest.MapFS) (string, int) {
+			copyFile(m, frontBody, "rpg/side/x.pxm")
+			return "rpg/side", 0
+		}},
+		{"Corps colour of a role", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, colorsPath, lineOf(t, m, colorsPath, "corps.slate"), "corps.slate 2e6e34 4caa50")
+		}},
+		{"Corps colour near the light", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, colorsPath, lineOf(t, m, colorsPath, "corps.slate"), "corps.slate cfc8b8 e8e0d0")
+		}},
+		{"Corps colour near another Corps", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, colorsPath, lineOf(t, m, colorsPath, "corps.slate"), "corps.slate 6e1e22 a2342e")
+		}},
+		{"roster naming an unknown outfit", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, rosterPath, lineOf(t, m, rosterPath, "member miner"), "member tinker worker moon")
+		}},
+		{"roster naming an unknown role", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return replace(t, m, rosterPath, lineOf(t, m, rosterPath, "member miner"), "member miner smith moon")
+		}},
+		{"Corps naming an unknown colour", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return swap(t, m, rosterPath, "corps peak", "corps.crimson", "corps.teal")
+		}},
+		{"Corps naming an unknown emblem", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return swap(t, m, rosterPath, "corps peak", "emblem.mountain", "emblem.star")
 		}},
 	})
 }
