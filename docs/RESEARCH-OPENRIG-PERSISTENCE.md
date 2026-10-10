@@ -80,7 +80,7 @@ The DwarfHarness design document records local prototype measurements on Windows
 
 A separate measured cost is likely more consequential for DwarfHarness: worktree materialization and validation. The design notes a full fresh checkout/hash walk of roughly 305 seconds for a 20,000-file tree on the recorded Windows machine, while a stat-only walk was under a second. Per-work-context copies also consume disk. That can dominate ledger append performance in real use, so persistence benchmarks must measure the entire run and not just a single event append.
 
-Source: [Core Appendix A.7–A.9](DESIGN-CORE-AND-LAUNCHERS.md#appendix-a--retained-measurements-2026-09-28-and-2026-10-02), [Core §3.5 worktree discussion](DESIGN-CORE-AND-LAUNCHERS.md#35-workspaces-private-scratch-per-work-context-and-fast-forward-promotion).
+Source: [Core Appendix A.7–A.9](DESIGN-CORE-AND-LAUNCHERS.md#a7-git-worktrees-on-windows), [Core §3.5 worktree discussion](DESIGN-CORE-AND-LAUNCHERS.md#35-workspaces-private-scratch-per-work-context-and-fast-forward-promotion).
 
 No OpenRig performance claim is made here: its test-layer guide describes correctness suites and scenario checks, not a published, comparable throughput/latency benchmark. See [OpenRig test layers](https://github.com/mvschwarz/openrig/blob/5fab9ae8025e0a0279c988aaee55d01dbac4d709/docs/as-built/test-layers.md).
 

@@ -685,7 +685,7 @@ Both SDKs are viable and expose per-request headers, raw JSON/responses/stream e
 | Shared session views | Cursor-delivery prototype only | Two attached launchers, competing commands, reconnect and shutdown |
 | Agent/Corps structure | Design only | Relationship/board context growth, broker queues, Diplomat/Grand fan-out, Griot updates and per-context accounting |
 | Child cleanup | Design only | Surviving descendant count after normal and abnormal shutdown; target zero |
-| Colony log | Candidate prototypes only (A.8): with our own log, 0.52 ms per durable one-event commit and 29 ms to read 20,000 events back | Budgets for startup replay time and index memory, the measured triggers for a SQLite index (D34) |
+| Colony log | C1's ledger and body store (A.10): cold and warm recovery, durable appends under steady, burst and saturating load, body publication, old command-ID lookups, explicit collection, peak memory and disk, measured on one Windows NTFS machine against an assumed workload at 12, 20 and 60 contexts. Candidate prototypes (A.8): with our own log, 0.52 ms per durable one-event commit and 29 ms to read 20,000 events back | Budgets for startup replay time and index memory; the measured triggers for a SQLite index and for snapshots (D34); owner-agreed thresholds |
 | Workspaces | git operations on synthetic repositories (A.7) | Observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
 | Promotion capacity | Illustrative model only (§3.5); no concurrent integrated benchmark | Real every-change accepted throughput/latency and burst drain; lane/queue bounds; speculative rework, ordered finalization and whole-process resource costs under the plan above |
 
@@ -1022,7 +1022,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 
 **Unchanged.** D94's prohibitions on emergency or timeout promotion, waived handoff (other than the owner's unrecoverable declaration) and GUI bypass; exactly one holder per office; D82 grants, D83 retirement history and D85 private-memory limits; D22/D63/D79 one-shot paid attempts, passive results and no bookkeeping model calls. Records, encodings and the calibration of the allotment, proposal cap and restart bursts remain producer work; no implementation is claimed.
 
-## Appendix A — Retained measurements, 2026-09-28 and 2026-10-02
+## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09 and 2026-10-10
 
 ### A.1 Setup and limits
 
@@ -1032,7 +1032,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 - Adapter runs used a local fake provider with canned streaming responses. Figures are medians of five runs unless noted.
 - The machine ran about twice as slowly as during the earlier language study. Compare values within a table, not timing numbers across sessions.
 - The old combined prototype included terminal and external-browser paths. Only relevant terminal/adapter/router results are retained below; its full record is archived in `superceeded-Design.md`, in the archive folder `../dwarfharness/`, outside this repository. No native UI, concurrent launcher attachment or Corps workload was measured.
-- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02 and state their own setup.
+- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02 and A.10 from 2026-10-09 and 2026-10-10; each states its own setup.
 
 ### A.2 Standalone prototype binary sizes
 
@@ -1146,6 +1146,212 @@ The workload used a 0.91 MB transcript and 100 calls.
 - Not candidates: TDM-GCC (last release v10.3.0, 2021-05-26) and MSVC, whose cgo support is open as [golang/go#20982](https://github.com/golang/go/issues/20982).
 - D28 chose llvm-mingw, pinned and installed outside `PATH` (§8.1).
 
+### A.10 Colony ledger and body store (C1, ticket 03)
+
+**Setup:** 2026-10-09 and 2026-10-10, on the owner's machine: go1.27.2, windows/amd64, `CGO_ENABLED=0`, without the race detector. The colonies lay outside the repository on NTFS volume C:; `20x30` was deleted once the recovery runs, the only ones that used it, had finished. The harness is `TestWorkload` in `internal/core/ledgerstore/workload_test.go` at commit bce3213. Each scenario group ran as `go test ./internal/core/ledgerstore -count=1 -timeout 0 -v -run '^TestWorkload$/^<group>$'`, and each run was a child process that wrote one JSON line. The machine was restarted, a clean shutdown, at 2026-10-09 22:44, local time, between generation and the cold recovery runs; the owner allowed this. The raw results are `.scratch/dwarf-harness/c1-evidence/ticket-03-workload-results.jsonl`. Under each table, "Fields" names the JSON fields it reports.
+
+**Model, an assumption.** The sources fix only promotion rates: 72 and 120 changes an hour at 12 and 20 contexts, with bursts of 48 and 80 requests (D78, B15; `ROADMAP-CORE.md` C2). They give no ledger rates and no record or body sizes. Each context makes 6 changes an hour, one every 10 minutes, and each change runs this 41-commit script twice:
+
+| Commits | Content |
+|---|---|
+| c1 | `Submit` of a request: its command and a 1 KiB record referencing a 32 KiB diff body |
+| c2–c11 | two plain records each; c5 and c9 each reference a 128 KiB run-log body |
+| c12 | `ledger.body_pin` of the two run logs |
+| c13–c17 | five `Submit` messages, each a command and a 1 KiB record referencing a 4 KiB body |
+| c18–c19 | two `Submit` commands, each with a 1 KiB record and no body |
+| c20–c40 | two plain records each |
+| c41 | `ledger.body_unpin` of c12's pin |
+
+Plain records are `fixture.sample` v1 with seeded payloads of 128 B (70% of records), 1 KiB (25%) or 8 KiB (5%). Their actor is `agent`, with the agent, execution-session, context and turn IDs, and the first record of each plain commit also has an operation ID. Per context-hour this is 492 commits, 960 records, 96 commands and 96 bodies of 3.61 MiB: 1.64, 2.73 and 8.20 commits a second at 12, 20 and 60 contexts (a calculation). The owner answered OG3: the larger workload is 60 contexts, and the load per agent is doubled, which the harness applies as two runs of the script per change (`scriptRepeats` 2). A burst is four `Submit` requests per context released at once, 48, 80 and 240 requests, each publishing a 32 KiB body first. Every result line carries `scriptRepeats` and the label "assumed workload, not a capacity claim"; its `perUnit` figures let a replaced model rescale.
+
+**Colonies.** A colony is named `<contexts>x<days>`, with `b` when its bodies were written. `x1b` holds one modelled day with bodies; `x7` and `x30` hold seven and thirty days of log only, in which the pin and unpin records are plain records of the same size. A fast generator wrote each colony through the contract encoder, `ledger.EncodeCommit`, into 64 MiB segments. It used seeded IDs and payloads, with event times spread over the modelled hours up to just before generation. It flushed the segments and directories at the end but not each body file, and `Check` verified each log before the colony was used. The free-space gate allowed `20x30`.
+
+**Generation** (`generate/<colony>`):
+
+| Colony | Records | Log (GiB) | Segments | Body files | Bodies (GiB) | Log bytes per record | Disk per context-hour (MiB) | Generation (s) | `Check` (s) |
+|---|---|---|---|---|---|---|---|---|---|
+| `12x1b` | 276,480 | 0.348 | 6 | 27,648 | 1.02 | 1,350 | 4.85 | 64.6 | 6.11 |
+| `12x7` | 1,935,360 | 2.43 | 39 | 0 | 0 | 1,350 | 1.23 | 49.6 | 54.5 |
+| `20x1b` | 460,800 | 0.584 | 10 | 46,080 | 1.69 | 1,360 | 4.86 | 153 | 14.6 |
+| `20x7` | 3,225,600 | 4.04 | 65 | 0 | 0 | 1,350 | 1.23 | 99.8 | 98.1 |
+| `60x1b` | 1,382,400 | 1.75 | 28 | 138,240 | 5.08 | 1,360 | 4.85 | 449 | 35.9 |
+| `60x7` | 9,676,800 | 12.1 | 195 | 0 | 0 | 1,350 | 1.23 | 299 | 279 |
+| `20x30` | 13,824,000 | 17.4 | 278 | 0 | 0 | 1,350 | 1.23 | 441 | 399 |
+
+Fields: `counts.records`, `logBytes`, `segments`, `counts.bodyFiles`, `bodyBytes`, `perUnit.logBytesPerRecord`, `perUnit.bytesPerContextHour` (log and bodies together), `timesMs.generate`, `timesMs.check`.
+
+**Recovery, cold** (`recover/<colony>` with `cache` "cold"): the first access to each colony after the restart, one `Open`. `Open` runs `Check` over the whole log, then reads it again to rebuild the command index, the segment catalogue, the pins and the collection index.
+
+| Colony | Log (GiB) | `Open` (s) | `Open` per GiB of log (s) | Peak working set (MiB) | Peak commit (MiB) | Go heap after GC (MiB) | Commands in the index | Active pin pairs |
+|---|---|---|---|---|---|---|---|---|
+| `12x1b` | 0.348 | 11.2 | 32.2 | 18.6 | 56.7 | 4.65 | 27,648 | 0 |
+| `12x7` | 2.43 | 75.4 | 31.0 | 38.5 | 76.5 | 13.9 | 65,536 | 0 |
+| `20x1b` | 0.584 | 19.3 | 33.1 | 23.7 | 61.9 | 7.34 | 46,080 | 0 |
+| `20x7` | 4.04 | 133 | 32.9 | 38.6 | 77.3 | 13.6 | 65,536 | 0 |
+| `60x1b` | 1.75 | 64.7 | 37.0 | 40.8 | 78.6 | 13.6 | 65,536 | 0 |
+| `60x7` | 12.1 | 431 | 35.5 | 91.4 | 95.6 | 24.1 | 65,536 | 0 |
+| `20x30` | 17.4 | 617 | 35.5 | 60.6 | 96.9 | 23.9 | 65,536 | 0 |
+
+Fields: `logBytes`, `timesMs.open`, `perUnit.openMsPerGiBLog`, `peakWorkingSetBytes`, `peakCommitBytes`, `heapInUseBytes`, `hotEntries`, `pinPairs`.
+
+**Recovery, warm** (`recover/<colony>` with `cache` "warm"): `Check` alone, then `Open` three times; the median `Open` is reported.
+
+| Colony | `Check` (s) | `Open`, median of three (s) | `Open` − `Check` (s), a calculation | Peak working set (MiB) | Peak commit (MiB) | Go heap after GC (MiB) | Heap per indexed command (B), a calculation |
+|---|---|---|---|---|---|---|---|
+| `12x1b` | 5.73 | 12.6 | 6.90 | 18.3 | 56.5 | 4.64 | 149 |
+| `12x7` | 45.2 | 84.1 | 38.9 | 39.2 | 77.2 | 14.0 | 210 |
+| `20x1b` | 11.2 | 21.0 | 9.81 | 24.5 | 62.7 | 7.08 | 145 |
+| `20x7` | 73.8 | 139 | 65.0 | 39.4 | 77.2 | 13.8 | 209 |
+| `60x1b` | 31.8 | 60.8 | 29.0 | 40.5 | 78.3 | 13.7 | 208 |
+| `60x7` | 219 | 431 | 212 | 58.2 | 96.2 | 23.6 | 366 |
+| `20x30` | 310 | 610 | 300 | 58.5 | 96.5 | 24.0 | 372 |
+
+Fields: `timesMs.check`, `timesMs.open`, their difference, `peakWorkingSetBytes`, `peakCommitBytes`, `heapInUseBytes`, `perUnit.heapBytesPerHotEntry` (the heap after `Open` less the heap before it, per indexed command).
+
+**Recovery after a kill** (`recover/crash`): a `20x7` colony, generated again as `crash-20x7`. A writer process ran the saturation load on it with 20 contexts and was killed after 20 s; then one `Open`.
+
+| Measure | Value |
+|---|---|
+| Last sequence the writer reported as acknowledged before the kill | 3,264,644 |
+| Last sequence after `Open` | 3,264,948 |
+| Bytes of a torn commit that `Open` truncated | 0 |
+| `Open` (s) | 137 |
+| Peak working set (MiB) | 41.1 |
+
+Fields: `counts.ackedBeforeKill`, `counts.durableAfterOpen`, `counts.truncatedBytes`, `timesMs.open`, `peakWorkingSetBytes`.
+
+**Sequential appends** (`append/sequential`): 2,000 one-record commits of about 650 bytes, actor `core`, no optional field, one writer, on a fresh colony. They are comparable in form only to A.8's single-event commit.
+
+| Measure | Value |
+|---|---|
+| `Append`, p50 / p95 / p99 / max (ms) | 0.515 / 1.00 / 1.13 / 2.27 |
+| Commits per second | 2,400 |
+| Log bytes per commit | 667 |
+| Peak working set (MiB) | 14.9 |
+| Peak commit (MiB) | 51.7 |
+
+Fields: `latencyMs.append`, `rates.commitsPerSec`, `perUnit.logBytesPerCommit`, `peakWorkingSetBytes`, `peakCommitBytes`.
+
+**Steady load** (`append/steady/<contexts>`): 15 minutes on a fresh colony; each context runs the script with Poisson arrivals at 82 commits per 600 s. A call's latency is its duration. Arrival to acknowledgement also includes the body's publication and any wait behind the context's previous commit.
+
+| Measure | 12 contexts | 20 contexts | 60 contexts |
+|---|---|---|---|
+| Requests offered | 1,448 | 2,426 | 7,415 |
+| Commits acknowledged | 1,448 | 2,426 | 7,415 |
+| Records acknowledged | 2,827 | 4,738 | 14,487 |
+| Commits per second, measured (model) | 1.61 (1.64) | 2.70 (2.73) | 8.24 (8.20) |
+| `Append` call, p50 / p95 / p99 / max (ms) | 3.24 / 4.27 / 4.93 / 215 | 3.21 / 4.28 / 4.89 / 8.40 | 2.67 / 4.20 / 4.87 / 46.8 |
+| `Submit` call, p50 / p95 / p99 / max (ms) | 1.39 / 3.84 / 4.45 / 46.3 | 1.44 / 3.84 / 4.38 / 6.91 | 1.42 / 3.90 / 5.85 / 39.0 |
+| Arrival to acknowledgement, p50 / p95 / p99 / max (ms) | 4.17 / 13.6 / 17.3 / 216 | 4.18 / 12.9 / 16.0 / 21.6 | 3.84 / 12.6 / 15.9 / 123 |
+| Publication of a 4 KiB body, p50 / p99 / max (ms) | 8.52 / 15.9 / 64.1 | 7.89 / 13.8 / 15.2 | 7.65 / 15.3 / 89.2 |
+| Publication of a 32 KiB body, p50 / p99 / max (ms) | 8.69 / 13.4 / 13.4 | 7.59 / 13.9 / 13.9 | 7.18 / 14.0 / 15.7 |
+| Publication of a 128 KiB body, p50 / p99 / max (ms) | 11.2 / 16.2 / 16.2 | 10.3 / 15.1 / 17.6 | 9.06 / 15.3 / 16.9 |
+| Most requests in flight | 2 | 2 | 3 |
+| CPU, user + system (s) | 4.17 | 7.64 | 22.3 |
+| Peak working set (MiB) | 18.0 | 17.8 | 20.7 |
+| Peak commit (MiB) | 54.8 | 54.8 | 57.5 |
+| Go heap at the end, after GC (MiB) | 1.23 | 1.16 | 1.38 |
+| Failed calls | 0 | 0 | 0 |
+
+Fields: `counts.offered`, `counts.commits`, `counts.records`, `rates.commitsPerSec` (`rates.modelCommitsPerSec`), `latencyMs.append`, `latencyMs.submit`, `latencyMs.ack`, `latencyMs["publish/4KiB"]`, `latencyMs["publish/32KiB"]`, `latencyMs["publish/128KiB"]`, `counts.maxInFlight`, `cpuUserSec` + `cpuSysSec`, `peakWorkingSetBytes`, `peakCommitBytes`, `heapInUseBytes`, and the sum of `failures`.
+
+**Burst** (`append/burst/<contexts>`): the steady load again on a fresh colony, with four `Submit` requests per context released at once at minute 7 of 15. Each burst request publishes a 32 KiB body first.
+
+| Measure | 12 contexts | 20 contexts | 60 contexts |
+|---|---|---|---|
+| Burst requests released | 48 | 80 | 240 |
+| Burst requests: arrival to acknowledgement, p50 / p99 / max (ms) | 129 / 152 / 152 | 208 / 252 / 252 | 601 / 723 / 725 |
+| Burst requests: 32 KiB publication, p50 / p99 / max (ms) | 120 / 141 / 141 | 199 / 239 / 239 | 570 / 702 / 706 |
+| Burst requests: `Submit` call, p50 / p99 / max (ms) | 2.51 / 12.7 / 12.7 | 1.93 / 35.4 / 35.4 | 7.00 / 209 / 300 |
+| Drain: release to the last burst acknowledgement (s) | 0.152 | 0.252 | 0.725 |
+| Steady requests overlapping the burst: arrival to acknowledgement, p50 / p99 / max (ms); n = 1, 1 and 6 | 19.5 / 19.5 / 19.5 | 120 / 120 / 120 | 11.1 / 592 / 592 |
+| Other steady requests: arrival to acknowledgement, p50 / p99 / max (ms) | 4.18 / 16.3 / 110 | 4.17 / 15.7 / 19.1 | 3.81 / 15.8 / 26.2 |
+| Most requests in flight | 48 | 80 | 240 |
+| Peak working set (MiB) | 23.3 | 25.9 | 39.3 |
+| Failed calls | 0 | 0 | 0 |
+
+Fields: `counts.burstRequests`, `latencyMs["burst/ack"]`, `latencyMs["burst/publish/32KiB"]`, `latencyMs["burst/submit"]`, `timesMs.burstDrain`, `latencyMs["ack@burst"]`, `latencyMs.ack`, `counts.maxInFlight`, `peakWorkingSetBytes`, and the sum of `failures`.
+
+**Saturation** (`append/saturation/<contexts>`): one goroutine per context runs the script without waiting, for 60 s, on a fresh colony.
+
+| Measure | 12 contexts | 20 contexts | 60 contexts |
+|---|---|---|---|
+| Commits per second | 1,090 | 976 | 917 |
+| Records per second | 2,130 | 1,900 | 1,790 |
+| Model commits per second, a calculation | 1.64 | 2.73 | 8.20 |
+| Headroom: measured ÷ model commits per second, a calculation | 667 | 357 | 112 |
+| `Append` call, p50 / p99 (ms) | 6.94 / 33.0 | 11.2 / 66.3 | 33.0 / 157 |
+| `Submit` call, p50 / p99 (ms) | 14.2 / 40.9 | 33.3 / 147 | 132 / 404 |
+| Arrival to acknowledgement, p50 / p99 (ms) | 8.00 / 37.8 | 12.7 / 80.6 | 37.4 / 228 |
+| CPU, user + system (s) | 54.3 | 52.3 | 56.0 |
+| Peak working set (MiB) | 51.5 | 48.0 | 52.5 |
+| Failed calls | 0 | 0 | 0 |
+
+Fields: `rates.commitsPerSec`, `rates.recordsPerSec`, `rates.modelCommitsPerSec`, `rates.headroom`, `latencyMs.append`, `latencyMs.submit`, `latencyMs.ack`, `cpuUserSec` + `cpuSysSec`, `peakWorkingSetBytes`, and the sum of `failures`.
+
+**Body publication** (`bodies/publish`): bodies published one after another to a fresh colony, without references.
+
+| Bodies | Published / attempted | p50 (ms) | max (ms) | MiB/s |
+|---|---|---|---|---|
+| 4 KiB | 200 / 200 | 3.38 | 104 | 0.758 |
+| 64 KiB | 200 / 200 | 3.37 | 37.3 | 16.0 |
+| 1 MiB | 50 / 50 | 9.32 | 28.6 | 99.8 |
+| 16 MiB | 10 / 10 | 95.2 | 108 | 165 |
+| 64 MiB | 5 / 5 | 366 | 370 | 175 |
+
+Fields, where `<size>` is `4KiB`, `64KiB`, `1MiB`, `16MiB` or `64MiB`: `counts["published/<size>"]`, `counts["attempted/<size>"]`, `latencyMs["publish/<size>"]`, `rates["MiBPerSec/<size>"]`. Each body is generated inside the timed call, at 1,030 MiB/s (`rates.sourceMiBPerSec`). Failed publications, by error: none.
+
+**Command-ID lookups** (`dedup/20x7`): `Submit` on the `20x7` colony after the recovery runs. Its log holds 322,560 commands, and the in-memory index holds at most 65,536 of them (`counts.hotCommandsBound`), so older IDs are looked up in the segments. The cases that record a command append to the colony.
+
+| Case | Calls | p50 (ms) | max (ms) | Segments scanned |
+|---|---|---|---|---|
+| A recent command again, found in the index | 100 | 0 | 0 | 0 |
+| A new command ID | 100 | 0.641 | 9.85 | 0 |
+| A first-day command again, looked up in the segments | 20 | 465 | 1,020 | 20 |
+| A first-day command ID with another submission: refused as a mismatch | 20 | 489 | 1,010 | 20 |
+| An ID dated in the first day that the log never held: recorded | 20 | 993 | 1,050 | 20 |
+
+Fields, where `<case>` is `hotDuplicate`, `freshID`, `firstDayDuplicate`, `firstDayMismatch` or `firstDayNeverRecorded`: `latencyMs["submit/<case>"]` (`n`, `p50`, `max`) and `counts["coldScans/<case>"]`, which counts the segment scans of all the case's calls; the commands in the log are `counts.commands` of `generate/20x7`. Every case ended as defined: `counts["unexpected/<case>"]` is 0. All 100 index hits measured 0 ms: they completed within one step of the monotonic clock (see Limits).
+
+**Explicit collection** (`collect/20x1b`): `Collect` with actor `owner` and a cutoff 12 modelled hours after the colony's start, while one appender commits a 1 KiB record every 100 ms.
+
+| Measure | Value |
+|---|---|
+| `Collect`, total (s) | 58.3 |
+| Phase A: listing and log scan, outside the writer turn (s) | 9.24 |
+| `ledger.bodies_collected` records written, one per batch with referenced bodies | 90 |
+| Batch: record stamped to last body-file call, p50 / max (ms) | 111 / 200 |
+| Referenced bodies recorded and deleted: count (GiB) | 23,040 (0.846) |
+| Unreferenced bodies deleted without a record: count (GiB) | 0 (0) |
+| Leftovers: deletions failed / earlier ones deleted | 0 / 0 |
+| Appends before the collection, p50 / max (ms) | 3.18 / 4.13 |
+| Appends during the collection, p50 / p99 / max (ms) | 3.24 / 674 / 677 |
+| Longest append during the collection (ms) | 677 |
+| `ReadBody` of 10 collected bodies, p50 / max (ms) | 456 / 516 |
+| Body files, before → after | 46,080 → 23,040 |
+| Body bytes, before → after (GiB) | 1.69 → 0.846 |
+| Log bytes, before → after (GiB) | 0.584 → 0.586 |
+| Free disk, before → after (GiB) | 26.2 → 27.0 |
+| Failed appends | 0 |
+
+Fields: `timesMs.collect`, `timesMs.phaseA`, `counts.batches`, `latencyMs.batch`, `counts.recorded` (`counts.recordedBytes`), `counts.unreferenced` (`counts.unreferencedBytes`), `counts.leftovers` / `counts.leftoversDeleted`, `latencyMs["append@idle"]`, `latencyMs["append@collect"]`, `timesMs.maxAppendStall`, `latencyMs.readBodyCollected`, `counts.bodyFilesBefore` → `counts.bodyFilesAfter`, `counts.bodyBytesBefore` → `counts.bodyBytesAfter`, `counts.logBytesBefore` → `logBytes`, `counts.freeBytesBefore` → `counts.freeBytesAfter`, and the sum of `failures`. Every collected body read back was reported unavailable, naming its collection record: `counts.classificationMismatches` is 0.
+
+**Limits:**
+
+- One machine: Windows 10 on NTFS. Linux and macOS, other file systems and network shares were not measured.
+- Every figure is a measurement against the assumed model above, on synthetic `fixture.sample` records. No budget, threshold or pass mark is set, nothing passes or fails one, and no figure is a capacity claim (D78, §8.6). Model rates and headroom are calculations.
+- A group fails only on a store invariant: an acknowledged commit missing after `Open`, a lookup case ending otherwise than defined, a misclassified collected body or a fatal store error. None failed.
+- No power-loss claim (B3). The colonies were written without a flush of each body file, and the restart was a clean shutdown, not a power loss.
+- Cold means the first access after a restart, because Windows documents no way for a non-administrator to evict one file's cached pages. Whether Windows prefetched colony files after the restart is unverified.
+- A cold `Open` is a cold `Check` followed by a rebuild that reads the log again, mostly from the file cache when the log fits in memory. The `60x7` log is 12.1 GiB.
+- Cold and warm `Open` times differ by at most 13% for each colony, warm being the slower in four of seven, and each recovery child used 1.0 to 1.2 CPU-seconds per second of wall time: a reading of the measurements is that on this machine `Open` was limited by processing the log, not by reading it from disk.
+- Peak working set, peak commit and CPU time are those of the whole child process, load generator included. `append/sequential` is the nearest baseline for the store alone.
+- The monotonic clock on this machine advanced in coarse steps: all 100 index hits measured 0 ms, and the sequential-append percentiles fall at 0.515, 1.00 and 1.13 ms. Latencies below a few milliseconds are therefore quantized to the clock's step, and their percentiles are coarse; a figure of 0 ms means at most one step. This is a reading of the measurements.
+- The publication latency of the 16 MiB and 64 MiB bodies includes generating their bytes.
+- A collection batch's time runs from its record's event time to its last body-file call. It excludes the scan of the log tail and the choice of bodies, which precede the record. The longest append during the collection is the end-to-end stall.
+- The append, burst, saturation and publication figures are on fresh colonies. History affects `Open` and old command-ID lookups, which have their own tables.
+- No other workload ran during the timed groups, with one exception: a directory-size scan of the colony folder ran for about a minute during generation. Build agents only read and wrote text files meanwhile.
+
 ## Appendix B — Sources and decision provenance
 
 - Owner's decisions: 2026-09-28 and 2026-09-29, recorded in §2 and §7; 2026-09-30 (build order, action ledger, workspace scratch and promotion), recorded in §2 D14–D18, §3.2, §3.5 and §7.3. The narrower 2026-09-29 reconciliation scope controls which early ideas were adopted.
@@ -1182,4 +1388,4 @@ The workload used a 0.91 MB transcript and 100 calls.
 
 **Historical design-model check, 2026-09-29:** a throwaway in-memory model with 21 agents matched 420 directed-pair decisions (76 allowed, 344 denied), 16 board-policy cases and 15 context/lifecycle boundary checks. It exercised the proposed role graph, directed memory, counterpart switching, approval scope, revocation and yielding. The model was not retained as a product test or reusable fixture. It did not exercise IPC, durable storage, provider execution, semantic storytelling or OS isolation; these counts are evidence of that design exercise, not a runtime release gate.
 
-**Not yet verified:** native toolkit build requirements beyond their documentation (A.9) and installed size; native startup/idle/security; colony IPC/instance recovery; broker durability and crash/side-effect recovery; the colony log's recovery and replay in the application (A.8 measured candidate prototypes only); D22's safeguards under simultaneous turns; temporary scratch and merge-back in the application (A.7 timed git operations on synthetic repositories only); the locked-file and case-insensitive-path hazards in §3.5; role-graph enforcement and scoped context reconstruction in the application; simultaneous launcher command races; descendant cleanup; Griot and multi-agent token/device costs. Design-model exercises are not implementation or IPC runtime verification.
+**Not yet verified:** native toolkit build requirements beyond their documentation (A.9) and installed size; native startup/idle/security; colony IPC/instance recovery; broker durability and crash/side-effect recovery; the colony log's recovery and replay in the application (A.8 measured candidate prototypes; A.10 measured C1's ledger store on one Windows NTFS machine, before C3 wires it into the host); D22's safeguards under simultaneous turns; temporary scratch and merge-back in the application (A.7 timed git operations on synthetic repositories only); the locked-file and case-insensitive-path hazards in §3.5; role-graph enforcement and scoped context reconstruction in the application; simultaneous launcher command races; descendant cleanup; Griot and multi-agent token/device costs. Design-model exercises are not implementation or IPC runtime verification.
