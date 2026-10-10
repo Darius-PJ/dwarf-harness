@@ -169,7 +169,7 @@
     },
     {
       "path": "world/animal.dog.pxm",
-      "sha256": "b83914642410bb4e0228062c1f84915ddddae1498623d492644ea7f44c4c8abf"
+      "sha256": "f21d7cb492b459a23c3e9fda5402008127ddb5e11599d1d1879acc7ec1154ca7"
     },
     {
       "path": "world/animal.horse_wheelbarrow.pxm",
@@ -403,7 +403,7 @@
     },
     {
       "path": "sample.json",
-      "sha256": "9045be570403d7c27a17be8d057c325864645b7e5c2706c78351e538c32c3244"
+      "sha256": "7b407e2eeb45829829ad9a8edef6c1ed8ca6ae40902f4cf229c546b7f452ee68"
     },
     {
       "path": "sheets/character-1x.png",
@@ -419,11 +419,11 @@
     },
     {
       "path": "sheets/map-1x.png",
-      "sha256": "0641fcdc295ecfc9aaea6cd9a212eb227e6ca4b66cbb483efb67e9279e7f58ca"
+      "sha256": "854f01ac1812852d41279ec12791ffdb96baa64e51bbbe68a775ef45419c4e33"
     },
     {
       "path": "sheets/map-4x.png",
-      "sha256": "bec1446ed48e3d0af28429bb3abf8eec0c22c52df61202379930eae63a20ec1e"
+      "sha256": "ec3af6bfab70dea0cece49b09779c4a59ba6ab90222ca08452e1a859d9e9fe3e"
     },
     {
       "path": "sheets/page-carter-act_diplomat-4x.gif",
@@ -459,7 +459,7 @@
     },
     {
       "path": "world/animal.dog.png",
-      "sha256": "03603e6a0d66327dc31cbc0f6e019729c86ee2931f6055f8ea70f7fc591b74f0"
+      "sha256": "db560e571863d1d32b949122338529a5f8821d68e269340dc6998504d21ec6ab"
     },
     {
       "path": "world/animal.horse_wheelbarrow.png",

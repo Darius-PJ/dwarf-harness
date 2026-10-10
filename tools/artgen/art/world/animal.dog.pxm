@@ -16,8 +16,8 @@ frame idle 0
 ..#.....#dd8dd#.
 .#d#..##ddddd8#.
 .#dd##ddddddddd#
-..#dd#ddddDDdd#.
-...#ddddd8DDddd#
+..#dd#dddddDDdd#
+...#dddddd8DDdd#
 ....###########.
 frame idle 1
 ................
@@ -33,8 +33,8 @@ frame idle 1
 ...#....#dd8dd#.
 ..#d#.##ddddd8#.
 .#dd##ddddddddd#
-..#dd#ddddDDdd#.
-...#ddddd8DDddd#
+..#dd#dddddDDdd#
+...#dddddd8DDdd#
 ....###########.
 frame running 0
 ................

@@ -3,7 +3,7 @@
   "pack": "dwarf-harness.sample",
   "licence": "LICENCE.txt",
   "provenance": "provenance.json",
-  "contentSha256": "4fffbf0acde946505e7bd4617802f90b2988df03c29d35015c83d7b738bf4744",
+  "contentSha256": "70cdd2ce8d07ac0751529dc07a175fbd3fa117953b58421f526a264b573f94dc",
   "grids": [
     {
       "grid": "world",
@@ -607,7 +607,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/animal.dog.png",
-          "sha256": "03603e6a0d66327dc31cbc0f6e019729c86ee2931f6055f8ea70f7fc591b74f0",
+          "sha256": "db560e571863d1d32b949122338529a5f8821d68e269340dc6998504d21ec6ab",
           "canvas": [
             16,
             16
