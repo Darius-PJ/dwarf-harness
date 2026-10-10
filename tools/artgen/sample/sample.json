@@ -3,7 +3,7 @@
   "pack": "dwarf-harness.sample",
   "licence": "LICENCE.txt",
   "provenance": "provenance.json",
-  "contentSha256": "bf35fb2515ddf5d3761dd9d51080b13a4a03c8b9714aa8b045b9c0a2d7270a31",
+  "contentSha256": "4fffbf0acde946505e7bd4617802f90b2988df03c29d35015c83d7b738bf4744",
   "grids": [
     {
       "grid": "world",
@@ -115,9 +115,9 @@
           "name": "act_worker",
           "frameCount": 3,
           "durationsMs": [
-            300,
-            300,
-            200
+            250,
+            400,
+            150
           ]
         },
         {
@@ -607,7 +607,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/animal.dog.png",
-          "sha256": "5643924dad518a8a3094d194358419010cf430c1ce61e588afaddd9e88ba8dd4",
+          "sha256": "03603e6a0d66327dc31cbc0f6e019729c86ee2931f6055f8ea70f7fc591b74f0",
           "canvas": [
             16,
             16
@@ -782,7 +782,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/back_accessory.pack.png",
-          "sha256": "e7759d3fb8b5d9a25100e4156f3cd1de9a95f0e8805b89ad8ba2583e639883b3",
+          "sha256": "786900240294d3e878d2fcb8fc25cf065271297de550093a7e9b1ea5aeab6b54",
           "canvas": [
             64,
             64
@@ -1181,7 +1181,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/banner.pennant.png",
-          "sha256": "5cdb7040634b500da131cc0262f8c34a244753b64218ecfa7efcf1838d47e3c1",
+          "sha256": "012b03334a6b91fd62e3192bd3d0463c10cd515ea10052baf906ae3d5a3db493",
           "canvas": [
             64,
             64
@@ -1330,7 +1330,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/body.stout.png",
-          "sha256": "6d704cff7b2a745f2c86192f10eb105e21ebbbafb5182b9c95fa7e8d52044e14",
+          "sha256": "b3a9910cdda955bc2c70405a165cd875c8fdf6402cf418621840633e1c6e3263",
           "canvas": [
             64,
             64
@@ -1440,7 +1440,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/emblem.crescent.png",
-          "sha256": "b62832a122d907434cf68103052b6bbe76d4f3ea52a97548170fe6ad0298eae2",
+          "sha256": "1616f5a2bd18ba18266be1397ea91508839ceaee88ee3468d55588faac8de2d9",
           "canvas": [
             64,
             64
@@ -1548,7 +1548,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/emblem.mountain.png",
-          "sha256": "b7a221b43d34c91d533e458704d625d2ac6f557f173879926cb3081b6101f646",
+          "sha256": "bc04bafbf1c608fbf4d5e7c151b7e6629a83dd8f562b889ebdf68ed73b8ba0bb",
           "canvas": [
             64,
             64
@@ -1695,7 +1695,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/front_accessory.pick.png",
-          "sha256": "8ec7a6df18138409abb57ab51e893a6ad216615f218498cf18c342db5a944261",
+          "sha256": "e9fea740a59e2cf89dd9e11f5c5c381c420cbcc5696f96573ad6ff50c468023d",
           "canvas": [
             64,
             64
@@ -1844,7 +1844,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/hair_beard.braided.png",
-          "sha256": "01a91bd3da78da0be4198b02d7c83a21d8992c553d9e54bfea7169260d942fca",
+          "sha256": "aaec5da5675e9ff9c93411eb082e86fc67e7c351a03e6f0f54d6df291afe9198",
           "canvas": [
             64,
             64
@@ -1993,7 +1993,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/hair_beard.topknot.png",
-          "sha256": "ea908962c47170dd8c22728b507d0da549fc3cfe0e3c41d7e2193e82d7f14332",
+          "sha256": "d6b67917554997df2b938265fac5561d1f6918d62a02c461a446574781afa155",
           "canvas": [
             64,
             64
@@ -2145,7 +2145,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/headwear.hat.png",
-          "sha256": "8e8c2052126dfbeb4c0825f0d2ce8ae44f74f8de948eda7471f8abb1c830187f",
+          "sha256": "eb660e549e5271b6cd9925225f1433b4f1298c67d35a2f756be6d6e3baffc188",
           "canvas": [
             64,
             64
@@ -2294,7 +2294,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/legwear.trousers.png",
-          "sha256": "949a3769b0d7484d84aaa3c01f4be8719a5bc3d142fafbada8b70fa4004f3b6f",
+          "sha256": "49f5013fdd9673578d424a600b4b936e261b9b42dd73e43f56893fcd0fea1bd0",
           "canvas": [
             64,
             64
@@ -2485,7 +2485,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/shoes.boots.png",
-          "sha256": "644c651de244e9801036338a4d08e555ecb5a13afb4f6474a4daf939b973778d",
+          "sha256": "a25e0e3afba47c9ae1574ac8341f86c6ea61d83052d4b8c75523014ba57a2226",
           "canvas": [
             64,
             64
@@ -2887,7 +2887,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.wall_top.png",
-          "sha256": "1e5b2d6cff157b0c17284320d1c00a34024db266a0dd1e8831b8ef95748a5921",
+          "sha256": "89fdb1294319d7fdc0ab2b7cd98402ff0df021f5385d70428902af7a7b63bf6c",
           "canvas": [
             16,
             16
@@ -2974,7 +2974,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/tool.worker.png",
-          "sha256": "c81c2e48486285efb1b787c45d89d02a4fe937e48d095df8deca11f1f59518c5",
+          "sha256": "3e95daad3967f8d42a57c892ff1d9a0d6ed17c27c05a3c7c1c527b8971092220",
           "canvas": [
             64,
             64
@@ -3087,7 +3087,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/torso_clothing.tunic.png",
-          "sha256": "e3ff7ca6e49671d76a3dc9e5b846afff71ff7aaa6ad647d8be75f971c0dd1140",
+          "sha256": "451659be7292244dcd1556dd7ceb43a1ea1c313267c5c17cca70af737a127e58",
           "canvas": [
             64,
             64
@@ -3236,7 +3236,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/torso_clothing.vest.png",
-          "sha256": "23619ffda36a80472d22eb88551edad2ffc1801fca335d79daf140e18d9e4365",
+          "sha256": "efbbb6aad07705312e3fab44297d8691a0184c2ad75304e0afb6279ca581f75a",
           "canvas": [
             64,
             64

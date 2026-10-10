@@ -1,21 +1,23 @@
-// tile.wall_top, world grid: the dressed top of a wall seen from above.
+// tile.wall_top, world grid: the dressed top of a wall seen from above. Plain
+// stone base on all four borders, so neighbouring wall tops join without a
+// seam; the few marks lie inside.
 canvas 16 16
 anchor 8 16
 category wall
 frame idle 0
-6666666666666666
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-6rrrrrrrrrrrrrrR
-RRRRRRRRRRRRRRRR
+rrrrrrrrrrrrrrrr
+rrrrrrrrrrrrrrrr
+rrrrrrrrrrrrrrrr
+rrr66rrrrrrrrrrr
+rrr6RRrrrrrrrrrr
+rrrrRRrrrrrrrrrr
+rrrrrrrrrrrrrrrr
+rrrrrrrrrrrrrrrr
+rrrrrrrrrrrrrrrr
+rrrrrrrrr66rrrrr
+rrrrrrrrrRRrrrrr
+rrrrrrrrr6RRrrrr
+rrrrrrrrrr6Rrrrr
+rrrrrrrrrrrrrrrr
+rrrrrrrrrrrrrrrr
+rrrrrrrrrrrrrrrr

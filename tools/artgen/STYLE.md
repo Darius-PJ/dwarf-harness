@@ -9,8 +9,8 @@ text.
 
 ## Views and light
 - Overworld (16 px, world/): three-quarter top-down; the camera looks down at the
-  scene from the south. Dwarves, the dog and every tile face the viewer; the horse
-  and wheelbarrow face east and the rail runs east-west.
+  scene from the south. Dwarves and every tile face the viewer; the dog, the horse
+  and the wheelbarrow face east, and the rail runs east-west.
 - Front still (64 px, rpg/front/): the dwarf at eye level, facing the viewer
   straight on, in its rest pose. One frame. Rosters show it.
 - Three-quarter (64 px, rpg/three_quarter/): the same dwarf at eye level, turned
@@ -95,8 +95,10 @@ text.
   (about 28-34 px with the arms), and the near side shows more. Nose, beard and toes
   point toward screen right. The far eye is one or two pixels or hidden; the far arm
   and far foot are mostly hidden by the body; the near arm overlaps the torso's
-  screen-left edge. A back accessory shows behind the body on screen left. Both
-  soles end on row 63, the near foot a little left of the far one.
+  screen-left edge. A back accessory shows behind the body on screen left. The near
+  leg stands in front and the far leg shows 4-5 px beside it, the line between them
+  drawn in the shadow step, never #. Both soles end on row 63, the near foot a
+  little left of the far one.
 - In idle frames the near (right) hand holds what the front accessory holds. During
   a role action it holds the role's tool or makes the action's gesture, and a front
   accessory held in that hand is stowed on the back, across the pack, in that
@@ -104,6 +106,10 @@ text.
   A stowed accessory lies across the pack and assumes it: give an outfit with such an
   accessory the pack too, until ticket 108 settles how a stowed accessory reads
   without one.
+- tool.<role> holds the action's equipment: the tool in the near hand and, where the
+  action needs a target, one fixed prop (the worker's anvil). Both exist only while
+  act_<role> plays, so they appear with the action; nothing in the layer carries a
+  role mark.
 - Layers keep their order in every frame. Where the near arm or hand must pass in
   front of a later layer (beard, hat, front accessory), that later layer leaves
   those pixels empty in that frame so the arm shows. Pose actions so such crossings
@@ -118,16 +124,20 @@ text.
 - With no role marker on the 64 px sprites, a role action must read as that role
   from its silhouette and motion alone, at 1x.
 - Few frames, strong key poses. idle: rest, breath. act_worker: ready, raise,
-  strike. act_diplomat: upright, bowed.
+  strike: the body leans into the blow, the arm reaches forward and the hammer
+  lands on the anvil with a spark. act_diplomat: upright, bowed.
 - Let timing ease the motion: hold key poses longer in animations.txt instead of
   adding in-between frames. The anticipation (the raise) holds; the contact (the
-  strike) is brief.
+  strike) is brief: act_worker plays 250 ms ready, 400 ms raise, 150 ms strike.
 - Move whole pixels. The breath settles chest, shoulders, head, beard, hat, pack,
   pennant and emblem by 1 px, as on the overworld; legs and feet stay. The bow
   bends the upper body forward from the waist: the torso leans toward screen right,
   the head, beard and hat drop about 7 px forward and 7 px down, and pack, pennant
-  and emblem follow the back; hips, legs and feet stay. A tool travels in an arc, a
-  few pixels per frame.
+  and emblem follow the back; hips, legs and feet stay. The strike leans into the
+  blow: head, beard, hat, pack, pennant and emblem move (+2,+1) and the torso
+  slants from +2 at the shoulders to 0 at the hips; hips, legs and feet stay. A
+  tool travels in an arc. In a three-frame blow each frame is a key pose, so the
+  tool may move far between frames.
 - Every layer has every frame. A layer that does not move repeats its rows exactly;
   layers that ride on the body (clothing, beard, hat, pack, pennant, emblem) move
   with it by the same amount so seams stay closed (collar, belt, brim, pole). Where
@@ -166,8 +176,10 @@ text.
 - Rock is darker and busier than floor; floor stays low in contrast so dwarves
   read on it. Texture (% and ~) only in rock and floor tiles, and only on interior
   pixels; draw edges and cracks explicitly.
-- wall_top is the rock mass seen from above; wall_face is the lighter vertical
-  face with horizontal strata. The door is wood planks with metal bands.
+- wall_top is the rock mass seen from above and joins its neighbours without a
+  seam: its four borders are plain base stone and its few marks lie inside;
+  wall_face is the lighter vertical face with horizontal strata. The door is wood
+  planks with metal bands.
 - Station, stockpile and rail are transparent sprites drawn over floor.
 - Motion frames of tiles, props and animals move 1-2 px at most; frame 0 is the
   rest pose.

@@ -37,7 +37,7 @@
     },
     {
       "path": "animations.txt",
-      "sha256": "537c9344e96ebcd072df2d0556fd2e6379da3497fb5b4d811ddf2ddcd27503b2"
+      "sha256": "29850de4ae69f57cdcc3378c0847da00f12306c0b8b66f4d0ffe5054e8b062fd"
     },
     {
       "path": "colors.txt",
@@ -113,63 +113,63 @@
     },
     {
       "path": "rpg/three_quarter/back_accessory.pack.pxm",
-      "sha256": "eb8113d32686acc225b93ba9397f1cd18b2cd2b9e2647d128f2824df9d80b253"
+      "sha256": "8b52219b43ad695476c6952c588178d8eb6761dd72e5164600208e382c4ceaad"
     },
     {
       "path": "rpg/three_quarter/banner.pennant.pxm",
-      "sha256": "96eb33279412846f67a17d0957b793adf2dfb0a0488282bf9d07d86c7c218317"
+      "sha256": "0f0a49772eab46e513e3788010ccae5910f205572ebde22a930c8f910d91545b"
     },
     {
       "path": "rpg/three_quarter/body.stout.pxm",
-      "sha256": "a3da2c252164988415cc255689b50f8c2d4aff8c947eb7b3f574c57c90f245e2"
+      "sha256": "e1a1a05357f5a97dcde63cb5f690894c6da07799de9fade0028c72a76a49d382"
     },
     {
       "path": "rpg/three_quarter/emblem.crescent.pxm",
-      "sha256": "ecdf0ea6c2efbb4d24c254003c35b9b522abca0e6408d8b08db9a2d7967a54ed"
+      "sha256": "59e6d2d36150b14dbba0a9715fb06e1fd9fe025a1159fb83f0565f0429f30d51"
     },
     {
       "path": "rpg/three_quarter/emblem.mountain.pxm",
-      "sha256": "8a09c9238fc9647228181ba63b81c8bcfaaf6601c144e04718596ec6abd33fa6"
+      "sha256": "29da6d76eb0d7326ae6eeb77309994f346881128e9aafc58476e5f1e474d6182"
     },
     {
       "path": "rpg/three_quarter/front_accessory.pick.pxm",
-      "sha256": "bef5705143d9235f9eb432cf5d9aa8a976ae1ef7148b8ed41a7db3cb7df788a9"
+      "sha256": "05cb2c959acfab339487ab5f4c9988dbd8018786524e335e5974ef11c6032860"
     },
     {
       "path": "rpg/three_quarter/hair_beard.braided.pxm",
-      "sha256": "afb31c9758cca0db2155fbfdc015d2a5d3d3095b70cbe261e7f81abb1307e2d2"
+      "sha256": "294f73c9b4ec3682232098919f579ef64924aab88bb1229d8657be86887b7041"
     },
     {
       "path": "rpg/three_quarter/hair_beard.topknot.pxm",
-      "sha256": "269c079fba5853e7ddbad78222d97e05b990f6366c4c8027c78288fcfec100ed"
+      "sha256": "6fdada520f5feb9978f27d3d4ed779f8bbe070c69180b62ec19e9ea8086de532"
     },
     {
       "path": "rpg/three_quarter/headwear.hat.pxm",
-      "sha256": "0f32b5c64e41c96cd971c7e9261356dc83a84173df4bd84cc4d1c2b3348c8d2d"
+      "sha256": "28d79a7826abe9f7024abaa443103cec8d165448c46aaaa4e0865d6a20b4fce7"
     },
     {
       "path": "rpg/three_quarter/legwear.trousers.pxm",
-      "sha256": "d4d0d2cdc8f0bad3eb092d5a202ed24fb2c876565863a6a39eddca28f0d5cb95"
+      "sha256": "f506084214a72b9a00f6370665dd5c1a72487192911f5d9f785c43bf18d34e66"
     },
     {
       "path": "rpg/three_quarter/shoes.boots.pxm",
-      "sha256": "08f71717abcb9a7e4e2709c3ec211f84106cd644292ca8a2ac7db36bc077665d"
+      "sha256": "925427092d7e176fb7ebcd6fec31cfe5cdd0dc826f4c3c2b9014f1ed24c1cbc4"
     },
     {
       "path": "rpg/three_quarter/tool.worker.pxm",
-      "sha256": "85883e95a0881ba57215fb3947dd79d39215a066932e5af102888b6fa2d84de9"
+      "sha256": "c8d1b26b73e7afac70254190117f394ecc24a3223ebce7decf64508b51423a28"
     },
     {
       "path": "rpg/three_quarter/torso_clothing.tunic.pxm",
-      "sha256": "0eb016ecbe84801ec544a24bcd25305b3f9b0ac500b8f3cf0d129a6ea5776cb1"
+      "sha256": "07ac435214cec781f9933ac7788e4ff0a6bdf9799514b3ed235465f6cfa63fb0"
     },
     {
       "path": "rpg/three_quarter/torso_clothing.vest.pxm",
-      "sha256": "d8693bac47e800fe927471cdf701a4d58731be7305aae9bbd0de924d00e7b9af"
+      "sha256": "c4b80d5da2dc87a5725bdb1b8f35a2bc0d1042c35af9ab6fb129f73916a90d87"
     },
     {
       "path": "world/animal.dog.pxm",
-      "sha256": "27c7cbd923f499e1e15dc8be4f8b2bbcf93c287f8d66b15bad5315275528557e"
+      "sha256": "b83914642410bb4e0228062c1f84915ddddae1498623d492644ea7f44c4c8abf"
     },
     {
       "path": "world/animal.horse_wheelbarrow.pxm",
@@ -273,7 +273,7 @@
     },
     {
       "path": "world/tile.wall_top.pxm",
-      "sha256": "f38067ea269ad4de385b32d9cd73d6619616e6e1df8311fce8e304bae1fb3d95"
+      "sha256": "0c4a380fe887d6c3ee69fe31e46203d5e9a134c27de178ec72f6b7a3c8d0cca4"
     },
     {
       "path": "world/tile.workbench.pxm",
@@ -347,71 +347,71 @@
     },
     {
       "path": "rpg/three_quarter/back_accessory.pack.png",
-      "sha256": "e7759d3fb8b5d9a25100e4156f3cd1de9a95f0e8805b89ad8ba2583e639883b3"
+      "sha256": "786900240294d3e878d2fcb8fc25cf065271297de550093a7e9b1ea5aeab6b54"
     },
     {
       "path": "rpg/three_quarter/banner.pennant.png",
-      "sha256": "5cdb7040634b500da131cc0262f8c34a244753b64218ecfa7efcf1838d47e3c1"
+      "sha256": "012b03334a6b91fd62e3192bd3d0463c10cd515ea10052baf906ae3d5a3db493"
     },
     {
       "path": "rpg/three_quarter/body.stout.png",
-      "sha256": "6d704cff7b2a745f2c86192f10eb105e21ebbbafb5182b9c95fa7e8d52044e14"
+      "sha256": "b3a9910cdda955bc2c70405a165cd875c8fdf6402cf418621840633e1c6e3263"
     },
     {
       "path": "rpg/three_quarter/emblem.crescent.png",
-      "sha256": "b62832a122d907434cf68103052b6bbe76d4f3ea52a97548170fe6ad0298eae2"
+      "sha256": "1616f5a2bd18ba18266be1397ea91508839ceaee88ee3468d55588faac8de2d9"
     },
     {
       "path": "rpg/three_quarter/emblem.mountain.png",
-      "sha256": "b7a221b43d34c91d533e458704d625d2ac6f557f173879926cb3081b6101f646"
+      "sha256": "bc04bafbf1c608fbf4d5e7c151b7e6629a83dd8f562b889ebdf68ed73b8ba0bb"
     },
     {
       "path": "rpg/three_quarter/front_accessory.pick.png",
-      "sha256": "8ec7a6df18138409abb57ab51e893a6ad216615f218498cf18c342db5a944261"
+      "sha256": "e9fea740a59e2cf89dd9e11f5c5c381c420cbcc5696f96573ad6ff50c468023d"
     },
     {
       "path": "rpg/three_quarter/hair_beard.braided.png",
-      "sha256": "01a91bd3da78da0be4198b02d7c83a21d8992c553d9e54bfea7169260d942fca"
+      "sha256": "aaec5da5675e9ff9c93411eb082e86fc67e7c351a03e6f0f54d6df291afe9198"
     },
     {
       "path": "rpg/three_quarter/hair_beard.topknot.png",
-      "sha256": "ea908962c47170dd8c22728b507d0da549fc3cfe0e3c41d7e2193e82d7f14332"
+      "sha256": "d6b67917554997df2b938265fac5561d1f6918d62a02c461a446574781afa155"
     },
     {
       "path": "rpg/three_quarter/headwear.hat.png",
-      "sha256": "8e8c2052126dfbeb4c0825f0d2ce8ae44f74f8de948eda7471f8abb1c830187f"
+      "sha256": "eb660e549e5271b6cd9925225f1433b4f1298c67d35a2f756be6d6e3baffc188"
     },
     {
       "path": "rpg/three_quarter/legwear.trousers.png",
-      "sha256": "949a3769b0d7484d84aaa3c01f4be8719a5bc3d142fafbada8b70fa4004f3b6f"
+      "sha256": "49f5013fdd9673578d424a600b4b936e261b9b42dd73e43f56893fcd0fea1bd0"
     },
     {
       "path": "rpg/three_quarter/shoes.boots.png",
-      "sha256": "644c651de244e9801036338a4d08e555ecb5a13afb4f6474a4daf939b973778d"
+      "sha256": "a25e0e3afba47c9ae1574ac8341f86c6ea61d83052d4b8c75523014ba57a2226"
     },
     {
       "path": "rpg/three_quarter/tool.worker.png",
-      "sha256": "c81c2e48486285efb1b787c45d89d02a4fe937e48d095df8deca11f1f59518c5"
+      "sha256": "3e95daad3967f8d42a57c892ff1d9a0d6ed17c27c05a3c7c1c527b8971092220"
     },
     {
       "path": "rpg/three_quarter/torso_clothing.tunic.png",
-      "sha256": "e3ff7ca6e49671d76a3dc9e5b846afff71ff7aaa6ad647d8be75f971c0dd1140"
+      "sha256": "451659be7292244dcd1556dd7ceb43a1ea1c313267c5c17cca70af737a127e58"
     },
     {
       "path": "rpg/three_quarter/torso_clothing.vest.png",
-      "sha256": "23619ffda36a80472d22eb88551edad2ffc1801fca335d79daf140e18d9e4365"
+      "sha256": "efbbb6aad07705312e3fab44297d8691a0184c2ad75304e0afb6279ca581f75a"
     },
     {
       "path": "sample.json",
-      "sha256": "dd3ae66ee910ee480a03639fd0437bd974330c0f41f68fab49d9f63b980554d0"
+      "sha256": "9045be570403d7c27a17be8d057c325864645b7e5c2706c78351e538c32c3244"
     },
     {
       "path": "sheets/character-1x.png",
-      "sha256": "66accfd0230784d1df55a711b52266855c1bf1214f9fadd8ae883099640d5cca"
+      "sha256": "ab5935f75a763294157716b643fa560c0ef66d8eb87ac4140261561d5230f2b8"
     },
     {
       "path": "sheets/character-4x.png",
-      "sha256": "649b0b5b019f42617915a0fba90110c7605abe6e2e60411b0b5f6bbf6c3a3826"
+      "sha256": "a29dd78f58fdf367cbafbd4f58cee3e1b5ab10594e207ef4e52e260d721f25ca"
     },
     {
       "path": "sheets/index.tsv",
@@ -419,47 +419,47 @@
     },
     {
       "path": "sheets/map-1x.png",
-      "sha256": "b516ad3c81cba1ec545bf8b788f1df396f9d46eaf2e5d787a1b521fa7ec609ce"
+      "sha256": "0641fcdc295ecfc9aaea6cd9a212eb227e6ca4b66cbb483efb67e9279e7f58ca"
     },
     {
       "path": "sheets/map-4x.png",
-      "sha256": "01d663dc312e18fb340d254f83ca4bfc8fbdc1e564b8740918ef31b0afed1971"
+      "sha256": "bec1446ed48e3d0af28429bb3abf8eec0c22c52df61202379930eae63a20ec1e"
     },
     {
       "path": "sheets/page-carter-act_diplomat-4x.gif",
-      "sha256": "5f248e1c76a02439b6e51adb78d4691c8959332df47273959097bb627cf9e6ee"
+      "sha256": "4ca4ddceba258b4c1593e35fea4ec2c31a3d8f19e9d2b46dece267e1f582bb63"
     },
     {
       "path": "sheets/page-carter-idle-4x.gif",
-      "sha256": "0ec3bd569cd5348a65603ae23f030fe88f13038b020f6fcce3e07447f3a857c8"
+      "sha256": "4ea4217d5a4c542c0445d920f56bb2d5f753e82268b17ad84b28141c402646bd"
     },
     {
       "path": "sheets/page-miner-act_worker-4x.gif",
-      "sha256": "ea0034c231c41bcd34ff544205921219c949b2e8dfc91b64080a112ae9847f11"
+      "sha256": "eb4ae1363a1adc29ac0951a4bbb871687ee2bc6ee4059fd65aa6534ec529ed23"
     },
     {
       "path": "sheets/page-miner-idle-4x.gif",
-      "sha256": "c4c901a1678a092f4bc0f52d1157cba20fbc697fcc0538bd368c577948b79712"
+      "sha256": "f7ebe26a86fb65888d0533ebdd7f96942a59f4b04f19d16dae80a0b26ccfd551"
     },
     {
       "path": "sheets/page-scribe-act_diplomat-4x.gif",
-      "sha256": "cef53b2142bc184c4124a613fb2dcf80bcd3e80119e605ea31d57b1137a0e96a"
+      "sha256": "9241935b1aad34c1caa09d6b252f0ea1c99f2b30672a163f5119b058a527d25f"
     },
     {
       "path": "sheets/page-scribe-idle-4x.gif",
-      "sha256": "b9fb2c3d4970cb3317a26a9fa2aa1c5aab6353914390d0c4e9e6a706f4687fc6"
+      "sha256": "79c53a7616f9bcf94632b2cb575090d2cad173908710966dcfdae6bbcbf4c0f8"
     },
     {
       "path": "sheets/page-smith-act_worker-4x.gif",
-      "sha256": "a7a4768679932153bd4883654166b439fed4f6db0bbabe68f14dc6c566703a62"
+      "sha256": "235fd3c795216a4c18b8067846fc1d3d972c951a29cffcc86a73a1b8ef272cf1"
     },
     {
       "path": "sheets/page-smith-idle-4x.gif",
-      "sha256": "d4596666b222b60d9e2f55fb1ba81a370f0214145e15992a54bd9cd869ba1ae0"
+      "sha256": "7679ca6afc8f2eee3a33d7e31ed4171e698a5d862e6c27d9d64b164932d8c24b"
     },
     {
       "path": "world/animal.dog.png",
-      "sha256": "5643924dad518a8a3094d194358419010cf430c1ce61e588afaddd9e88ba8dd4"
+      "sha256": "03603e6a0d66327dc31cbc0f6e019729c86ee2931f6055f8ea70f7fc591b74f0"
     },
     {
       "path": "world/animal.horse_wheelbarrow.png",
@@ -563,7 +563,7 @@
     },
     {
       "path": "world/tile.wall_top.png",
-      "sha256": "1e5b2d6cff157b0c17284320d1c00a34024db266a0dd1e8831b8ef95748a5921"
+      "sha256": "89fdb1294319d7fdc0ab2b7cd98402ff0df021f5385d70428902af7a7b63bf6c"
     },
     {
       "path": "world/tile.workbench.png",
