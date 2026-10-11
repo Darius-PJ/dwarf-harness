@@ -1,6 +1,6 @@
 # Undercurrent roadmap: from the standalone engine to a working Undercurrent
 
-**Status:** 2026-10-05. Steps 0–4, 6 and 15 of the former implementation roadmap moved to the core and router roadmaps when it was split (D19); the mapping table in `ROADMAPS.md` gives every old step its new ID. No field-layer implementation exists yet. This roadmap orders field-layer work, names dependencies and acceptance gates, and records no completed runtime or release gate.
+**Status:** 2026-10-10 (the owner freezes C1's ledger contracts, D111: U1 Ready; U3's foundation waits only for C2); 2026-10-05. Steps 0–4, 6 and 15 of the former implementation roadmap moved to the core and router roadmaps when it was split (D19); the mapping table in `ROADMAPS.md` gives every old step its new ID. No field-layer implementation exists yet. This roadmap orders field-layer work, names dependencies and acceptance gates, and records no completed runtime or release gate.
 
 ## Start here
 
@@ -214,7 +214,7 @@ C1 must formally freeze the `ledger-format` and `ledger-reader` contracts before
 
 **Exit criterion.** U1.L passes C1-frozen golden vectors for strict JSON v1, exact-byte hash/activation separation, the selected compact-v1 and standard-v1 parser boundaries, and all duplicate-key, schema, enum, kernel, edge-type, numeric-bound and configured size/count rejections. U1.E passes every applicable Undercurrent §14.1 property: deterministic typed routes and identities; lifecycle/no-echo; conservative lineage; scoped accounting; atomic graphs and honest coverage; exact source removal; checked signed-`int64` arrival-delta/due-time arithmetic with whole-generation invalidation on negative/overflowing conversion and no partial arrival/reach publication; delayed-arrival cancellation; replay/cache invalidation; mixed numeric comparison; unknown-not-zero; projection-before-selection; ambient/federation boundaries; prompt bounds; read neutrality; and explicit capacity exhaustion. Verify per-source-search and logical-task counters survive quantum yields, retries, restart, replay and cache rebuild; hard-cap exhaustion stays incomplete/unknown and is not automatically restarted under the same key. Compare FIFO route results with exhaustive simple-path enumeration on small integer graphs, including a flooring case where a stronger three-hop prefix and a weaker two-hop prefix tie at the destination; verify queued descendants survive intermediate-winner changes and cap/revision aborts publish no partial reach. Route candidates and immutable prefix bytes count against existing work and temporary-state caps. All listed gates remain unrun.
 
-**Status.** Waiting.
+**Status.** Ready (2026-10-10; C1's `ledger-format` and `ledger-reader` frozen, D111).
 
 ### U2. Synthetic ledgers, simulation, adversarial suite
 
@@ -306,7 +306,7 @@ Formerly step 5.
 
 **Exit criterion.** Foundation: replay at every cursor reconstructs whole logical graph versions; incremental deltas equal deterministic full rebuilds; approved directions/edge classes hold; co-access never transports; unsupported/over-budget coverage remains unknown; analyzer helpers are bounded and cannot block Core. Accepted-promotion integration, only after C4 Done, connects actual durable predecessor-to-integrated-target acceptance and proves replay/update agreement without duplicate attribution. U3 is Done only when both stages pass; record foundation completion separately so U5 need not wait for promotion integration (D52). No result exists yet.
 
-**Status.** Waiting (foundation: C2 and frozen `ledger-appender`; promotion integration: C4).
+**Status.** Waiting (foundation: C2; promotion integration: C4).
 
 ### U4. Promotion-pipeline field kinds
 
@@ -574,9 +574,9 @@ Formerly step 16.
 
 | Step | Remaining prerequisite or acceptance gate |
 |---|---|
-| U1 | C1 must freeze ledger-format/reader and the selected law-format contract/golden vectors; law values are explicit U2 candidates but calibration remains unrun; U1.E §14.1/replay/§13.7 capacity and checked signed-`int64` arrival-time evidence; D64–D69 activation implementation/bindings and recovery gates; Q15 cross-architecture tolerance remains unmeasured. |
+| U1 | C1's ledger-format/reader are frozen (D111); the selected law-format contract/golden vectors must still be frozen; law values are explicit U2 candidates but calibration remains unrun; U1.E §14.1/replay/§13.7 capacity and checked signed-`int64` arrival-time evidence; D64–D69 activation implementation/bindings and recovery gates; Q15 cross-architecture tolerance remains unmeasured. |
 | U2 | The Q25 protocol/cutoffs are selected in §14.3–14.4 and the V6 rule is solely validation §4.9.1; freeze exact manifests before runs. P-V2-F1-REPRODUCTION-ONLY is adopted: F1 seeds no field source and triggers no autonomous job/model turn; authorized private diagnostics remain, and existing C4 reproduction requires an explicit request. F2 is minimum failure-field evidence. Field simulation, C3/C4 A1, C5/C6 governance and separate C10/A2 results remain unrun. |
-| U3 | C2 plus frozen C1 appender; D29 dependency approval, honest language coverage, C1 graph-delta schema, atomic replay/rebuild and explicit-capacity evidence; co-access saturation/expiry deduplication must rebuild from bounded authoritative facts or stay unknown, with no exact count/edge while identities are incomplete. C4 gates promotion integration. |
+| U3 | C2 (C1's appender is frozen, D111); D29 dependency approval, honest language coverage, C1 graph-delta schema, atomic replay/rebuild and explicit-capacity evidence; co-access saturation/expiry deduplication must rebuild from bounded authoritative facts or stay unknown, with no exact count/edge while identities are incomplete. C4 gates promotion integration. |
 | U4 | C2/C4/C5, U1.E and full U3; exact C1/C4 evidence/source schemas, lineage/retirement integration, per-kind properties, permission-scoped overlap and D78 capacity evidence. |
 | U5 | R1/C1 exact band/status/fact contracts, frozen U1.L, U1.E for source/engine integration, and U3 foundation; exercise selected R1 band lookup/expiry and typed provider-status lease; verify stable budget-limit identity replacement/withdrawal without stale accumulation, preserve all cross-period holds exactly once and treat missing current evidence as unknown; actual budget/resource/runner inputs, finite capacity denominators and real workload/capacity calibration remain unrun. |
 | U6 | U4/U5/R1 and frozen context-module; actual tokenizer/provider-cost measurement, threshold coefficients, selected Core-private shadow retention/access and projection/revocation/fairness side-channel evidence remain unrun. |
