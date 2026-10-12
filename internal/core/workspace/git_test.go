@@ -96,8 +96,8 @@ func TestGitCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, _, err := f.git.run(ctx, f.root, inspectionEnvironment(f.env), nil, []int{0}, "version")
-	if !errors.Is(err, ErrGit) {
-		t.Fatalf("cancelled command succeeded: %v", err)
+	if !errors.Is(err, ErrGit) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled command lost its cause: %v", err)
 	}
 }
 

@@ -3,9 +3,11 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -84,4 +86,42 @@ func newGitFixture(t testing.TB, format string) gitFixture {
 		t.Fatal(f.git.unavailable)
 	}
 	return f
+}
+
+type captureSideEffects struct {
+	Objects, Refs string
+	Tmp           map[string]string
+}
+
+func snapshotCaptureSideEffects(t *testing.T, f gitFixture, p Proposal) captureSideEffects {
+	t.Helper()
+	s := captureSideEffects{
+		Objects: string(gitCommand(t, f.env, f.root, nil, "--git-dir="+p.CommonDir, "count-objects", "-v")),
+		Refs:    string(gitCommand(t, f.env, f.root, nil, "--git-dir="+p.CommonDir, "for-each-ref", "--format=%(refname)%00%(objectname)%00", "--end-of-options", "refs/dwarf-harness/captures/")),
+		Tmp:     map[string]string{},
+	}
+	err := filepath.WalkDir(filepath.Join(f.colony, "workspaces"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if filepath.Base(path) == "tmp" || strings.Contains(filepath.ToSlash(path), "/tmp/") {
+			if d.IsDir() {
+				s.Tmp[path] = "directory"
+			} else {
+				s.Tmp[path] = "file\x00" + string(readTestFile(t, path))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func assertCaptureSideEffects(t *testing.T, f gitFixture, p Proposal, before captureSideEffects) {
+	t.Helper()
+	if after := snapshotCaptureSideEffects(t, f, p); !reflect.DeepEqual(before, after) {
+		t.Fatalf("busy changed objects, refs or capture tmp: before %#v after %#v", before, after)
+	}
 }

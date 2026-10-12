@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -101,8 +102,11 @@ func TestInspectRefuses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if filepath.Clean(p.CommonDir) != filepath.Clean(bare) {
+		if p.CommonDir != filepath.ToSlash(bare) {
 			t.Fatalf("wrong common dir: %q", p.CommonDir)
+		}
+		if runtime.GOOS == "windows" && strings.Contains(p.CommonDir, `\`) {
+			t.Fatalf("Git's common-dir bytes were rewritten: %q", p.CommonDir)
 		}
 	})
 }

@@ -89,6 +89,7 @@ func TestGitVersionGate(t *testing.T) {
 		ok bool
 	}{
 		{"git version 2.55.0.windows.3\n", true}, {"git version 2.42.0\n", true}, {"git version 3.0.0", true},
+		{"git version 2.45.2 (Apple Git-200)\n", true},
 		{"git version 2.39.5 (Apple Git-154)\n", false}, {"git version 2.41.9", false}, {"", false}, {"git version x", false}, {"git version 2.42", false}, {"git version 2.42.0\ntrailing", false},
 	} {
 		version, err := parseGitVersion([]byte(tc.in))

@@ -90,17 +90,27 @@ func (b *limitedStderr) Write(p []byte) (int, error) {
 }
 
 func (g *gitRunner) run(ctx context.Context, dir string, env []string, in io.Reader, exits []int, args ...string) ([]byte, int, error) {
+	var out bytes.Buffer
+	exit, err := g.runOutput(ctx, dir, env, in, &out, exits, args...)
+	if err != nil {
+		return nil, exit, err
+	}
+	return out.Bytes(), exit, nil
+}
+
+// runOutput streams stdout to the caller while preserving run's process,
+// cancellation, exit-code and stderr rules. It never buffers object bodies.
+func (g *gitRunner) runOutput(ctx context.Context, dir string, env []string, in io.Reader, out io.Writer, exits []int, args ...string) (int, error) {
 	if g.unavailable != nil {
-		return nil, -1, g.unavailable
+		return -1, g.unavailable
 	}
 	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdin = in
 	cmd.WaitDelay = 5 * time.Second
-	var out bytes.Buffer
 	var stderr limitedStderr
-	cmd.Stdout = &out
+	cmd.Stdout = out
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	exit := 0
@@ -115,7 +125,7 @@ func (g *gitRunner) run(ctx context.Context, dir string, env []string, in io.Rea
 	if ctx.Err() == nil && (err == nil || errors.As(err, &exitError)) {
 		for _, want := range exits {
 			if exit == want {
-				return out.Bytes(), exit, nil
+				return exit, nil
 			}
 		}
 	}
@@ -123,7 +133,11 @@ func (g *gitRunner) run(ctx context.Context, dir string, env []string, in io.Rea
 	if detail == "" && err != nil {
 		detail = err.Error()
 	}
-	return nil, exit, &GitError{Args: append([]string(nil), args...), Exit: exit, Stderr: detail}
+	cause := err
+	if ctx.Err() != nil {
+		cause = ctx.Err()
+	}
+	return exit, &GitError{Args: append([]string(nil), args...), Exit: exit, Stderr: detail, Err: cause}
 }
 
 func (g *gitRunner) repository(ctx context.Context, colony, common string, in io.Reader, exits []int, args ...string) ([]byte, int, error) {

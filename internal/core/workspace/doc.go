@@ -1,7 +1,8 @@
-// Package workspace provides Core's record-free Git, capture-input and private
-// worktree mechanics. Ticket 05 S1a writes no ledger record and exposes no
-// promotion or capture-only command. The service, capture engine and reservation
-// layer are separate slices. Nothing here accepts a promotion or moves main.
+// Package workspace provides Core's record-free private worktrees, exact
+// capture and capture reservations. Ticket 05 S1 writes no ledger record and
+// exposes no promotion or capture-only command. The service and durable
+// workspace lifecycle remain a separate slice. Nothing here accepts a
+// promotion or moves main.
 //
 // # Git and its environments
 //
@@ -16,6 +17,8 @@
 // Commands use exec.CommandContext, a five-second WaitDelay and at most 64 KiB
 // of stderr. Each call declares its expected exit codes; an unexpected exit is
 // a GitError matching ErrGit. Git message text never determines an outcome.
+// GitError also preserves cancellation and process-start or wait errors for
+// errors.Is; cancellation never becomes an expected exit.
 // Listings are NUL-delimited, and parsers return no partial list on malformed
 // output. Object IDs are lowercase hex: 40 digits for sha1, 64 for sha256.
 // Core never fetches missing objects.
@@ -59,7 +62,8 @@
 // service must repeat this check at registration; scratch creation repeats it
 // independently, immediately before creating a private branch.
 //
-// Proposal contains the absolute common directory, Git version, object format,
+// Proposal preserves Git's absolute, forward-slash common-directory string
+// verbatim, including on Windows. It also holds the Git version, object format,
 // seven normalization settings and five HostFiles. Absent files are distinct
 // from empty ones. Each file is bounded at 1 MiB. Inspection imports:
 //
@@ -113,6 +117,9 @@
 // worktree add --no-checkout followed by private read-tree -u --reset against
 // the anchor tree, writing the worktree's real index under pinned conversion.
 // A creation failure attempts cleanup; reconciliation later owns any orphan.
+// Before materialization, a recursive NUL-delimited tree listing rejects case
+// collisions over paths and directory prefixes on every platform, naming both
+// paths. An unmaterializable baseline is never checked out first.
 //
 // refs/dwarf-harness/colony holds the raw blob "dwarf-harness colony <ID>" plus
 // LF. Creation uses hash-object -w --stdin --no-filters then update-ref with the
@@ -124,34 +131,149 @@
 // Objects precede refs, which precede the service's record. This is not a
 // power-loss guarantee or a same-user security boundary (C10).
 //
+// # Exact capture
+//
+// A capture takes a physical scratch, a trusted baseline tree, a live reserved
+// token and observe or seal mode. The baseline is the anchor in ticket 05;
+// ticket 06 can supply a local parent's sealed tree. Scratch HEAD, its index,
+// assume-unchanged, skip-worktree and stat-only hints are never authority.
+// Preconditions are an explicit profile, available Git at the pinned version,
+// a usable workspace with this colony's marker, and a present scratch directory.
+//
+// Each capture rematerializes the pinned inputs and creates a UUIDv7 private
+// index at workspaces/<wdir>/tmp/<capture ID>.idx. read-tree loads the baseline.
+// Baseline gitlinks and symlinks are unsupported_kind. Baseline path and
+// directory-prefix collisions give case_collision before the walk, on every OS.
+// Eligible untracked paths come from ls-files -z -o --exclude-standard; a
+// trailing slash identifies an unsupported nested repository. The ignored
+// listing additionally uses -i --directory. IgnoredEntries counts its entries:
+// a wholly ignored directory is one entry, not its recursive file count. No
+// ignored names are returned.
+//
+// Before raw candidate reads or Git candidate hashing, Core walks without
+// following links. DirEntry.Type
+// and Lstat classify regular files and real directories; ModeSymlink gives
+// unsupported_kind, and ModeIrregular, pipes, sockets and other special kinds
+// give special_file. Only the root .git file and exactly named, wholly ignored
+// real directories are skipped. Core reconciles exact path bytes against Git:
+// tracked-but-absent paths are deletions, except a case-only spelling under
+// pinned ignorecase=true gives name_mismatch. Git-only eligible paths also give
+// name_mismatch; Core-only nonignored files give unobservable_path. Candidate
+// names must be UTF-8, otherwise invalid_path. Tracked paths stay eligible
+// despite ignore rules;
+// same-capture .gitignore edits and negations govern new files under Git's
+// normal precedence with pinned local and global excludes.
+//
+// File count and walked raw-size caps give file_cap and byte_cap respectively,
+// before the first raw read.
+// check-attr then rejects filter as unsupported_filter and working-tree-encoding
+// or ident as unsupported_conversion unless their values are unspecified or
+// unset. No driver is granted, including an unknown or empty-valued filter.
+// Core reads every candidate in path-byte order, streaming SHA-256 and actual
+// byte counts. A running byte-cap breach gives byte_cap; open/read errors give
+// unreadable; changed size or modification time gives scratch_changed.
+//
+// Git removes deleted entries from the private index, adds every present
+// candidate under pinned conversion, and writes the tree. Core verifies the
+// exact path set, regular modes 100644/100755, and final case collisions over
+// paths and every directory prefix using strings.ToUpper. Equivalence to NTFS
+// folding is an inference, not a Unicode normalization guarantee.
+//
+// cat-file --batch streams each distinct blob through raw and CRLF SHA-256
+// hashers. Per path, raw must equal blob or crlf(blob), where crlf inserts CR
+// before LF only if the preceding byte is not CR, including across chunks.
+// Otherwise the result is scratch_changed when metadata changed, or
+// lossy_normalization. Whole blobs are never buffered. Every raw-read file is
+// restatted before sealing. Under autocrlf=true, irreversible mixed endings
+// are refused; lone CR bytes are not special-cased and may be stored verbatim.
+//
+// The raw manifest is JSON Lines. Its first line has keys format, version,
+// object_format, with format dwarf-harness/capture-manifest and version 1.
+// Following rows are path-byte-sorted and have keys path, mode, id, size,
+// sha256 in that order. Raw size and SHA-256 remain distinct from the Git blob
+// ID. A manifest over ledgerstore.MaxBodyBytes gives manifest_cap. The bytes
+// and their SHA-256 are returned, not published. The result also carries the
+// capture ID, tree, baseline, inputs revision and SHA-256, file and raw-byte
+// counts, and the seal-only retention ref.
+//
+// Seal creates refs/dwarf-harness/captures/<capture ID> with a zero old ID.
+// Observe creates no retention ref. The private index and its lock artifact
+// are removed on every outcome. A refusal returns no result and retains
+// nothing. A retained tree and its blobs survive scratch, index, HEAD,
+// attribute, ignore and live-config changes and git gc --prune=now; ticket 06
+// and later terminal-state owners release the retention ref.
+//
+// # Reservation lifetimes
+//
+// Scratch exclusion and the colony-wide MaxBytes share are acquired under one
+// mutex, both or neither. Exclusive acquisition never waits for a writer or
+// another exclusive holder: scratch_busy returns without a snapshot, queued
+// retry or interrupted writer, even if the request context has already ended.
+// An insufficient bytes pool gives capture_budget without retaining exclusion.
+// BeginWrite holders are shared; a writer waits context-boundedly for an
+// exclusive holder to release and never interrupts its capture.
+//
+// Only reserve mints the unexported token. Under the same mutex, capture refuses
+// nil, unminted, wrong-scratch, used, released or bytes-less tokens with a typed
+// internal error matching ErrInvalid. Marking is atomic: one token permits one
+// capture, including concurrent attempts. The caller owns and defers release
+// of exclusion through its entire operation: observe, durable close and
+// removal, or seal and admission record. The engine returns only the bytes
+// share on every outcome. release is idempotent and returns whatever parts
+// remain, including bytes when the engine was never reached. Closure can take
+// exclusion alone for an absent directory, adding bytes only when it observes.
+// Ticket 06 adds its longer-lived K-slot to this token, not a second mechanism.
+//
 // # Removal boundary
 //
 // The service must prove a scratch has no unrepresented eligible edits before
 // durably recording its closure. Its only represented tree in ticket 05 is its
-// anchor; a capture refusal blocks closure. Ignored files are scratch-local,
-// are discarded, and the service's closure result reports their count. A
-// missing directory may close. These record/representation checks are not
-// bypassed or simulated by this record-free mechanics package.
+// anchor; a capture refusal blocks closure. Ignored entries are scratch-local
+// and discarded; closure reports the ignored-listing entry count described
+// above. A missing directory may close. These record/representation checks
+// are not bypassed or simulated by this record-free mechanics package.
 //
 // After durable closure, or for an orphan never handed to a context, Core owns
 // removal. A DirEntry/Lstat walk unlinks symlinks and ModeIrregular reparse
 // points with os.Remove without descending, descends only real directories,
-// and unlinks files. Only then does os.RemoveAll remove the remaining real
-// directories. Core never asks git worktree remove --force to traverse an
-// unverified directory. Removal failure gives ErrRemovalPending; registration
-// is not pruned until removal completes. Then git worktree prune runs, the
+// and unlinks files. A permission error unlinking a regular file gets one
+// chmod 0600 and one retry; links and reparse points are never chmodded.
+// Only then does os.RemoveAll remove the remaining real directories. Core
+// never asks git worktree remove --force to traverse an unverified directory.
+// Removal failure gives ErrRemovalPending; registration is not pruned until
+// removal completes. Then git worktree prune runs, the
 // scratch branch is deleted by compare-and-swap only if still at its base, and
 // the anchor is deleted. Moved branches retain their history. Closed scratches
 // and Open's orphan sweep retry this same primitive; no success is assumed.
 // Same-user check/use races remain C10's boundary.
 //
-// # Later slices
+// # Profile, measurements and later admission
 //
-// CaptureProfile is the capture subset of CORE:862's CapacityProfile, to be
-// extended by ticket 06 and C4, not a second capacity authority. Capture must
-// receive an unexported reservation minted only by reserve; exclusive holders
-// never wait and busy creates no snapshot. C2 has no validator: no_validator
-// is unconditional, with no injectable validator seam, until C4 wires the
-// real validator. Replay reads no clock. A maintenance policy for loose objects
-// from observe/refused captures remains open for ticket 06 or later, not 05.
+// CaptureProfile is the capture subset of CORE:862's CapacityProfile, extended
+// by ticket 06 and C4 rather than a second capacity authority. MaxFiles and
+// MaxBytes must be positive, and BytesInFlight must be at least MaxBytes;
+// otherwise configuration gives ErrInvalid. A nil Config.Capture gives
+// no_capacity_profile. ProvisionalCaptureProfile returns 100,000 files, 1 GiB
+// per capture and 20 GiB in flight. These are calibration inputs, not measured
+// capacity, a colony cap or a service level.
+//
+// Reads are sequential in v1. The opt-in DWARF_CAPTURE_WORKLOAD_OUT harness
+// records creation, fresh and warm observe, a seal after ten edits, and closure
+// observation for 1,000 and 10,000 roughly 800-byte files. Results and work
+// directories stay outside the repository. It skips under -race, leaves
+// Defender enabled and adds no exclusions, compares trees with reference Git,
+// and has no timing threshold. Burst concurrency remains C4's feasibility gate.
+// Windows long paths Git cannot list give unobservable_path; sharing violations
+// give unreadable. With filemode=false, tracked executable modes are preserved
+// and new files get 100644. Linux and macOS CI require Git at least 2.42.
+//
+// C2 has no validator: no_validator is unconditional, with no injectable seam,
+// until C4 wires the real validator. RequestPromotion belongs to the service:
+// after profile and immediate reservation checks it checks Git, workspace and
+// scratch availability, returns unavailable, and releases. It never captures,
+// records, waits, queues, retries or changes refs. The service should retain one
+// Git runner instead of resolving a fresh executable through each Inspect call.
+// Replay reads no clock. Observe and refused captures can leave loose objects;
+// plumbing never triggers gc --auto. Their maintenance policy remains open for
+// ticket 06 or later, not 05.
 package workspace

@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"reflect"
 	"strings"
@@ -182,6 +183,33 @@ func FuzzDecodeCaptureInputs(f *testing.F) {
 		encoded, err := d.encode()
 		if err != nil || !bytes.Equal(b, encoded) {
 			t.Fatal("accepted noncanonical capture inputs")
+		}
+	})
+}
+
+func FuzzCRLFStreaming(f *testing.F) {
+	f.Add([]byte("a\r\nb\n"), []byte{2, 1, 2})
+	f.Add([]byte("\r\r\n\x00\n"), []byte{1, 0, 3})
+	f.Add([]byte{}, []byte{})
+	f.Fuzz(func(t *testing.T, b, chunks []byte) {
+		h := newCRLFHasher()
+		for offset, i := 0, 0; offset < len(b); i++ {
+			n := 1
+			if len(chunks) > 0 {
+				n = int(chunks[i%len(chunks)])
+			}
+			if n == 0 {
+				_, _ = h.Write(nil)
+				n = 1
+			}
+			n = min(n, len(b)-offset)
+			if written, err := h.Write(b[offset : offset+n]); err != nil || written != n {
+				t.Fatalf("stream write: %d %v", written, err)
+			}
+			offset += n
+		}
+		if got, want := h.Sum(), sha256.Sum256(referenceCRLF(b)); got != want {
+			t.Fatalf("chunked CRLF hash differs from reference")
 		}
 	})
 }

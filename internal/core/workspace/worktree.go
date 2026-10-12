@@ -135,6 +135,17 @@ func (g *gitRunner) createWorktree(ctx context.Context, colony string, p Proposa
 	if tree == "" {
 		return zero, fmt.Errorf("%w: missing anchor tree", ErrGit)
 	}
+	names, _, err := g.repository(ctx, colony, p.CommonDir, nil, []int{0}, "ls-tree", "-r", "-z", "--name-only", "--end-of-options", tree)
+	if err != nil {
+		return zero, err
+	}
+	paths, err := parseNULList(names)
+	if err != nil {
+		return zero, fmt.Errorf("%w: baseline paths: %v", ErrGit, err)
+	}
+	if err := checkCaseCollisions(paths); err != nil {
+		return zero, err
+	}
 	s := scratchWorktree{Dir: dir, Branch: "refs/heads/dwarf-harness/" + name, BaseCommit: base, AnchorTree: tree, AnchorRef: "refs/dwarf-harness/anchors/" + id}
 	old, err := g.readRef(ctx, colony, p.CommonDir, s.Branch, oidLength(p.ObjectFormat))
 	if err != nil {
@@ -215,6 +226,16 @@ func (g *gitRunner) removeWorktree(ctx context.Context, colony, common string, s
 // reports Windows junctions and mount points as ModeIrregular. Files are
 // unlinked during the walk; RemoveAll sees only real, empty directories.
 func removeScratchDirectory(root string, removeAll func(string) error) error {
+	removeEntry := func(path string, mode os.FileMode) error {
+		err := os.Remove(path)
+		if err != nil && os.IsPermission(err) && mode.IsRegular() {
+			if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
+				return chmodErr
+			}
+			return os.Remove(path)
+		}
+		return err
+	}
 	info, err := os.Lstat(root)
 	if os.IsNotExist(err) {
 		return nil
@@ -223,7 +244,7 @@ func removeScratchDirectory(root string, removeAll func(string) error) error {
 		return err
 	}
 	if !info.IsDir() || info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
-		return os.Remove(root)
+		return removeEntry(root, info.Mode())
 	}
 	var unlink func(string) error
 	unlink = func(dir string) error {
@@ -240,7 +261,7 @@ func removeScratchDirectory(root string, removeAll func(string) error) error {
 			}
 			kind |= info.Mode().Type()
 			if kind&(os.ModeSymlink|os.ModeIrregular) != 0 || !info.IsDir() {
-				if err := os.Remove(path); err != nil {
+				if err := removeEntry(path, info.Mode()); err != nil {
 					return err
 				}
 				continue

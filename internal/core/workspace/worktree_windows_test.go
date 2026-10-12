@@ -121,3 +121,21 @@ func TestRemovalBlockedByOpenHandle(t *testing.T) {
 	}
 	assertScratchRemoved(t, f, p, s)
 }
+
+func TestRemovalUnlinksReadOnlyRegularFile(t *testing.T) {
+	f, p, s := fixtureScratch(t)
+	path := filepath.Join(s.Dir, "nested", "read-only.txt")
+	writeTestFile(t, path, []byte("agent tool output\n"))
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, 0o600); err != nil && !os.IsNotExist(err) {
+			t.Error(err)
+		}
+	})
+	if err := f.git.removeWorktree(context.Background(), f.colony, p.CommonDir, s, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertScratchRemoved(t, f, p, s)
+}

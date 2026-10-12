@@ -65,7 +65,7 @@ func (g *gitRunner) inspect(ctx context.Context, root string) (Proposal, error) 
 	if !ok || (format != "sha1" && format != "sha256") || !filepath.IsAbs(common) {
 		return p, fmt.Errorf("%w: invalid repository description", ErrGit)
 	}
-	p.CommonDir = filepath.Clean(common)
+	p.CommonDir = common
 	p.ObjectFormat = format
 	p.GitVersion = g.version
 	call := func(args ...string) ([]byte, int, error) {
