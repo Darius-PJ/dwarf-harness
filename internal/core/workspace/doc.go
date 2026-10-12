@@ -1,8 +1,7 @@
-// Package workspace provides Core's record-free private worktrees, exact
-// capture and capture reservations. Ticket 05 S1 writes no ledger record and
-// exposes no promotion or capture-only command. The service and durable
-// workspace lifecycle remain a separate slice. Nothing here accepts a
-// promotion or moves main.
+// Package workspace provides Core's registered Git workspaces, bound private
+// scratches, exact capture and capture reservations. The service writes the four
+// frozen F2-05 workspace record types through the colony store. Nothing here
+// accepts a promotion or moves main; there is no capture-only product command.
 //
 // # Git and its environments
 //
@@ -12,13 +11,15 @@
 // Missing, old or malformed Git gives ErrGitUnavailable at inspection. Version
 // mismatch gives inputs_stale, naming both pinned and running versions. A Git
 // upgrade therefore requires the owner's input reapproval before captures can
-// resume. The later service may still open when Git is unavailable.
+// resume. Open still succeeds when Git is unavailable.
 //
 // Commands use exec.CommandContext, a five-second WaitDelay and at most 64 KiB
 // of stderr. Each call declares its expected exit codes; an unexpected exit is
 // a GitError matching ErrGit. Git message text never determines an outcome.
 // GitError also preserves cancellation and process-start or wait errors for
 // errors.Is; cancellation never becomes an expected exit.
+// Cancellation detected outside Git returns the context error directly; use
+// errors.Is with context.Canceled or context.DeadlineExceeded in either case.
 // Listings are NUL-delimited, and parsers return no partial list on malformed
 // output. Object IDs are lowercase hex: 40 digits for sha1, 64 for sha256.
 // Core never fetches missing objects.
@@ -59,7 +60,7 @@
 //
 // Inspect is read-only. It refuses a nonrepository, a missing main commit, or
 // main checked out in any worktree (D48). Bare repositories are allowed. The
-// service must repeat this check at registration; scratch creation repeats it
+// service repeats this check at registration; scratch creation repeats it
 // independently, immediately before creating a private branch.
 //
 // Proposal preserves Git's absolute, forward-slash common-directory string
@@ -224,27 +225,91 @@
 // exclusion alone for an absent directory, adding bytes only when it observes.
 // Ticket 06 adds its longer-lived K-slot to this token, not a second mechanism.
 //
+// # Service lifecycle and records
+//
+// Open takes the host-owned ledgerstore store (opened with ledger.Defined) and
+// verifies its log directory with os.SameFile. One service owns a colony's
+// workspace projection and Git runner. Register rechecks the observed part of
+// the owner's Proposal and records exactly the five reviewed files. It refuses
+// duplicate common directories, including filesystem aliases, and another
+// colony's marker. A matching marker permits interrupted registration to resume.
+// Register atomically writes registered, capture_inputs_pinned revision 1, and
+// body_pin. UpdateInputs is an owner-only expected-revision compare-and-swap:
+// inputs revision n+1, its body_pin, and the previous body's body_unpin are one
+// commit. In-flight captures retain their inputs; later ones see the new revision.
+// The caller authenticates the owner; no stand-in authenticator exists in C2.
+//
+// Scratch creates one worktree per (context, workspace) pair, serializing first
+// uses of that pair with context-bounded waiting, without serializing Git work
+// for other pairs. UUIDv7 suffix names are never reused from recorded history;
+// at most three IDs are tried around history, directory and branch collisions.
+// Objects, anchor ref and materialized worktree precede scratch_created. A
+// definite append failure rolls creation back. An uncertain append retains the
+// worktree until replay determines whether the record exists.
+// Workspace materialization directories likewise use the ID's last eight hex
+// digits. Register mints around recorded suffixes and existing directories,
+// at most three attempts, then ErrInvalid. Replay rejects a repeated workspace
+// suffix with ErrInconsistent; no alternative directory mapping exists.
+//
+// At Open the service enforces every record rule the log decides; the exact-set
+// rule of capture_inputs_pinned is enforced at append and, at Open, for the
+// current revision only; superseded revisions' bodies are never read. Checks
+// include actor and context binding, commit shape and pin matching, revision
+// sequencing, workspace identity, never-reused scratch identities/names, one
+// open scratch per pair, branch == refs/heads/dwarf-harness/<dir>, both Git ID
+// lengths matching the workspace format, and at-most-once closure. A violation
+// gives InconsistentError matching ErrInconsistent and naming its sequence.
+// Unknown closure reasons remain readable closures; the producer writes only
+// abandoned. A newer consumed record version returns the ledger reader's
+// UnsupportedVersionError.
+//
+// Current bodies are verified by ReadBody, decoded and compared with body_refs.
+// Missing or unreadable current bodies and unknown document versions make that
+// workspace inputs_unavailable, with digest/error detail, without failing Open.
+// A malformed known document or a contradictory exact set fails Open. Git
+// directories and colony markers are checked before operations. Reconciliation
+// empties disposable tmp directories, removes never-exposed orphans, retries
+// durable closures, restores missing open anchors when their objects survive,
+// and reports missing scratches and unfinished repairs. It writes no record and
+// reads no clock. Unrecorded anchor and capture refs are swept in usable
+// repositories. An orphan's regular .git file identifies its registered workspace
+// by os.SameFile; exactly one matching UUID-suffix anchor proves its base.
+// Missing or ambiguous proof permits directory removal only (and pruning only
+// in a verified workspace); the branch is retained and named in Pending. A moved
+// orphan branch is also retained and reported. Anchors for still-present orphan
+// directories survive the stray sweep, preserving retry proof. Stray branches
+// without directories are never swept. Every ref deletion uses an old-value CAS.
+//
+// Close drains operations and outstanding BeginWrite leases, rejects later calls
+// with ErrClosed, and is idempotent. The host closes the store separately.
+// appender.ErrUncertain or appender.ErrPoisoned poisons the service: every later
+// call except Close returns ErrPoisoned. Recovery requires the host to recover
+// the store and open a new service, never an in-memory guess about a commit.
+// Projections retain historical identities and names; memory grows with history.
+//
 // # Removal boundary
 //
-// The service must prove a scratch has no unrepresented eligible edits before
-// durably recording its closure. Its only represented tree in ticket 05 is its
-// anchor; a capture refusal blocks closure. Ignored entries are scratch-local
-// and discarded; closure reports the ignored-listing entry count described
-// above. A missing directory may close. These record/representation checks
-// are not bypassed or simulated by this record-free mechanics package.
+// CloseScratch proves a scratch has no unrepresented eligible edits before
+// durably recording scratch_closed. Its only represented tree in ticket 05 is
+// its anchor; a capture refusal blocks closure. An owner, or the bound context's
+// agent, may close it. Ignored entries are scratch-local and discarded;
+// ClosureResult.IgnoredEntries counts Git's ignored listing, with an ignored
+// directory counted once and no path reported. Removal-only retries report zero.
+// A missing directory may close without observation.
 //
 // After durable closure, or for an orphan never handed to a context, Core owns
 // removal. A DirEntry/Lstat walk unlinks symlinks and ModeIrregular reparse
 // points with os.Remove without descending, descends only real directories,
-// and unlinks files. A permission error unlinking a regular file gets one
-// chmod 0600 and one retry; links and reparse points are never chmodded.
-// Only then does os.RemoveAll remove the remaining real directories. Core
+// and unlinks files. The root regular .git file is preserved until every other
+// child is removed, so a pending orphan keeps its workspace identity for retry.
+// Only then is .git unlinked and os.RemoveAll removes the empty root. Core
 // never asks git worktree remove --force to traverse an unverified directory.
 // Removal failure gives ErrRemovalPending; registration is not pruned until
 // removal completes. Then git worktree prune runs, the
 // scratch branch is deleted by compare-and-swap only if still at its base, and
-// the anchor is deleted. Moved branches retain their history. Closed scratches
-// and Open's orphan sweep retry this same primitive; no success is assumed.
+// the anchor is deleted by CAS against its observed ID. Moved branches retain
+// their history. A lost anchor CAS is ErrRemovalPending, never assumed success.
+// Closed scratches and Open's orphan sweep retry this same primitive.
 // Same-user check/use races remain C10's boundary.
 //
 // # Profile, measurements and later admission
@@ -268,11 +333,10 @@
 // and new files get 100644. Linux and macOS CI require Git at least 2.42.
 //
 // C2 has no validator: no_validator is unconditional, with no injectable seam,
-// until C4 wires the real validator. RequestPromotion belongs to the service:
-// after profile and immediate reservation checks it checks Git, workspace and
-// scratch availability, returns unavailable, and releases. It never captures,
-// records, waits, queues, retries or changes refs. The service should retain one
-// Git runner instead of resolving a fresh executable through each Inspect call.
+// until C4 wires the real validator. RequestPromotion checks binding, then the
+// profile, then immediate reservation, then Git, workspace and scratch
+// availability. It returns unavailable and releases. It never captures, records,
+// waits, queues, retries or changes refs.
 // Replay reads no clock. Observe and refused captures can leave loose objects;
 // plumbing never triggers gc --auto. Their maintenance policy remains open for
 // ticket 06 or later, not 05.

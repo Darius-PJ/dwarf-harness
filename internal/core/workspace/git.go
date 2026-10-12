@@ -15,9 +15,10 @@ import (
 )
 
 type gitRunner struct {
-	path, version string
-	unavailable   error
-	environ       func() []string
+	path, version      string
+	unavailable        error
+	environ            func() []string
+	beforeAnchorDelete func()
 }
 
 func newGitRunner(environ func() []string) *gitRunner {

@@ -215,8 +215,17 @@ func (g *gitRunner) removeWorktree(ctx context.Context, colony, common string, s
 		}
 	}
 	if s.AnchorRef != "" {
-		if _, _, err := g.repository(ctx, colony, common, nil, []int{0}, "update-ref", "-d", "--end-of-options", s.AnchorRef); err != nil {
+		anchor, err := g.readRef(ctx, colony, common, s.AnchorRef, len(s.BaseCommit))
+		if err != nil {
 			return fmt.Errorf("%w: %v", ErrRemovalPending, err)
+		}
+		if anchor != "" {
+			if g.beforeAnchorDelete != nil {
+				g.beforeAnchorDelete()
+			}
+			if _, _, err := g.repository(ctx, colony, common, nil, []int{0}, "update-ref", "-d", "--end-of-options", s.AnchorRef, anchor); err != nil {
+				return fmt.Errorf("%w: %v", ErrRemovalPending, err)
+			}
 		}
 	}
 	return nil
@@ -226,16 +235,6 @@ func (g *gitRunner) removeWorktree(ctx context.Context, colony, common string, s
 // reports Windows junctions and mount points as ModeIrregular. Files are
 // unlinked during the walk; RemoveAll sees only real, empty directories.
 func removeScratchDirectory(root string, removeAll func(string) error) error {
-	removeEntry := func(path string, mode os.FileMode) error {
-		err := os.Remove(path)
-		if err != nil && os.IsPermission(err) && mode.IsRegular() {
-			if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
-				return chmodErr
-			}
-			return os.Remove(path)
-		}
-		return err
-	}
 	info, err := os.Lstat(root)
 	if os.IsNotExist(err) {
 		return nil
@@ -244,9 +243,10 @@ func removeScratchDirectory(root string, removeAll func(string) error) error {
 		return err
 	}
 	if !info.IsDir() || info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
-		return removeEntry(root, info.Mode())
+		return os.Remove(root)
 	}
 	var unlink func(string) error
+	var rootGit string
 	unlink = func(dir string) error {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -260,8 +260,12 @@ func removeScratchDirectory(root string, removeAll func(string) error) error {
 				return err
 			}
 			kind |= info.Mode().Type()
+			if dir == root && entry.Name() == ".git" && info.Mode().IsRegular() {
+				rootGit = path
+				continue
+			}
 			if kind&(os.ModeSymlink|os.ModeIrregular) != 0 || !info.IsDir() {
-				if err := removeEntry(path, info.Mode()); err != nil {
+				if err := os.Remove(path); err != nil {
 					return err
 				}
 				continue
@@ -269,11 +273,20 @@ func removeScratchDirectory(root string, removeAll func(string) error) error {
 			if err := unlink(path); err != nil {
 				return err
 			}
+			if err := removeAll(path); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
 	if err := unlink(root); err != nil {
 		return err
+	}
+	// Preserve the workspace link while another entry prevents removal.
+	if rootGit != "" {
+		if err := os.Remove(rootGit); err != nil {
+			return err
+		}
 	}
 	return removeAll(root)
 }

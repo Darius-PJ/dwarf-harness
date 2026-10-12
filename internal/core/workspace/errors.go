@@ -18,6 +18,16 @@ var (
 	ErrUnavailable         = errors.New("workspace: unavailable")
 	ErrBusy                = errors.New("workspace: busy")
 	ErrCaptureRefused      = errors.New("workspace: capture refused")
+	ErrExists              = errors.New("workspace: already exists")
+	ErrStaleProposal       = errors.New("workspace: stale proposal")
+	ErrRevision            = errors.New("workspace: inputs revision changed")
+	ErrUnknownWorkspace    = errors.New("workspace: unknown workspace")
+	ErrNoScratch           = errors.New("workspace: no open scratch")
+	ErrNotBound            = errors.New("workspace: caller is not bound")
+	ErrUnrepresentedEdits  = errors.New("workspace: unrepresented edits")
+	ErrClosed              = errors.New("workspace: closed")
+	ErrPoisoned            = errors.New("workspace: poisoned; recovery required")
+	ErrInconsistent        = errors.New("workspace: inconsistent history")
 )
 
 // GitError describes an unexpected exit without interpreting Git's messages.
@@ -70,3 +80,14 @@ type reservationError struct{ reason string }
 
 func (e *reservationError) Error() string { return fmt.Sprintf("%v: %s", ErrInvalid, e.reason) }
 func (e *reservationError) Unwrap() error { return ErrInvalid }
+
+// InconsistentError identifies the first record whose service-owned rule fails.
+type InconsistentError struct {
+	Seq    uint64
+	Detail string
+}
+
+func (e *InconsistentError) Error() string {
+	return fmt.Sprintf("%v at sequence %d: %s", ErrInconsistent, e.Seq, e.Detail)
+}
+func (e *InconsistentError) Unwrap() error { return ErrInconsistent }
