@@ -1,6 +1,6 @@
 # Router roadmap
 
-**Status:** Planning document, 2026-10-05; updated 2026-10-08 for D100's grouped outage prompt and the D97–D102 service-loss onset. No router code exists. This roadmap orders routing §14 phases 0–5 as steps R0–R5 (D19), with selected engineering choices and explicit dependencies, stop points and evidence gates. It does not report implementation, contract freeze or owner approval.
+**Status:** planning document; each step's status is in its **Status.** line below and on the [status board](ROADMAPS.md#status-board), and each contract's in [`CONTRACTS.md`](CONTRACTS.md). This roadmap orders routing §14 phases 0–5 as steps R0–R5 (D19), with selected engineering choices and explicit dependencies, stop points and evidence gates. It does not report implementation, contract freeze or owner approval.
 
 ## Start here
 

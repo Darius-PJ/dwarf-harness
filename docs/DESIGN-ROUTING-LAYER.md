@@ -1,6 +1,6 @@
 # Routing layer design
 
-**Status:** Draft 0.8, for review; selected engineering design, not implementation or contract-freeze evidence. No router code exists yet.
+**Status:** Draft 0.8, for review; selected engineering design, not implementation or contract-freeze evidence.
 **Date:** 2026-10-05 (engineering closure and selected endpoint/tariff verification); earlier research and worked examples retain their recorded dates.
 **Scope:** The component between the harness's agent loop and the model providers. Anthropic and OpenAI first; more providers later.
 **Inputs:** The open-source harness survey (`RESEARCH-OPEN-SOURCE-HARNESSES.md`), the implementation-language research (`RESEARCH-IMPLEMENTATION-LANGUAGE.md`), the core-and-launchers design (`DESIGN-CORE-AND-LAUNCHERS.md`), and the provider-efficiency and router surveys from the same research rounds. Appendix B records the earlier primary-source research; the initial endpoint bounds and tariffs in §9.4 were rechecked on 2026-10-05.
@@ -14,7 +14,7 @@
 
 - B9–B10 select Core-owned durable accounting, inclusive endpoint cost bounds, sealed request/quote identity, one-attempt dispatch and scoped R1 observations.
 - Context-module limits, headroom publication, cache/classifier defaults and transport rules are concrete selections below; formal freezes and empirical gates remain explicit.
-- D80–D87 and the Core/field roadmaps replace the earlier unresolved social, disclosure, federation and platform-policy forks. C0 remains Ready; D52 owner approval and the six contract freezes are not completed by this document.
+- D80–D87 and the Core/field roadmaps replace the earlier unresolved social, disclosure, federation and platform-policy forks. D52 owner approval and the six contract freezes are not completed by this document.
 
 **Historical changes in 0.7**, from the owner's implementation decisions of 2026-10-02 (`DECISIONS.md`):
 

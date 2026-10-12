@@ -1,6 +1,6 @@
 # Native GUI roadmap
 
-**Status:** Waiting — operational design and D96 pre-alpha fortress alignment consolidated; remaining producer specifications/freezes, implementation and native/runtime gates are unrun.
+**Status:** operational design and D96 pre-alpha fortress alignment consolidated; the status of GUI and GUI-F is on the [status board](ROADMAPS.md#status-board), and each contract's in [`CONTRACTS.md`](CONTRACTS.md).
 **Updated:** 2026-10-08 (D103 Go art generator; D97–D102 ordinary service-loss procedure; D96 consolidation of D89–D95 2026-10-07; prior operational design 2026-10-05).
 **Scope:** `dwarf-harness-GUI`, the Fyne native display client in the nested `gui/` Go module. It attaches to the one Core authority for a colony and exposes the same authorized capabilities as the terminal. It is not a second Core, a browser application, a provider client or a credential holder.
 
@@ -16,11 +16,11 @@ The [fortress GUI specification](../.scratch/fortress-gui/spec.md) owns detailed
 
 ## Status and dependency order
 
-The GUI work is **Waiting** on C7's authenticated local host/session protocol and the separately deliverable C9 backend capability, with Fyne selected. It does **not** wait for whole C9. Keep the cycle-free order:
+The GUI work waits on C7's authenticated local host/session protocol and the separately deliverable C9 backend capability, with Fyne selected. It does **not** wait for whole C9. Keep the cycle-free order:
 
 **C9 backend capability → GUI parity → whole C9 completion**
 
-C9 backend depends on C4, C5 and C6. GUI consumes that backend capability plus C7; it demonstrates GUI parity for those existing typed workflows, and that parity closes whole C9. C7, toolkit selection and backend capability are separate prerequisites, not a single circular C9 dependency. C0 is Done (2026-10-09) and C1 is Done (2026-10-10; F0 frozen at version 1 on 2026-10-10, D111); this roadmap marks no GUI step Ready or Done and claims no implementation, freeze, build, usability study or accessibility result. C1's `ledger-format`, `ledger-reader` and `ledger-appender` are Frozen at version 1 (D111); `law-format` is Frozen at version 1 (D114); the other two, `launcher-protocol` and `context-module`, remain Not started.
+C9 backend depends on C4, C5 and C6. GUI consumes that backend capability plus C7; it demonstrates GUI parity for those existing typed workflows, and that parity closes whole C9. C7, toolkit selection and backend capability are separate prerequisites, not a single circular C9 dependency. This roadmap claims no implementation, freeze, build, usability study or accessibility result.
 
 The separate **GUI-F fortress/RPG gate** requires actual C3 task/eligibility facts, C6 relationship/memory/publication/handoff evidence, C8 creation/Purpose/alignment/succession capabilities, C9 **backend** pinned alignment execution and corresponding frozen C7 projections/commands/progress/presentation/attach additions. C8's first-action alignment depends on C9 backend, never whole C9 or GUI parity. C3's generic guards and C7 base do not wait backward on C8 or GUI. Optional external-classifier scenarios require actual R5/C10 qualification; a dog drawing is not helper qualification. GUI-A–E retain their existing operational scope: new GUI-F leadership/presentation capabilities do not become prerequisites for GUI-E's independently deliverable C9 parity. Full fortress release additionally requires GUI-F and native accessibility/packaging/resource evidence.
 
@@ -145,9 +145,9 @@ Run all [FG01–FG22 scenarios](../.scratch/fortress-gui/spec.md#11-observable-a
 
 Run the actual generated art and its composition, malformed/missing asset cases and the declared native workload. Qualify any complete native-terminal candidate, including scrollback and supported-platform behavior, against the bounded integration allowance; otherwise exercise the user-selected external fallback. Source research establishes neither result. Reapply GUI-D accessibility and GUI-E packaging/resource checks with the fortress enabled. No document, art mock, arbitrary attenuation formula or unimplemented outage handling passes these gates; a complete fortress release requires GUI-F as well as existing operational parity.
 
-## Acceptance evidence not yet available
+## Acceptance evidence
 
-This roadmap records design only. No GUI was built or launched, no host/launcher protocol was exercised, and no screen-reader, keyboard, rendering, package, memory, CPU, latency, privacy or reconnect gate was run. A release claim requires evidence from the real native application and connected Core, not a mock view or schema-only test.
+This roadmap records design only. A release claim requires evidence from the real native application and connected Core, from its host/launcher protocol and from its screen-reader, keyboard, rendering, package, memory, CPU, latency, privacy and reconnect gates, not a mock view or schema-only test.
 
 ## Consolidation comment
 

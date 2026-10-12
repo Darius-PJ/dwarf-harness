@@ -22,5 +22,5 @@ Publication and triage state do not grant owner approval, freeze contracts or ad
 - Child ticket: `.scratch/<effort>/issues/<NN>-<slug>.md`, with the question in its body. `Type:` is `research`, `prototype`, `grilling` or `task`; `Status:` records `claimed` or `resolved` while working.
 - Dependencies: `Blocked by: NN, NN`; a ticket is unblocked only when every listed ticket is resolved.
 - Frontier: select the lowest-numbered open, unblocked, unclaimed ticket.
-- Claim: save `Status: claimed` before work.
+- Claim: save `Status: claimed` before work. During the build, the claim lands with the rest of the ticket's documents in its one documents commit when the ticket closes ([`ROADMAPS.md`](../ROADMAPS.md) rule 10, D116).
 - Resolve: append an `## Answer`, set `Status: resolved`, and append a gist plus child link to the map’s Decisions-so-far.
