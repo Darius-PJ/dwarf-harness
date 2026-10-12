@@ -299,3 +299,16 @@ func (ms *members) nat(key string, required bool) int64 {
 	}
 	return int64(n)
 }
+
+// text returns the required string key.
+func (ms *members) text(key string) string {
+	raw, ok := ms.get(key, true)
+	if !ok {
+		return ""
+	}
+	s, ok := parseString(raw)
+	if !ok {
+		ms.err = fmt.Errorf("%s is not a string", key)
+	}
+	return s
+}

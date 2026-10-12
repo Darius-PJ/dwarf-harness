@@ -156,10 +156,13 @@
 //
 // A Catalogue lists the record type versions a writer may append. Defined
 // returns those this contract version defines: the four F0 record types
-// below, each at version 1. The type namespace "ledger." is reserved for F0
+// and the four proposed F2-05 types below, each at version 1. F2-05 awaits
+// the owner's additive freeze; it does not change F0 or format version 1.
+// The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
 // family may use it, and Defined never contains it.
+// The namespace "workspace." is reserved for C2's record families.
 //
 // # F0 record types
 //
@@ -234,4 +237,117 @@
 // it, during an explicit collection; the writer refuses it through Append.
 // It lists only bodies that an earlier record referenced and that no active
 // pin held.
+//
+// # F2-05 record types
+//
+// These four proposed version-1 types are ticket 05's part of F2. C2 owns
+// their payload specifications. Only Core's workspace service
+// (internal/core/workspace) may append them, through appender.Appender;
+// permitted callers are enforced by review. The service checks the record
+// rules both when appending and at Open. Check, Reader, EncodeCommit and
+// these payload encoders and decoders do not enforce service record rules.
+//
+// Payloads follow the F0 encoding rules above: compact JSON, keys in the
+// tabled order, errors wrapping ErrInvalid, no missing required, null known
+// or repeated keys, and unknown keys ignored for additive evolution.
+// Re-encoding a decoded payload reproduces the bytes Encode produced.
+// Git object IDs are 40 or 64 lowercase hex digits. A decoder accepts either
+// length; matching the workspace's object_format is a service record rule.
+//
+// workspace.registered v1 (WorkspaceRegistered) registers a Git workspace
+// with the owner's approval.
+//
+//	key            type    presence  rule
+//	workspace_id   UUIDv7  required  the workspace's ID
+//	common_dir     string required  the absolute common-directory grammar below
+//	object_format  string required  sha1 or sha256
+//
+// common_dir accepts exactly: valid UTF-8; 1–4,096 bytes; no byte below
+// 0x20 and no 0x7F; no backslash; forward slashes only; absolute in one of
+// three forms: POSIX /…, drive-rooted [A-Za-z]:/…, or UNC //host/share…
+// with non-empty host and share; no empty component (no // except the two
+// leading UNC slashes); no component . or ..; no trailing /. Everything
+// else is refused with an error wrapping ErrInvalid.
+//
+// This is Git's forward-slash string from rev-parse --path-format=absolute
+// --git-common-dir, unchanged by Core. Drive-letter case is kept as Git
+// printed it; the decoder does not fold case. This grammar is lexical,
+// byte-exact and identical on every host; it checks neither existence nor
+// platform validity, and makes no host calls. The 4,096-byte cap is a
+// contract rule, not a producer policy that may be tightened after freeze.
+//
+// Record rules: actor is owner; body_refs is absent. This is index 0 of a
+// three-record commit: index 1 is its workspace.capture_inputs_pinned with
+// revision 1, and index 2 is that record's ledger.body_pin. workspace_id is
+// new, and no earlier registration names the same common_dir.
+//
+// workspace.capture_inputs_pinned v1 (CaptureInputsPinned) records one
+// owner-approved revision of the workspace's capture inputs.
+//
+//	key                    type    presence  rule
+//	workspace_id           UUIDv7  required  a registered workspace
+//	revision               integer required  1 through MaxInt64
+//	capture_inputs_sha256  digest  required  SHA-256 of the capture-inputs document, a body
+//	pin_id                 UUIDv7  required  the ledger.body_pin of this revision
+//
+// Record rules: actor is owner. body_refs is present and holds exactly the
+// document and every body it names. The same commit holds a ledger.body_pin
+// with this pin_id and the same body_refs. Revision 1 appears only at index 1
+// of the registration commit. Each later revision is the current revision
+// plus 1, at index 0 of its commit, with its pin at index 1 and the
+// ledger.body_unpin of the previous revision's pin_id at index 2.
+//
+// workspace.scratch_created v1 (ScratchCreated) records a context's private
+// scratch worktree and its trusted root eligibility baseline.
+//
+//	key           type           presence  rule
+//	scratch_id    UUIDv7         required  the scratch's ID
+//	workspace_id  UUIDv7         required  a registered workspace
+//	context_id    UUIDv7         required  the bound work context that owns the scratch and authors its changes
+//	dir           string        required  8 lowercase hex digits; scratch/<dir> in the colony directory
+//	branch        string        required  the refs/heads/ grammar below
+//	base_commit   Git object ID required  the canonical commit the scratch was cut from
+//	anchor_tree   Git object ID required  that commit's tree, the root eligibility baseline
+//
+// branch accepts exactly: valid UTF-8; begins refs/heads/; non-empty suffix;
+// at most 4,096 bytes; no byte below 0x20 and no 0x7F; no space and no
+// backslash; no empty component (no //); no trailing /. Everything else is
+// refused with ErrInvalid. This is a lexical, byte-exact subset, identical
+// on every host. The decoder checks neither existence nor platform
+// validity. The 4,096-byte cap is a contract rule.
+//
+// Git's remaining lexical rules (.., @{, lone @, .lock, leading-dot or
+// trailing-dot components, ~ ^ : ? * [) are the producer's: Git itself
+// refuses them when Core creates the branch, so the decoder does not
+// re-implement them. Core's own naming scheme is a service record rule,
+// not a contract rule: ticket 05's dedicated scratches use
+// branch == "refs/heads/dwarf-harness/" + dir.
+//
+// Record rules: actor is core; the envelope's context_id equals this
+// context_id; body_refs is absent. scratch_id is new; the pair (context_id,
+// workspace_id) has no open scratch. dir and branch were never used by an
+// earlier scratch. Both Git ID lengths match the workspace's object_format.
+//
+// workspace.scratch_closed v1 (ScratchClosed) records an explicit closure.
+//
+//	key         type    presence  rule
+//	scratch_id  UUIDv7  required  an open scratch
+//	context_id  UUIDv7  required  the scratch's context
+//	reason      string required  ^[a-z][a-z0-9_]*$, at most 64 bytes
+//
+// Version 1 defines reason abandoned. Reason is an open token: both Encode
+// and Decode accept every well-formed token, including unknown future
+// reasons. A reader treats one as a closure for a reason it does not know,
+// never as invalid. Core writes only reasons its reading version defines;
+// this is a producer rule, not an encoding rule.
+//
+// Record rules: actor is owner, or agent with the envelope's context_id
+// equal to this context_id; body_refs is absent. A scratch closes at most
+// once, and context_id is the scratch's.
+//
+// The F2-05 golden at testdata/f2/05/log/00000000000000000001.jsonl holds
+// six commits and twelve records: two registrations and their pins, two
+// scratches, one input revision update and its pin/unpin, then one closure.
+// It pins a drive-rooted path and a POSIX path, both Git ID lengths and
+// revisions 1 and 2. Tests cover the UNC form separately.
 package ledger

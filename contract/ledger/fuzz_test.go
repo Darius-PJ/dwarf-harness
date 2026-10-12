@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -66,7 +67,7 @@ func FuzzCheckTruncation(f *testing.F) {
 		dir  string
 	}
 	var targets []target
-	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f)} {
+	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f), mustWorkspace(f)} {
 		dir := f.TempDir()
 		for _, name := range g.names {
 			targets = append(targets, target{g: g, name: name, dir: dir})
@@ -219,6 +220,33 @@ func FuzzCheckCorruption(f *testing.F) {
 		want := CheckResult{Last: g.chainAt(name, start), Segment: name, Size: start, TornBytes: size - start}
 		if res != want || res.Last.Seq >= damaged.seq {
 			t.Fatalf("seq %d damaged: Check = %+v, want %+v", damaged.seq, res, want)
+		}
+	})
+}
+
+func FuzzDecodeF2_05(f *testing.F) {
+	fixtures := f2Payloads()
+	for i, tc := range fixtures {
+		f.Add(uint8(i), []byte(mustEncode(tc.p)))
+		f.Add(uint8(i), []byte(`{}`))
+	}
+	f.Add(uint8(3), []byte(mustEncode(ScratchClosed{ScratchID: fid("51"), ContextID: fid("d1"), Reason: "merged"})))
+	f.Fuzz(func(t *testing.T, kind uint8, data []byte) {
+		typ := fixtures[int(kind)%len(fixtures)].typ
+		p, err := decodeF2_05(typ, data)
+		if err != nil {
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Decode error = %v, want ErrInvalid", err)
+			}
+			return
+		}
+		js, err := p.Encode()
+		if err != nil {
+			t.Fatalf("Encode decoded %+v: %v", p, err)
+		}
+		again, err := decodeF2_05(typ, js)
+		if err != nil || !reflect.DeepEqual(again, p) {
+			t.Fatalf("Decode re-encoded %s = %+v, %v; want %+v", js, again, err, p)
 		}
 	})
 }

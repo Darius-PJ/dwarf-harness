@@ -1,6 +1,9 @@
 package ledger
 
-import "testing"
+import (
+	"maps"
+	"testing"
+)
 
 func TestNewCatalogue(t *testing.T) {
 	for _, tc := range []struct {
@@ -31,17 +34,22 @@ func TestNewCatalogue(t *testing.T) {
 		}
 	}
 
-	// Defined is F0's catalogue, exactly the four F0 types at version 1, so
-	// that a production writer can write F0 records and refuses fixture
-	// records.
+	// Defined contains the F0 and proposed F2-05 type versions, but never
+	// fixture records or a version the contract does not define.
 	def := Defined()
-	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected} {
+	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected, TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed} {
 		if !def.Contains(TypeVersion{typ, 1}) || def.Contains(TypeVersion{typ, 2}) {
 			t.Errorf("Defined() holds %s at version 1: %v, at version 2: %v; want true, false",
 				typ, def.Contains(TypeVersion{typ, 1}), def.Contains(TypeVersion{typ, 2}))
 		}
 	}
-	if len(def.set) != 4 || def.Contains(TypeVersion{"fixture.sample", 1}) {
-		t.Errorf("Defined() holds %v, want only the four F0 type versions", def.set)
+	want := map[TypeVersion]bool{
+		{"ledger.command", 1}: true, {"ledger.body_pin", 1}: true,
+		{"ledger.body_unpin", 1}: true, {"ledger.bodies_collected", 1}: true,
+		{"workspace.registered", 1}: true, {"workspace.capture_inputs_pinned", 1}: true,
+		{"workspace.scratch_created", 1}: true, {"workspace.scratch_closed", 1}: true,
+	}
+	if !maps.Equal(def.set, want) || def.Contains(TypeVersion{"fixture.sample", 1}) {
+		t.Errorf("Defined() holds %v, want %v", def.set, want)
 	}
 }

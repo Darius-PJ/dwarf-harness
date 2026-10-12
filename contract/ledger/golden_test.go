@@ -25,6 +25,8 @@ const (
 	// catalogueDir holds the golden catalogue log, a one-segment log
 	// directory holding every F0 record type.
 	catalogueDir = "testdata/f0/catalogue/log"
+	// workspaceDir holds the proposed F2-05 catalogue's one-segment log.
+	workspaceDir = "testdata/f2/05/log"
 )
 
 // fid returns a fixed fixture UUIDv7 ending in suffix.
@@ -35,6 +37,7 @@ func fid(suffix string) uuid.UUID {
 var (
 	goldenColony    = fid("01")
 	catalogueColony = fid("02")
+	workspaceColony = fid("03")
 )
 
 // The bodies and the submission that the catalogue log references.
@@ -142,6 +145,40 @@ func catalogueInputs() []goldenCommit {
 	}
 }
 
+// workspaceInputs follows the F2-05 registration, scratch and closure
+// history, with both Git object formats and a pinned-input revision update.
+func workspaceInputs() []goldenCommit {
+	header := func(commit string, t int64) CommitHeader {
+		return CommitHeader{ColonyID: workspaceColony, CommitID: fid(commit), EventTimeNS: t}
+	}
+	return []goldenCommit{
+		{header: header("c1", 1791000020000000000), drafts: []Draft{
+			{Type: TypeWorkspaceRegistered, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(WorkspaceRegistered{WorkspaceID: fid("41"), CommonDir: "C:/fixture/repo-a/.git", ObjectFormat: "sha1"})},
+			{Type: TypeCaptureInputsPinned, TypeVersion: 1, Actor: ActorOwner, BodyRefs: sortedDigests(goldenB1, goldenSubmission), Payload: mustEncode(CaptureInputsPinned{WorkspaceID: fid("41"), Revision: 1, CaptureInputsSHA256: goldenB1, PinID: fid("21")})},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: sortedDigests(goldenB1, goldenSubmission), Payload: mustEncode(BodyPin{PinID: fid("21")})},
+		}},
+		{header: header("c2", 1791000021000000000), drafts: []Draft{
+			{Type: TypeWorkspaceRegistered, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(WorkspaceRegistered{WorkspaceID: fid("42"), CommonDir: "/fixture/repo-b/.git", ObjectFormat: "sha256"})},
+			{Type: TypeCaptureInputsPinned, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{goldenB2}, Payload: mustEncode(CaptureInputsPinned{WorkspaceID: fid("42"), Revision: 1, CaptureInputsSHA256: goldenB2, PinID: fid("22")})},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{goldenB2}, Payload: mustEncode(BodyPin{PinID: fid("22")})},
+		}},
+		{header: header("c3", 1791000022000000000), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("d1"), Payload: mustEncode(ScratchCreated{ScratchID: fid("51"), WorkspaceID: fid("41"), ContextID: fid("d1"), Dir: "0a1b2c3d", Branch: "refs/heads/dwarf-harness/0a1b2c3d", BaseCommit: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", AnchorTree: "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"})},
+		}},
+		{header: header("c4", 1791000023000000000), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("d2"), Payload: mustEncode(ScratchCreated{ScratchID: fid("52"), WorkspaceID: fid("42"), ContextID: fid("d2"), Dir: "4e5f6a7b", Branch: "refs/heads/dwarf-harness/4e5f6a7b", BaseCommit: "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", AnchorTree: "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"})},
+		}},
+		{header: header("c5", 1791000024000000000), drafts: []Draft{
+			{Type: TypeCaptureInputsPinned, TypeVersion: 1, Actor: ActorOwner, BodyRefs: sortedDigests(goldenB3, goldenSubmission), Payload: mustEncode(CaptureInputsPinned{WorkspaceID: fid("41"), Revision: 2, CaptureInputsSHA256: goldenB3, PinID: fid("23")})},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: sortedDigests(goldenB3, goldenSubmission), Payload: mustEncode(BodyPin{PinID: fid("23")})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(BodyUnpin{PinID: fid("21")})},
+		}},
+		{header: header("c6", 1791000025000000000), drafts: []Draft{
+			{Type: TypeScratchClosed, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("d1"), Payload: mustEncode(ScratchClosed{ScratchID: fid("51"), ContextID: fid("d1"), Reason: "abandoned"})},
+		}},
+	}
+}
+
 // goldenRecord locates one record of a golden log.
 type goldenRecord struct {
 	seq  uint64
@@ -213,12 +250,20 @@ var catalogueTypes = Consumption{
 	"fixture.sample": {1}, TypeCommand: {1}, TypeBodyPin: {1}, TypeBodyUnpin: {1}, TypeBodiesCollected: {1},
 }
 
+var workspaceTypes = Consumption{
+	TypeWorkspaceRegistered: {1}, TypeCaptureInputsPinned: {1},
+	TypeScratchCreated: {1}, TypeScratchClosed: {1}, TypeBodyPin: {1}, TypeBodyUnpin: {1},
+}
+
 var (
 	golden = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(goldenDir, goldenColony, allFixtures, goldenInputs())
 	})
 	catalogueLog = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(catalogueDir, catalogueColony, catalogueTypes, catalogueInputs())
+	})
+	workspaceLog = sync.OnceValues(func() (*goldenLog, error) {
+		return buildLog(workspaceDir, workspaceColony, workspaceTypes, workspaceInputs())
 	})
 )
 
@@ -230,6 +275,11 @@ func mustGolden(t testing.TB) *goldenLog {
 func mustCatalogue(t testing.TB) *goldenLog {
 	t.Helper()
 	return mustBuild(t, catalogueLog)
+}
+
+func mustWorkspace(t testing.TB) *goldenLog {
+	t.Helper()
+	return mustBuild(t, workspaceLog)
 }
 
 func mustBuild(t testing.TB, build func() (*goldenLog, error)) *goldenLog {
@@ -354,6 +404,34 @@ func TestGoldenF0(t *testing.T) {
 	}
 }
 
+func TestGoldenF2_05(t *testing.T) {
+	g := mustWorkspace(t)
+	if *update {
+		if err := os.MkdirAll(g.dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, data := range g.files {
+			if err := os.WriteFile(filepath.Join(g.dir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stored := snapshot(t, g.dir)
+	if got := slices.Sorted(maps.Keys(stored)); !slices.Equal(got, g.names) {
+		t.Fatalf("files = %v, want %v", got, g.names)
+	}
+	for _, name := range g.names {
+		if !bytes.Equal(stored[name], g.files[name]) {
+			t.Errorf("%s/%s differs from the F2-05 encoding", g.dir, name)
+		}
+	}
+	res, err := Check(g.dir, g.colony)
+	want := CheckResult{Last: g.end(), Segment: g.final(), Size: int64(len(g.files[g.final()]))}
+	if err != nil || res != want || res.Last.Seq != 12 {
+		t.Errorf("Check = %+v, %v; want %+v with Last.Seq 12", res, err, want)
+	}
+}
+
 func TestGoldenDecodes(t *testing.T) {
 	for _, tc := range []struct {
 		g *goldenLog
@@ -370,6 +448,7 @@ func TestGoldenDecodes(t *testing.T) {
 			`{"n":6}`,
 		}},
 		{mustCatalogue(t), nil},
+		{mustWorkspace(t), nil},
 	} {
 		g := tc.g
 		commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})
