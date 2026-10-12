@@ -148,7 +148,7 @@
 // Valid v1 laws need at most depth 7, 8 members, 6 elements, 64-byte decoded
 // strings and 681 tokens. Whitespace and escaped spellings can still inflate
 // their raw byte size beyond compact-v1. A three-parameter policy needs depth
-// 2, at most 5 members, 33-byte decoded strings and 27 tokens.
+// 2, at most 5 members, 31-byte decoded strings and 27 tokens.
 //
 // # Refusal phases and errors
 //
