@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -113,7 +115,8 @@ func TestF2_05PayloadsRefuse(t *testing.T) {
 					}
 				})
 			}
-			for key, value := range members {
+			for _, key := range slices.Sorted(maps.Keys(members)) {
+				value := members[key]
 				delete(members, key)
 				bad, _ := json.Marshal(members)
 				refuse("missing "+key, bad)

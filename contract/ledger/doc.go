@@ -259,7 +259,7 @@
 //
 //	key            type    presence  rule
 //	workspace_id   UUIDv7  required  the workspace's ID
-//	common_dir     string required  the absolute common-directory grammar below
+//	common_dir     string  required  the absolute common-directory grammar below
 //	object_format  string required  sha1 or sha256
 //
 // common_dir accepts exactly: valid UTF-8; 1–4,096 bytes; no byte below
@@ -304,8 +304,8 @@
 //	scratch_id    UUIDv7         required  the scratch's ID
 //	workspace_id  UUIDv7         required  a registered workspace
 //	context_id    UUIDv7         required  the bound work context that owns the scratch and authors its changes
-//	dir           string        required  8 lowercase hex digits; scratch/<dir> in the colony directory
-//	branch        string        required  the refs/heads/ grammar below
+//	dir           string         required  8 lowercase hex digits; scratch/<dir> in the colony directory
+//	branch        string         required  the refs/heads/ grammar below
 //	base_commit   Git object ID required  the canonical commit the scratch was cut from
 //	anchor_tree   Git object ID required  that commit's tree, the root eligibility baseline
 //
@@ -333,7 +333,7 @@
 //	key         type    presence  rule
 //	scratch_id  UUIDv7  required  an open scratch
 //	context_id  UUIDv7  required  the scratch's context
-//	reason      string required  ^[a-z][a-z0-9_]*$, at most 64 bytes
+//	reason      string  required  ^[a-z][a-z0-9_]*$, at most 64 bytes
 //
 // Version 1 defines reason abandoned. Reason is an open token: both Encode
 // and Decode accept every well-formed token, including unknown future

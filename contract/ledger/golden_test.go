@@ -425,6 +425,38 @@ func TestGoldenF2_05(t *testing.T) {
 			t.Errorf("%s/%s differs from the F2-05 encoding", g.dir, name)
 		}
 	}
+	commits, _, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := workspaceInputs()
+	if len(commits) != len(inputs) {
+		t.Fatalf("read %d commits, want %d", len(commits), len(inputs))
+	}
+	for i, c := range commits {
+		if len(c.Records) != len(inputs[i].drafts) {
+			t.Fatalf("commit %d: read %d records, want %d", i, len(c.Records), len(inputs[i].drafts))
+		}
+		for j, r := range c.Records {
+			var got payload
+			var err error
+			switch r.Type {
+			case TypeBodyPin, TypeBodyUnpin:
+				got, err = decodeF0(r.Type, r.Payload)
+			default:
+				got, err = decodeF2_05(r.Type, r.Payload)
+			}
+			if err != nil {
+				t.Fatalf("seq %d: decoding stored %s payload: %v", r.Seq, r.Type, err)
+			}
+			// Compare the decoded value's canonical encoding to the fixture
+			// value, without decoding the expectation through the same code.
+			want := inputs[i].drafts[j].Payload
+			if encoded, err := got.Encode(); err != nil || !bytes.Equal(encoded, want) {
+				t.Errorf("seq %d: decoded %+v encodes as %s, %v; want %s", r.Seq, got, encoded, err, want)
+			}
+		}
+	}
 	res, err := Check(g.dir, g.colony)
 	want := CheckResult{Last: g.end(), Segment: g.final(), Size: int64(len(g.files[g.final()]))}
 	if err != nil || res != want || res.Last.Seq != 12 {
