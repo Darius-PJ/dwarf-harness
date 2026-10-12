@@ -1,7 +1,8 @@
 // Package ledger is the ledger-format and ledger-reader contract (F0): the
 // on-disk encoding of a colony's history, the rules that verify it, and the
-// read-only Reader through which every consumer replays it. Format version 1
-// is a draft until its owner freeze (D40); this documentation is the format.
+// read-only Reader through which every consumer replays it. The owner froze
+// format version 1 (D40, D111); catalogue parts join it only by addition, as
+// F2-05 did (D115). This documentation is the format.
 //
 // # Records
 //

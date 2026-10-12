@@ -34,7 +34,7 @@
 // writer, as a separate method or interface, so that this contract does not
 // change for it.
 //
-// This contract is a draft until its owner freeze (D40).
+// The owner froze this contract at version 1 (D40, D111).
 package appender
 
 import (

@@ -1,6 +1,6 @@
 // Package law loads and identifies the shared field law and the local D47
-// validation policy independently of field execution. Version 1 is a draft
-// until the owner's freeze (D40). This documentation is the format.
+// validation policy independently of field execution. The owner froze
+// version 1 (D40, D114). This documentation is the format.
 //
 // # Field-law version 1
 //
