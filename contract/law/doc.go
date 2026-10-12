@@ -256,6 +256,8 @@
 // alongside it. A new kind, rule or kernel requires a new evaluator version.
 // Later contract versions must preserve the exact typed values and digests of
 // these version-1 golden vectors and the evaluator semantics they identify.
+// In those values an empty edge_types array, as local/v1 requires, loads as
+// an empty, non-nil EdgeTypes slice; consumers test len(EdgeTypes) == 0.
 // No upgrader converts an old artifact to new semantics. Goldens include
 // alternate whitespace/key-order/CRLF identities and unsupported newer heads;
 // their numeric candidates are test data, not the owner's chosen law.
