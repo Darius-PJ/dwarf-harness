@@ -1,6 +1,6 @@
 # Undercurrent roadmap: from the standalone engine to a working Undercurrent
 
-**Status:** 2026-10-10 (the owner freezes C1's ledger contracts, D111: U1 Ready; U3's foundation waits only for C2); 2026-10-05. Steps 0–4, 6 and 15 of the former implementation roadmap moved to the core and router roadmaps when it was split (D19); the mapping table in `ROADMAPS.md` gives every old step its new ID. No field-layer implementation exists yet. This roadmap orders field-layer work, names dependencies and acceptance gates, and records no completed runtime or release gate.
+**Status:** 2026-10-12 (U1.L drafts `law-format` in `contract/law`, ticket 04, B22: U1 In progress; not frozen); 2026-10-10 (the owner freezes C1's ledger contracts, D111: U1 Ready; U3's foundation waits only for C2); 2026-10-05. Steps 0–4, 6 and 15 of the former implementation roadmap moved to the core and router roadmaps when it was split (D19); the mapping table in `ROADMAPS.md` gives every old step its new ID. Apart from U1.L's draft `law-format` contract (`contract/law`, ticket 04), no field-layer implementation exists yet. This roadmap orders field-layer work, names dependencies and acceptance gates, and records no completed runtime or release gate.
 
 ## Start here
 
@@ -214,7 +214,7 @@ C1 must formally freeze the `ledger-format` and `ledger-reader` contracts before
 
 **Exit criterion.** U1.L passes C1-frozen golden vectors for strict JSON v1, exact-byte hash/activation separation, the selected compact-v1 and standard-v1 parser boundaries, and all duplicate-key, schema, enum, kernel, edge-type, numeric-bound and configured size/count rejections. U1.E passes every applicable Undercurrent §14.1 property: deterministic typed routes and identities; lifecycle/no-echo; conservative lineage; scoped accounting; atomic graphs and honest coverage; exact source removal; checked signed-`int64` arrival-delta/due-time arithmetic with whole-generation invalidation on negative/overflowing conversion and no partial arrival/reach publication; delayed-arrival cancellation; replay/cache invalidation; mixed numeric comparison; unknown-not-zero; projection-before-selection; ambient/federation boundaries; prompt bounds; read neutrality; and explicit capacity exhaustion. Verify per-source-search and logical-task counters survive quantum yields, retries, restart, replay and cache rebuild; hard-cap exhaustion stays incomplete/unknown and is not automatically restarted under the same key. Compare FIFO route results with exhaustive simple-path enumeration on small integer graphs, including a flooring case where a stronger three-hop prefix and a weaker two-hop prefix tie at the destination; verify queued descendants survive intermediate-winner changes and cap/revision aborts publish no partial reach. Route candidates and immutable prefix bytes count against existing work and temporary-state caps. All listed gates remain unrun.
 
-**Status.** Ready (2026-10-10; C1's `ledger-format` and `ledger-reader` frozen, D111).
+**Status.** In progress (2026-10-12: U1.L's `law-format` is drafted in `contract/law`, ticket 04 and B22, and awaits the owner's freeze; U1.E has not started. C1's `ledger-format` and `ledger-reader` were frozen on 2026-10-10, D111).
 
 ### U2. Synthetic ledgers, simulation, adversarial suite
 

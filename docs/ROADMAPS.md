@@ -1,6 +1,6 @@
 # Roadmaps: index, dependencies and working rules
 
-**Status:** 2026-10-12 (D52 promotion boundary approved, D112; C2 Ready); 2026-10-10 (C1 Done through tickets 02 and 03; F0 frozen at version 1 on 2026-10-10, D111; U1 Ready); 2026-10-09 (C0 Done through ticket 01; D106 moves the toolchain to go1.27.2); 2026-10-08 (D97–D102 ordinary service-loss procedure; D96 pre-alpha consolidation of D89–D95 2026-10-07; prior coordination update 2026-10-05). Apart from C0's check and C1's ledger and body store, both Done, C1's three ledger contracts, frozen at version 1 (D111), and the owner's approval of the C2 promotion boundary (D112), this index records no implementation, contract freeze or completed gate. It is the entry point for anyone, human or agent, assigned a roadmap step. It holds the step format, cross-roadmap dependencies, status board and rules for parallel work (D19, D41). The roadmaps order work; they do not approve designs that source documents mark as proposals.
+**Status:** 2026-10-12 (D52 promotion boundary approved, D112; C2 Ready; U1.L drafts `law-format`, ticket 04, B22; U1 In progress); 2026-10-10 (C1 Done through tickets 02 and 03; F0 frozen at version 1 on 2026-10-10, D111; U1 Ready); 2026-10-09 (C0 Done through ticket 01; D106 moves the toolchain to go1.27.2); 2026-10-08 (D97–D102 ordinary service-loss procedure; D96 pre-alpha consolidation of D89–D95 2026-10-07; prior coordination update 2026-10-05). Apart from C0's check and C1's ledger and body store, both Done, C1's three ledger contracts, frozen at version 1 (D111), the owner's approval of the C2 promotion boundary (D112), and U1.L's `law-format` contract, drafted and not frozen (ticket 04, B22), this index records no implementation, contract freeze or completed gate. It is the entry point for anyone, human or agent, assigned a roadmap step. It holds the step format, cross-roadmap dependencies, status board and rules for parallel work (D19, D41). The roadmaps order work; they do not approve designs that source documents mark as proposals.
 
 ## Start here
 
@@ -184,7 +184,7 @@ Notes on the edges:
 | R3 | Cache planner active | R2 | Waiting |
 | R4 | Priced model changes | R3 | Waiting |
 | R5 | Optional modules | R4; qualified C10 profile before enabling external plugins/helpers | Waiting |
-| U1 | Law and engine capabilities | C1 contracts frozen; U1.L `law-format` before U1.E engine/replay | Ready |
+| U1 | Law and engine capabilities | C1 contracts frozen; U1.L `law-format` before U1.E engine/replay | In progress |
 | U2 | Synthetic ledgers, simulation, adversarial suite | U1.E for field simulation; validation cases: C3/C4 (A1), C5/C6 (governance), C10 (A2) | Waiting |
 | U3 | Coupling graph service | Foundation: C2 and frozen `ledger-appender` (C1, D50); accepted-promotion integration: C4 (D52) | Waiting |
 | U4 | Promotion-pipeline field kinds | C2, C4, C5, U1.E, U3 | Waiting |
