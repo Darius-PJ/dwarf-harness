@@ -140,6 +140,42 @@ func TestOpenReconciles(t *testing.T) {
 			t.Fatalf("leftover not removed: %v", err)
 		}
 	})
+	t.Run("closed_refs_without_directory", func(t *testing.T) {
+		f := newServiceFixture(t)
+		s := mustScratch(t, f, uuid.NewV7())
+		if _, err := f.svc.CloseScratch(context.Background(), ownerClosure(s)); err != nil {
+			t.Fatal(err)
+		}
+		for _, ref := range []string{s.Branch, s.worktree().AnchorRef} {
+			if err := f.git.createRef(context.Background(), f.colony, f.p.CommonDir, ref, s.BaseCommit); err != nil {
+				t.Fatal(err)
+			}
+			report := f.reopen(t, serviceConfig())
+			if report.RemovalsCompleted != 0 || len(report.Pending) != 0 {
+				t.Fatalf("ref-only cleanup: %#v", report)
+			}
+			if oid, err := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, ref, 40); err != nil || oid != "" {
+				t.Fatalf("closed ref remains: %s = %q, %v", ref, oid, err)
+			}
+		}
+	})
+	t.Run("capture_owner_retains_ref", func(t *testing.T) {
+		f := newServiceFixture(t)
+		s := mustScratch(t, f, uuid.NewV7())
+		writeTestFile(t, filepath.Join(s.Dir, "captured.txt"), []byte("sealed content"))
+		capture, err := f.capture(s, sealCapture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer gitCommand(t, f.env, f.root, nil, "update-ref", "-d", capture.RetentionRef, capture.Tree)
+		report := f.reopen(t, serviceConfig())
+		if len(report.Pending) != 0 {
+			t.Fatalf("capture reopen: %#v", report)
+		}
+		if tree, err := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, capture.RetentionRef, 40); err != nil || tree != capture.Tree {
+			t.Fatalf("Open released the owner's capture: tree=%q want=%q err=%v", tree, capture.Tree, err)
+		}
+	})
 	t.Run("anchor_restored_tmp_emptied", func(t *testing.T) {
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
@@ -174,6 +210,46 @@ func TestOpenReconciles(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestOpenGitCallsIndependentOfCompletedScratches(t *testing.T) {
+	f := newServiceFixture(t)
+	openCalls := func() int {
+		t.Helper()
+		if err := f.svc.Close(); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		// Open obtains the controlled environment once per Git invocation;
+		// reuse that seam instead of replacing any real Git operation.
+		deps := serviceDeps{environ: func() []string {
+			calls++
+			return f.env
+		}}
+		var report Reconciliation
+		var err error
+		f.svc, report, err = openService(context.Background(), f.store, f.colony, serviceConfig(), deps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.RemovalsCompleted != 0 || len(report.Pending) != 0 {
+			t.Fatalf("completed cleanup was retried: %#v", report)
+		}
+		return calls
+	}
+	before := openCalls()
+	for range 3 {
+		s := mustScratch(t, f, uuid.NewV7())
+		if _, err := f.svc.CloseScratch(context.Background(), ownerClosure(s)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(s.Dir); !os.IsNotExist(err) {
+			t.Fatalf("closed scratch remains: %v", err)
+		}
+	}
+	if after := openCalls(); after != before {
+		t.Fatalf("Open Git calls grew with completed scratches: before=%d after=%d", before, after)
+	}
 }
 
 type uncertainStore struct {

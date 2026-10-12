@@ -205,6 +205,12 @@ func (g *gitRunner) removeWorktree(ctx context.Context, colony, common string, s
 	if _, _, err := g.repository(ctx, colony, common, nil, []int{0}, "worktree", "prune", "--expire=now"); err != nil {
 		return fmt.Errorf("%w: %v", ErrRemovalPending, err)
 	}
+	return g.removeWorktreeRefs(ctx, colony, common, s)
+}
+
+// removeWorktreeRefs releases a removed scratch's refs. Reconciliation batches
+// worktree pruning per workspace; individual removals prune before this call.
+func (g *gitRunner) removeWorktreeRefs(ctx context.Context, colony, common string, s scratchWorktree) error {
 	current, err := g.readRef(ctx, colony, common, s.Branch, len(s.BaseCommit))
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrRemovalPending, err)

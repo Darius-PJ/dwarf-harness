@@ -389,6 +389,13 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 	pending := func(path string, err error) {
 		report.Pending = append(report.Pending, fmt.Sprintf("%s: %v", path, err))
 	}
+	// Reconciliation batches pruning after all directory removals.
+	removeWorktree := func(w workspaceState, scratch scratchWorktree) error {
+		if err := removeScratchDirectory(scratch.Dir, s.deps.removeAll); err != nil {
+			return fmt.Errorf("%w: %v", ErrRemovalPending, err)
+		}
+		return s.git.removeWorktreeRefs(ctx, s.colony, w.CommonDir, scratch)
+	}
 	// Temporary indices are disposable, including those for an interrupted
 	// registration. Never follow a reparse point while removing them.
 	workspaceDirs, err := os.ReadDir(filepath.Join(s.colony, "workspaces"))
@@ -406,6 +413,7 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 	}
 	usable := map[uuid.UUID]bool{}
 	anchors := map[uuid.UUID]map[string]string{}
+	branches := map[uuid.UUID]map[string]string{}
 	for _, id := range sortedIDs(s.workspaces) {
 		w := s.workspaces[id]
 		if w.inputsError != "" {
@@ -427,7 +435,12 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 			pending(id.String(), err)
 			continue
 		}
-		usable[id], anchors[id] = true, refs
+		heads, err := s.listRefs(ctx, w, "refs/heads/dwarf-harness/")
+		if err != nil {
+			pending(id.String(), err)
+			continue
+		}
+		usable[id], anchors[id], branches[id] = true, refs, heads
 	}
 	known := map[string]bool{}
 	for _, id := range sortedIDs(s.scratches) {
@@ -439,7 +452,10 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 		}
 		if scratch.closed {
 			_, statErr := os.Lstat(scratch.Dir)
-			if err := s.git.removeWorktree(ctx, s.colony, w.CommonDir, scratch.worktree(), s.deps.removeAll); err != nil {
+			if os.IsNotExist(statErr) && branches[w.ID][scratch.Branch] == "" && anchors[w.ID][scratch.worktree().AnchorRef] == "" {
+				continue
+			}
+			if err := removeWorktree(w, scratch.worktree()); err != nil {
 				pending(scratch.Dir, err)
 			} else {
 				delete(anchors[w.ID], scratch.worktree().AnchorRef)
@@ -499,18 +515,13 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 				pending(path, err)
 			} else {
 				report.OrphansRemoved++
-				if verified {
-					if _, _, err := s.git.repository(ctx, s.colony, w.CommonDir, nil, []int{0}, "worktree", "prune", "--expire=now"); err != nil {
-						pending(path, err)
-					}
-				}
 			}
 			pending(branch, errors.New("orphan workspace or base is unverified; branch retained"))
 			continue
 		}
 		ref := matches[0]
 		wt := scratchWorktree{Dir: path, Branch: branch, BaseCommit: anchors[w.ID][ref], AnchorRef: ref}
-		if err := s.git.removeWorktree(ctx, s.colony, w.CommonDir, wt, s.deps.removeAll); err != nil {
+		if err := removeWorktree(w, wt); err != nil {
 			pending(path, err)
 			continue
 		}
@@ -524,6 +535,11 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 	}
 	for _, id := range sortedIDs(s.workspaces) {
 		w := s.workspaces[id]
+		if usable[id] {
+			if _, _, err := s.git.repository(ctx, s.colony, w.CommonDir, nil, []int{0}, "worktree", "prune", "--expire=now"); err != nil {
+				pending(w.CommonDir, err)
+			}
+		}
 		for ref, oid := range anchors[id] {
 			anchorID, err := uuid.Parse(strings.TrimPrefix(ref, "refs/dwarf-harness/anchors/"))
 			if err == nil && protectedSuffixes[shortID(anchorID)] {
@@ -541,20 +557,6 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 			}
 			if _, _, err := s.git.repository(ctx, s.colony, w.CommonDir, nil, []int{0}, "update-ref", "-d", "--end-of-options", ref, oid); err != nil {
 				pending(ref, err)
-			}
-		}
-		if usable[id] {
-			// No C2 product operation owns a sealed capture yet. A retained
-			// capture without a record is an interrupted, unexposed operation.
-			refs, err := s.listRefs(ctx, w, "refs/dwarf-harness/captures/")
-			if err != nil {
-				pending(w.CommonDir, err)
-				continue
-			}
-			for ref, oid := range refs {
-				if _, _, err := s.git.repository(ctx, s.colony, w.CommonDir, nil, []int{0}, "update-ref", "-d", "--end-of-options", ref, oid); err != nil {
-					pending(ref, err)
-				}
 			}
 		}
 	}

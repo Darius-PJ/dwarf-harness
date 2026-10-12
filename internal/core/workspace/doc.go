@@ -269,10 +269,13 @@
 // A malformed known document or a contradictory exact set fails Open. Git
 // directories and colony markers are checked before operations. Reconciliation
 // empties disposable tmp directories, removes never-exposed orphans, retries
-// durable closures, restores missing open anchors when their objects survive,
-// and reports missing scratches and unfinished repairs. It writes no record and
-// reads no clock. Unrecorded anchor and capture refs are swept in usable
-// repositories. An orphan's regular .git file identifies its registered workspace
+// durable closures whose directory, branch or anchor remains, restores missing
+// open anchors when their objects survive, and reports missing scratches and
+// unfinished repairs. Pruning runs once per usable workspace, not per closed
+// scratch. Reconciliation writes no record and reads no clock. Only unrecorded
+// anchor refs are swept in usable repositories; capture refs are released by
+// their owners. Ticket 06 adds the record-aware sweep of captures no admission
+// record names. An orphan's regular .git file identifies its registered workspace
 // by os.SameFile; exactly one matching UUID-suffix anchor proves its base.
 // Missing or ambiguous proof permits directory removal only (and pruning only
 // in a verified workspace); the branch is retained and named in Pending. A moved
