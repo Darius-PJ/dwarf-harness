@@ -1,0 +1,395 @@
+{
+  "kinds": [
+    {
+      "saturation_units": 1000000,
+      "cutoff_units": 1000,
+      "attenuation_ppm": 800000,
+      "hop_latency_ms": 0,
+      "sources": [
+        {
+          "coupling": {
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ],
+            "direction": "dependency_to_consumer",
+            "profile": "dependency_downstream/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 86400,
+          "unit": "affordance_units",
+          "mode": "impulse",
+          "rule_id": "repair_r2_impulse/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ],
+            "direction": "dependency_to_consumer",
+            "profile": "dependency_downstream/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 86400,
+          "unit": "affordance_units",
+          "mode": "impulse",
+          "rule_id": "repair_r3_impulse/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ],
+            "direction": "dependency_to_consumer",
+            "profile": "dependency_downstream/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "affordance_units",
+          "mode": "sustained",
+          "rule_id": "repair_r3_sustained/v1"
+        }
+      ],
+      "unit": "affordance_units",
+      "quantity_class": "evidential",
+      "id": "affordance"
+    },
+    {
+      "saturation_units": 1000000,
+      "cutoff_units": 1000,
+      "attenuation_ppm": 800000,
+      "hop_latency_ms": 0,
+      "sources": [
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 86400,
+          "unit": "strain_units",
+          "mode": "impulse",
+          "rule_id": "validation_f2_impulse/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "strain_units",
+          "mode": "sustained",
+          "rule_id": "validation_f2_sustained/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ],
+            "direction": "dependency_to_consumer",
+            "profile": "dependency_downstream/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "strain_units",
+          "mode": "sustained",
+          "rule_id": "validation_f3_attributed/v1"
+        }
+      ],
+      "unit": "strain_units",
+      "quantity_class": "evidential",
+      "id": "dependency_strain"
+    },
+    {
+      "saturation_units": 1000000,
+      "cutoff_units": 1000,
+      "attenuation_ppm": 800000,
+      "hop_latency_ms": 0,
+      "sources": [
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 20000,
+          "age_rule_id": "linear_per_day/v1",
+          "half_life_seconds": 0,
+          "unit": "uncertainty_units",
+          "mode": "rising",
+          "rule_id": "base_staleness/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "uncertainty_units",
+          "mode": "level",
+          "rule_id": "check_flakiness/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "uncertainty_units",
+          "mode": "level",
+          "rule_id": "check_quarantine/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "uncertainty_units",
+          "mode": "level",
+          "rule_id": "check_retirement/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "uncertainty_units",
+          "mode": "level",
+          "rule_id": "private_overlap/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ],
+            "direction": "dependency_to_consumer",
+            "profile": "overlap_relevance/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 86400,
+          "unit": "uncertainty_units",
+          "mode": "impulse",
+          "rule_id": "promotion_overlap/v1"
+        }
+      ],
+      "unit": "uncertainty_units",
+      "quantity_class": "evidential",
+      "id": "epistemic_uncertainty"
+    },
+    {
+      "saturation_units": 1000000,
+      "cutoff_units": 1000,
+      "attenuation_ppm": 800000,
+      "hop_latency_ms": 0,
+      "sources": [
+        {
+          "coupling": {
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ],
+            "direction": "dependency_to_consumer",
+            "profile": "dependency_downstream/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 86400,
+          "unit": "perturbation_units",
+          "mode": "impulse",
+          "rule_id": "canonical_change/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ],
+            "direction": "dependency_to_consumer",
+            "profile": "dependency_downstream/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 86400,
+          "unit": "perturbation_units",
+          "mode": "impulse",
+          "rule_id": "federated_perturbation/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ],
+            "direction": "dependency_to_consumer",
+            "profile": "dependency_downstream/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "perturbation_units",
+          "mode": "level",
+          "rule_id": "provider_status/v1"
+        }
+      ],
+      "unit": "perturbation_units",
+      "quantity_class": "extensive",
+      "id": "perturbation"
+    },
+    {
+      "saturation_units": 1000000,
+      "cutoff_units": 1000,
+      "attenuation_ppm": 800000,
+      "hop_latency_ms": 0,
+      "sources": [
+        {
+          "coupling": {
+            "edge_types": [
+              "registered_resource_use"
+            ],
+            "direction": "resource_to_consumer",
+            "profile": "registered_resource_outward/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "pressure_units",
+          "mode": "level",
+          "rule_id": "core_budget_exposure/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "registered_resource_use"
+            ],
+            "direction": "resource_to_consumer",
+            "profile": "registered_resource_outward/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "pressure_units",
+          "mode": "level",
+          "rule_id": "core_resource_usage/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "registered_resource_use"
+            ],
+            "direction": "resource_to_consumer",
+            "profile": "registered_resource_outward/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "pressure_units",
+          "mode": "level",
+          "rule_id": "core_runner_queue/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [
+              "registered_resource_use"
+            ],
+            "direction": "resource_to_consumer",
+            "profile": "registered_resource_outward/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 0,
+          "unit": "pressure_units",
+          "mode": "level",
+          "rule_id": "router_headroom/v1"
+        }
+      ],
+      "unit": "pressure_units",
+      "quantity_class": "extensive",
+      "id": "resource_pressure"
+    },
+    {
+      "saturation_units": 1000000,
+      "cutoff_units": 1000,
+      "attenuation_ppm": 800000,
+      "hop_latency_ms": 0,
+      "sources": [
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 3600,
+          "unit": "surprise_units",
+          "mode": "impulse",
+          "rule_id": "check_duration_anomaly/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 3600,
+          "unit": "surprise_units",
+          "mode": "impulse",
+          "rule_id": "check_outcome_anomaly/v1"
+        },
+        {
+          "coupling": {
+            "edge_types": [],
+            "direction": "local",
+            "profile": "local/v1"
+          },
+          "rise_units_per_day": 0,
+          "age_rule_id": "none",
+          "half_life_seconds": 3600,
+          "unit": "surprise_units",
+          "mode": "impulse",
+          "rule_id": "shared_resource_pressure_anomaly/v1"
+        }
+      ],
+      "unit": "surprise_units",
+      "quantity_class": "evidential",
+      "id": "surprise"
+    }
+  ],
+  "weight_scale_ppm": 1000000,
+  "law_version": 1,
+  "law_id": "golden.full",
+  "kernel": "bounded_best_arrival/v1",
+  "evaluator_version": 1,
+  "schema_version": 1,
+  "format": "dwarf-harness/undercurrent-law"
+}

@@ -1,0 +1,16 @@
+{
+  "format": "dwarf-harness/validation-policy",
+  "schema_version": 1,
+  "flake_rate_prior": {
+    "numerator": 1,
+    "denominator": 20
+  },
+  "failure_repair_confidence": {
+    "numerator": 999,
+    "denominator": 1000
+  },
+  "quarantine_threshold": {
+    "numerator": 1,
+    "denominator": 5
+  }
+}

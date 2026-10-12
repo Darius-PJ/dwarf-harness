@@ -1,0 +1,166 @@
+{
+  "format": "dwarf-harness/undercurrent-law",
+  "schema_version": 1,
+  "evaluator_version": 1,
+  "kernel": "bounded_best_arrival/v1",
+  "law_id": "a.b_c-d000000000000000000000000000000000000000000000000000000000",
+  "law_version": 2147483647,
+  "weight_scale_ppm": 1000000,
+  "kinds": [
+    {
+      "id": "affordance",
+      "quantity_class": "evidential",
+      "unit": "affordance_units",
+      "sources": [
+        {
+          "rule_id": "repair_r2_impulse/v1",
+          "mode": "impulse",
+          "unit": "affordance_units",
+          "half_life_seconds": 31536000,
+          "age_rule_id": "none",
+          "rise_units_per_day": 0,
+          "coupling": {
+            "profile": "dependency_downstream/v1",
+            "direction": "dependency_to_consumer",
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ]
+          }
+        }
+      ],
+      "hop_latency_ms": 86400000,
+      "attenuation_ppm": 999999,
+      "cutoff_units": 999999999999,
+      "saturation_units": 1000000000000
+    },
+    {
+      "id": "dependency_strain",
+      "quantity_class": "evidential",
+      "unit": "strain_units",
+      "sources": [
+        {
+          "rule_id": "validation_f3_attributed/v1",
+          "mode": "sustained",
+          "unit": "strain_units",
+          "half_life_seconds": 0,
+          "age_rule_id": "none",
+          "rise_units_per_day": 0,
+          "coupling": {
+            "profile": "dependency_downstream/v1",
+            "direction": "dependency_to_consumer",
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ]
+          }
+        }
+      ],
+      "hop_latency_ms": 86400000,
+      "attenuation_ppm": 999999,
+      "cutoff_units": 999999999999,
+      "saturation_units": 1000000000000
+    },
+    {
+      "id": "epistemic_uncertainty",
+      "quantity_class": "evidential",
+      "unit": "uncertainty_units",
+      "sources": [
+        {
+          "rule_id": "base_staleness/v1",
+          "mode": "rising",
+          "unit": "uncertainty_units",
+          "half_life_seconds": 0,
+          "age_rule_id": "linear_per_day/v1",
+          "rise_units_per_day": 1000000000000,
+          "coupling": {
+            "profile": "local/v1",
+            "direction": "local",
+            "edge_types": []
+          }
+        }
+      ],
+      "hop_latency_ms": 86400000,
+      "attenuation_ppm": 999999,
+      "cutoff_units": 999999999999,
+      "saturation_units": 1000000000000
+    },
+    {
+      "id": "perturbation",
+      "quantity_class": "extensive",
+      "unit": "perturbation_units",
+      "sources": [
+        {
+          "rule_id": "federated_perturbation/v1",
+          "mode": "impulse",
+          "unit": "perturbation_units",
+          "half_life_seconds": 31536000,
+          "age_rule_id": "none",
+          "rise_units_per_day": 0,
+          "coupling": {
+            "profile": "dependency_downstream/v1",
+            "direction": "dependency_to_consumer",
+            "edge_types": [
+              "declared_dataflow",
+              "static_dependency"
+            ]
+          }
+        }
+      ],
+      "hop_latency_ms": 86400000,
+      "attenuation_ppm": 999999,
+      "cutoff_units": 999999999999,
+      "saturation_units": 1000000000000
+    },
+    {
+      "id": "resource_pressure",
+      "quantity_class": "extensive",
+      "unit": "pressure_units",
+      "sources": [
+        {
+          "rule_id": "core_runner_queue/v1",
+          "mode": "level",
+          "unit": "pressure_units",
+          "half_life_seconds": 0,
+          "age_rule_id": "none",
+          "rise_units_per_day": 0,
+          "coupling": {
+            "profile": "registered_resource_outward/v1",
+            "direction": "resource_to_consumer",
+            "edge_types": [
+              "registered_resource_use"
+            ]
+          }
+        }
+      ],
+      "hop_latency_ms": 86400000,
+      "attenuation_ppm": 999999,
+      "cutoff_units": 999999999999,
+      "saturation_units": 1000000000000
+    },
+    {
+      "id": "surprise",
+      "quantity_class": "evidential",
+      "unit": "surprise_units",
+      "sources": [
+        {
+          "rule_id": "shared_resource_pressure_anomaly/v1",
+          "mode": "impulse",
+          "unit": "surprise_units",
+          "half_life_seconds": 31536000,
+          "age_rule_id": "none",
+          "rise_units_per_day": 0,
+          "coupling": {
+            "profile": "local/v1",
+            "direction": "local",
+            "edge_types": []
+          }
+        }
+      ],
+      "hop_latency_ms": 86400000,
+      "attenuation_ppm": 999999,
+      "cutoff_units": 999999999999,
+      "saturation_units": 1000000000000
+    }
+  ]
+}
