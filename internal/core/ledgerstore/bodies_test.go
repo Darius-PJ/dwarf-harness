@@ -733,12 +733,11 @@ func TestBodiesConcurrentUse(t *testing.T) {
 				}
 			}
 		})
-		deadline := time.Now().Add(time.Minute)
-		for acked.Load() < 200 && !t.Failed() && time.Now().Before(deadline) {
+		// Close lands once 200 references are acknowledged, however long a
+		// loaded machine takes. No wall-clock bound applies: a stall shows as
+		// go test's own timeout, with every goroutine's stack.
+		for acked.Load() < 200 && !t.Failed() {
 			time.Sleep(time.Millisecond)
-		}
-		if n := acked.Load(); n < 200 {
-			t.Errorf("%d references acknowledged within a minute, want 200", n)
 		}
 		if err := s.Close(); err != nil {
 			t.Errorf("Close = %v", err)
