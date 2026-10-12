@@ -1,6 +1,6 @@
 # 04: Load and identify a strict law independently of field execution
 
-Status: claimed
+Status: resolved
 Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
@@ -26,11 +26,11 @@ Exposes U1.L law capability (ticket [04](04-load-and-identify-a-strict-law-indep
 
 ## Acceptance criteria
 
-- [ ] A complete valid LAW-PARSER artifact loads into the typed six-kind/rule registry; every specified malformed, duplicate, unsupported, unsorted and boundary-exceeding artifact is rejected atomically under both finite profiles.
-- [ ] Golden vectors distinguish byte-identical artifacts from whitespace/key-order/line-ending changes using exact immutable Git-blob SHA-256, with no semantic canonicalizer.
-- [ ] The same contract supplies typed versioned D47 parameters and local-manifest bindings to a C4-facing consumer without importing or starting the field engine.
-- [ ] Shared law exports exclude local workspace/check/environment policy, grants, credentials and activation time; parsing cannot authorize or execute activation.
-- [ ] Additive/version compatibility, old evaluator semantics and unsupported versions are observable through the declared contract and golden samples; the contract record clearly separates implementation from owner freeze.
+- [x] A complete valid LAW-PARSER artifact loads into the typed six-kind/rule registry; every specified malformed, duplicate, unsupported, unsorted and boundary-exceeding artifact is rejected atomically under both finite profiles.
+- [x] Golden vectors distinguish byte-identical artifacts from whitespace/key-order/line-ending changes using exact immutable Git-blob SHA-256, with no semantic canonicalizer.
+- [x] The same contract supplies typed versioned D47 parameters and local-manifest bindings to a C4-facing consumer without importing or starting the field engine.
+- [x] Shared law exports exclude local workspace/check/environment policy, grants, credentials and activation time; parsing cannot authorize or execute activation.
+- [x] Additive/version compatibility, old evaluator semantics and unsupported versions are observable through the declared contract and golden samples; the contract record clearly separates implementation from owner freeze.
 
 ## Bounded acceptance profiles
 
@@ -58,6 +58,10 @@ Canonical sections (resolved through the parent specification’s reading map):
 - Contract register law-format
 - Decision log D40/D47/B2/B12
 
+## Answer
+
+U1.L's `law-format` contract is built, reviewed and on `main` as a draft, and U1 is In progress. `contract/law`, which uses the standard library only, loads the shared field law of Undercurrent §13.4 into the typed six-kind registry and refuses a malformed, duplicate, unsupported, unsorted or out-of-bounds artifact whole, under both `compact-v1` and `standard-v1`; a host may tighten those limits but never widen them. It also loads the local validation policy, D47's flake-rate prior, failure/repair confidence and quarantine threshold as exact fractions, which a C4-facing consumer reads without the field law or the engine. Each artifact is identified by the SHA-256 of its exact bytes, and golden vectors show that whitespace, key-order and line-ending changes alter that identity but not the loaded values. Neither artifact can carry workspace, check or environment data, grants, credentials or activation time, and loading activates nothing. Newer schema, evaluator and kernel versions are refused as unsupported, never reinterpreted. The decisions, which the owner approved as ruled, are recorded in [B22](../../../docs/DECISIONS.md#b22-u1l-law-format-version-1-the-validation-policy-and-their-identities); following his answer to OG-B, the policy holds three values, without the per-incident execution cap. The design brief and the advisor's ruling are under `.scratch/dwarf-harness/u1-evidence/`. The ticket ends with the owner freeze request for `law-format` (OG4), sent on 2026-10-12 without claiming the freeze; its packet is `.scratch/dwarf-harness/u1-evidence/law-format-freeze-packet.md`. `law-format` stays Draft until the owner freezes it under D40, and U1.L is Done only then.
+
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
@@ -69,3 +73,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-12 — Slice S1 is built and reviewed, and S2 adds its documents. The coder built `contract/law` on branch `build/04-law` (62e2c6b, rebased onto main as 6f82da1), and the build advisor approved it on evidence collected in a separate worktree of that commit, with one required change: the package documentation gave a validation policy's longest string as 33 bytes, a figure left from the four-value draft, and the fix-up 9bba28f corrects it to 31. At 62e2c6b, 595 tests and subtests, examples and fuzz seeds included, passed and none failed; each fuzz target ran for 120 s (752,723 and 2,385,988 executions) without a failure or a new corpus file; the check passed all nine steps with `DWARF_CC` set; the package depends on nothing outside the standard library; `go.mod` and `go.sum` are unchanged; the golden files are stored with LF line endings (`full-compact.json` has none) and match their pinned SHA-256 digests; and an import of `internal/core/durable` planted in `contract/law` failed the import-boundary step on all five build targets. On 9bba28f the package tests and gofmt passed again. S2 records [B22](../../../docs/DECISIONS.md#b22-u1l-law-format-version-1-the-validation-policy-and-their-identities), the register's `law-format` row as Draft and U1 as In progress. Nothing is frozen; freezing `law-format` is the owner's separate decision under D40.
 
 2026-10-12 — The owner approved the merge. The full check passed all nine steps on 7dbb41a, and `main` moved by fast-forward to it: S1 6f82da1, the doc.go fix 9bba28f and S2 7dbb41a, which carries B22. `law-format` is Draft and not frozen. The freeze request comes next, with its own packet, and this ticket closes when that request is sent (ruling P24).
+
+2026-10-12 — OG4, the `law-format` freeze request, was sent at 07:51 local time as one question-tool request, pointing to the packet at `.scratch/dwarf-harness/u1-evidence/law-format-freeze-packet.md`. Its V1–V8 results, `go doc` output and golden digests were taken at 35ca559, which adds one sentence to the package documentation, as the build advisor's review of S1 asked: an empty edge list loads as an empty, non-nil slice. `main` reaches 35ca559 by fast-forward with this comment's commit. The ticket closes with the request sent, not answered (ruling P24). `law-format` stays Draft until the owner answers and his decision entry is recorded.
