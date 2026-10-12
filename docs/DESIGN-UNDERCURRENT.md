@@ -609,9 +609,10 @@ The contract has the following parts.
 
 | Event | Fields Undercurrent needs | Feeds |
 |---|---|---|
-| Scratch created | Context, workspace root, base commit, authoring context; for temporary scratch (D23), parent scratch | Context-local staleness; possible-overlap only under the current explicit projection grant |
+| Scratch created | Context, workspace root, base commit, authoring context; for temporary scratch (D23), parent scratch. Frozen for a context's dedicated scratch as `workspace.scratch_created` v1 (D115): scratch, workspace, owning context (which authors the scratch's changes), base commit and anchor tree; the temporary scratch's parent field joins later by addition (D40) | Context-local staleness; possible-overlap only under the current explicit projection grant |
 | Scratch changed paths | Context, authoring context, changed path set and scratch commit | Local path evidence; outward effect is only a permitted coarse overlap/staleness hint |
 | Temporary scratch merged back | Context, parent scratch, authoring context, outcome and changed paths | Private-work evidence; never an addressed source or public promotion |
+| Scratch closed | Context, scratch and reason (`ROADMAP-CORE.md` C2). Frozen as `workspace.scratch_closed` v1 (D115): version 1 defines the reason `abandoned`, and later F2 parts add others, such as temporary merged back and promoted, by addition | U4's set of open scratches and U9's occupancy lifetimes (`ROADMAP-CORE.md` C2), never recovered from bodies (D36) |
 | Promotion attempted | Original request/context and immutable submission/base/capture identity; derived candidate/generation and attempts where applicable | Lifecycle accounting only; intent is not delivery, pressure, failure or affordance |
 | Promotion accepted | Request context, actual durable predecessor/target, exact accepted candidate/generation, evidence bindings and predecessor-to-target paths with D23 authoring contexts (D53–D77); schema remains open | One delivered delta: eligible `epistemic_uncertainty` overlap/staleness and check-qualified `affordance`; no predecessor re-credit |
 | Promotion refused | Context, reason and canonical tip | Staleness/overlap only when measured path/base evidence warrants it; changed predecessor alone is not interference |

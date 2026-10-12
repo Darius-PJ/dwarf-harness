@@ -8,7 +8,7 @@ import (
 	"uuid"
 )
 
-// The proposed F2-05 record types, each at version 1. The package
+// The F2-05 record types, each at version 1. The package
 // documentation specifies their payloads and service-owned record rules.
 const (
 	TypeWorkspaceRegistered = "workspace.registered"

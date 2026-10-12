@@ -36,7 +36,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 
 // Defined returns the record type versions this contract version defines,
 // F0's catalogue: TypeCommand, TypeBodyPin, TypeBodyUnpin and
-// TypeBodiesCollected; and the proposed F2-05 additions:
+// TypeBodiesCollected; and the F2-05 additions:
 // TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated and
 // TypeScratchClosed, each at version 1. It never contains a type in the
 // reserved fixture namespace.

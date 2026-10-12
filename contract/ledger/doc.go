@@ -156,8 +156,8 @@
 //
 // A Catalogue lists the record type versions a writer may append. Defined
 // returns those this contract version defines: the four F0 record types
-// and the four proposed F2-05 types below, each at version 1. F2-05 awaits
-// the owner's additive freeze; it does not change F0 or format version 1.
+// and the four F2-05 types below, each at version 1. F2-05 joined by the
+// owner's additive freeze (D115); it does not change F0 or format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -240,7 +240,8 @@
 //
 // # F2-05 record types
 //
-// These four proposed version-1 types are ticket 05's part of F2. C2 owns
+// These four version-1 types are ticket 05's part of F2, frozen by addition
+// to format version 1 (D115). C2 owns
 // their payload specifications. Only Core's workspace service
 // (internal/core/workspace) may append them, through appender.Appender;
 // permitted callers are enforced by review. The service checks the record
@@ -260,7 +261,7 @@
 //	key            type    presence  rule
 //	workspace_id   UUIDv7  required  the workspace's ID
 //	common_dir     string  required  the absolute common-directory grammar below
-//	object_format  string required  sha1 or sha256
+//	object_format  string  required  sha1 or sha256
 //
 // common_dir accepts exactly: valid UTF-8; 1–4,096 bytes; no byte below
 // 0x20 and no 0x7F; no backslash; forward slashes only; absolute in one of
@@ -306,8 +307,8 @@
 //	context_id    UUIDv7         required  the bound work context that owns the scratch and authors its changes
 //	dir           string         required  8 lowercase hex digits; scratch/<dir> in the colony directory
 //	branch        string         required  the refs/heads/ grammar below
-//	base_commit   Git object ID required  the canonical commit the scratch was cut from
-//	anchor_tree   Git object ID required  that commit's tree, the root eligibility baseline
+//	base_commit   Git object ID  required  the canonical commit the scratch was cut from
+//	anchor_tree   Git object ID  required  that commit's tree, the root eligibility baseline
 //
 // branch accepts exactly: valid UTF-8; begins refs/heads/; non-empty suffix;
 // at most 4,096 bytes; no byte below 0x20 and no 0x7F; no space and no

@@ -34,7 +34,7 @@ func TestNewCatalogue(t *testing.T) {
 		}
 	}
 
-	// Defined contains the F0 and proposed F2-05 type versions, but never
+	// Defined contains the F0 and F2-05 type versions, but never
 	// fixture records or a version the contract does not define.
 	def := Defined()
 	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected, TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed} {

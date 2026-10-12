@@ -25,7 +25,7 @@ const (
 	// catalogueDir holds the golden catalogue log, a one-segment log
 	// directory holding every F0 record type.
 	catalogueDir = "testdata/f0/catalogue/log"
-	// workspaceDir holds the proposed F2-05 catalogue's one-segment log.
+	// workspaceDir holds the F2-05 catalogue's one-segment log.
 	workspaceDir = "testdata/f2/05/log"
 )
 
