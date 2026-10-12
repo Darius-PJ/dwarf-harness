@@ -1,6 +1,6 @@
 # 04: Load and identify a strict law independently of field execution
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
@@ -61,3 +61,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-12 — Claimed for the staged build by the project manager, on the owner's instruction of 2026-10-12 to take the next tickets once this was adjusted, each pausing for his approval before work moved on. A runner maps the requirements, a designer drafts the brief and the advisor rules on it. No code starts before the owner approves the design.
