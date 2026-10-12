@@ -20,7 +20,7 @@ Conventions:
 
 ## Start here for a fresh session
 
-**Current stopping point:** [D96](DECISIONS.md#d96-pre-alpha-fortress-alignment-and-consolidation-boundary) authorizes consolidation of D89–D95 as a pre-alpha design, not exhaustive design closure. This document incorporates that alignment; reconciliation no longer awaits another owner confirmation. [D97–D102](DECISIONS.md#d97-officer-service-loss-causes-onset-held-questions-and-restoration-evidence) add the ordinary service-loss and officer-recovery procedure (§13.11). Exact relationship attenuation/rubric/encoding, producer schemas and bounded presentation persistence remain explicit specification/testing work. C0 and C1 are Done, and the owner froze C1's F0 contracts at version 1 on 2026-10-10 (D111); C2 is Ready after the owner's D52 approval (D112). C8/C9 remain Waiting on their actual capability dependencies, including C9 backend before C8 initial alignment, never whole C9 or GUI. `ledger-format`, `ledger-reader`, `ledger-appender` and `law-format` are Frozen (D111, D114) and the other two contracts remain Not started; §13 preserves approval, calibration and implementation gates.
+**Current stopping point:** [D96](DECISIONS.md#d96-pre-alpha-fortress-alignment-and-consolidation-boundary) authorizes consolidation of D89–D95 as a pre-alpha design, not exhaustive design closure. This document incorporates that alignment; reconciliation no longer awaits another owner confirmation. [D97–D102](DECISIONS.md#d97-officer-service-loss-causes-onset-held-questions-and-restoration-evidence) add the ordinary service-loss and officer-recovery procedure (§13.11). Exact relationship attenuation/rubric/encoding, producer schemas and bounded presentation persistence remain explicit specification/testing work. C0 and C1 are Done, and the owner froze C1's F0 contracts at version 1 on 2026-10-10 (D111); C2 is In progress (ticket 05) after the owner's D52 approval (D112). C8/C9 remain Waiting on their actual capability dependencies, including C9 backend before C8 initial alignment, never whole C9 or GUI. `ledger-format`, `ledger-reader`, `ledger-appender` and `law-format` are Frozen (D111, D114) and the other two contracts remain Not started; §13 preserves approval, calibration and implementation gates.
 
 | Read | Authority and purpose |
 |---|---|
@@ -36,7 +36,7 @@ Conventions:
 
 **Implementation and evidence:** these design rounds produced documents and throwaway experiments, not a completed implementation of this independent architecture. Existing legacy files have not been audited against it. Go/interface sketches and rollout gates are specifications, not runnable APIs or completed phases. Appendix A retains dated prototype measurements; Appendix B records the narrower relationship-model exercise and the runtime obligations still unverified. A fresh session need not repeat old benchmarks merely to resume the design.
 
-**Recommended continuation:** follow `ROADMAPS.md`: C0 is Done (2026-10-09, ticket 01), and C1 in `ROADMAP-CORE.md` is Done (2026-10-10, tickets 02 and 03; F0 frozen at version 1 on 2026-10-10, D111). C2 is Ready after the owner's D52 approval of the specified boundary (D112); its mechanisms are no longer an open technical-design question. C8/C9 wait for their documented dependencies. The GUI roadmap names its gates and cycle-free dependency on the C9 backend capability. `ledger-format`, `ledger-reader` and `ledger-appender` are Frozen at version 1 (D111); `law-format` is Frozen at version 1 (D114); the other two contracts remain Not started. The owner answer provenance and delegated engineering decision IDs are marked adopted in §13; do not treat a specification as an implementation result or a frozen contract.
+**Recommended continuation:** follow `ROADMAPS.md`: C0 is Done (2026-10-09, ticket 01), and C1 in `ROADMAP-CORE.md` is Done (2026-10-10, tickets 02 and 03; F0 frozen at version 1 on 2026-10-10, D111). C2 is In progress (ticket 05) after the owner's D52 approval of the specified boundary (D112); its mechanisms are no longer an open technical-design question. C8/C9 wait for their documented dependencies. The GUI roadmap names its gates and cycle-free dependency on the C9 backend capability. `ledger-format`, `ledger-reader` and `ledger-appender` are Frozen at version 1 (D111); `law-format` is Frozen at version 1 (D114); the other two contracts remain Not started. The owner answer provenance and delegated engineering decision IDs are marked adopted in §13; do not treat a specification as an implementation result or a frozen contract.
 
 **Continuation scope:** the documents now live in `docs/` of this repository, their only living copy (D30). `superceeded-Design.md`, `recipes/` and the legacy code and data stay unread in the archive folder `../dwarfharness/`, outside this repository, unless the owner separately authorizes access; the permitted ideas have already been incorporated into §11–§12. Unreconciled design documents are not authority for this independent application. Git work in this repository follows D31 and D41: Conventional Commits; one worktree and branch per agent; `main` moves only by fast-forward after the full check (D42); changes touching a frozen contract, an owner decision or a new dependency wait for the owner; nothing is pushed without the owner.
 
@@ -198,7 +198,7 @@ Each submission stays immutable while host-derived cumulative candidate generati
 
 Owner-authorized exact policy versions and controlled colony-wide cutover remain in §13.4; U1.L law-format is distinct from U1.E. C4's A1 visibility behavior is O4 plus same-process canaries under the finite V6 suite in `RESEARCH-ADMISSIBLE-VALIDATION.md` §4.9.1; no sampling, no automatic O1 relaxation and no A2 claim. C10's platform isolation is a separate unproven gate.
 
-**Readiness and proof:** C0 is Done (2026-10-09, ticket 01), and C1 is Done (2026-10-10, tickets 02 and 03; F0 frozen at version 1 on 2026-10-10, D111). C2 is **Ready after the owner's D52 approval** (D112); C3 remains testing-only; C4 requires C3, U1.L, owner-frozen `law-format` and successful end-to-end validation/capacity gates. `ledger-format`, `ledger-reader` and `ledger-appender` are Frozen at version 1 (D111); `law-format` is Frozen at version 1 (D114); the other two contracts remain Not started. No accepted promotion, implementation or runtime gate is claimed here.
+**Readiness and proof:** C0 is Done (2026-10-09, ticket 01), and C1 is Done (2026-10-10, tickets 02 and 03; F0 frozen at version 1 on 2026-10-10, D111). C2 is **In progress** (ticket 05) after the owner's D52 approval (D112); C3 remains testing-only; C4 requires C3, U1.L, owner-frozen `law-format` and successful end-to-end validation/capacity gates. `ledger-format`, `ledger-reader` and `ledger-appender` are Frozen at version 1 (D111); `law-format` is Frozen at version 1 (D114); the other two contracts remain Not started. No accepted promotion, implementation or runtime gate is claimed here.
 
 **C2 mechanics versus C4 acceptance (D52, D77–D78):** without the real validator, requests return unavailable, leave canonical unchanged and record no accepted promotion. No allow-all validator, temporary bypass or direct-ref workaround is permitted. C2 acceptance proves workspace mechanics and unavailable refusal; disposable compare-and-swap checks are not accepted promotions. During C4, the integrated validator exercises accepted/refused scenarios on test workspaces and proves exact derived validated/promoted-tree identity, evidence/predecessor binding, ordered successful-prefix publication, invalidation/rebuild, cancellation cutoff, durable finalization/recovery, safe slot release and actual resource measurements. Process-crash evidence is not power-loss/storage-durability proof. C4's own scenarios do not require C4 to be Done first.
 
@@ -686,7 +686,7 @@ Both SDKs are viable and expose per-request headers, raw JSON/responses/stream e
 | Agent/Corps structure | Design only | Relationship/board context growth, broker queues, Diplomat/Grand fan-out, Griot updates and per-context accounting |
 | Child cleanup | Design only | Surviving descendant count after normal and abnormal shutdown; target zero |
 | Colony log | C1's ledger and body store (A.10): cold and warm recovery, durable appends under steady, burst and saturating load, body publication, old command-ID lookups, explicit collection, peak memory and disk, measured on one Windows NTFS machine against an assumed workload at 12, 20 and 60 contexts. Candidate prototypes (A.8): with our own log, 0.52 ms per durable one-event commit and 29 ms to read 20,000 events back | Budgets for startup replay time and index memory; the measured triggers for a SQLite index and for snapshots (D34); owner-agreed thresholds |
-| Workspaces | git operations on synthetic repositories (A.7) | Observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
+| Workspaces | C2's scratch creation and exact capture (A.11): creation, a fresh and a warm observe, a seal after ten edits and a closure's observe, at 1,000 and 10,000 files, one capture at a time, measured on one Windows NTFS machine. Git operations on synthetic repositories (A.7) | The concurrent cost of captures in a synchronized burst, C4's feasibility gate; observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
 | Promotion capacity | Illustrative model only (§3.5); no concurrent integrated benchmark | Real every-change accepted throughput/latency and burst drain; lane/queue bounds; speculative rework, ordered finalization and whole-process resource costs under the plan above |
 
 ## 9. Rollout (proposed)
@@ -821,7 +821,7 @@ C8 depends on this actual **C9 backend capability**, not whole C9 or GUI parity.
 
 ## 13. Engineering dispositions, 2026-10-05
 
-This section is the controlling Core design addendum. Where earlier sections or their open-question lists disagree with it, this section supersedes them. It selects mechanisms; it does not freeze a contract, pass an implementation gate, or claim a completed build, benchmark, security boundary or runtime test. The owner-adopted choices are recorded as adopted, not as owner-originated wording. C0 is Done (2026-10-09, ticket 01); C2 is Ready after the owner's D52 approval of the now-specified boundary (D112); C8 and C9 wait on their named dependencies. `ledger-format`, `ledger-reader` and `ledger-appender` are Frozen at version 1 (D111); `law-format` is Frozen at version 1 (D114); the other two contracts remain Not started.
+This section is the controlling Core design addendum. Where earlier sections or their open-question lists disagree with it, this section supersedes them. It selects mechanisms; it does not freeze a contract, pass an implementation gate, or claim a completed build, benchmark, security boundary or runtime test. The owner-adopted choices are recorded as adopted, not as owner-originated wording. C0 is Done (2026-10-09, ticket 01); C2 is In progress (ticket 05) after the owner's D52 approval of the now-specified boundary (D112); C8 and C9 wait on their named dependencies. `ledger-format`, `ledger-reader` and `ledger-appender` are Frozen at version 1 (D111); `law-format` is Frozen at version 1 (D114); the other two contracts remain Not started.
 
 **Owner choices adopted 2026-10-05:** D80 allows coarse resource-pressure and permission-scoped overlap hints, never private content; D81 selects explicit federation among independently sovereign operators, without implicit trust or a global coordinator; D82 gives the owner capability/budget ceilings and permits narrower explicit task grants without repeated consent inside their scope; D83 preserves exactly delivered history, with holes, but no unseen backlog, successor access or new posting rights; D84 makes Grand roles coordinators of their corresponding chains, with the owner apex and no blanket descendant access; D85 uses fresh memory unless an explicit manifest selects already-shareable lessons/artifacts; D86 excludes only the repairing context and its clones from check retirement, not every context of the same agent; D87 selects exactly one demand-started disposable native macOS guest slot on Apple Silicon, plus a separately budgeted Linux guest for Linux-declared work, with Intel Macs limited to Core/GUI and Linux-guest execution.
 
@@ -1022,7 +1022,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 
 **Unchanged.** D94's prohibitions on emergency or timeout promotion, waived handoff (other than the owner's unrecoverable declaration) and GUI bypass; exactly one holder per office; D82 grants, D83 retirement history and D85 private-memory limits; D22/D63/D79 one-shot paid attempts, passive results and no bookkeeping model calls. Records, encodings and the calibration of the allotment, proposal cap and restart bursts remain producer work; no implementation is claimed.
 
-## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09 and 2026-10-10
+## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09, 2026-10-10 and 2026-10-12
 
 ### A.1 Setup and limits
 
@@ -1032,7 +1032,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 - Adapter runs used a local fake provider with canned streaming responses. Figures are medians of five runs unless noted.
 - The machine ran about twice as slowly as during the earlier language study. Compare values within a table, not timing numbers across sessions.
 - The old combined prototype included terminal and external-browser paths. Only relevant terminal/adapter/router results are retained below; its full record is archived in `superceeded-Design.md`, in the archive folder `../dwarfharness/`, outside this repository. No native UI, concurrent launcher attachment or Corps workload was measured.
-- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02 and A.10 from 2026-10-09 and 2026-10-10; each states its own setup.
+- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02, A.10 from 2026-10-09 and 2026-10-10, and A.11 from 2026-10-12; each states its own setup.
 
 ### A.2 Standalone prototype binary sizes
 
@@ -1351,6 +1351,53 @@ Fields: `timesMs.collect`, `timesMs.phaseA`, `counts.batches`, `latencyMs.batch`
 - A collection batch's time runs from its record's event time to its last body-file call. It excludes the scan of the log tail and the choice of bodies, which precede the record. The longest append during the collection is the end-to-end stall.
 - The append, burst, saturation and publication figures are on fresh colonies. History affects `Open` and old command-ID lookups, which have their own tables.
 - No other workload ran during the timed groups, with one exception: a directory-size scan of the colony folder ran for about a minute during generation. Build agents only read and wrote text files meanwhile.
+
+### A.11 Workspace scratch and capture (C2, ticket 05)
+
+**Setup:** 2026-10-12, on the owner's machine, the one A.10 used, with no antivirus exclusion added by the build; go1.27.2, windows/amd64, `CGO_ENABLED=0`, without the race detector; Git 2.55.0.windows.3. The workload's repositories, colonies and scratches lay in temporary directories under `%TEMP%`, outside the repository, on NTFS volume C:. The harness is `TestCaptureWorkload` in `internal/core/workspace/workload_test.go` at commit e40ffcb, S1b as rebased onto `main`. It ran once, in a worktree of f2942bd, S1b before its rebase, whose `internal/core/workspace` is byte-identical to e40ffcb's, as `go test -count=1 -timeout=45m -run '^TestCaptureWorkload$' -v ./internal/core/workspace` with `GOTOOLCHAIN=local`, an empty `GOFLAGS`, `CGO_ENABLED=0` and `DWARF_CAPTURE_WORKLOAD_OUT` naming a results file outside the repository, and wrote one JSON line per timed phase. The raw results are `.scratch/dwarf-harness/c2-evidence/ticket-05-capture-workload.jsonl`. Under each table, "Fields" names the JSON fields it reports.
+
+**Workload, synthetic.** For each size, 1,000 and 10,000 files, the harness makes a fresh SHA-1 repository whose `main` holds only `src/00000.txt`, `src/00001.txt` and so on. Each file is 800 bytes: its number in eight digits, then `x` bytes, then an LF, its only line ending; A.7's synthetic files were also about 0.8 KB. The pinned inputs are those Git reports for that repository, with `core.autocrlf=true`, the owner's setting (B23), so the scratch's files are written with CRLF. Each size has its own colony directory, marker and scratch, and a capture-bytes pool under the provisional profile of 100,000 files, 1 GiB per capture and 20 GiB in flight (B23). Each phase is one call, timed from `time.Now` to `time.Since`, Git's child processes included:
+
+- `creation`: the scratch is made from `main`, as B23 item 5 describes: the checks of the pinned Git version and of `main`, the case-collision listing of the anchor tree, the inputs' materialization, the anchor ref, `worktree add --no-checkout`, and `read-tree -u --reset`, which writes every file and the scratch's index;
+- `fresh_observe`: the scratch's first capture, in observe mode, of the files creation has just written;
+- `warm_observe`: the next capture, with nothing changed;
+- `seal_10_edits`: outside the timer, the first byte of ten files is changed, keeping their size; then a capture in seal mode, which also creates its retention ref;
+- `closure_observe`: the next capture, in observe mode, with nothing changed since the seal, like the observation a closure makes before its record; the harness closes nothing.
+
+Each capture is against the anchor tree, under a reservation released when the call ends: it walks the scratch, reads every file, has Git add every file under the pinned conversion and streams every distinct blob back for the round-trip check (B23 item 7).
+
+**Model, an assumption.** The sources fix only promotion rates: 12 or 20 code-working pairs, each offering one change per 600 s (72 and 120 an hour), and a synchronized burst of four checkpoints per pair, 48 and 80 requests (D78, B15; `ROADMAP-CORE.md` C2). They give no repository size; the two sizes are A.7's. One capture runs at a time in each scratch, and captures in different scratches run concurrently within the bytes in flight. The harness measures one capture at a time in one scratch: the cost of a single change, not of a burst. The design's cost model is a walk that reads no file, plus a full read of every candidate, plus Git's hashing and the writing of changed blobs (ticket 05's design brief, §2.16, in `.scratch/dwarf-harness/c2-evidence/`). For its parts, A.7 measured on the owner's machine a stat-only walk of 10,000 files in 0.6 s, about 23 ms for a freshly written file's first read and about 0.2 ms for a repeat, and 305 s for SHA-256 over every file of a freshly created 10,000-file worktree.
+
+**Scratch creation** (`creation`):
+
+| Files | Creation (s) | Per file (ms), a calculation |
+|---|---|---|
+| 1,000 | 0.641 | 0.641 |
+| 10,000 | 3.78 | 0.378 |
+
+Fields: `duration_ms` of the `creation` line with that `files`; per file, `duration_ms` ÷ `files`.
+
+**Captures** (`fresh_observe`, `warm_observe`, `seal_10_edits` and `closure_observe`, in that order, in the scratch that creation made):
+
+| Measure | 1,000 files | 10,000 files |
+|---|---|---|
+| Raw bytes Core read in each capture | 801,000 | 8,010,000 |
+| Fresh observe (s) | 9.94 | 84.7 |
+| Warm observe (s) | 0.519 | 2.84 |
+| Seal after ten edits (s) | 0.659 | 3.01 |
+| Closure observe (s) | 0.517 | 2.83 |
+| Per file, fresh / warm / seal / closure (ms), a calculation | 9.94 / 0.519 / 0.659 / 0.517 | 8.47 / 0.284 / 0.301 / 0.283 |
+
+Fields: `core_raw_bytes`, the same in the four lines of a size; `duration_ms` of the `fresh_observe`, `warm_observe`, `seal_10_edits` and `closure_observe` lines with that `files`; per file, `duration_ms` ÷ `files`. The harness fails unless both observes before the edits give the anchor tree and count every file, the seal gives the tree that reference Git staged from the same files under the same settings and counts every file, the closure observe gives the seal's tree, and no observe keeps a ref (`tree`); it did not fail.
+
+**Limits:**
+
+- One machine: Windows 10 on NTFS. Linux and macOS, other file systems and network shares were not measured.
+- One run: each figure is a single measurement of one call, not a median, on a synthetic repository of one directory of small files, not on a real workspace. No budget, threshold or pass mark is set, nothing passes or fails one, and no figure is a capacity claim (D78, §8.6). Per-file figures are calculations.
+- Single captures only: concurrent captures in several scratches and a synchronized burst were not run; their cost remains C4's blocking feasibility gate (`ROADMAP-CORE.md` C2). Each capture reads its files one at a time (B23).
+- Fresh means the scratch's first capture, right after creation wrote its files; neither the file cache nor antivirus scanning was controlled or observed. A.7 attributes a freshly written file's slow first read to antivirus scanning, as an [INFERENCE]; this run does not test that.
+- The harness records wall time only, with no CPU time, memory or disk figure. Creation excludes the service's records, and the closure figure excludes closure's record and the scratch's removal, which ticket 05's S3 adds.
+- No other build or test ran during the run. The project manager's agent session, which ran no build or test, and background processes used about a third of one hardware thread in all, from per-process CPU times taken before and after the run.
 
 ## Appendix B — Sources and decision provenance
 
