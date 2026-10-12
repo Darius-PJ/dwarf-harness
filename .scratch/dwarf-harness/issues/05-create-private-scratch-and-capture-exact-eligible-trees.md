@@ -1,6 +1,6 @@
 # 05: Create private scratch and capture exact eligible trees
 
-Status: ready-for-agent
+Status: claimed
 Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
@@ -45,3 +45,5 @@ Canonical sections: Core roadmap C2; its cited controlling Core design and lates
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-12 — Claimed for the staged build by the project manager, on the owner's instruction of 2026-10-12 to take the next tickets once this was adjusted, each pausing for his approval before work moved on. The owner answered the D52 approval request the same day; the decision entry recording it lands in its own commit. A runner maps the requirements and a designer drafts the brief. C2's F2 event families are proposed and frozen by the owner before C2 producer implementation, and no code starts before the owner approves the design.

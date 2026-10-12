@@ -63,3 +63,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-12 — Claimed for the staged build by the project manager, on the owner's instruction of 2026-10-12 to take the next tickets once this was adjusted, each pausing for his approval before work moved on. A runner maps the requirements, a designer drafts the brief and the advisor rules on it. No code starts before the owner approves the design.
+
+2026-10-12 — The owner answered both design gates. At OG-A, the approval of the design before any code, he approved it as ruled; at OG-B, whether the validation policy holds three values or four, he chose three. The brief and the advisor's ruling are at `.scratch/dwarf-harness/u1-evidence/` (commit cbed47c); the ruling wins where they differ. Slice S1, the `contract/law` package, is being built on branch `build/04-law`. S1 and S2 reach `main` together, and only after the owner approves the merge.
