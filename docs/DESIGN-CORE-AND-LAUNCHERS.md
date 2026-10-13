@@ -686,7 +686,7 @@ Both SDKs are viable and expose per-request headers, raw JSON/responses/stream e
 | Agent/Corps structure | Design only | Relationship/board context growth, broker queues, Diplomat/Grand fan-out, Griot updates and per-context accounting |
 | Child cleanup | Design only | Surviving descendant count after normal and abnormal shutdown; target zero |
 | Colony log | C1's ledger and body store (A.10): cold and warm recovery, durable appends under steady, burst and saturating load, body publication, old command-ID lookups, explicit collection, peak memory and disk, measured on one Windows NTFS machine against an assumed workload at 12, 20 and 60 contexts. Candidate prototypes (A.8): with our own log, 0.52 ms per durable one-event commit and 29 ms to read 20,000 events back | Budgets for startup replay time and index memory; the measured triggers for a SQLite index and for snapshots (D34); owner-agreed thresholds |
-| Workspaces | C2's scratch creation and exact capture (A.11): creation, a fresh and a warm observe, a seal after ten edits and a closure's observe, at 1,000 and 10,000 files, one capture at a time, measured on one Windows NTFS machine. Git operations on synthetic repositories (A.7) | The concurrent cost of captures in a synchronized burst, C4's feasibility gate; observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
+| Workspaces | C2's scratch creation and exact capture (A.11): creation, a fresh and a warm observe, a seal after ten edits and a closure's observe, at 1,000 and 10,000 files, one capture at a time, measured on one Windows NTFS machine. C2's checkpoints and integration (A.12): a root and a successor admission, and the integration of their two-request train and its rebuild after `main` moved, at the same sizes, one call at a time, with Git's loose-object counts, measured once on the same machine. Git operations on synthetic repositories (A.7) | The concurrent cost of captures, admissions and integrations in a synchronized burst, with conflicts and full generation windows, C4's feasibility gate; a maintenance policy for loose objects, revisited at C4's capacity gate; observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
 | Promotion capacity | Illustrative model only (§3.5); no concurrent integrated benchmark | Real every-change accepted throughput/latency and burst drain; lane/queue bounds; speculative rework, ordered finalization and whole-process resource costs under the plan above |
 
 ## 9. Rollout (proposed)
@@ -1022,7 +1022,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 
 **Unchanged.** D94's prohibitions on emergency or timeout promotion, waived handoff (other than the owner's unrecoverable declaration) and GUI bypass; exactly one holder per office; D82 grants, D83 retirement history and D85 private-memory limits; D22/D63/D79 one-shot paid attempts, passive results and no bookkeeping model calls. Records, encodings and the calibration of the allotment, proposal cap and restart bursts remain producer work; no implementation is claimed.
 
-## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09, 2026-10-10 and 2026-10-12
+## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09, 2026-10-10, 2026-10-12 and 2026-10-13
 
 ### A.1 Setup and limits
 
@@ -1032,7 +1032,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 - Adapter runs used a local fake provider with canned streaming responses. Figures are medians of five runs unless noted.
 - The machine ran about twice as slowly as during the earlier language study. Compare values within a table, not timing numbers across sessions.
 - The old combined prototype included terminal and external-browser paths. Only relevant terminal/adapter/router results are retained below; its full record is archived in `superceeded-Design.md`, in the archive folder `../dwarfharness/`, outside this repository. No native UI, concurrent launcher attachment or Corps workload was measured.
-- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02, A.10 from 2026-10-09 and 2026-10-10, and A.11 from 2026-10-12; each states its own setup.
+- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02, A.10 from 2026-10-09 and 2026-10-10, A.11 from 2026-10-12, and A.12 from 2026-10-13; each states its own setup.
 
 ### A.2 Standalone prototype binary sizes
 
@@ -1398,6 +1398,54 @@ Fields: `core_raw_bytes`, the same in the four lines of a size; `duration_ms` of
 - Fresh means the scratch's first capture, right after creation wrote its files; neither the file cache nor antivirus scanning was controlled or observed. A.7 attributes a freshly written file's slow first read to antivirus scanning, as an [INFERENCE]; this run does not test that.
 - The harness records wall time only, with no CPU time, memory or disk figure. Creation excludes the service's records, and the closure figure excludes closure's record and the scratch's removal, which ticket 05's S3 adds.
 - No other build or test ran during the run. The project manager's agent session, which ran no build or test, and background processes used about a third of one hardware thread in all, from per-process CPU times taken before and after the run.
+
+### A.12 Workspace checkpoints and integration (C2, ticket 06)
+
+**Setup:** 2026-10-13, on the owner's machine, the one A.11 describes, with no antivirus exclusion added by the build; go1.27.2, windows/amd64, without the race detector; Git 2.55.0.windows.3. The workload's repositories, colonies and scratches lay in temporary directories under `%TEMP%`, outside the repository, which the harness checks. The harness is `TestCaptureWorkload` in `internal/core/workspace/workload_test.go` at commit fcf23e4. It ran once, with `DWARF_CAPTURE_WORKLOAD_OUT` naming a results file outside the repository, and wrote one JSON line per timed phase; each line also records the Git and Go versions and the platform. The raw results are [`ticket-06-capture-workload.jsonl`](../.scratch/dwarf-harness/c2-evidence/ticket-06-capture-workload.jsonl). Under the table, "Fields" names the JSON fields it reports.
+
+**Workload, synthetic.** For each size, 1,000 and 10,000 files, the harness builds A.11's repository, pinned inputs and colony and runs A.11's five phases, `creation` to `closure_observe`, as A.11 describes them, in a scratch the mechanism makes. It then sets `core.autocrlf=true` in the repository's own configuration, inspects the repository again, opens the workspace service on the colony's store with the provisional capacity profile (100,000 files, 1 GiB per capture, 20 GiB in flight, four checkpoints per pair and a window of four generations; B23 item 10 and the package documentation), registers the workspace and has the service create a scratch for a new context. Each phase is one call, timed from `time.Now` to `time.Since`, Git's child processes included:
+
+- `admit_root`: a root request, admitted as C4 will admit one, `beginRequest` and then `admit`: the reservation of the scratch, a checkpoint slot and the capture bytes; a seal against the anchor tree, the scratch's first capture since the service created it; the manifest's publication; and one commit holding the admission record and its pin;
+- `admit_successor`: outside the timer, the first byte of ten files is changed; then a successor naming the root as its head, admitted the same way, which seals against the root's sealed tree;
+- `integrate_two`: one `integrate` call for the workspace, which derives a clean generation for each of the two requests in order, the root's over `main` and the successor's over the root's: each a `merge-tree` in the integration environment, the derived tree's case check, an integration commit, its ref and one record;
+- `rebuild_two`: outside the timer, `main` moves to a new commit with the same tree; then one `integrate` call, which supersedes both generations, since their predecessor commits changed, and derives them again.
+
+**Model, an assumption.** The sources fix only promotion rates: 12 or 20 code-working pairs, each offering one change per 600 s (72 and 120 an hour), and a synchronized burst of four checkpoints per pair, 48 and 80 requests (D78, B15; `ROADMAP-CORE.md` C2). A pair's checkpoints are admitted one after another, each naming the previous head, while pairs admit in parallel within the capture bytes in flight (B23 item 10). The design's cost model for an admission is A.11's seal plus one manifest publication and one append; for a derivation, one `git merge-tree --write-tree`, which took 0.09–0.15 s in A.7, plus a tree listing, `commit-tree`, `update-ref` and an append; and a move of `main` rebuilds at most the window's four generations per workspace (ticket 06's design brief, §2.17, in `.scratch/dwarf-harness/c2-evidence/`). The harness measures one admission or one integration call at a time, in one workspace with a train of two requests: the cost of a single change, not of a burst.
+
+**Phases** (every line of the results, in the order the harness wrote them: the nine phases at 1,000 files, then at 10,000):
+
+| Phase | Files | Time (s) | Raw bytes read | Manifest bytes | Loose objects | Loose (KiB) |
+|---|---|---|---|---|---|---|
+| `creation` | 1,000 | 0.684 | 0 | 0 | 1 | 0 |
+| `fresh_observe` | 1,000 | 14.2 | 801,000 | 176,079 | 1 | 0 |
+| `warm_observe` | 1,000 | 0.574 | 801,000 | 176,079 | 1 | 0 |
+| `seal_10_edits` | 1,000 | 0.789 | 801,000 | 176,079 | 13 | 24 |
+| `closure_observe` | 1,000 | 0.604 | 801,000 | 176,079 | 13 | 24 |
+| `admit_root` | 1,000 | 4.69 | 801,000 | 176,079 | 13 | 24 |
+| `admit_successor` | 1,000 | 0.801 | 801,000 | 176,079 | 25 | 48 |
+| `integrate_two` | 1,000 | 0.402 | 0 | 0 | 27 | 49 |
+| `rebuild_two` | 1,000 | 0.443 | 0 | 0 | 30 | 49 |
+| `creation` | 10,000 | 5.03 | 0 | 0 | 1 | 0 |
+| `fresh_observe` | 10,000 | 131 | 8,010,000 | 1,760,079 | 1 | 0 |
+| `warm_observe` | 10,000 | 3.77 | 8,010,000 | 1,760,079 | 1 | 0 |
+| `seal_10_edits` | 10,000 | 4.02 | 8,010,000 | 1,760,079 | 13 | 241 |
+| `closure_observe` | 10,000 | 3.86 | 8,010,000 | 1,760,079 | 13 | 241 |
+| `admit_root` | 10,000 | 129 | 8,010,000 | 1,760,079 | 13 | 241 |
+| `admit_successor` | 10,000 | 4.12 | 8,010,000 | 1,760,079 | 25 | 483 |
+| `integrate_two` | 10,000 | 0.399 | 0 | 0 | 27 | 483 |
+| `rebuild_two` | 10,000 | 0.462 | 0 | 0 | 30 | 484 |
+
+Fields: `phase`, `files`, `duration_ms` ÷ 1,000, `core_raw_bytes`, `manifest_bytes`, `loose_objects` and `loose_kib`. Raw bytes are those Core read in the phase's capture, for an admission the sum of the sizes its published manifest lists; manifest bytes are the length of the capture's manifest, for an admission the body it published; creation and the integrations capture nothing and report 0 for both. The loose figures are the `count` and `size` lines of `git count-objects -v` in the workspace repository just after the phase, so each also counts what the earlier phases of the same size left loose. The baseline commit's objects were not loose by the end of `creation`, which left one loose object at either size; the run did not record why. The harness fails unless A.11's checks hold (`tree`), the root admission seals the anchor tree, the successor's sealed tree is the one reference Git stages from the same files under the same settings, and after each integration the successor's newest generation derives that tree; it did not fail.
+
+**Limits:**
+
+- One machine and one run, as in A.11: Windows 10 on NTFS, and each figure a single measurement of one call, not a median, on a synthetic repository of one directory of small files, not on a real workspace. No budget, threshold or pass mark is set, nothing passes or fails one, and no figure is a capacity claim (D78, §8.6).
+- One workspace with a train of two requests from one context, and `main` moved once, to a commit with the same tree, so every merge is clean and the rebuild changes no tree. Conflicts, failure cascades, a full window, several pairs or workspaces and a synchronized burst were not run; their concurrent cost remains C4's feasibility gate (`ROADMAP-CORE.md` C2).
+- The loose figures are what `git count-objects -v` reported in one fresh repository per size. Core runs no maintenance (B25); whether Git's own automatic maintenance ran was not recorded. They are not a disk budget.
+- `admit_root` is the service scratch's first capture after creation wrote its files, like A.11's fresh observe; neither the file cache nor antivirus scanning was controlled or observed.
+- The harness records wall time and Git's loose-object figures only, with no CPU time or memory figure. The five phases before admission repeat A.11's, a second single measurement on the same machine.
+- No other build or test ran during the run; the project manager's agent session only read and wrote text files.
+- The harness ran at fcf23e4. The review's fix-up 02edd7b, to which `main` then moved, changed product code the phases time, the projection's scans and the locking of an ending commit, but not the harness, and the harness was not run again.
 
 ## Appendix B — Sources and decision provenance
 
