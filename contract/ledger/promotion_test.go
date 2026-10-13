@@ -290,7 +290,7 @@ func TestF2_06PayloadsRefuse(t *testing.T) {
 	}
 }
 
-// F2-07's provenance keys are proposed for the owner's freeze (D113).
+// F2-07's provenance keys are frozen (D119).
 func TestPromotionAdmittedProvenance(t *testing.T) {
 	t.Parallel()
 	root := f2_06Payloads()[0].p.(PromotionAdmitted)

@@ -31,8 +31,8 @@ const (
 	// promotionDir holds ticket 06's part of F2, frozen (D118), in one
 	// segment.
 	promotionDir = "testdata/f2/06/log"
-	// scratchChangeDir holds ticket 07's part of F2, proposed for the
-	// owner's freeze (D113), in one segment.
+	// scratchChangeDir holds ticket 07's part of F2, frozen (D119),
+	// in one segment.
 	scratchChangeDir = "testdata/f2/07/log"
 )
 
@@ -317,8 +317,8 @@ func promotionInputs() []goldenCommit {
 	}
 }
 
-// scratchChangeInputs covers ticket 07's part of F2, proposed for the
-// owner's freeze (D113): observations, private merge-back plans and results,
+// scratchChangeInputs covers ticket 07's part of F2, frozen (D119):
+// observations, private merge-back plans and results,
 // temporary closures and admission provenance. The IDs are disjoint from
 // the earlier goldens.
 func scratchChangeInputs() []goldenCommit {
@@ -871,8 +871,8 @@ func TestGoldenF2_06(t *testing.T) {
 	}
 }
 
-// TestGoldenF2_07 pins ticket 07's part of F2, proposed for the owner's
-// freeze (D113), without changing any earlier golden.
+// TestGoldenF2_07 pins ticket 07's part of F2, frozen (D119), without
+// changing any earlier golden.
 func TestGoldenF2_07(t *testing.T) {
 	t.Parallel()
 	g := mustScratchChange(t)

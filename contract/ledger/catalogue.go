@@ -40,8 +40,8 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated and
 // TypeScratchClosed; and ticket 06's part of F2, frozen (D118):
 // TypePromotionAdmitted, TypeGenerationDerived and
-// TypePromotionFailed; and ticket 07's part of F2, proposed for the owner's
-// freeze (D113): TypeScratchChanged and TypeScratchMergeBack. All thirteen
+// TypePromotionFailed; and ticket 07's part of F2, frozen (D119):
+// TypeScratchChanged and TypeScratchMergeBack. All thirteen
 // are at version 1. It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{

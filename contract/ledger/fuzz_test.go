@@ -293,8 +293,8 @@ func FuzzDecodeF2_06(f *testing.F) {
 	})
 }
 
-// FuzzDecodeF2_07 exercises ticket 07's part of F2, proposed for the
-// owner's freeze (D113), including empty paths and open failure tokens.
+// FuzzDecodeF2_07 exercises ticket 07's part of F2, frozen (D119),
+// including empty paths and open failure tokens.
 func FuzzDecodeF2_07(f *testing.F) {
 	fixtures := f2_07Payloads()
 	for i, tc := range fixtures {

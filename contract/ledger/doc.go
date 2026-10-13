@@ -162,7 +162,7 @@
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
-// F2-07 is ticket 07's part of F2, proposed for the owner's freeze (D113),
+// F2-07 is ticket 07's part of F2, frozen (D119),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -564,15 +564,15 @@
 //
 // # F2-07 record types
 //
-// These two version-1 types are ticket 07's part of F2, proposed for the
-// owner's freeze (D113), by addition to format version 1. C2 owns their
+// These two version-1 types are ticket 07's part of F2, frozen by
+// addition to format version 1 (D119). C2 owns their
 // payload specifications. Only Core's workspace service
 // (internal/core/workspace) may append them, through appender.Appender;
 // permitted callers are enforced by review. The service checks the record
 // rules both when appending and at Open. Check, Reader, EncodeCommit and
 // these payload encoders and decoders do not enforce service record rules.
-// C2's product still admits nothing; the service that writes these records
-// is ticket 07's S3.
+// C2's product still admits nothing; Core's workspace service writes these
+// records.
 //
 // Payloads follow the F0 encoding rules above: compact JSON, keys in the
 // tabled order, errors wrapping ErrInvalid, no missing required, null known

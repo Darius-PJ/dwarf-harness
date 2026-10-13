@@ -13,8 +13,8 @@ import (
 	"uuid"
 )
 
-// These fixtures cover ticket 07's part of F2, proposed for the owner's
-// freeze (D113), through its public payload encoders and decoders.
+// These fixtures cover ticket 07's part of F2, frozen (D119), through
+// its public payload encoders and decoders.
 func decodeF2_07(typ string, js json.RawMessage) (payload, error) {
 	switch typ {
 	case TypeScratchChanged:

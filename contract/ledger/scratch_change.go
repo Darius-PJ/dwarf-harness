@@ -10,7 +10,7 @@ import (
 )
 
 // The F2-07 record types, each at version 1: ticket 07's part of F2,
-// proposed for the owner's freeze (D113). The package documentation
+// frozen (D119). The package documentation
 // specifies their payloads and service-owned record rules.
 const (
 	TypeScratchChanged   = "workspace.scratch_changed"

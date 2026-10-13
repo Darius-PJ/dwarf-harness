@@ -55,8 +55,8 @@ type ScratchClosed struct {
 	Reason    string    `json:"reason"`     // [a-z][a-z0-9_]*, at most 64 bytes
 }
 
-// ReasonTemporaryMergedBack is ticket 07's closure reason, proposed for
-// the owner's freeze as part of F2 (D113).
+// ReasonTemporaryMergedBack is ticket 07's closure reason, frozen as part
+// of F2 (D119).
 const ReasonTemporaryMergedBack = "temporary_merged_back"
 
 // Encode returns p as a workspace.registered v1 payload. Its errors wrap

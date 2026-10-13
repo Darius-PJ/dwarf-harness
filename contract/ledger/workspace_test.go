@@ -228,7 +228,7 @@ func TestF2_05PathGrammars(t *testing.T) {
 	}
 }
 
-// F2-07's parent key is proposed for the owner's freeze (D113).
+// F2-07's parent key is frozen (D119).
 func TestScratchCreatedParent(t *testing.T) {
 	t.Parallel()
 	p := f2Payloads()[2].p.(ScratchCreated)
