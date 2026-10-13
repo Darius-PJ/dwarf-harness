@@ -1,17 +1,20 @@
 // Package workspace provides Core's registered Git workspaces, bound private
-// scratches, exact capture and capture reservations. The service writes the four
-// frozen F2-05 workspace record types through the colony store. Nothing here
-// accepts a promotion or moves main; there is no capture-only product command.
+// scratches, exact capture, checkpoint reservations and integration primitives.
+// The service writes the four frozen F2-05 workspace record types through the
+// colony store. Nothing here accepts a promotion or moves main; there is no
+// capture-only product command or exported seal, merge or commit entry point.
 //
 // # Git and its environments
 //
-// Core resolves git to an absolute executable path. Git 2.42 or later is
+// Core resolves git to an absolute executable path. Git 2.45 or later is
 // required: the leading major.minor.patch triple is checked, and the complete
 // version text after "git version " (including vendor suffixes) is pinned.
 // Missing, old or malformed Git gives ErrGitUnavailable at inspection. Version
 // mismatch gives inputs_stale, naming both pinned and running versions. A Git
 // upgrade therefore requires the owner's input reapproval before captures can
 // resume. Open still succeeds when Git is unavailable.
+// Persisted capture-inputs/1 documents keep their original Git 2.42 validation
+// floor so old bytes still replay; this does not lower the executable's floor.
 //
 // Commands use exec.CommandContext, a five-second WaitDelay and at most 64 KiB
 // of stderr. Each call declares its expected exit codes; an unexpected exit is
@@ -24,7 +27,7 @@
 // output. Object IDs are lowercase hex: 40 digits for sha1, 64 for sha256.
 // Core never fetches missing objects.
 //
-// Three explicit environments separate observation from execution:
+// Four explicit environments separate observation from execution:
 //
 //   - Inspection preserves the owner's live configuration, including Git config
 //     environment variables, but removes GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
@@ -46,6 +49,11 @@
 //     GIT_INDEX_FILE=<private index>, GIT_OBJECT_DIRECTORY=<common>/objects and
 //     GIT_ATTR_NOSYSTEM=1. The private Git configuration replaces live workspace
 //     configuration, attributes, excludes, hooks and refs.
+//   - Integration uses the capture environment without GIT_WORK_TREE or
+//     GIT_INDEX_FILE, with -c core.bare=true and workspaces/<wdir>/tmp as cwd.
+//     Pinned inputs are rematerialized before use. Only pinned info/attributes
+//     and the pinned attributes file apply; tree .gitattributes and the
+//     repository's configured merge drivers do not.
 //
 // Paths are absolute at the filesystem boundary; repository-relative paths use
 // slash separators. Positional revisions and paths follow --end-of-options.
@@ -206,11 +214,12 @@
 //
 // # Reservation lifetimes
 //
-// Scratch exclusion and the colony-wide MaxBytes share are acquired under one
-// mutex, both or neither. Exclusive acquisition never waits for a writer or
-// another exclusive holder: scratch_busy returns without a snapshot, queued
-// retry or interrupted writer, even if the request context has already ended.
-// An insufficient bytes pool gives capture_budget without retaining exclusion.
+// reserve takes a kind. Closure takes scratch exclusion and adds MaxBytes only
+// before observation. Admission takes exclusion, MaxBytes and one provisional
+// checkpoint slot, all or none under one mutex. It never waits for a writer or
+// another exclusive holder, queues a retry or interrupts a writer. Refusals are
+// ordered: no_capacity_profile, scratch_busy, checkpoint_slots, capture_budget.
+// Closure of an absent directory still needs neither a profile nor bytes.
 // BeginWrite holders are shared; a writer waits context-boundedly for an
 // exclusive holder to release and never interrupts its capture.
 //
@@ -221,9 +230,49 @@
 // of exclusion through its entire operation: observe, durable close and
 // removal, or seal and admission record. The engine returns only the bytes
 // share on every outcome. release is idempotent and returns whatever parts
-// remain, including bytes when the engine was never reached. Closure can take
-// exclusion alone for an absent directory, adding bytes only when it observes.
-// Ticket 06 adds its longer-lived K-slot to this token, not a second mechanism.
+// remain, including bytes when the engine was never reached. The exclusive
+// admission token holds its provisional slot; release without keepSlot returns
+// it. keepSlot transfers it at most once into the pair's live count, after which
+// release returns only exclusion and bytes. freeSlot ends one live request's
+// claim; setLive restores counts at Open. C4 adds the validator to this same
+// token, not a second reservation mechanism. K is per open context/workspace
+// scratch; workspace and colony checkpoint capacity are sums, not separate caps.
+//
+// # Record-free integration primitives
+//
+// mergeTrees applies the sealed submission's delta from its explicit delta
+// base to a predecessor tree. It runs merge-tree --write-tree -z --name-only
+// --no-messages --merge-base=<base> --end-of-options <predecessor> <submission>
+// in the integration environment, with expected exits 0 and 1. Exit 0 must
+// carry exactly a NUL-terminated tree ID; exit 1 must also carry at least one
+// distinct, nonempty, NUL-terminated conflict path. Shape/exit mismatches return
+// no partial result. Exit status, never marker text, decides a merge conflict,
+// whose result tree is discarded. A clean tree's recursive ls-tree listing in
+// the repository environment is checked for path and directory-prefix case
+// collisions on every OS; the first pair becomes a case_collision conflict.
+//
+// integrationCommit uses commit-tree -p <parent> -m <message> --end-of-options
+// <tree> in the integration environment. The predecessor is its only parent.
+// Author and committer are DwarfHarness Core <core@dwarf-harness.invalid>; both
+// dates are the generation UUIDv7 milliseconds divided by 1000, with +0000.
+// The message is "dwarf-harness integration", a blank line, "request <ID>" and
+// "generation <ID>". No wall clock or host identity enters the commit.
+// Generation refs refs/dwarf-harness/generations/<ID> are created by CAS against
+// the format-sized zero ID and deleted by CAS against the recorded commit,
+// using the repository environment.
+//
+// integration-rules/1 names these merge, environment, case-check and commit
+// rules. Its private configuration leaves merge.renormalize,
+// merge.conflictStyle and merge.default unset; changing these rules requires a
+// new rules value, not merely a new inputs revision.
+//
+// Conflict reports return deterministic JSON Lines bytes and their SHA-256,
+// without publishing or pinning. The header has format
+// dwarf-harness/conflict-report, version 1, cause (merge or case_collision) and
+// paths (the true distinct total). Up to 10,000 {"path":"..."} rows follow in
+// path-byte order, each once. Any non-UTF-8 path gives ErrInvalid and no result,
+// including a path beyond the row limit. S3 owns publication and pinning.
+// These primitives have no product caller, write no record and move no main ref.
 //
 // # Service lifecycle and records
 //
@@ -315,15 +364,17 @@
 // Closed scratches and Open's orphan sweep retry this same primitive.
 // Same-user check/use races remain C10's boundary.
 //
-// # Profile, measurements and later admission
+// # Capacity profile and measurements
 //
-// CaptureProfile is the capture subset of CORE:862's CapacityProfile, extended
-// by ticket 06 and C4 rather than a second capacity authority. MaxFiles and
-// MaxBytes must be positive, and BytesInFlight must be at least MaxBytes;
-// otherwise configuration gives ErrInvalid. A nil Config.Capture gives
-// no_capacity_profile. ProvisionalCaptureProfile returns 100,000 files, 1 GiB
-// per capture and 20 GiB in flight. These are calibration inputs, not measured
-// capacity, a colony cap or a service level.
+// CapacityProfile is Core's capture and checkpoint capacity authority, extended
+// by C4 rather than replaced with a second profile. MaxFiles, MaxBytes,
+// CheckpointsPerPair and GenerationWindow must be positive; BytesInFlight must
+// be at least MaxBytes. Otherwise configuration gives ErrInvalid. A nil
+// Config.Capacity gives no_capacity_profile. ProvisionalCapacityProfile returns
+// 100,000 files, 1 GiB per capture, 20 GiB in flight, four live checkpoints per
+// pair and a four-generation workspace window. S3 applies the window to trains.
+// These are calibration inputs, not measured capacity, a colony cap or a
+// service level.
 //
 // Reads are sequential in v1. The opt-in DWARF_CAPTURE_WORKLOAD_OUT harness
 // records creation, fresh and warm observe, a seal after ten edits, and closure
@@ -333,7 +384,7 @@
 // and has no timing threshold. Burst concurrency remains C4's feasibility gate.
 // Windows long paths Git cannot list give unobservable_path; sharing violations
 // give unreadable. With filemode=false, tracked executable modes are preserved
-// and new files get 100644. Linux and macOS CI require Git at least 2.42.
+// and new files get 100644. Linux and macOS CI require Git at least 2.45.
 //
 // C2 has no validator: no_validator is unconditional, with no injectable seam,
 // until C4 wires the real validator. RequestPromotion checks binding, then the

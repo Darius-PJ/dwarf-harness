@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -83,12 +84,13 @@ func TestParseCatFileHeader(t *testing.T) {
 	}
 }
 
-func TestGitVersionGate(t *testing.T) {
+func TestParseGitVersion(t *testing.T) {
 	for _, tc := range []struct {
 		in string
 		ok bool
 	}{
-		{"git version 2.55.0.windows.3\n", true}, {"git version 2.42.0\n", true}, {"git version 3.0.0", true},
+		{"git version 2.55.0.windows.3\n", true}, {"git version 2.42.0\n", false}, {"git version 3.0.0", true},
+		{"git version 2.44.9\n", false}, {"git version 2.45.0\n", true},
 		{"git version 2.45.2 (Apple Git-200)\n", true},
 		{"git version 2.39.5 (Apple Git-154)\n", false}, {"git version 2.41.9", false}, {"", false}, {"git version x", false}, {"git version 2.42", false}, {"git version 2.42.0\ntrailing", false},
 	} {
@@ -111,5 +113,43 @@ func TestParseCheckAttrEmptyValue(t *testing.T) {
 	want := []attribute{{Path: "candidate", Name: "filter", Value: ""}}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Git's empty attribute value %q: %#v, %v", b, got, err)
+	}
+}
+
+func TestParseMergeTree(t *testing.T) {
+	for _, n := range []int{40, 64} {
+		oid := strings.Repeat("a", n)
+		for _, tc := range []struct {
+			name, in string
+			exit     int
+			paths    []string
+			bad      bool
+		}{
+			{"clean", oid + "\x00", 0, nil, false},
+			{"one conflict", oid + "\x00a.txt\x00", 1, []string{"a.txt"}, false},
+			{"two conflicts", oid + "\x00a.txt\x00b.txt\x00", 1, []string{"a.txt", "b.txt"}, false},
+			{"path bytes", oid + "\x00-tab\tline\nname\x00", 1, []string{"-tab\tline\nname"}, false},
+			{"empty", "", 0, nil, true},
+			{"unterminated tree", oid, 0, nil, true},
+			{"unterminated path", oid + "\x00a", 1, nil, true},
+			{"empty path", oid + "\x00a\x00\x00", 1, nil, true},
+			{"wrong length", oid + "a\x00", 0, nil, true},
+			{"wrong hex", strings.Repeat("A", n) + "\x00", 0, nil, true},
+			{"clean with paths", oid + "\x00a.txt\x00", 0, nil, true},
+			{"conflict without paths", oid + "\x00", 1, nil, true},
+			{"duplicate", oid + "\x00a\x00b\x00a\x00", 1, nil, true},
+			{"unexpected exit", oid + "\x00", 2, nil, true},
+		} {
+			t.Run(fmt.Sprintf("%d/%s", n, tc.name), func(t *testing.T) {
+				tree, paths, err := parseMergeTree([]byte(tc.in), tc.exit, n)
+				if tc.bad {
+					if err == nil || tree != "" || paths != nil {
+						t.Fatalf("malformed output returned %q %q %v", tree, paths, err)
+					}
+				} else if err != nil || tree != oid || !reflect.DeepEqual(paths, tc.paths) {
+					t.Fatalf("got %q %q %v", tree, paths, err)
+				}
+			})
+		}
 	}
 }

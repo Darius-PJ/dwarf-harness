@@ -299,3 +299,20 @@ func TestMaterializedAttributesPrecedence(t *testing.T) {
 		t.Fatalf("attribute precedence: %q", b)
 	}
 }
+
+func TestCaptureInputsKeepHistoricalGitFloor(t *testing.T) {
+	// These format-v1 bytes were valid before integration raised the runtime
+	// floor. Replaying them must remain possible without running that Git.
+	body := []byte(`{"format":"dwarf-harness/capture-inputs","version":1,"rules":"capture-rules/1","git_version":"2.42.0","object_format":"sha1","core.autocrlf":"false","core.eol":"native","core.filemode":"true","core.ignorecase":"false","core.longpaths":"false","core.precomposeunicode":"false","core.symlinks":"true"}`)
+	document, err := decodeCaptureInputs(body)
+	if err != nil {
+		t.Fatalf("historical input document rejected: %v", err)
+	}
+	encoded, err := document.encode()
+	if err != nil || !bytes.Equal(encoded, body) {
+		t.Fatalf("historical input bytes changed: %s %v", encoded, err)
+	}
+	if _, err := parseGitVersion([]byte("git version " + document.GitVersion)); err == nil {
+		t.Fatal("historical document lowered the runtime Git floor")
+	}
+}

@@ -129,3 +129,25 @@ func TestCaptureCaseOnlyRenameIsDeleteAndAdd(t *testing.T) {
 		t.Fatalf("case rename paths: %#v", rows)
 	}
 }
+
+func TestUnreadableDirectoryPathIsRelative(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses chmod 000 read denial")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "nested", "unreadable")
+	writeTestFile(t, filepath.Join(path, "file"), []byte("unreadable"))
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(path, 0o700); err != nil {
+			t.Error(err)
+		}
+	})
+	_, err := walkCapture(context.Background(), root, nil)
+	refusal := assertRefusal(t, err, "unreadable")
+	if refusal.Path != "nested/unreadable" {
+		t.Fatalf("host path disclosed: %q", refusal.Path)
+	}
+}

@@ -79,6 +79,10 @@ func captureEnvironment(host []string, colony, inputs, scratch, index, common st
 	return append(repositoryEnvironment(host, colony), "GIT_DIR="+filepath.Join(inputs, "git"), "GIT_WORK_TREE="+scratch, "GIT_INDEX_FILE="+index, "GIT_OBJECT_DIRECTORY="+filepath.Join(common, "objects"), "GIT_ATTR_NOSYSTEM=1")
 }
 
+func integrationEnvironment(host []string, colony, inputs, common string) []string {
+	return append(repositoryEnvironment(host, colony), "GIT_DIR="+filepath.Join(inputs, "git"), "GIT_OBJECT_DIRECTORY="+filepath.Join(common, "objects"), "GIT_ATTR_NOSYSTEM=1")
+}
+
 type limitedStderr struct{ bytes.Buffer }
 
 func (b *limitedStderr) Write(p []byte) (int, error) {

@@ -78,6 +78,14 @@ func refuse(reason, path, detail string) error {
 }
 
 func checkCaseCollisions(paths []string) error {
+	first, second := firstCaseCollision(paths)
+	if first != "" {
+		return refuse("case_collision", first, fmt.Sprintf("paths %q and %q collide", first, second))
+	}
+	return nil
+}
+
+func firstCaseCollision(paths []string) (first, second string) {
 	type seenPath struct{ part, path string }
 	seen := map[string]seenPath{}
 	for _, path := range paths {
@@ -90,26 +98,26 @@ func checkCaseCollisions(paths []string) error {
 			prefix += part
 			key := strings.ToUpper(prefix)
 			if previous, ok := seen[key]; ok && previous.part != prefix {
-				return refuse("case_collision", previous.path, fmt.Sprintf("paths %q and %q collide", previous.path, path))
+				return previous.path, path
 			}
 			seen[key] = seenPath{part: prefix, path: path}
 		}
 	}
-	return nil
+	return "", ""
 }
 
 // capture uses a token once and returns only its bytes share on every exit.
 // Its caller owns the exclusion through any subsequent record and removal.
 // A separate baseline supports ticket 06 without trusting scratch index or HEAD.
 func (e *captureEngine) capture(ctx context.Context, s captureScratch, baseline string, r *reservation, mode captureMode) (result captureResult, err error) {
+	if mode != observeCapture && mode != sealCapture {
+		return result, fmt.Errorf("%w: invalid capture mode", ErrInvalid)
+	}
 	profile, err := r.beginCapture(s.Worktree.Dir)
 	if err != nil {
 		return result, err
 	}
 	defer r.releaseCaptureBytes()
-	if mode != observeCapture && mode != sealCapture {
-		return result, fmt.Errorf("%w: invalid capture mode", ErrInvalid)
-	}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -389,21 +397,21 @@ func (e *captureEngine) capture(ctx context.Context, s captureScratch, baseline 
 
 func walkCapture(ctx context.Context, root string, ignored map[string]bool) (map[string]fileObservation, error) {
 	walked := map[string]fileObservation{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return refuse("unreadable", path, err.Error())
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if walkErr != nil {
+			return refuse("unreadable", rel, walkErr.Error())
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if rel == "." {
 			return nil
 		}
-		rel = filepath.ToSlash(rel)
 		kind := d.Type()
 		info, err := os.Lstat(path)
 		if err != nil {

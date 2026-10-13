@@ -141,7 +141,7 @@ type serviceFixture struct {
 }
 
 func serviceConfig() Config {
-	return Config{Capture: &CaptureProfile{MaxFiles: 100, MaxBytes: 1 << 20, BytesInFlight: 2 << 20}}
+	return Config{Capacity: &CapacityProfile{MaxFiles: 100, MaxBytes: 1 << 20, BytesInFlight: 2 << 20, CheckpointsPerPair: 4, GenerationWindow: 4}}
 }
 
 func newUnregisteredService(t *testing.T) *serviceFixture {
@@ -215,7 +215,7 @@ func (f *serviceFixture) capture(scratch Scratch, mode captureMode) (captureResu
 	f.svc.mu.Lock()
 	w := f.svc.workspaces[scratch.WorkspaceID]
 	f.svc.mu.Unlock()
-	r, err := f.svc.pool.reserve(scratch.Dir, true)
+	r, err := f.svc.pool.reserve(scratch.Dir, admissionReservation)
 	if err != nil {
 		return captureResult{}, err
 	}

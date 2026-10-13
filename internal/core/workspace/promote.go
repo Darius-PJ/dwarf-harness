@@ -28,7 +28,7 @@ func (s *Service) RequestPromotion(ctx context.Context, contextID, workspaceID u
 	if !bound {
 		return ErrNoScratch
 	}
-	r, err := s.pool.reserve(scratch.Dir, true)
+	r, err := s.pool.reserve(scratch.Dir, admissionReservation)
 	if err != nil {
 		return err
 	}

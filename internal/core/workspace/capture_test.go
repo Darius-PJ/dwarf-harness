@@ -32,13 +32,13 @@ func newCaptureFixture(t *testing.T) *captureFixture {
 	if err := f.git.ensureMarker(context.Background(), f.colony, p, "capture-test-colony"); err != nil {
 		t.Fatal(err)
 	}
-	profile := CaptureProfile{MaxFiles: 100, MaxBytes: 1 << 20, BytesInFlight: 2 << 20}
+	profile := CapacityProfile{MaxFiles: 100, MaxBytes: 1 << 20, BytesInFlight: 2 << 20, CheckpointsPerPair: 4, GenerationWindow: 4}
 	return &captureFixture{f: f, p: p, s: captureScratch{Worktree: s, Inputs: p, Revision: 1, ColonyID: "capture-test-colony", InputsDir: filepath.Join(f.colony, "workspaces", "inputs", "1"), TmpDir: filepath.Join(f.colony, "workspaces", "00112233", "tmp")}, engine: newCaptureEngine(f.git, f.colony), pool: testReservationPool(t, &profile)}
 }
 
 func (f *captureFixture) capture(ctx context.Context, mode captureMode) (captureResult, error) {
 	f.s.Inputs = f.p
-	r, err := f.pool.reserve(f.s.Worktree.Dir, true)
+	r, err := f.pool.reserve(f.s.Worktree.Dir, admissionReservation)
 	if err != nil {
 		return captureResult{}, err
 	}
@@ -269,7 +269,7 @@ func TestCaptureRequiresReservation(t *testing.T) {
 		assertReservationInvalid(t, err)
 	}
 	assertCaptureSideEffects(t, f.f, f.p, before)
-	r, err := f.pool.reserve(f.s.Worktree.Dir, true)
+	r, err := f.pool.reserve(f.s.Worktree.Dir, admissionReservation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +518,7 @@ func TestRepeatedCarriageReturnUsesReferenceGit(t *testing.T) {
 func TestCaptureCaps(t *testing.T) {
 	t.Run("files", func(t *testing.T) {
 		f := newCaptureFixture(t)
-		f.pool = testReservationPool(t, &CaptureProfile{MaxFiles: 1, MaxBytes: 100, BytesInFlight: 100})
+		f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 1, MaxBytes: 100, BytesInFlight: 100, CheckpointsPerPair: 4, GenerationWindow: 4})
 		mustCapture(t, f, observeCapture)
 		writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "extra"), []byte("x"))
 		reads := 0
@@ -532,7 +532,7 @@ func TestCaptureCaps(t *testing.T) {
 	t.Run("bytes", func(t *testing.T) {
 		f := newCaptureFixture(t)
 		writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "base.txt"), []byte("ab"))
-		f.pool = testReservationPool(t, &CaptureProfile{MaxFiles: 2, MaxBytes: 2, BytesInFlight: 2})
+		f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 2, MaxBytes: 2, BytesInFlight: 2, CheckpointsPerPair: 4, GenerationWindow: 4})
 		mustCapture(t, f, observeCapture)
 		writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "base.txt"), []byte("abc"))
 		reads := 0
@@ -546,7 +546,7 @@ func TestCaptureCaps(t *testing.T) {
 	t.Run("growth", func(t *testing.T) {
 		f := newCaptureFixture(t)
 		writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "zzz"), []byte("x"))
-		f.pool = testReservationPool(t, &CaptureProfile{MaxFiles: 2, MaxBytes: 20, BytesInFlight: 20})
+		f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 2, MaxBytes: 20, BytesInFlight: 20, CheckpointsPerPair: 4, GenerationWindow: 4})
 		f.engine.afterRawRead = func(path string) {
 			if path == "base.txt" {
 				writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "zzz"), bytes.Repeat([]byte("x"), 30))
@@ -652,7 +652,7 @@ func TestSealIsImmutable(t *testing.T) {
 
 func TestCaptureMaximumByteProfile(t *testing.T) {
 	f := newCaptureFixture(t)
-	f.pool = testReservationPool(t, &CaptureProfile{MaxFiles: 100, MaxBytes: 1<<63 - 1, BytesInFlight: 1<<63 - 1})
+	f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 100, MaxBytes: 1<<63 - 1, BytesInFlight: 1<<63 - 1, CheckpointsPerPair: 4, GenerationWindow: 4})
 	raw := readTestFile(t, filepath.Join(f.s.Worktree.Dir, "base.txt"))
 	got := mustCapture(t, f, observeCapture)
 	if got.RawBytes != int64(len(raw)) {
@@ -719,7 +719,7 @@ func TestCaptureUnavailable(t *testing.T) {
 
 func TestReservationOnePerPair(t *testing.T) {
 	f := newCaptureFixture(t)
-	r, err := f.pool.reserve(f.s.Worktree.Dir, true)
+	r, err := f.pool.reserve(f.s.Worktree.Dir, admissionReservation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,7 +765,7 @@ func TestCaptureSHA256Repository(t *testing.T) {
 	if err := f.git.ensureMarker(context.Background(), f.colony, p, "sha256-colony"); err != nil {
 		t.Fatal(err)
 	}
-	profile := ProvisionalCaptureProfile()
+	profile := ProvisionalCapacityProfile()
 	fixture := &captureFixture{f: f, p: p, s: captureScratch{Worktree: s, Inputs: p, Revision: 1, InputsDir: inputs, TmpDir: filepath.Join(f.colony, "workspaces", "00112233", "tmp"), ColonyID: "sha256-colony"}, engine: newCaptureEngine(f.git, f.colony), pool: testReservationPool(t, &profile)}
 	writeTestFile(t, filepath.Join(dir, "new.txt"), []byte("sha256 content\r\n"))
 	want, _ := referenceTree(t, fixture)
@@ -777,5 +777,23 @@ func TestCaptureSHA256Repository(t *testing.T) {
 		if !validOID(row.ID, 64) {
 			t.Fatalf("SHA-256 blob truncated: %s", row.ID)
 		}
+	}
+}
+
+func TestCaptureInvalidModeKeepsToken(t *testing.T) {
+	f := newCaptureFixture(t)
+	want, _ := referenceTree(t, f)
+	r, err := f.pool.reserve(f.s.Worktree.Dir, admissionReservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.release()
+	_, err = f.engine.capture(context.Background(), f.s, f.s.Worktree.AnchorTree, r, captureMode(255))
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid mode: %v", err)
+	}
+	got, err := f.engine.capture(context.Background(), f.s, f.s.Worktree.AnchorTree, r, sealCapture)
+	if err != nil || got.Tree != want || got.RetentionRef == "" {
+		t.Fatalf("invalid mode burned the token: %#v %v", got, err)
 	}
 }

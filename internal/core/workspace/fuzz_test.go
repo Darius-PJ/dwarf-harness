@@ -152,7 +152,7 @@ func FuzzParseCatFileHeader(f *testing.F) {
 }
 
 func FuzzParseGitVersion(f *testing.F) {
-	for _, s := range []string{"git version 2.55.0.windows.3\n", "git version 2.42.0", "git version 2.39.5 (Apple Git-154)", "git version x", ""} {
+	for _, s := range []string{"git version 2.55.0.windows.3\n", "git version 2.42.0", "git version 2.44.9", "git version 2.45.0", "git version 2.39.5 (Apple Git-154)", "git version x", ""} {
 		f.Add([]byte(s), uint16(55), uint16(0))
 	}
 	f.Fuzz(func(t *testing.T, b []byte, minor, patch uint16) {
@@ -210,6 +210,49 @@ func FuzzCRLFStreaming(f *testing.F) {
 		}
 		if got, want := h.Sum(), sha256.Sum256(referenceCRLF(b)); got != want {
 			t.Fatalf("chunked CRLF hash differs from reference")
+		}
+	})
+}
+
+func FuzzParseMergeTree(f *testing.F) {
+	for _, n := range []int{40, 64} {
+		oid := strings.Repeat("a", n)
+		f.Add([]byte(oid+"\x00"), 0, n == 64)
+		f.Add([]byte(oid+"\x00a.txt\x00b.txt\x00"), 1, n == 64)
+		f.Add([]byte(oid+"\x00a\x00a\x00"), 1, n == 64)
+	}
+	f.Add([]byte("broken"), 2, false)
+	f.Fuzz(func(t *testing.T, b []byte, exit int, sha256 bool) {
+		n := 40
+		if sha256 {
+			n = 64
+		}
+		tree, paths, err := parseMergeTree(b, exit, n)
+		if err != nil {
+			if tree != "" || paths != nil {
+				t.Fatal("partial merge result")
+			}
+		} else {
+			out := tree + "\x00"
+			seen := map[string]bool{}
+			for _, path := range paths {
+				if path == "" || seen[path] {
+					t.Fatal("empty or repeated conflict path")
+				}
+				seen[path] = true
+				out += path + "\x00"
+			}
+			if !validOID(tree, n) || out != string(b) || (exit == 0 && len(paths) != 0) || (exit == 1 && len(paths) == 0) || (exit != 0 && exit != 1) {
+				t.Fatal("invalid merge round trip")
+			}
+		}
+		path := strings.ReplaceAll(string(b), "\x00", "x")
+		if path != "" {
+			oid := strings.Repeat("f", n)
+			tree, paths, err := parseMergeTree([]byte(oid+"\x00"+path+"\x00"), 1, n)
+			if err != nil || tree != oid || !reflect.DeepEqual(paths, []string{path}) {
+				t.Fatalf("generated conflict: %q %q %v", tree, paths, err)
+			}
 		}
 	})
 }

@@ -234,7 +234,7 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	if closure.Reason != "abandoned" {
 		return result, ErrInvalid
 	}
-	r, err := s.pool.reserve(scratch.Dir, false)
+	r, err := s.pool.reserve(scratch.Dir, closureReservation)
 	if err != nil {
 		return result, err
 	}

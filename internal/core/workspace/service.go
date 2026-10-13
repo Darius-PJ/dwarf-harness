@@ -87,7 +87,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	if err != nil || !os.SameFile(want, actual) {
 		return nil, report, fmt.Errorf("%w: store belongs to a different colony directory", ErrInvalid)
 	}
-	pool, err := newReservationPool(cfg.Capture)
+	pool, err := newReservationPool(cfg.Capacity)
 	if err != nil {
 		return nil, report, err
 	}

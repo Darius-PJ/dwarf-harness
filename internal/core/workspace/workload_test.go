@@ -137,7 +137,7 @@ func TestCaptureWorkload(t *testing.T) {
 				t.Fatal("creation changed the baseline")
 			}
 			writeRow("creation", duration, captureResult{Tree: worktree.AnchorTree})
-			profile := ProvisionalCaptureProfile()
+			profile := ProvisionalCapacityProfile()
 			fixture := &captureFixture{f: f, p: p, s: captureScratch{Worktree: worktree, Inputs: p, Revision: 1, InputsDir: inputs, TmpDir: filepath.Join(f.colony, "workspaces", "00112233", "tmp"), ColonyID: "workload-colony"}, engine: newCaptureEngine(f.git, f.colony), pool: testReservationPool(t, &profile)}
 			for _, phase := range []string{"fresh_observe", "warm_observe"} {
 				start = time.Now()

@@ -267,7 +267,7 @@ func (d inputsDocument) encode() ([]byte, error) {
 	if d.Format != "dwarf-harness/capture-inputs" || d.Version != 1 || d.Rules == "" || strings.ContainsAny(d.Rules, "\x00\r\n") {
 		return nil, fmt.Errorf("%w: unsupported capture inputs", ErrInvalid)
 	}
-	if _, err := parseGitVersion([]byte("git version " + d.GitVersion)); err != nil {
+	if _, err := parseGitVersionAtLeast([]byte("git version "+d.GitVersion), 42); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	if d.ObjectFormat != "sha1" && d.ObjectFormat != "sha256" {

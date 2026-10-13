@@ -6,14 +6,22 @@ import (
 	"sync"
 )
 
+type reservationKind uint8
+
+const (
+	closureReservation reservationKind = iota
+	admissionReservation
+)
+
 type scratchAccess struct {
 	writers   int
+	live      int
 	exclusive *reservation
 	changed   chan struct{}
 }
 type reservationPool struct {
 	mu        sync.Mutex
-	profile   *CaptureProfile
+	profile   *CapacityProfile
 	bytes     int64
 	scratches map[string]*scratchAccess
 }
@@ -25,9 +33,11 @@ type reservation struct {
 	scratch string
 	bytes   int64
 	used    bool
+	kind    reservationKind
+	kept    bool
 }
 
-func newReservationPool(profile *CaptureProfile) (*reservationPool, error) {
+func newReservationPool(profile *CapacityProfile) (*reservationPool, error) {
 	if err := validateProfile(profile); err != nil {
 		return nil, err
 	}
@@ -48,15 +58,15 @@ func (p *reservationPool) access(scratch string) *scratchAccess {
 	return a
 }
 
-// reserve never waits for a holder. capture=false is only for closure's initial
-// exclusive claim; reserveCaptureBytes adds its pool claim before observation.
-func (p *reservationPool) reserve(scratch string, capture bool) (*reservation, error) {
+// reserve acquires all of a kind's parts or none and never waits for a holder.
+// Closure adds its byte claim separately, before observation.
+func (p *reservationPool) reserve(scratch string, kind reservationKind) (*reservation, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if scratch == "" {
-		return nil, fmt.Errorf("%w: missing scratch", ErrInvalid)
+	if scratch == "" || (kind != closureReservation && kind != admissionReservation) {
+		return nil, fmt.Errorf("%w: missing scratch or invalid reservation kind", ErrInvalid)
 	}
-	if capture && p.profile == nil {
+	if kind == admissionReservation && p.profile == nil {
 		return nil, &UnavailableError{Reason: "no_capacity_profile"}
 	}
 	a := p.access(scratch)
@@ -64,13 +74,16 @@ func (p *reservationPool) reserve(scratch string, capture bool) (*reservation, e
 		return nil, &BusyError{Reason: "scratch_busy"}
 	}
 	var amount int64
-	if capture {
+	if kind == admissionReservation {
+		if a.live >= p.profile.CheckpointsPerPair {
+			return nil, &BusyError{Reason: "checkpoint_slots"}
+		}
 		amount = p.profile.MaxBytes
 		if amount > p.profile.BytesInFlight-p.bytes {
 			return nil, &BusyError{Reason: "capture_budget"}
 		}
 	}
-	r := &reservation{pool: p, scratch: scratch, bytes: amount}
+	r := &reservation{pool: p, scratch: scratch, bytes: amount, kind: kind}
 	a.exclusive = r
 	p.bytes += amount
 	return r, nil
@@ -101,16 +114,16 @@ func (r *reservation) reserveCaptureBytes() error {
 	return nil
 }
 
-func (r *reservation) beginCapture(scratch string) (CaptureProfile, error) {
+func (r *reservation) beginCapture(scratch string) (CapacityProfile, error) {
 	if r == nil || r.pool == nil {
-		return CaptureProfile{}, &reservationError{reason: "capture requires a reservation"}
+		return CapacityProfile{}, &reservationError{reason: "capture requires a reservation"}
 	}
 	p := r.pool
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	a := p.scratches[scratch]
 	if p.profile == nil || a == nil || a.exclusive != r || r.scratch != scratch || r.bytes != p.profile.MaxBytes || r.used {
-		return CaptureProfile{}, &reservationError{reason: "capture requires its unused live byte reservation"}
+		return CapacityProfile{}, &reservationError{reason: "capture requires its unused live byte reservation"}
 	}
 	r.used = true
 	return *p.profile, nil
@@ -149,6 +162,40 @@ func (r *reservation) release() {
 	a.exclusive = nil
 	close(a.changed)
 	a.changed = make(chan struct{})
+}
+
+// The exclusive admission token itself holds the provisional slot. A kept
+// slot outlives release; the acknowledged ending's owner frees it separately.
+func (r *reservation) keepSlot() {
+	if r == nil || r.pool == nil {
+		return
+	}
+	p := r.pool
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	a := p.scratches[r.scratch]
+	if a == nil || a.exclusive != r || r.kind != admissionReservation || r.kept {
+		return
+	}
+	a.live++
+	r.kept = true
+}
+
+// freeSlot is called once per acknowledged request ending, by its owner.
+func (p *reservationPool) freeSlot(scratch string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	a := p.access(scratch)
+	if a.live > 0 {
+		a.live--
+	}
+}
+
+// setLive restores the projection's counts at Open, before operations begin.
+func (p *reservationPool) setLive(scratch string, n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.access(scratch).live = n
 }
 
 func (p *reservationPool) beginWrite(ctx context.Context, scratch string) (func(), error) {

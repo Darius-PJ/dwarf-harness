@@ -193,6 +193,12 @@ func parseCatFileHeader(b []byte, n int) (catFileHeader, error) {
 }
 
 func parseGitVersion(b []byte) (string, error) {
+	return parseGitVersionAtLeast(b, 45)
+}
+
+// Persisted input formats keep their original floor independently of the
+// executable's current requirements. Both use the same version grammar.
+func parseGitVersionAtLeast(b []byte, minimumMinor int) (string, error) {
 	s := strings.TrimSuffix(string(b), "\n")
 	s = strings.TrimSuffix(s, "\r")
 	if !strings.HasPrefix(s, "git version ") {
@@ -224,8 +230,32 @@ func parseGitVersion(b []byte) (string, error) {
 	if end < len(s) && s[end] != '.' && s[end] != ' ' {
 		return "", fmt.Errorf("invalid version suffix")
 	}
-	if nums[0] < 2 || nums[0] == 2 && nums[1] < 42 {
-		return "", fmt.Errorf("git 2.42 or later is required")
+	if nums[0] < 2 || nums[0] == 2 && nums[1] < minimumMinor {
+		return "", fmt.Errorf("git 2.%d or later is required", minimumMinor)
 	}
 	return s, nil
+}
+
+func parseMergeTree(b []byte, exit, n int) (string, []string, error) {
+	fields, err := parseNULList(b)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(fields) == 0 || !validOID(fields[0], n) {
+		return "", nil, fmt.Errorf("invalid merge tree")
+	}
+	if (exit != 0 && exit != 1) || (exit == 0 && len(fields) != 1) || (exit == 1 && len(fields) < 2) {
+		return "", nil, fmt.Errorf("merge exit and output disagree")
+	}
+	seen := make(map[string]bool, len(fields)-1)
+	for _, path := range fields[1:] {
+		if seen[path] {
+			return "", nil, fmt.Errorf("repeated merge path")
+		}
+		seen[path] = true
+	}
+	if exit == 0 {
+		return fields[0], nil, nil
+	}
+	return fields[0], fields[1:], nil
 }
