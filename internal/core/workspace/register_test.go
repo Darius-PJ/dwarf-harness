@@ -17,6 +17,7 @@ import (
 )
 
 func TestRegisterRecordsPinnedInputs(t *testing.T) {
+	t.Parallel()
 	f := newUnregisteredService(t)
 	f.p.LocalExcludes = HostFile{Present: true, Bytes: []byte("private-local\n")}
 	f.p.GlobalExcludes = HostFile{Present: true, Bytes: []byte("private-global\n")}
@@ -88,8 +89,10 @@ func TestRegisterRecordsPinnedInputs(t *testing.T) {
 }
 
 func TestRegisterRefusals(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{"not_git", "no_main", "main_checked_out", "other_colony", "same_repository", "stale_normalization"} {
 		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
 			f := newUnregisteredService(t)
 			p := f.p
 			want := ErrStaleProposal
@@ -135,6 +138,7 @@ func TestRegisterRefusals(t *testing.T) {
 }
 
 func TestRegisterResumesAfterMarker(t *testing.T) {
+	t.Parallel()
 	f := newUnregisteredService(t)
 	if err := f.git.ensureMarker(context.Background(), f.colony, f.p, f.store.Colony().String()); err != nil {
 		t.Fatal(err)
@@ -148,6 +152,7 @@ func TestRegisterResumesAfterMarker(t *testing.T) {
 }
 
 func TestUpdateInputsCompareAndSwap(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	writeTestFile(t, filepath.Join(s.Dir, "later.tmp"), []byte("eligible under revision one\n"))
@@ -213,6 +218,7 @@ func TestUpdateInputsCompareAndSwap(t *testing.T) {
 }
 
 func TestPinnedGitVersionGatesCapture(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	f.svc.git.version = "2.99.0"
@@ -235,8 +241,10 @@ func TestPinnedGitVersionGatesCapture(t *testing.T) {
 }
 
 func TestRegisterWorkspaceSuffixCollisions(t *testing.T) {
+	t.Parallel()
 	for _, existingDirectory := range []bool{false, true} {
 		t.Run(fmt.Sprintf("directory_%t", existingDirectory), func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			other := newGitFixture(t, "sha1")
 			p, err := f.svc.git.inspect(context.Background(), other.root)

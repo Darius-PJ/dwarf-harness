@@ -17,6 +17,7 @@ func referenceCRLF(b []byte) []byte {
 }
 
 func TestCRLFStreaming(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ raw, converted string }{{"a\nb\n", "a\r\nb\r\n"}, {"a\r\nb\n", "a\r\nb\r\n"}, {"", ""}, {"\r\r\n", "\r\r\n"}, {"\x00\n\r\n\r", "\x00\r\n\r\n\r"}} {
 		for split := range len(tc.raw) + 1 {
 			h := newCRLFHasher()

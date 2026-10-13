@@ -9,6 +9,7 @@ import (
 )
 
 func TestParseNULList(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in   string
 		want []string
@@ -25,6 +26,7 @@ func TestParseNULList(t *testing.T) {
 }
 
 func TestParseStageEntries(t *testing.T) {
+	t.Parallel()
 	for _, n := range []int{40, 64} {
 		oid := strings.Repeat("a", n)
 		got, err := parseStageEntries([]byte("100644 "+oid+" 0\t-a\tline\nname\x00"), n)
@@ -42,6 +44,7 @@ func TestParseStageEntries(t *testing.T) {
 }
 
 func TestParseCheckAttr(t *testing.T) {
+	t.Parallel()
 	got, err := parseCheckAttr([]byte("line\nname\x00filter\x00unset\x00"))
 	want := []attribute{{Path: "line\nname", Name: "filter", Value: "unset"}}
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -56,6 +59,7 @@ func TestParseCheckAttr(t *testing.T) {
 }
 
 func TestParseWorktreeList(t *testing.T) {
+	t.Parallel()
 	oid := strings.Repeat("1", 40)
 	in := "worktree /repo\nname\x00bare\x00\x00worktree /scratch\x00HEAD " + oid + "\x00branch refs/heads/main\x00locked reason\nline\x00\x00"
 	got, err := parseWorktreeList([]byte(in), 40)
@@ -72,6 +76,7 @@ func TestParseWorktreeList(t *testing.T) {
 }
 
 func TestParseCatFileHeader(t *testing.T) {
+	t.Parallel()
 	oid := strings.Repeat("f", 64)
 	got, err := parseCatFileHeader([]byte(oid+" blob 123\n"), 64)
 	if err != nil || got != (catFileHeader{OID: oid, Kind: "blob", Size: 123}) {
@@ -85,6 +90,7 @@ func TestParseCatFileHeader(t *testing.T) {
 }
 
 func TestParseGitVersion(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in string
 		ok bool
@@ -105,6 +111,7 @@ func TestParseGitVersion(t *testing.T) {
 }
 
 func TestParseCheckAttrEmptyValue(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	gitCommand(t, f.env, f.root, nil, "config", "core.attributesFile", "attributes")
 	writeTestFile(t, filepath.Join(f.root, "attributes"), []byte("* filter=\n"))
@@ -117,6 +124,7 @@ func TestParseCheckAttrEmptyValue(t *testing.T) {
 }
 
 func TestParseMergeTree(t *testing.T) {
+	t.Parallel()
 	for _, n := range []int{40, 64} {
 		oid := strings.Repeat("a", n)
 		for _, tc := range []struct {
@@ -141,6 +149,7 @@ func TestParseMergeTree(t *testing.T) {
 			{"unexpected exit", oid + "\x00", 2, nil, true},
 		} {
 			t.Run(fmt.Sprintf("%d/%s", n, tc.name), func(t *testing.T) {
+				t.Parallel()
 				tree, paths, err := parseMergeTree([]byte(tc.in), tc.exit, n)
 				if tc.bad {
 					if err == nil || tree != "" || paths != nil {

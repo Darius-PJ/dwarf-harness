@@ -13,23 +13,14 @@ import (
 )
 
 func TestCaptureRefusesSpecialFiles(t *testing.T) {
-	for _, kind := range []string{"fifo", "socket"} {
+	t.Parallel()
+	for _, kind := range []string{"fifo"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			path := filepath.Join(f.s.Worktree.Dir, "special")
-			if kind == "fifo" {
-				if err := syscall.Mkfifo(path, 0o600); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				// sockaddr_un has a short limit, especially under macOS's
-				// long temporary root. The socket still lives in the scratch.
-				t.Chdir(f.s.Worktree.Dir)
-				socket, err := net.Listen("unix", "special")
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer socket.Close()
+			if err := syscall.Mkfifo(path, 0o600); err != nil {
+				t.Fatal(err)
 			}
 			reads := 0
 			f.engine.afterRawRead = func(string) { reads++ }
@@ -42,7 +33,27 @@ func TestCaptureRefusesSpecialFiles(t *testing.T) {
 	}
 }
 
+func TestCaptureRefusesSocket(t *testing.T) {
+	f := newCaptureFixture(t)
+	// sockaddr_un has a short limit, especially under macOS's
+	// long temporary root. The socket still lives in the scratch.
+	t.Chdir(f.s.Worktree.Dir)
+	socket, err := net.Listen("unix", "special")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+	reads := 0
+	f.engine.afterRawRead = func(string) { reads++ }
+	_, err = f.capture(context.Background(), sealCapture)
+	assertRefusal(t, err, "special_file")
+	if reads != 0 {
+		t.Fatalf("read %d files before rejecting socket", reads)
+	}
+}
+
 func TestCaptureRefusesSymlink(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	target := filepath.Join(t.TempDir(), "target")
 	writeTestFile(t, target, []byte("outside"))
@@ -59,6 +70,7 @@ func TestCaptureRefusesSymlink(t *testing.T) {
 }
 
 func TestCaptureExecutableMode(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	f.p.Normalization.FileMode = "true"
 	path := filepath.Join(f.s.Worktree.Dir, "run.sh")
@@ -79,6 +91,7 @@ func TestCaptureExecutableMode(t *testing.T) {
 }
 
 func TestCaptureUnreadable(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses chmod 000 read denial")
 	}
@@ -110,6 +123,7 @@ func requireCaseSensitiveFilesystem(t *testing.T) {
 }
 
 func TestCaptureCaseOnlyRenameIsDeleteAndAdd(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux case-sensitive rename row")
 	}
@@ -131,6 +145,7 @@ func TestCaptureCaseOnlyRenameIsDeleteAndAdd(t *testing.T) {
 }
 
 func TestUnreadableDirectoryPathIsRelative(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses chmod 000 read denial")
 	}

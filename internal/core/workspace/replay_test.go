@@ -47,6 +47,7 @@ func revisionDrafts(t *testing.T, f *serviceFixture, revision int64, document le
 }
 
 func TestOpenFailsClosedOnRuleBreak(t *testing.T) {
+	t.Parallel()
 	rows := []string{
 		"registered_actor", "registered_body_refs", "registered_index", "registered_commit_count", "registration_without_pin", "duplicate_workspace", "duplicate_common_dir", "registration_revision", "registration_workspace",
 		"inputs_actor", "inputs_workspace", "inputs_body_refs_absent", "inputs_document_omitted", "inputs_pin_id", "inputs_pin_refs", "inputs_pin_index", "revision_one_outside_registration", "revision_gap", "update_index", "update_without_unpin", "update_wrong_unpin", "current_document_exact_set", "current_document_malformed",
@@ -56,6 +57,7 @@ func TestOpenFailsClosedOnRuleBreak(t *testing.T) {
 	}
 	for _, name := range rows {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			scratch := mustScratch(t, f, uuid.NewV7())
 			refs := f.svc.workspaces[f.w.ID].refs
@@ -233,6 +235,7 @@ func TestOpenFailsClosedOnRuleBreak(t *testing.T) {
 }
 
 func TestReplayUnknownClosureReason(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	payload := encoded(t, ledger.ScratchClosed{ScratchID: s.ID, ContextID: s.ContextID, Reason: "future_reason"})
@@ -246,6 +249,7 @@ func TestReplayUnknownClosureReason(t *testing.T) {
 }
 
 func TestReplayNeverReadsSupersededInputs(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	malformed := publishTestBody(t, f, []byte(`{"format":"dwarf-harness/capture-inputs","version":1}`))
 	second := revisionDrafts(t, f, 2, malformed, []ledger.Digest{malformed})
@@ -338,7 +342,13 @@ func (h promotionHistory) locate(t *testing.T, kind string, id uuid.UUID, outcom
 }
 
 func TestOpenFailsClosedOnF2_06RuleBreak(t *testing.T) {
+	t.Parallel()
 	h := buildPromotionHistory(t)
+	// Every row has a different colony ID, so the shared repository's marker
+	// makes it unavailable for reconciliation. Only its immutable history and
+	// bodies are shared; check that the reference fixture stays untouched.
+	before := snapshotRequestEffects(t, h.f)
+	t.Cleanup(func() { assertRequestEffects(t, h.f, before) })
 	rows := []string{
 		"admission_actor", "admission_context", "admission_body_refs", "admission_pin_missing", "admission_pin_id", "admission_pin_refs", "admission_pin_not_immediate",
 		"admission_request_reused", "admission_capture_reused", "admission_root_lineage_reused", "admission_successor_lineage",
@@ -355,6 +365,7 @@ func TestOpenFailsClosedOnF2_06RuleBreak(t *testing.T) {
 	rows = append(rows, "generation_ended_id_reused")
 	for _, name := range rows {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			ci, at := h.locate(t, ledger.TypePromotionAdmitted, h.a2.RequestID, "", false)
 			switch {
 			case strings.HasPrefix(name, "generation_"):
@@ -679,6 +690,7 @@ func TestOpenFailsClosedOnF2_06RuleBreak(t *testing.T) {
 }
 
 func TestReplayUnknownPromotionFailure(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	first, next := rootRequest(s), rootRequest(s)

@@ -21,6 +21,7 @@ func gitVariables(env []string) map[string]string {
 }
 
 func TestControlledEnvironmentIgnoresHostGit(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	host := []string{"PATH=kept", "HOME=kept", "GIT_DIR=bogus", "GIT_WORK_TREE=bogus", "GIT_INDEX_FILE=bogus", "GIT_OBJECT_DIRECTORY=bogus", "GIT_ALTERNATE_OBJECT_DIRECTORIES=bogus", "GIT_COMMON_DIR=bogus", "GIT_NAMESPACE=bogus", "GIT_CEILING_DIRECTORIES=bogus", "GIT_DISCOVERY_ACROSS_FILESYSTEM=1", "GIT_CONFIG_PARAMETERS='core.autocrlf=input'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.excludesFile", "GIT_CONFIG_VALUE_0=host-ignore", "GIT_CONFIG_GLOBAL=host-config", "GIT_CONFIG_SYSTEM=host-system", "GIT_ATTR_NOSYSTEM=1", "GIT_TRACE=1"}
 	inspection := map[string]string{"GIT_CONFIG_PARAMETERS": "'core.autocrlf=input'", "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.excludesFile", "GIT_CONFIG_VALUE_0": "host-ignore", "GIT_CONFIG_GLOBAL": "host-config", "GIT_CONFIG_SYSTEM": "host-system", "GIT_ATTR_NOSYSTEM": "1", "GIT_TRACE": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"}
@@ -83,6 +84,7 @@ func TestControlledEnvironmentIgnoresHostGit(t *testing.T) {
 }
 
 func TestUnexpectedGitExitIsTyped(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	b, _, err := f.git.repository(context.Background(), f.colony, filepath.Join(f.root, ".git"), nil, []int{0}, "read-tree", "--end-of-options", strings.Repeat("0", 40))
 	var ge *GitError
@@ -92,6 +94,7 @@ func TestUnexpectedGitExitIsTyped(t *testing.T) {
 }
 
 func TestGitCancellation(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -102,6 +105,7 @@ func TestGitCancellation(t *testing.T) {
 }
 
 func TestObjectArgumentDoesNotBecomeOption(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	b, err := f.git.readBlob(context.Background(), f.colony, filepath.Join(f.root, ".git"), "--filters")
 	var ge *GitError
@@ -118,6 +122,7 @@ func TestMissingGitProgram(t *testing.T) {
 }
 
 func TestRefArgumentDoesNotBecomeOption(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	common := filepath.Join(f.root, ".git")
 	oid := strings.TrimSpace(string(gitCommand(t, f.env, f.root, []byte("ref boundary\n"), "hash-object", "-w", "--stdin", "--no-filters")))

@@ -80,6 +80,7 @@ func mustIntegrate(t *testing.T, f *serviceFixture) {
 }
 
 func TestIncrementalCandidatesOverForeignPredecessor(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	a, b := mustScratch(t, f, uuid.NewV7()), mustScratch(t, f, uuid.NewV7())
 	a1, b1 := rootRequest(a), rootRequest(b)
@@ -122,6 +123,7 @@ func TestIncrementalCandidatesOverForeignPredecessor(t *testing.T) {
 }
 
 func TestLocalParentFailureEndsSuffix(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	var requests []Request
@@ -194,6 +196,7 @@ func TestLocalParentFailureEndsSuffix(t *testing.T) {
 }
 
 func TestForeignRemovalRebuildsSurvivors(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	b, a := mustScratch(t, f, uuid.NewV7()), mustScratch(t, f, uuid.NewV7())
 	b0 := rootRequest(b)
@@ -225,6 +228,7 @@ func TestForeignRemovalRebuildsSurvivors(t *testing.T) {
 }
 
 func TestSpeculativeConflictWaits(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	b, a := mustScratch(t, f, uuid.NewV7()), mustScratch(t, f, uuid.NewV7())
 	b1, a1 := rootRequest(b), rootRequest(a)
@@ -288,6 +292,7 @@ func TestSpeculativeConflictWaits(t *testing.T) {
 }
 
 func TestConflictIsVisibleWork(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
@@ -332,6 +337,7 @@ func TestConflictIsVisibleWork(t *testing.T) {
 }
 
 func TestNewRootAfterFailure(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	var requests []Request
@@ -378,6 +384,7 @@ func TestNewRootAfterFailure(t *testing.T) {
 }
 
 func TestWindowBoundsGenerations(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	var requests []Request
 	for i := range 6 {
@@ -437,6 +444,7 @@ func TestWindowBoundsGenerations(t *testing.T) {
 }
 
 func TestIntegrationUsesPinnedEnvironment(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
@@ -459,6 +467,7 @@ func TestIntegrationUsesPinnedEnvironment(t *testing.T) {
 }
 
 func TestConcurrentIntegrationWaitsWithinContext(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)

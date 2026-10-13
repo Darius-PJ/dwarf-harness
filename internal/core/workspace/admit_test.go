@@ -16,6 +16,7 @@ import (
 )
 
 func TestSuccessorEligibilityFromParentTree(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
@@ -43,6 +44,7 @@ func TestSuccessorEligibilityFromParentTree(t *testing.T) {
 }
 
 func TestForeignPredecessorNeverSetsEligibility(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	a, b := mustScratch(t, f, uuid.NewV7()), mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(a)
@@ -60,6 +62,7 @@ func TestForeignPredecessorNeverSetsEligibility(t *testing.T) {
 }
 
 func TestAdmissionFailureRollsBack(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	f.svc.pool.profile.CheckpointsPerPair = 1
@@ -105,6 +108,7 @@ func TestAdmissionFailureRollsBack(t *testing.T) {
 }
 
 func TestParentFailureDuringCaptureRefused(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	writeTestFile(t, filepath.Join(s.Dir, "base.txt"), []byte("local\ntwo\n"))
@@ -144,7 +148,9 @@ func TestParentFailureDuringCaptureRefused(t *testing.T) {
 }
 
 func TestConcurrentRequestsOnePair(t *testing.T) {
+	t.Parallel()
 	t.Run("distinct_and_same_ids", func(t *testing.T) {
+		t.Parallel()
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
 		for _, same := range []bool{false, true} {
@@ -196,6 +202,7 @@ func TestConcurrentRequestsOnePair(t *testing.T) {
 		}
 	})
 	t.Run("head_rechecked_under_exclusion", func(t *testing.T) {
+		t.Parallel()
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
 		loser := rootRequest(s)
@@ -217,6 +224,7 @@ func TestConcurrentRequestsOnePair(t *testing.T) {
 }
 
 func TestAdmissionUsesRecordedInputsRevision(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)

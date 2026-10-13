@@ -11,12 +11,14 @@ import (
 )
 
 func TestCloseRemovalPending(t *testing.T) {
+	t.Parallel()
 	for _, reopen := range []bool{false, true} {
 		name := "retry"
 		if reopen {
 			name = "open"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			s := mustScratch(t, f, uuid.NewV7())
 			path, err := syscall.UTF16PtrFromString(filepath.Join(s.Dir, "base.txt"))
@@ -30,11 +32,11 @@ func TestCloseRemovalPending(t *testing.T) {
 				t.Fatal(err)
 			}
 			closed := false
-			defer func() {
+			t.Cleanup(func() {
 				if !closed {
 					_ = syscall.CloseHandle(handle)
 				}
-			}()
+			})
 			before := f.store.Durable()
 			_, err = f.svc.CloseScratch(context.Background(), ownerClosure(s))
 			if !errors.Is(err, ErrRemovalPending) {
@@ -69,6 +71,7 @@ func TestCloseRemovalPending(t *testing.T) {
 }
 
 func TestCloseScratchRefusesJunction(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	target := t.TempDir()
@@ -83,6 +86,7 @@ func TestCloseScratchRefusesJunction(t *testing.T) {
 }
 
 func TestOpenReconcilesPendingOrphan(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	orphan := orphanWorktree(t, f)
 	path, err := syscall.UTF16PtrFromString(filepath.Join(orphan.Dir, "base.txt"))
@@ -94,11 +98,11 @@ func TestOpenReconcilesPendingOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed := false
-	defer func() {
+	t.Cleanup(func() {
 		if !closed {
 			_ = syscall.CloseHandle(handle)
 		}
-	}()
+	})
 	report := f.reopen(t, serviceConfig())
 	if report.OrphansRemoved != 0 || len(report.Pending) == 0 {
 		t.Fatalf("pending orphan not reported: %#v", report)

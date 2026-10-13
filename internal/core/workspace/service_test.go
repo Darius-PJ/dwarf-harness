@@ -70,7 +70,7 @@ func TestOpenReconciles(t *testing.T) {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		t.Cleanup(cancel)
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHelperScratchCrash$")
 		cmd.Env = append(slices.Clone(f.env), workspaceChildColony+"="+f.colony, "DWARF_WORKSPACE_CHILD_ID="+f.w.ID.String())
 		var stderr bytes.Buffer
@@ -83,17 +83,17 @@ func TestOpenReconciles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer stdin.Close()
+		t.Cleanup(func() { _ = stdin.Close() })
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
 		stopped := false
-		defer func() {
+		t.Cleanup(func() {
 			if !stopped {
 				_ = cmd.Process.Kill()
 				_ = cmd.Wait()
 			}
-		}()
+		})
 		line, err := bufio.NewReader(stdout).ReadString('\n')
 		if err != nil || line != "scratch-ready\n" {
 			t.Fatalf("child readiness: %q %v %s", line, err, stderr.String())
@@ -134,6 +134,7 @@ func TestOpenReconciles(t *testing.T) {
 		}
 	})
 	t.Run("closed_leftover", func(t *testing.T) {
+		t.Parallel()
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
 		f.svc.deps.removeAll = func(string) error { return os.ErrPermission }
@@ -149,6 +150,7 @@ func TestOpenReconciles(t *testing.T) {
 		}
 	})
 	t.Run("closed_refs_without_directory", func(t *testing.T) {
+		t.Parallel()
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
 		if _, err := f.svc.CloseScratch(context.Background(), ownerClosure(s)); err != nil {
@@ -168,6 +170,7 @@ func TestOpenReconciles(t *testing.T) {
 		}
 	})
 	t.Run("anchor_restored_tmp_emptied", func(t *testing.T) {
+		t.Parallel()
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
 		ref := s.worktree().AnchorRef
@@ -187,6 +190,7 @@ func TestOpenReconciles(t *testing.T) {
 		}
 	})
 	t.Run("missing_directory", func(t *testing.T) {
+		t.Parallel()
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
 		if err := os.RemoveAll(s.Dir); err != nil {
@@ -204,6 +208,7 @@ func TestOpenReconciles(t *testing.T) {
 }
 
 func TestOpenGitCallsIndependentOfCompletedScratches(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	openCalls := func() int {
 		t.Helper()
@@ -264,8 +269,10 @@ func (s *uncertainStore) Append(ctx context.Context, drafts []ledger.Draft) (app
 }
 
 func TestUncertainAppendPoisons(t *testing.T) {
+	t.Parallel()
 	for _, persist := range []bool{false, true} {
 		t.Run(fmt.Sprintf("persist_%t", persist), func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			f.svc.store = &uncertainStore{Store: f.store, persist: persist}
 			c := uuid.NewV7()
@@ -304,8 +311,10 @@ func TestUncertainAppendPoisons(t *testing.T) {
 }
 
 func TestCurrentInputsUnavailable(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"missing", "future_version"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			s := mustScratch(t, f, uuid.NewV7())
 			if kind == "missing" {
@@ -377,8 +386,10 @@ func orphanWorktree(t *testing.T, f *serviceFixture) scratchWorktree {
 }
 
 func TestOpenReconcilesUnprovenOrMovedOrphanBranch(t *testing.T) {
+	t.Parallel()
 	for _, missingAnchor := range []bool{false, true} {
 		t.Run(fmt.Sprintf("missing_anchor_%t", missingAnchor), func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			orphan := orphanWorktree(t, f)
 			want := orphan.BaseCommit
@@ -420,7 +431,7 @@ func TestOpenSweepsUnownedRefs(t *testing.T) {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		t.Cleanup(cancel)
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHelperScratchCrash$")
 		cmd.Env = append(slices.Clone(f.env), workspaceChildColony+"="+f.colony, "DWARF_WORKSPACE_CHILD_ID="+f.w.ID.String(), "DWARF_WORKSPACE_CHILD_CONTEXT="+s.ContextID.String())
 		var stderr bytes.Buffer
@@ -433,17 +444,17 @@ func TestOpenSweepsUnownedRefs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer stdin.Close()
+		t.Cleanup(func() { _ = stdin.Close() })
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
 		stopped := false
-		defer func() {
+		t.Cleanup(func() {
 			if !stopped {
 				_ = cmd.Process.Kill()
 				_ = cmd.Wait()
 			}
-		}()
+		})
 		line, err := bufio.NewReader(stdout).ReadString('\n')
 		if err != nil || line != "scratch-ready\n" {
 			t.Fatalf("admission child: %q %v %s", line, err, stderr.String())
@@ -473,6 +484,7 @@ func TestOpenSweepsUnownedRefs(t *testing.T) {
 		}
 	})
 	t.Run("recorded_and_failed_release", func(t *testing.T) {
+		t.Parallel()
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
 		r := rootRequest(s)
@@ -509,8 +521,10 @@ func TestOpenSweepsUnownedRefs(t *testing.T) {
 }
 
 func TestOpenRestoresRetainedRefs(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"missing", "different", "pruned"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			s := mustScratch(t, f, uuid.NewV7())
 			r := rootRequest(s)
@@ -563,6 +577,7 @@ func TestOpenRestoresRetainedRefs(t *testing.T) {
 }
 
 func TestOpenRebuildsAdmissionState(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
@@ -595,9 +610,11 @@ func TestOpenRebuildsAdmissionState(t *testing.T) {
 }
 
 func TestRequestPoisonReplay(t *testing.T) {
+	t.Parallel()
 	for _, phase := range []string{"admission", "generation"} {
 		for _, persist := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/persist_%t", phase, persist), func(t *testing.T) {
+				t.Parallel()
 				f := newServiceFixture(t)
 				cfg := serviceConfig()
 				cfg.Capacity.CheckpointsPerPair = 1

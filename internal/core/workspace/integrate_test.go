@@ -48,6 +48,7 @@ func mustMergeTrees(t *testing.T, f *captureFixture, base, predecessor, submissi
 }
 
 func TestMergeTreesUsesDeltaBase(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	base := integrationTree(t, f.f, map[string]string{"base.txt": "a\ntwo\n"})
 	predecessor := integrationTree(t, f.f, map[string]string{"base.txt": "foreign\ntwo\n"})
@@ -65,6 +66,7 @@ func TestMergeTreesUsesDeltaBase(t *testing.T) {
 }
 
 func TestMergeTreesConflictByExitStatus(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	base := integrationTree(t, f.f, map[string]string{"a.txt": "base\n", "b.txt": "base\n"})
 	predecessor := integrationTree(t, f.f, map[string]string{"a.txt": "ours\n", "b.txt": "ours\n"})
@@ -103,7 +105,9 @@ func TestMergeTreesConflictByExitStatus(t *testing.T) {
 }
 
 func TestIntegrationEnvironment(t *testing.T) {
+	t.Parallel()
 	t.Run("exact variables", func(t *testing.T) {
+		t.Parallel()
 		host := []string{"PATH=kept", "HOME=kept", "GIT_DIR=bogus", "GIT_WORK_TREE=bogus", "GIT_INDEX_FILE=bogus", "GIT_OBJECT_DIRECTORY=bogus", "GIT_ALTERNATE_OBJECT_DIRECTORIES=bogus", "GIT_COMMON_DIR=bogus", "GIT_NAMESPACE=bogus", "GIT_CEILING_DIRECTORIES=bogus", "GIT_DISCOVERY_ACROSS_FILESYSTEM=1", "GIT_CONFIG_PARAMETERS='merge.default=evil'", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=merge.default", "GIT_CONFIG_VALUE_0=evil", "GIT_CONFIG_GLOBAL=host-config", "GIT_CONFIG_SYSTEM=host-system", "GIT_ATTR_NOSYSTEM=0", "GIT_TRACE=1", "GIT_AUTHOR_NAME=host", "GIT_COMMITTER_DATE=host"}
 		if runtime.GOOS == "windows" {
 			host = append(host, "git_attr_source=HEAD", "git_config_parameters=host")
@@ -116,6 +120,7 @@ func TestIntegrationEnvironment(t *testing.T) {
 	})
 	for _, driver := range []string{"evil", "union", "binary"} {
 		t.Run(driver, func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			marker := filepath.Join(t.TempDir(), "merge-driver-ran")
 			gitCommand(t, f.f.env, f.f.root, nil, "config", "merge.evil.driver", "touch '"+filepath.ToSlash(marker)+"'; exit 0")
@@ -144,6 +149,7 @@ func TestIntegrationEnvironment(t *testing.T) {
 	}
 	for _, source := range []string{"local", "global"} {
 		t.Run("pinned "+source, func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			attrs := HostFile{Present: true, Bytes: []byte("*.txt merge=binary\n")}
 			if source == "local" {
@@ -168,8 +174,10 @@ func TestIntegrationEnvironment(t *testing.T) {
 }
 
 func TestDerivedTreeCaseCollision(t *testing.T) {
+	t.Parallel()
 	for _, paths := range [][2]string{{"Docs/x.txt", "docs/y.txt"}, {"Name.txt", "name.txt"}} {
 		t.Run(paths[0], func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			base := integrationTree(t, f.f, map[string]string{})
 			predecessor := integrationTree(t, f.f, map[string]string{paths[0]: "one\n"})
@@ -183,6 +191,7 @@ func TestDerivedTreeCaseCollision(t *testing.T) {
 }
 
 func TestIntegrationCommit(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	tree := integrationTree(t, f.f, map[string]string{"derived.txt": "integrated\n"})
 	parent := f.s.Worktree.BaseCommit
@@ -218,6 +227,7 @@ func TestIntegrationCommit(t *testing.T) {
 }
 
 func TestIntegrationLineEndingNeutral(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	f.p.Normalization.AutoCRLF = "true"
 	baseText := "1\n2\n3\n4\n5\n"
@@ -238,6 +248,7 @@ func TestIntegrationLineEndingNeutral(t *testing.T) {
 }
 
 func TestConflictReport(t *testing.T) {
+	t.Parallel()
 	for _, cause := range []string{"merge", "case_collision"} {
 		body, digest, err := conflictReport(cause, []string{"z", "line\nname", "a", "z"})
 		want := fmt.Sprintf("{\"format\":\"dwarf-harness/conflict-report\",\"version\":1,\"cause\":%q,\"paths\":3}\n{\"path\":\"a\"}\n{\"path\":\"line\\nname\"}\n{\"path\":\"z\"}\n", cause)
@@ -275,6 +286,7 @@ func TestConflictReport(t *testing.T) {
 }
 
 func TestGenerationRefsCompareAndSwap(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	ctx := context.Background()
 	id := uuid.NewV7()

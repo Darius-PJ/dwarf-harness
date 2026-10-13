@@ -27,8 +27,10 @@ func fixtureScratch(t *testing.T) (gitFixture, Proposal, scratchWorktree) {
 }
 
 func TestCreateNeverChecksOutMain(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"sha1", "sha256"} {
 		t.Run(format, func(t *testing.T) {
+			t.Parallel()
 			f := newGitFixture(t, format)
 			p, err := f.git.inspect(context.Background(), f.root)
 			if err != nil {
@@ -77,6 +79,7 @@ func TestCreateNeverChecksOutMain(t *testing.T) {
 }
 
 func TestCreationRechecksMain(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
@@ -90,6 +93,7 @@ func TestCreationRechecksMain(t *testing.T) {
 }
 
 func TestRemoveCompletesWhatGitLeaves(t *testing.T) {
+	t.Parallel()
 	f, p, s := fixtureScratch(t)
 	nested := filepath.Join(s.Dir, "ignored", "nested")
 	if err := os.MkdirAll(nested, 0o700); err != nil {
@@ -138,6 +142,7 @@ func assertScratchRemoved(t *testing.T, f gitFixture, p Proposal, s scratchWorkt
 }
 
 func TestRemovalPreservesMovedBranch(t *testing.T) {
+	t.Parallel()
 	f, p, s := fixtureScratch(t)
 	tree := strings.TrimSpace(string(gitCommand(t, f.env, s.Dir, nil, "write-tree")))
 	commit := strings.TrimSpace(string(gitCommand(t, f.env, s.Dir, []byte("agent commit\n"), "commit-tree", tree, "-p", s.BaseCommit)))
@@ -152,6 +157,7 @@ func TestRemovalPreservesMovedBranch(t *testing.T) {
 }
 
 func TestRefsAreCreateOnly(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
@@ -174,6 +180,7 @@ func TestRefsAreCreateOnly(t *testing.T) {
 }
 
 func TestMarkerIsRawAndResumable(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha256")
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
@@ -195,6 +202,7 @@ func TestMarkerIsRawAndResumable(t *testing.T) {
 }
 
 func TestRemoveDoesNotFollowSymlink(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows junction and directory symlink cases are in TestRemoveDoesNotFollowJunction")
 	}

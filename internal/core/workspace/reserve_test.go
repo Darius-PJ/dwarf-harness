@@ -27,6 +27,7 @@ func assertBusy(t *testing.T, err error, reason string) {
 }
 
 func TestExclusiveIsImmediateBusy(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	before := snapshotCaptureSideEffects(t, f.f, f.p)
 	for _, shared := range []bool{false, true} {
@@ -72,6 +73,7 @@ func TestExclusiveIsImmediateBusy(t *testing.T) {
 }
 
 func TestWriterWaitsForCapture(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		profile := CapacityProfile{MaxFiles: 1, MaxBytes: 10, BytesInFlight: 10, CheckpointsPerPair: 4, GenerationWindow: 4}
 		pool := testReservationPool(t, &profile)
@@ -114,6 +116,7 @@ func TestWriterWaitsForCapture(t *testing.T) {
 }
 
 func TestPoolIsAtomic(t *testing.T) {
+	t.Parallel()
 	profile := CapacityProfile{MaxFiles: 1, MaxBytes: 10, BytesInFlight: 10, CheckpointsPerPair: 4, GenerationWindow: 4}
 	pool := testReservationPool(t, &profile)
 	first, err := pool.reserve("a", admissionReservation)
@@ -137,6 +140,7 @@ func TestPoolIsAtomic(t *testing.T) {
 }
 
 func TestCapacityProfileRefusals(t *testing.T) {
+	t.Parallel()
 	for _, change := range []func(*CapacityProfile){
 		func(p *CapacityProfile) { p.MaxFiles = 0 },
 		func(p *CapacityProfile) { p.MaxBytes = 0 },
@@ -163,8 +167,10 @@ func TestCapacityProfileRefusals(t *testing.T) {
 }
 
 func TestReservationReleasedOnEveryPath(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"refusal", "git error", "cancelled context"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 100, MaxBytes: 1 << 20, BytesInFlight: 1 << 20, CheckpointsPerPair: 4, GenerationWindow: 4})
 			ctx := context.Background()
@@ -202,6 +208,7 @@ func TestReservationReleasedOnEveryPath(t *testing.T) {
 }
 
 func TestObserveReturnsPoolButKeepsExclusion(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	other, err := f.f.git.createWorktree(context.Background(), f.f.colony, f.p, f.s.InputsDir, filepath.Join(f.f.colony, "scratch", "87654321"), "second-observer")
 	if err != nil {
@@ -279,6 +286,7 @@ func assertReservationInvalid(t *testing.T, err error) {
 }
 
 func TestCheckpointSlotsPerPair(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		profile := ProvisionalCapacityProfile()
 		pool := testReservationPool(t, &profile)
@@ -332,6 +340,7 @@ func TestCheckpointSlotsPerPair(t *testing.T) {
 }
 
 func TestSlotReturnedUnlessKept(t *testing.T) {
+	t.Parallel()
 	profile := ProvisionalCapacityProfile()
 	profile.CheckpointsPerPair = 1
 	pool := testReservationPool(t, &profile)
@@ -367,6 +376,7 @@ func TestSlotReturnedUnlessKept(t *testing.T) {
 }
 
 func TestAdmissionBusyIsAtomic(t *testing.T) {
+	t.Parallel()
 	profile := ProvisionalCapacityProfile()
 	profile.CheckpointsPerPair = 1
 	pool := testReservationPool(t, &profile)
@@ -395,6 +405,7 @@ func TestAdmissionBusyIsAtomic(t *testing.T) {
 }
 
 func TestConcurrentAdmissionReservations(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		profile := ProvisionalCapacityProfile()
 		pool := testReservationPool(t, &profile)

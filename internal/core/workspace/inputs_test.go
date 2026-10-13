@@ -14,6 +14,7 @@ import (
 )
 
 func TestInspectImportsHostInputs(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	common := filepath.Join(f.root, ".git")
 	home := ""
@@ -57,7 +58,9 @@ func TestInspectImportsHostInputs(t *testing.T) {
 }
 
 func TestInspectRefuses(t *testing.T) {
+	t.Parallel()
 	t.Run("not repository", func(t *testing.T) {
+		t.Parallel()
 		g := newGitRunner(func() []string { return testEnv(t) })
 		_, err := g.inspect(context.Background(), t.TempDir())
 		if !errors.Is(err, ErrNotGitRepository) {
@@ -65,6 +68,7 @@ func TestInspectRefuses(t *testing.T) {
 		}
 	})
 	t.Run("no main", func(t *testing.T) {
+		t.Parallel()
 		f := newGitFixture(t, "sha1")
 		gitCommand(t, f.env, f.root, nil, "branch", "-D", "main")
 		_, err := f.git.inspect(context.Background(), f.root)
@@ -74,6 +78,7 @@ func TestInspectRefuses(t *testing.T) {
 	})
 	for _, linked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "main checkout", true: "linked main checkout"}[linked], func(t *testing.T) {
+			t.Parallel()
 			f := newGitFixture(t, "sha1")
 			if linked {
 				gitCommand(t, f.env, f.root, nil, "worktree", "add", filepath.Join(t.TempDir(), "linked"), "main")
@@ -87,6 +92,7 @@ func TestInspectRefuses(t *testing.T) {
 		})
 	}
 	t.Run("oversize", func(t *testing.T) {
+		t.Parallel()
 		f := newGitFixture(t, "sha1")
 		writeTestFile(t, filepath.Join(f.root, ".git", "info", "exclude"), bytes.Repeat([]byte("x"), (1<<20)+1))
 		_, err := f.git.inspect(context.Background(), f.root)
@@ -95,6 +101,7 @@ func TestInspectRefuses(t *testing.T) {
 		}
 	})
 	t.Run("bare", func(t *testing.T) {
+		t.Parallel()
 		f := newGitFixture(t, "sha1")
 		bare := filepath.Join(t.TempDir(), "bare.git")
 		gitCommand(t, f.env, f.root, nil, "clone", "--bare", f.root, bare)
@@ -112,6 +119,7 @@ func TestInspectRefuses(t *testing.T) {
 }
 
 func TestInputsDigestCoversEveryInput(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
@@ -180,6 +188,7 @@ func TestInputsDigestCoversEveryInput(t *testing.T) {
 }
 
 func TestDecodeCaptureInputsRefuses(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
@@ -205,6 +214,7 @@ func TestDecodeCaptureInputsRefuses(t *testing.T) {
 }
 
 func TestTamperedMaterializationIsRewritten(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha256")
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
@@ -244,6 +254,7 @@ func TestTamperedMaterializationIsRewritten(t *testing.T) {
 }
 
 func TestPinnedGitVersionNamesBothVersions(t *testing.T) {
+	t.Parallel()
 	g := &gitRunner{version: "2.55.0.windows.3"}
 	err := g.checkInputsVersion("2.42.0")
 	var unavailable *UnavailableError
@@ -253,6 +264,7 @@ func TestPinnedGitVersionNamesBothVersions(t *testing.T) {
 }
 
 func TestInspectGlobalExcludePaths(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	home := environmentValue(f.env, "HOME")
 	var env []string
@@ -279,6 +291,7 @@ func TestInspectGlobalExcludePaths(t *testing.T) {
 }
 
 func TestMaterializedAttributesPrecedence(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
@@ -301,6 +314,7 @@ func TestMaterializedAttributesPrecedence(t *testing.T) {
 }
 
 func TestCaptureInputsKeepHistoricalGitFloor(t *testing.T) {
+	t.Parallel()
 	// These format-v1 bytes were valid before integration raised the runtime
 	// floor. Replaying them must remain possible without running that Git.
 	body := []byte(`{"format":"dwarf-harness/capture-inputs","version":1,"rules":"capture-rules/1","git_version":"2.42.0","object_format":"sha1","core.autocrlf":"false","core.eol":"native","core.filemode":"true","core.ignorecase":"false","core.longpaths":"false","core.precomposeunicode":"false","core.symlinks":"true"}`)

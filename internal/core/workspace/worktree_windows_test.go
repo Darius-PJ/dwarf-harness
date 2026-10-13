@@ -16,6 +16,11 @@ func makeJunction(t *testing.T, path, target string) {
 	if err != nil {
 		t.Fatalf("mklink /J: %v: %s", err, out)
 	}
+	t.Cleanup(func() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Error(err)
+		}
+	})
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode()&os.ModeIrregular == 0 {
 		t.Fatalf("junction type: %v, %v", info, err)
@@ -23,7 +28,9 @@ func makeJunction(t *testing.T, path, target string) {
 }
 
 func TestRemoveDoesNotFollowJunction(t *testing.T) {
+	t.Parallel()
 	t.Run("os.Remove unlinks junction", func(t *testing.T) {
+		t.Parallel()
 		target := t.TempDir()
 		writeTestFile(t, filepath.Join(target, "keep"), []byte("owner bytes"))
 		link := filepath.Join(t.TempDir(), "junction")
@@ -41,6 +48,7 @@ func TestRemoveDoesNotFollowJunction(t *testing.T) {
 	for _, kind := range []string{"junction", "directory symlink"} {
 		for _, retry := range []bool{false, true} {
 			t.Run(kind+map[bool]string{true: " retry", false: " remove"}[retry], func(t *testing.T) {
+				t.Parallel()
 				f, p, s := fixtureScratch(t)
 				target := t.TempDir()
 				writeTestFile(t, filepath.Join(target, "keep"), []byte("owner bytes"))
@@ -77,6 +85,7 @@ func TestRemoveDoesNotFollowJunction(t *testing.T) {
 }
 
 func TestRemovalBlockedByOpenHandle(t *testing.T) {
+	t.Parallel()
 	f, p, s := fixtureScratch(t)
 	path, err := syscall.UTF16PtrFromString(filepath.Join(s.Dir, "base.txt"))
 	if err != nil {
@@ -87,11 +96,11 @@ func TestRemovalBlockedByOpenHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed := false
-	defer func() {
+	t.Cleanup(func() {
 		if !closed {
 			_ = syscall.CloseHandle(handle)
 		}
-	}()
+	})
 	err = f.git.removeWorktree(context.Background(), f.colony, p.CommonDir, s, nil)
 	if !errors.Is(err, ErrRemovalPending) {
 		t.Fatalf("held handle result: %v", err)
@@ -123,6 +132,7 @@ func TestRemovalBlockedByOpenHandle(t *testing.T) {
 }
 
 func TestRemovalUnlinksReadOnlyRegularFile(t *testing.T) {
+	t.Parallel()
 	f, p, s := fixtureScratch(t)
 	path := filepath.Join(s.Dir, "nested", "read-only.txt")
 	writeTestFile(t, path, []byte("agent tool output\n"))

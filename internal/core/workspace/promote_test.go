@@ -18,6 +18,7 @@ func assertUnavailable(t *testing.T, err error, reason string) {
 	}
 }
 func TestRequestPromotionUnavailableInC2(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	writeTestFile(t, filepath.Join(s.Dir, "new.txt"), []byte("must not be captured\n"))
@@ -42,6 +43,7 @@ func TestRequestPromotionUnavailableInC2(t *testing.T) {
 }
 
 func TestRequestPromotionBusyBeforeUnavailable(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	release, err := f.svc.BeginWrite(context.Background(), s.ID)
@@ -86,6 +88,7 @@ func TestRequestPromotionBusyBeforeUnavailable(t *testing.T) {
 }
 
 func TestRequestPromotionBinding(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	ctx := context.Background()
 	c := uuid.NewV7()
@@ -123,8 +126,10 @@ func TestRequestPromotionBinding(t *testing.T) {
 }
 
 func TestRequestPromotionUnavailablePreconditions(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{"git_unavailable", "inputs_stale", "workspace_unverified", "scratch_missing"} {
 		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			s := mustScratch(t, f, uuid.NewV7())
 			switch reason {

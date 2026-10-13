@@ -17,6 +17,7 @@ import (
 )
 
 func TestScratchOnePerPair(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	ctx := context.Background()
 	c1 := uuid.NewV7()
@@ -80,6 +81,7 @@ func TestScratchOnePerPair(t *testing.T) {
 }
 
 func TestScratchNamesNeverReused(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	old := mustScratch(t, f, uuid.NewV7())
 	if _, err := f.svc.CloseScratch(context.Background(), ownerClosure(old)); err != nil {
@@ -109,8 +111,10 @@ func TestScratchNamesNeverReused(t *testing.T) {
 }
 
 func TestCloseScratchRefusesUnrepresentedEdits(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"edit", "new", "deletion", "unsupported_filter"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			s := mustScratch(t, f, uuid.NewV7())
 			path := filepath.Join(s.Dir, "base.txt")
@@ -159,6 +163,7 @@ func TestCloseScratchRefusesUnrepresentedEdits(t *testing.T) {
 			name = "moved_branch_equal_tree"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			s := mustScratch(t, f, uuid.NewV7())
 			writeTestFile(t, filepath.Join(s.Dir, "base.txt"), []byte("edited\n"))
@@ -185,6 +190,7 @@ func TestCloseScratchRefusesUnrepresentedEdits(t *testing.T) {
 		})
 	}
 	t.Run("ignored_entries_unit", func(t *testing.T) {
+		t.Parallel()
 		f := newServiceFixture(t)
 		p := f.p
 		p.LocalExcludes = HostFile{Present: true, Bytes: []byte("build/\n*.tmp\n")}
@@ -206,6 +212,7 @@ func TestCloseScratchRefusesUnrepresentedEdits(t *testing.T) {
 }
 
 func TestCloseScratchAuthority(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	before := f.store.Durable()
@@ -228,6 +235,7 @@ func TestCloseScratchAuthority(t *testing.T) {
 }
 
 func TestCloseScratchBusy(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	release, err := f.svc.BeginWrite(context.Background(), s.ID)
@@ -284,6 +292,7 @@ func TestScratchWaitsOnlyForItsPair(t *testing.T) {
 }
 
 func TestAnchorRemovalPreservesMovedRef(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	ref := s.worktree().AnchorRef
@@ -309,8 +318,10 @@ func TestAnchorRemovalPreservesMovedRef(t *testing.T) {
 }
 
 func TestCloseScratchWhileRequestsLive(t *testing.T) {
+	t.Parallel()
 	for _, racing := range []bool{false, true} {
 		t.Run(fmt.Sprintf("admitted_during_reservation_%t", racing), func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t)
 			scratch := mustScratch(t, f, uuid.NewV7())
 			r := rootRequest(scratch)

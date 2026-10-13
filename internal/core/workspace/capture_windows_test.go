@@ -11,8 +11,10 @@ import (
 )
 
 func TestCaptureRefusesJunction(t *testing.T) {
+	t.Parallel()
 	for _, tracked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "untracked", true: "tracked directory"}[tracked], func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			target := t.TempDir()
 			writeTestFile(t, filepath.Join(target, "inside.txt"), []byte("outside bytes must not be read\n"))
@@ -42,6 +44,7 @@ func TestCaptureRefusesJunction(t *testing.T) {
 }
 
 func TestCaptureRefusesSymlink(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	target := filepath.Join(t.TempDir(), "target")
 	writeTestFile(t, target, []byte("outside"))
@@ -62,6 +65,7 @@ func TestCaptureRefusesSymlink(t *testing.T) {
 }
 
 func TestCaptureCaseOnlyRename(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	f.p.Normalization.IgnoreCase = "true"
 	if err := os.Rename(filepath.Join(f.s.Worktree.Dir, "base.txt"), filepath.Join(f.s.Worktree.Dir, "BASE.txt")); err != nil {
@@ -72,6 +76,7 @@ func TestCaptureCaseOnlyRename(t *testing.T) {
 }
 
 func TestCaptureLongPath(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	f.p.Normalization.LongPaths = "false"
 	path := filepath.Join(f.s.Worktree.Dir, strings.Repeat("a", 100), strings.Repeat("b", 100), strings.Repeat("c", 100), "long.txt")
@@ -81,6 +86,7 @@ func TestCaptureLongPath(t *testing.T) {
 }
 
 func TestCaptureUnreadable(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	path, err := syscall.UTF16PtrFromString(filepath.Join(f.s.Worktree.Dir, "base.txt"))
 	if err != nil {
@@ -90,12 +96,13 @@ func TestCaptureUnreadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer syscall.CloseHandle(handle)
+	t.Cleanup(func() { _ = syscall.CloseHandle(handle) })
 	_, err = f.capture(context.Background(), sealCapture)
 	assertRefusal(t, err, "unreadable")
 }
 
 func TestCaptureWindowsModes(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	f.p.Normalization.FileMode = "false"
 	tree, _ := plumbingBaseline(t, f.f, []stageEntry{{Path: "base.txt", Mode: "100755"}})

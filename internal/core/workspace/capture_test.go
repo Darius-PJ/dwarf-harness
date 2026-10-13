@@ -126,6 +126,7 @@ func referenceTree(t *testing.T, f *captureFixture) (string, string) {
 }
 
 func TestCaptureEligibility(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		edit func(*testing.T, *captureFixture)
@@ -182,6 +183,7 @@ func TestCaptureEligibility(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			tc.edit(t, f)
 			want, _ := referenceTree(t, f)
@@ -222,6 +224,7 @@ func manifestRows(t *testing.T, result captureResult) []manifestEntry {
 }
 
 func TestCaptureCanonicalContent(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	raw := map[string][]byte{"text.txt": []byte("a\r\nb\r\n"), "raw.bin": []byte("a\r\nb\r\n"), "binary.dat": {0, 'a', '\r', '\n'}}
 	writeTestFile(t, filepath.Join(f.s.Worktree.Dir, ".gitattributes"), []byte("*.bin -text\n"))
@@ -253,6 +256,7 @@ func TestCaptureCanonicalContent(t *testing.T) {
 }
 
 func TestCaptureDeterministic(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	a := mustCapture(t, f, observeCapture)
 	b := mustCapture(t, f, observeCapture)
@@ -262,6 +266,7 @@ func TestCaptureDeterministic(t *testing.T) {
 }
 
 func TestCaptureRequiresReservation(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	before := snapshotCaptureSideEffects(t, f.f, f.p)
 	for _, r := range []*reservation{nil, {}, {pool: f.pool, scratch: f.s.Worktree.Dir, bytes: f.pool.profile.MaxBytes}} {
@@ -279,6 +284,7 @@ func TestCaptureRequiresReservation(t *testing.T) {
 }
 
 func TestIgnoredEntriesUnit(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	f.p.LocalExcludes = HostFile{Present: true, Bytes: []byte("build/\none.tmp\n")}
 	writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "build", "a"), []byte("a"))
@@ -291,6 +297,7 @@ func TestIgnoredEntriesUnit(t *testing.T) {
 }
 
 func TestObserveRetainsNothing(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	before := snapshotCaptureSideEffects(t, f.f, f.p)
 	observed := mustCapture(t, f, observeCapture)
@@ -365,8 +372,10 @@ func plumbingBaseline(t *testing.T, f gitFixture, entries []stageEntry) (string,
 }
 
 func TestCaseCollidingBaselineRefusedBeforeMaterialization(t *testing.T) {
+	t.Parallel()
 	for _, paths := range [][]string{{"A.txt", "a.txt"}, {"Dir/x", "dir/y"}} {
 		t.Run(strings.Join(paths, "+"), func(t *testing.T) {
+			t.Parallel()
 			entries := []stageEntry{{Path: paths[0], Mode: "100644"}, {Path: paths[1], Mode: "100644"}}
 			f := newGitFixture(t, "sha1")
 			_, commit := plumbingBaseline(t, f, entries)
@@ -409,6 +418,7 @@ func TestCaseCollidingBaselineRefusedBeforeMaterialization(t *testing.T) {
 }
 
 func TestCaptureIgnoresScratchIndexAndHead(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	dir := f.s.Worktree.Dir
 	writeTestFile(t, filepath.Join(dir, "base.txt"), []byte("staged\n"))
@@ -428,6 +438,7 @@ func TestCaptureIgnoresScratchIndexAndHead(t *testing.T) {
 }
 
 func TestCaptureReadsEveryFile(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	path := filepath.Join(f.s.Worktree.Dir, "base.txt")
 	first := mustCapture(t, f, observeCapture)
@@ -449,6 +460,7 @@ func TestCaptureReadsEveryFile(t *testing.T) {
 }
 
 func TestCaptureRefusals(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, reason string
 		edit         func(*testing.T, *captureFixture)
@@ -482,6 +494,7 @@ func TestCaptureRefusals(t *testing.T) {
 		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			tc.edit(t, f)
 			reads := 0
@@ -499,6 +512,7 @@ func TestCaptureRefusals(t *testing.T) {
 }
 
 func TestRepeatedCarriageReturnUsesReferenceGit(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	raw := []byte("\r\r\n")
 	writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "repeated.txt"), raw)
@@ -516,7 +530,9 @@ func TestRepeatedCarriageReturnUsesReferenceGit(t *testing.T) {
 }
 
 func TestCaptureCaps(t *testing.T) {
+	t.Parallel()
 	t.Run("files", func(t *testing.T) {
+		t.Parallel()
 		f := newCaptureFixture(t)
 		f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 1, MaxBytes: 100, BytesInFlight: 100, CheckpointsPerPair: 4, GenerationWindow: 4})
 		mustCapture(t, f, observeCapture)
@@ -530,6 +546,7 @@ func TestCaptureCaps(t *testing.T) {
 		}
 	})
 	t.Run("bytes", func(t *testing.T) {
+		t.Parallel()
 		f := newCaptureFixture(t)
 		writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "base.txt"), []byte("ab"))
 		f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 2, MaxBytes: 2, BytesInFlight: 2, CheckpointsPerPair: 4, GenerationWindow: 4})
@@ -544,6 +561,7 @@ func TestCaptureCaps(t *testing.T) {
 		}
 	})
 	t.Run("growth", func(t *testing.T) {
+		t.Parallel()
 		f := newCaptureFixture(t)
 		writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "zzz"), []byte("x"))
 		f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 2, MaxBytes: 20, BytesInFlight: 20, CheckpointsPerPair: 4, GenerationWindow: 4})
@@ -559,6 +577,7 @@ func TestCaptureCaps(t *testing.T) {
 		}
 	})
 	t.Run("manifest", func(t *testing.T) {
+		t.Parallel()
 		f := newCaptureFixture(t)
 		f.engine.manifestCap = 32
 		_, err := f.capture(context.Background(), sealCapture)
@@ -567,8 +586,10 @@ func TestCaptureCaps(t *testing.T) {
 }
 
 func TestCaptureDetectsChangeDuringCapture(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"size", "metadata only"} {
 		t.Run(change, func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			f.engine.afterRawRead = func(path string) {
 				if path != "base.txt" {
@@ -599,6 +620,7 @@ func TestCaptureDetectsChangeDuringCapture(t *testing.T) {
 }
 
 func TestSealIsImmutable(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	dir := f.s.Worktree.Dir
 	writeTestFile(t, filepath.Join(dir, "sealed-only.txt"), []byte("only the capture retains this blob\n"))
@@ -651,6 +673,7 @@ func TestSealIsImmutable(t *testing.T) {
 }
 
 func TestCaptureMaximumByteProfile(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	f.pool = testReservationPool(t, &CapacityProfile{MaxFiles: 100, MaxBytes: 1<<63 - 1, BytesInFlight: 1<<63 - 1, CheckpointsPerPair: 4, GenerationWindow: 4})
 	raw := readTestFile(t, filepath.Join(f.s.Worktree.Dir, "base.txt"))
@@ -661,6 +684,7 @@ func TestCaptureMaximumByteProfile(t *testing.T) {
 }
 
 func TestBlobBatchStreaming(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha1")
 	bodies := [][]byte{{}, []byte("a\r\nb\n\x00binary\n")}
 	var ids []string
@@ -687,15 +711,14 @@ func TestBlobBatchStreaming(t *testing.T) {
 }
 
 func TestCaptureUnavailable(t *testing.T) {
-	for _, reason := range []string{"no_capacity_profile", "git_unavailable", "inputs_stale", "workspace_unverified", "scratch_missing"} {
+	t.Parallel()
+	for _, reason := range []string{"no_capacity_profile", "inputs_stale", "workspace_unverified", "scratch_missing"} {
 		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			switch reason {
 			case "no_capacity_profile":
 				f.pool = testReservationPool(t, nil)
-			case "git_unavailable":
-				t.Setenv("PATH", t.TempDir())
-				f.engine.git = newGitRunner(func() []string { return f.f.env })
 			case "inputs_stale":
 				f.p.GitVersion = "2.42.0-pinned-other"
 			case "workspace_unverified":
@@ -717,7 +740,19 @@ func TestCaptureUnavailable(t *testing.T) {
 	}
 }
 
+func TestCaptureGitUnavailable(t *testing.T) {
+	f := newCaptureFixture(t)
+	t.Setenv("PATH", t.TempDir())
+	f.engine.git = newGitRunner(func() []string { return f.f.env })
+	result, err := f.capture(context.Background(), sealCapture)
+	var unavailable *UnavailableError
+	if !errors.Is(err, ErrUnavailable) || !errors.As(err, &unavailable) || unavailable.Reason != "git_unavailable" || result.Tree != "" {
+		t.Fatalf("precondition git_unavailable: result=%#v err=%v", result, err)
+	}
+}
+
 func TestReservationOnePerPair(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	r, err := f.pool.reserve(f.s.Worktree.Dir, admissionReservation)
 	if err != nil {
@@ -750,6 +785,7 @@ func TestReservationOnePerPair(t *testing.T) {
 }
 
 func TestCaptureSHA256Repository(t *testing.T) {
+	t.Parallel()
 	f := newGitFixture(t, "sha256")
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
@@ -781,6 +817,7 @@ func TestCaptureSHA256Repository(t *testing.T) {
 }
 
 func TestCaptureInvalidModeKeepsToken(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	want, _ := referenceTree(t, f)
 	r, err := f.pool.reserve(f.s.Worktree.Dir, admissionReservation)

@@ -8,6 +8,7 @@ import (
 )
 
 func TestCaptureRejectsNonUTF8Path(t *testing.T) {
+	t.Parallel()
 	f := newCaptureFixture(t)
 	writeTestFile(t, filepath.Join(f.s.Worktree.Dir, "invalid-\xff"), []byte("unrepresentable name\n"))
 	_, err := f.capture(context.Background(), sealCapture)
@@ -15,9 +16,11 @@ func TestCaptureRejectsNonUTF8Path(t *testing.T) {
 }
 
 func TestCaptureFinalCaseCollisions(t *testing.T) {
+	t.Parallel()
 	requireCaseSensitiveFilesystem(t)
 	for _, paths := range [][]string{{"A.txt", "a.txt"}, {"Dir/x", "dir/y"}} {
 		t.Run(strings.Join(paths, "+"), func(t *testing.T) {
+			t.Parallel()
 			f := newCaptureFixture(t)
 			f.p.Normalization.IgnoreCase = "false"
 			for _, path := range paths {

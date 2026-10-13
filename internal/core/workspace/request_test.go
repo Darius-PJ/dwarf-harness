@@ -43,6 +43,7 @@ func promotionError(ctx context.Context, s *Service, r Request) error {
 }
 
 func TestFourCheckpointsThenBusy(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
@@ -71,6 +72,7 @@ func TestFourCheckpointsThenBusy(t *testing.T) {
 }
 
 func TestIdenticalContentStaysDistinct(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
@@ -89,6 +91,7 @@ func TestIdenticalContentStaysDistinct(t *testing.T) {
 }
 
 func TestSameIDReplayDoesNotRecapture(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
@@ -118,6 +121,7 @@ func TestSameIDReplayDoesNotRecapture(t *testing.T) {
 }
 
 func TestSameIDMismatch(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
@@ -156,6 +160,7 @@ func TestSameIDMismatch(t *testing.T) {
 }
 
 func TestCapacityScalesWithPairs(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	other := newGitFixture(t, "sha1")
 	p, err := f.svc.git.inspect(context.Background(), other.root)
@@ -181,6 +186,7 @@ func TestCapacityScalesWithPairs(t *testing.T) {
 }
 
 func TestHeadChecks(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r1 := rootRequest(s)
@@ -207,6 +213,7 @@ func TestHeadChecks(t *testing.T) {
 }
 
 func TestRequestInFlightIsBusy(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	r := rootRequest(s)
