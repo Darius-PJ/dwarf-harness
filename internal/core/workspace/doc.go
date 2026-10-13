@@ -121,10 +121,10 @@
 // # Private worktrees and retention
 //
 // The service mints never-reused eight-lowercase-hex directory names from its
-// UUIDv7 IDs, reserving one scratch per context/workspace pair. Mechanics create
-// refs/heads/dwarf-harness/<dir> at an explicit base commit, never main itself.
-// Dedicated creation passes main's tip; the record-free mechanic also supports
-// a temporary fork at its parent's acknowledged private tip. An anchor ref
+// UUIDv7 IDs, reserving one dedicated scratch per context/workspace pair.
+// Mechanics create refs/heads/dwarf-harness/<dir> at an explicit base commit,
+// never main itself. Dedicated creation passes main's tip; a temporary forks
+// its dedicated parent's acknowledged private tip. An anchor ref
 // refs/dwarf-harness/anchors/<scratch ID> retains exactly that base commit.
 // Creation uses worktree add --no-checkout followed by private read-tree -u
 // --reset against the anchor tree, writing the real index under pinned conversion.
@@ -144,9 +144,67 @@
 // power-loss guarantee or a same-user security boundary (C10).
 // Scratch-commit refs refs/dwarf-harness/scratch-commits/<ID> retain private
 // observation and merge-back commits by the same zero-ID create and recorded-ID
-// delete CAS as generation refs. These are record-free primitives only: service
-// routing, observation, merge-back and notices arrive with S3 after the F2-07
-// freeze. Service.BeginWrite and existing scratch lifetimes remain unchanged.
+// delete CAS as generation refs. The service retains every observation commit
+// while its scratch is open, including parent observations from which open
+// temporaries forked. Closing a parent with an open child is forbidden.
+//
+// # Typed writers and observations
+//
+// BeginWrite takes WriteBinding, not a scratch ID. Required IDs are UUIDv7;
+// ResumeScratchID may be zero. Different AgentID and TaskAgentID give ErrNotBound.
+// These are caller-stated bindings, authenticated by C3: only the live Writer
+// keeps the plain binding for equality checks, never an authority store, an
+// agent-keyed index or a ledger agent_id; Close drops that binding.
+// The same live WriterID with the same binding returns the same handle; a
+// changed binding gives ErrWriterMismatch. A second live writer on
+// (ContextID, TaskScratchID) gives context_busy. One context may hold a writer
+// on its own scratch and one on another task simultaneously.
+//
+// Only the task's context receives its dedicated scratch. Another context of
+// the same agent always receives a fresh temporary, even when the task is idle.
+// The per-task routing lock protects its acknowledged fork tip, never main,
+// mutable HEAD, the real index or the task's uncommitted files. A pending child
+// is reserved before Git work so closure sees it. Temporaries name their parent,
+// coexist with their author's dedicated scratch and never enter the pair map.
+// ResumeScratchID attaches only to an open temporary of that context and task;
+// a foreign binding gives ErrNotBound and a closed temporary gives ErrClosed.
+// Resume creates no directory or record; omitting it never reuses old work.
+//
+// Writer.Lease protects each physical tool edit through the shared pool and
+// returns an idempotent release. Writer.Close marks the handle closed at once,
+// without revoking physical leases. Logical occupancy and the service operation
+// drain only when outstanding calls and leases return. A nil, copied, forged or
+// wrong-service handle gives ErrInvalid; a closed or successfully observed
+// handle gives ErrClosed. Scratch returns zero for those handles or a poisoned
+// service; Close is harmless and idempotent even for an invalid handle.
+//
+// CommitObserved freezes new leases, waits within ctx for its existing leases,
+// then reserves observation exclusion and MaxBytes immediately or returns busy.
+// A lease during observation waits within its own ctx; failure thaws the writer,
+// while an acknowledged observation permits only Close. Capture uses the latest
+// acknowledged tip tree, with anchor-tree union tip-tree trusted names.
+// written_paths is the previous-tip difference; changed_paths is the full
+// anchor difference. Both are byte-sorted, deduplicated, NUL-delimited Git
+// diff-tree --no-renames path sets, with invalid paths refused as invalid_path.
+// The envelope encoder preflights the whole commit against MaxRecordBytes and
+// MaxCommitBytes, including worst-case envelope widths, before commit/ref/body
+// publication. Overflow gives pathset_cap, never truncation or chunking.
+//
+// scratch-rules/1 is the frozen F2-07 name for pinned host observation, trusted
+// anchor/tip names, raw-manifest versus canonical-tree identity, deterministic
+// single-parent commits, and retention-ref/record/private-branch ordering.
+// Every observation, including an unchanged tree, gets a new Core commit on the
+// previous tip. Its retention ref precedes manifest publication, scratch_changed,
+// the immediate body_pin, and the immediate previous-observation body_unpin
+// when present. Only after acknowledgment does branch CAS project the new tip;
+// the real index is never updated. Sequence is the appender's actual First.
+// Definite append failure CAS-deletes the new ref; uncertainty poisons and retains.
+//
+// Open and pre-use tip repair accept the recorded new tip, CAS the recorded
+// previous tip to it, or restore an absent branch from zero. They verify the
+// workspace, anchor and worktree admin identity and never overwrite any other
+// value: scratch_tip_mismatch blocks routing, observation, admission and closure,
+// and appears in Open's Pending. Repair changes no files, index or record.
 //
 // # Exact capture
 //
@@ -235,8 +293,8 @@
 // another exclusive holder, queues a retry or interrupts a writer. Refusals are
 // ordered: no_capacity_profile, scratch_busy, checkpoint_slots, capture_budget.
 // Closure of an absent directory still needs neither a profile nor bytes.
-// BeginWrite holders are shared; a writer waits context-boundedly for an
-// exclusive holder to release and never interrupts its capture.
+// Writer.Lease holders are shared; physical writers wait context-boundedly for
+// an exclusive holder to release and never interrupt its capture.
 // The record-free sole mutation writer waits within ctx until both the shared
 // writer count and exclusive holder are clear, then holds the same exclusion.
 // Capture, closure and admission meeting it return scratch_busy immediately;
@@ -296,7 +354,7 @@
 // derive from the operation UUIDv7. Messages are "dwarf-harness scratch
 // observation", a blank line, "scratch <ID>", "observation <ID>"; and
 // "dwarf-harness scratch merge-back", a blank line, "scratch <temporary ID>",
-// "merge-back <ID>". An observation will move HEAD without updating the real
+// "merge-back <ID>". An observation moves HEAD without updating the real
 // index; Core never reads that index as capture authority. Merge-back installs
 // a verified index instead.
 //
@@ -320,8 +378,9 @@
 // uses the repository environment. Partial failure preserves the actual disk
 // state and leaves refs unmoved. The retry form takes a verified intermediate O
 // built from disk, then applies O to target by the same two-tree recipe; it
-// never resets the directory. Service preparation, blocking and explicit retry
-// bookkeeping belong to S3, not these primitives.
+// never resets the directory. Service merge-back preparation, blocking and
+// explicit retry bookkeeping belong to S3b, not these primitives. Their frozen
+// policy name is scratch-merge-rules/1.
 //
 // Conflict reports return deterministic JSON Lines bytes and their SHA-256,
 // without publishing or pinning. The header has format
@@ -411,13 +470,15 @@
 // failed deletion waits for Open. Conflict report pins survive terminal state
 // until closure unless a superseding generation already released them.
 //
-// Open lists capture and generation namespaces once each per usable workspace,
-// deletes unretained refs by CAS, and recreates missing retained refs against
-// zero at their recorded objects. Missing objects give capture_missing
-// <request> or generation_missing <generation> in Pending. A ref at a different
-// object is reported and never overwritten. Open reads no manifest or clock,
-// starts no capture or integration and writes no record. Live requests retain
-// their slots, captures and current generations.
+// Open lists capture, generation and scratch-commit namespaces once each per
+// usable workspace, deletes unretained refs by CAS, and recreates missing
+// retained refs against zero at recorded objects. Missing objects give
+// capture_missing <request>, generation_missing <generation> or
+// observation_missing <observation> in Pending. A ref at a different object is
+// reported and never overwritten. Open reads no manifest or clock, starts no
+// capture or integration and writes no record. Live requests retain their slots,
+// captures and current generations. Observation retention walks open scratches
+// and their own observation lists; a closed scratch drops its list.
 //
 // # Service lifecycle and records
 //
@@ -450,9 +511,16 @@
 // current revision only; superseded revisions' bodies are never read. Checks
 // include actor and context binding, commit shape and pin matching, revision
 // sequencing, workspace identity, never-reused scratch identities/names, one
-// open scratch per pair, branch == refs/heads/dwarf-harness/<dir>, both Git ID
-// lengths matching the workspace format, and at-most-once closure. A violation
-// gives InconsistentError matching ErrInconsistent and naming its sequence.
+// open dedicated scratch per pair, branch == refs/heads/dwarf-harness/<dir>,
+// Git ID lengths matching the workspace format, and at-most-once closure.
+// Parent-qualified creation requires an open dedicated parent of the same
+// workspace and a different context, at exactly its acknowledged commit/tree.
+// scratch_changed checks fresh observation identity, open scratch binding,
+// creation parent, previous tip, recorded inputs digest/revision, exact manifest
+// body_refs, immediate pin and previous-observation unpin. Closures reject open
+// children and require all owned pins released once in original pin order.
+// The same journalled rule set runs before append and during Open.
+// A violation gives InconsistentError matching ErrInconsistent and its sequence.
 // Unknown closure reasons remain readable closures; the producer writes only
 // abandoned. A newer consumed record version returns the ledger reader's
 // UnsupportedVersionError.
@@ -467,7 +535,7 @@
 // open anchors when their objects survive, and reports missing scratches and
 // unfinished repairs. Pruning runs once per usable workspace, not per closed
 // scratch. Reconciliation writes no record and reads no clock. Unrecorded
-// anchors and unretained capture/generation refs are swept in usable
+// anchors and unretained capture/generation/scratch-commit refs are swept in usable
 // repositories. An orphan's regular .git file identifies its registered workspace
 // by os.SameFile; exactly one matching UUID-suffix anchor proves its base.
 // Missing or ambiguous proof permits directory removal only (and pruning only
@@ -476,8 +544,10 @@
 // directories survive the stray sweep, preserving retry proof. Stray branches
 // without directories are never swept. Every ref deletion uses an old-value CAS.
 //
-// Close drains operations and outstanding BeginWrite leases, rejects later calls
-// with ErrClosed, and is idempotent. The host closes the store separately.
+// Close drains operations, logical writers and outstanding physical leases,
+// rejects later service calls with ErrClosed, and is idempotent. Existing writers
+// may still finish their leased tools and observation while shutdown waits.
+// The host closes the store separately.
 // appender.ErrUncertain or appender.ErrPoisoned poisons the service: every later
 // call except Close returns ErrPoisoned. Recovery requires the host to recover
 // the store and open a new service, never an in-memory guess about a commit.
@@ -485,18 +555,23 @@
 // generation, capture and lineage IDs, and per-revision input digests; memory
 // grows with history. Superseded input bodies are never read for these identity
 // checks. Other projection facts are per-scratch live counts, the live requests'
-// manifest pins, and each active report pin's owning scratch, held until
-// supersession or closure.
+// and latest observations' manifest pins, and each active report pin's owning
+// scratch, held until supersession or closure. Observation IDs remain UUID-only
+// historical facts after their closed scratch's observation list is released.
 //
 // # Removal boundary
 //
 // CloseScratch proves a scratch has no unrepresented eligible edits before
-// durably recording scratch_closed. The represented tree remains its anchor:
-// admission never represents delivery. A capture refusal blocks closure. An
-// owner, or the bound context's agent, may close it. After authority and again
-// under exclusion, live requests give ErrLiveRequests without observation.
-// Closure records scratch_closed followed by all still-active report unpins
-// in pin order. Ignored entries are scratch-local and discarded;
+// durably recording scratch_closed. A dedicated scratch remains represented by
+// its anchor: admission and private observation never represent delivery.
+// A temporary's abandoned closure instead compares to its acknowledged private
+// tip, initially its fork tree, with anchor/tip trusted names. Unobserved edits
+// give ErrUnrepresentedEdits. An owner or the bound author's context may close it.
+// Authority, live requests and open/pending children are checked before and
+// under exclusion; they give ErrNotBound, ErrLiveRequests or ErrTemporaryChildren.
+// Live writers give scratch_busy. Closure records scratch_closed followed by all
+// still-active observation and F2-06 report unpins in original pin order.
+// Ignored entries are scratch-local and discarded;
 // ClosureResult.IgnoredEntries counts Git's ignored listing, with an ignored
 // directory counted once and no path reported. Removal-only retries report zero.
 // A missing directory may close without observation.
@@ -531,9 +606,11 @@
 // Reads are sequential in v1. The opt-in DWARF_CAPTURE_WORKLOAD_OUT harness
 // records creation, fresh and warm observe, a seal after ten edits, closure
 // observation, root and successor admission, two integrations and their rebuild
-// after a same-tree main advance, for 1,000 and 10,000 roughly 800-byte files.
-// Each row includes manifest bytes and Git's loose object count and KiB.
-// Results and work
+// after a same-tree main advance, plus observe_task, temporary_first_write and
+// observe_temporary, for 1,000 and 10,000 roughly 800-byte files. Each row includes
+// manifest bytes, Git's loose object count and KiB, and retained scratch/body
+// footprint. Service observations compare files, index, refs and ledger against
+// independent Git outside the timers. Results and work
 // directories stay outside the repository. It skips under -race, leaves
 // Defender enabled and adds no exclusions, compares trees with reference Git,
 // and has no timing threshold. Burst concurrency remains C4's feasibility gate.

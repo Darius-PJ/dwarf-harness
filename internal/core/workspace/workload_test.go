@@ -53,18 +53,21 @@ func captureWorkloadWithin(root, path string) bool {
 }
 
 type captureWorkloadRow struct {
-	Phase         string  `json:"phase"`
-	Files         int     `json:"files"`
-	CoreRawBytes  int64   `json:"core_raw_bytes"`
-	DurationMS    float64 `json:"duration_ms"`
-	Tree          string  `json:"tree"`
-	GitVersion    string  `json:"git_version"`
-	GoVersion     string  `json:"go_version"`
-	GOOS          string  `json:"goos"`
-	GOARCH        string  `json:"goarch"`
-	ManifestBytes int     `json:"manifest_bytes"`
-	LooseObjects  int64   `json:"loose_objects"`
-	LooseKiB      int64   `json:"loose_kib"`
+	Phase                string  `json:"phase"`
+	Files                int     `json:"files"`
+	CoreRawBytes         int64   `json:"core_raw_bytes"`
+	DurationMS           float64 `json:"duration_ms"`
+	Tree                 string  `json:"tree"`
+	GitVersion           string  `json:"git_version"`
+	GoVersion            string  `json:"go_version"`
+	GOOS                 string  `json:"goos"`
+	GOARCH               string  `json:"goarch"`
+	ManifestBytes        int     `json:"manifest_bytes"`
+	LooseObjects         int64   `json:"loose_objects"`
+	LooseKiB             int64   `json:"loose_kib"`
+	RetainedScratchBytes int64   `json:"retained_scratch_bytes"`
+	RetainedBodyBytes    int64   `json:"retained_body_bytes"`
+	Unresolved           int     `json:"unresolved"`
 }
 
 func TestCaptureWorkload(t *testing.T) {
@@ -125,9 +128,38 @@ func TestCaptureWorkload(t *testing.T) {
 			baseline := strings.TrimSpace(string(gitCommand(t, f.env, f.root, nil, "rev-parse", "--verify", "--end-of-options", "main^{tree}")))
 			inputs := filepath.Join(f.colony, "workspaces", "inputs", "1")
 			dir := filepath.Join(f.colony, "scratch", fmt.Sprintf("%08x", count))
+			footprint := func(root string) int64 {
+				t.Helper()
+				var total int64
+				err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+					if os.IsNotExist(err) && path == root {
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+					if entry.IsDir() && path == filepath.Join(root, ".tmp") {
+						return filepath.SkipDir
+					}
+					info, err := entry.Info()
+					if err != nil {
+						return err
+					}
+					if info.Mode().IsRegular() {
+						total += info.Size()
+					}
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return total
+			}
 			writeRow := func(phase string, duration time.Duration, result captureResult) {
 				row := captureWorkloadRow{Phase: phase, Files: count, CoreRawBytes: result.RawBytes, DurationMS: float64(duration) / float64(time.Millisecond), Tree: result.Tree, GitVersion: f.git.version, GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
 				row.ManifestBytes = len(result.Manifest)
+				row.RetainedScratchBytes = footprint(filepath.Join(f.colony, "scratch"))
+				row.RetainedBodyBytes = footprint(filepath.Join(f.colony, "bodies"))
 				for _, line := range strings.Split(string(gitCommand(t, f.env, f.root, nil, "count-objects", "-v")), "\n") {
 					key, value, ok := strings.Cut(line, ": ")
 					if !ok || (key != "count" && key != "size") {
@@ -222,13 +254,12 @@ func TestCaptureWorkload(t *testing.T) {
 			start = time.Now()
 			rootState := mustAdmit(t, sf, request)
 			duration = time.Since(start)
-			admissionResult := func(state RequestState) captureResult {
-				a := admittedRecord(t, sf, state.RequestID)
-				body, err := store.ReadBody(context.Background(), a.ManifestSHA256)
+			manifestResult := func(tree string, digest ledger.Digest) captureResult {
+				body, err := store.ReadBody(context.Background(), digest)
 				if err != nil {
 					t.Fatal(err)
 				}
-				result := captureResult{Tree: state.SealedTree, Manifest: body}
+				result := captureResult{Tree: tree, Manifest: body}
 				for _, line := range bytes.Split(bytes.TrimSpace(body), []byte{'\n'})[1:] {
 					var entry manifestEntry
 					if err := json.Unmarshal(line, &entry); err != nil {
@@ -237,6 +268,10 @@ func TestCaptureWorkload(t *testing.T) {
 					result.RawBytes += entry.Size
 				}
 				return result
+			}
+			admissionResult := func(state RequestState) captureResult {
+				a := admittedRecord(t, sf, state.RequestID)
+				return manifestResult(state.SealedTree, a.ManifestSHA256)
 			}
 			if rootState.SealedTree != baseline {
 				t.Fatal("root admission differs from reference baseline")
@@ -272,6 +307,69 @@ func TestCaptureWorkload(t *testing.T) {
 				}
 				writeRow(phase, duration, captureResult{Tree: g.DerivedTree})
 			}
+			observe := func(phase string, writer *Writer) Observation {
+				t.Helper()
+				actual := writer.Scratch()
+				admin, err := scratchAdmin(actual.worktree(), p.CommonDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				indexBefore := readTestFile(t, filepath.Join(admin, "index"))
+				mainBefore := fixtureMain(t, f)
+				start := time.Now()
+				observation, err := writer.CommitObserved(context.Background())
+				duration := time.Since(start)
+				writer.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				reference := &captureFixture{f: f, p: p, s: svc.captureScratch(svc.workspaces[w.ID], actual)}
+				want, _ := referenceTree(t, reference)
+				branch, err := f.git.readRef(context.Background(), f.colony, p.CommonDir, actual.Branch, 40)
+				if err != nil || observation.Tree != want || branch != observation.Commit || fixtureMain(t, f) != mainBefore || !bytes.Equal(indexBefore, readTestFile(t, filepath.Join(admin, "index"))) {
+					t.Fatalf("%s changed files/index/main or disagreed with reference Git: %v", phase, err)
+				}
+				commits := serviceCommits(t, store)
+				last := commits[len(commits)-1]
+				record, err := ledger.DecodeScratchChanged(last.Records[0].Payload)
+				if err != nil || record.ObservationID != observation.ID || record.ScratchCommit != observation.Commit || record.ScratchTree != want || record.ContextID != actual.ContextID || observation.Sequence != last.First {
+					t.Fatalf("%s durable observation differs: %+v %v", phase, record, err)
+				}
+				writeRow(phase, duration, manifestResult(want, record.ManifestSHA256))
+				return observation
+			}
+			taskWriter := mustWriter(t, sf, testWriteBinding(scratch))
+			defer taskWriter.Close()
+			taskObservation := observe("observe_task", taskWriter)
+			binding := testWriteBinding(scratch)
+			binding.ContextID = uuid.NewV7()
+			start = time.Now()
+			temporaryWriter, err := svc.BeginWrite(context.Background(), binding)
+			duration = time.Since(start)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer temporaryWriter.Close()
+			temporary := temporaryWriter.Scratch()
+			taskFiles, temporaryFiles := snapshotScratch(t, scratch.Dir), snapshotScratch(t, temporary.Dir)
+			delete(taskFiles, ".git")
+			delete(temporaryFiles, ".git")
+			if temporary.BaseCommit != taskObservation.Commit || len(taskFiles) != len(temporaryFiles) {
+				t.Fatal("temporary creation did not fork the committed task")
+			}
+			for path, want := range taskFiles {
+				if !bytes.Equal(temporaryFiles[path], want) {
+					t.Fatalf("temporary fork differs at %s", path)
+				}
+			}
+			writeRow("temporary_first_write", duration, captureResult{Tree: temporary.AnchorTree})
+			for i := range 10 {
+				path := filepath.Join(temporary.Dir, "src", fmt.Sprintf("%05d.txt", i))
+				b := readTestFile(t, path)
+				b[0] = 'T'
+				writeTestFile(t, path, b)
+			}
+			observe("observe_temporary", temporaryWriter)
 		})
 	}
 }

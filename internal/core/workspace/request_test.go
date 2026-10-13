@@ -106,7 +106,7 @@ func TestSameIDReplayDoesNotRecapture(t *testing.T) {
 			t.Fatalf("idle replay after reopen=%t: %+v %v", reopen, got, err)
 		}
 		assertRequestEffects(t, f, beforeIdle)
-		release, err := f.svc.BeginWrite(context.Background(), s.ID)
+		release, err := leaseTestWriter(context.Background(), f.svc, s)
 		if err != nil {
 			t.Fatal(err)
 		}

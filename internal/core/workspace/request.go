@@ -148,9 +148,10 @@ func (s *Service) beginRequest(ctx context.Context, r Request) (requestPlan, *re
 	if err == nil {
 		plan, err = s.headPlan(r, s.scratches[id])
 	}
+	scratch := s.scratches[id]
 	s.mu.Unlock()
 	if err == nil {
-		err = s.captureReady(ctx, plan.workspace, plan.scratch)
+		err = s.repairScratchTip(ctx, plan.workspace, scratch)
 	}
 	if err != nil {
 		token.release()
@@ -427,12 +428,23 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 		if s.liveCount(p.ScratchID) != 0 {
 			return bad("closure has live requests")
 		}
-		pins := s.scratches[p.ScratchID].reportPins
+		scratch := s.scratches[p.ScratchID]
+		pins := s.scratchPins(scratch)
 		if err := requireUnpins(drafts, at, pins); err != nil {
 			return err
 		}
 		for _, pin := range pins {
 			rules.unpins[pin] = at
+		}
+		if scratch.observationPin != (uuid.UUID{}) {
+			delete(s.manifestPins, scratch.observationPin)
+			next := scratch
+			next.observationPin = uuid.UUID{}
+			s.scratches[p.ScratchID] = next
+			*journal = append(*journal, func() {
+				s.scratches[p.ScratchID] = scratch
+				s.manifestPins[scratch.observationPin] = scratch.ObservationID
+			})
 		}
 	case ledger.TypeBodyUnpin:
 		p, err := ledger.DecodeBodyUnpin(d.Payload)

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
+	"slices"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -14,16 +14,22 @@ import (
 
 // Scratch is a private worktree bound to one context and workspace. Dir is absolute.
 type Scratch struct {
-	ID, WorkspaceID, ContextID          uuid.UUID
-	Dir, Branch, BaseCommit, AnchorTree string
+	ID, WorkspaceID, ContextID, ParentScratchID uuid.UUID
+	Dir, Branch, BaseCommit, AnchorTree         string
+	TipCommit, TipTree                          string
+	ObservationID                               uuid.UUID
 }
 
 type scratchState struct {
 	Scratch
-	closed     bool
-	head       uuid.UUID
-	live       int
-	reportPins []uuid.UUID
+	closed              bool
+	head                uuid.UUID
+	live                int
+	reportPins          []uuid.UUID
+	previousTip         string
+	observationPin      uuid.UUID
+	observationSequence uint64
+	observationIDs      []uuid.UUID
 }
 
 type scratchPair struct{ context, workspace uuid.UUID }
@@ -79,11 +85,11 @@ func (s *Service) Scratch(ctx context.Context, contextID, workspaceID uuid.UUID)
 			delete(s.creating, pair)
 			s.mu.Unlock()
 		}()
-		return s.createScratch(ctx, pair, w)
+		return s.createScratch(ctx, pair, w, uuid.UUID{}, "")
 	}
 }
 
-func (s *Service) createScratch(ctx context.Context, pair scratchPair, w workspaceState) (Scratch, error) {
+func (s *Service) createScratch(ctx context.Context, pair scratchPair, w workspaceState, parent uuid.UUID, base string) (Scratch, error) {
 	if s.git.unavailable != nil {
 		return Scratch{}, s.git.unavailable
 	}
@@ -128,19 +134,22 @@ func (s *Service) createScratch(ctx context.Context, pair scratchPair, w workspa
 		return Scratch{}, fmt.Errorf("%w: scratch names exhausted", ErrInvalid)
 	}
 	defer func() { s.mu.Lock(); delete(s.pendingDirs, filepath.Base(dir)); s.mu.Unlock() }()
-	base, err := s.git.readRef(ctx, s.colony, w.CommonDir, "refs/heads/main^{commit}", oidLength(w.ObjectFormat))
-	if err != nil {
-		return Scratch{}, err
-	}
-	if base == "" {
-		return Scratch{}, ErrNoCanonical
+	if parent == (uuid.UUID{}) {
+		var err error
+		base, err = s.git.readRef(ctx, s.colony, w.CommonDir, "refs/heads/main^{commit}", oidLength(w.ObjectFormat))
+		if err != nil {
+			return Scratch{}, err
+		}
+		if base == "" {
+			return Scratch{}, ErrNoCanonical
+		}
 	}
 	wt, err := s.git.createWorktree(ctx, s.colony, w.inputs, s.inputsDir(w), dir, id.String(), base)
 	if err != nil {
 		return Scratch{}, err
 	}
-	result := Scratch{ID: id, WorkspaceID: pair.workspace, ContextID: pair.context, Dir: wt.Dir, Branch: wt.Branch, BaseCommit: wt.BaseCommit, AnchorTree: wt.AnchorTree}
-	p := ledger.ScratchCreated{ScratchID: id, WorkspaceID: pair.workspace, ContextID: pair.context, Dir: filepath.Base(dir), Branch: wt.Branch, BaseCommit: wt.BaseCommit, AnchorTree: wt.AnchorTree}
+	result := Scratch{ID: id, WorkspaceID: pair.workspace, ContextID: pair.context, ParentScratchID: parent, Dir: wt.Dir, Branch: wt.Branch, BaseCommit: wt.BaseCommit, AnchorTree: wt.AnchorTree, TipCommit: wt.BaseCommit, TipTree: wt.AnchorTree}
+	p := ledger.ScratchCreated{ScratchID: id, WorkspaceID: pair.workspace, ContextID: pair.context, ParentScratchID: parent, Dir: filepath.Base(dir), Branch: wt.Branch, BaseCommit: wt.BaseCommit, AnchorTree: wt.AnchorTree}
 	payload, err := p.Encode()
 	if err == nil && s.deps.beforeAppend != nil {
 		s.deps.beforeAppend()
@@ -161,48 +170,46 @@ func (s *Service) createScratch(ctx context.Context, pair scratchPair, w workspa
 	return result, nil
 }
 
-// BeginWrite marks a host-managed writer. The idempotent release ends both the
-// write reservation and its service operation; Close waits for it. An exclusive
-// holder delays this call only within ctx. Closed scratches reject new writes.
-func (s *Service) BeginWrite(ctx context.Context, scratchID uuid.UUID) (func(), error) {
-	if err := s.start(); err != nil {
-		return nil, err
+// hasTemporaryChildren and scratchPins are projection queries under s.mu.
+func (s *Service) hasTemporaryChildren(id uuid.UUID) bool {
+	if s.pendingChildren[id] != 0 {
+		return true
 	}
-	finish := true
-	defer func() {
-		if finish {
-			s.ops.Done()
+	for _, scratch := range s.scratches {
+		if !scratch.closed && scratch.ParentScratchID == id {
+			return true
 		}
-	}()
-	if !validID(scratchID) {
-		return nil, ErrInvalid
 	}
-	s.mu.Lock()
-	scratch, ok := s.scratches[scratchID]
-	s.mu.Unlock()
-	if !ok {
-		return nil, ErrNoScratch
+	return false
+}
+
+func (s *Service) scratchPins(scratch scratchState) []uuid.UUID {
+	pins := slices.Clone(scratch.reportPins)
+	if scratch.observationPin != (uuid.UUID{}) {
+		pins = append(pins, scratch.observationPin)
 	}
-	if scratch.closed {
-		return nil, ErrClosed
-	}
-	release, err := s.pool.beginWrite(ctx, scratch.Dir)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	closed, poisoned := s.scratches[scratchID].closed, s.poisoned
-	s.mu.Unlock()
-	if closed || poisoned {
-		release()
-		if poisoned {
-			return nil, ErrPoisoned
+	slices.SortFunc(pins, func(a, b uuid.UUID) int {
+		if s.pinSequences[a] < s.pinSequences[b] {
+			return -1
 		}
-		return nil, ErrClosed
+		if s.pinSequences[a] > s.pinSequences[b] {
+			return 1
+		}
+		return 0
+	})
+	return pins
+}
+
+func (s *Service) closureBusy(scratch scratchState) error {
+	if scratch.ParentScratchID == (uuid.UUID{}) && s.hasTemporaryChildren(scratch.ID) {
+		return ErrTemporaryChildren
 	}
-	finish = false
-	var once sync.Once
-	return func() { once.Do(func() { release(); s.ops.Done() }) }, nil
+	for _, writer := range s.writers {
+		if writer.scratchID == scratch.ID {
+			return &BusyError{Reason: "scratch_busy"}
+		}
+	}
+	return nil
 }
 
 // Closure states the caller's authority. C3 authenticates the caller; the
@@ -235,6 +242,7 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	scratch, ok := s.scratches[closure.ScratchID]
 	w := s.workspaces[scratch.WorkspaceID]
 	live := s.liveCount(scratch.ID)
+	busy := s.closureBusy(scratch)
 	s.mu.Unlock()
 	if !ok {
 		return result, ErrNoScratch
@@ -248,9 +256,17 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	if live != 0 {
 		return result, ErrLiveRequests
 	}
+	if busy != nil {
+		return result, busy
+	}
 	if s.deps.beforeCloseReserve != nil {
 		s.deps.beforeCloseReserve()
 	}
+	unlock, err := s.lockTask(ctx, taskID(scratch.Scratch))
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
 	r, err := s.pool.reserve(scratch.Dir, closureReservation)
 	if err != nil {
 		return result, err
@@ -261,6 +277,10 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	scratch = s.scratches[closure.ScratchID]
 	live = s.liveCount(scratch.ID)
 	err = s.usableLocked()
+	if err == nil {
+		err = s.closureBusy(scratch)
+	}
+	pins := s.scratchPins(scratch)
 	s.mu.Unlock()
 	if err != nil {
 		return result, err
@@ -277,17 +297,26 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 			if s.pool.profile == nil {
 				return result, &UnavailableError{Reason: "no_capacity_profile"}
 			}
-			if err := s.captureReady(ctx, w, scratch.Scratch); err != nil {
+			if err := s.repairScratchTip(ctx, w, scratch); err != nil {
 				return result, err
 			}
 			if err := r.reserveCaptureBytes(); err != nil {
 				return result, err
 			}
-			observed, err := s.engine.capture(ctx, s.captureScratch(w, scratch.Scratch), scratch.AnchorTree, r, observeCapture)
+			cs := s.captureScratch(w, scratch.Scratch)
+			represented := scratch.AnchorTree
+			if scratch.ParentScratchID != (uuid.UUID{}) {
+				represented = scratch.TipTree
+				cs, err = s.privateCaptureScratch(ctx, w, scratch.Scratch)
+				if err != nil {
+					return result, err
+				}
+			}
+			observed, err := s.engine.capture(ctx, cs, represented, r, observeCapture)
 			if err != nil {
 				return result, err
 			}
-			if observed.Tree != scratch.AnchorTree {
+			if observed.Tree != represented {
 				return result, ErrUnrepresentedEdits
 			}
 			result.IgnoredEntries = observed.IgnoredEntries
@@ -297,15 +326,26 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 			return result, err
 		}
 		drafts := []ledger.Draft{{Type: ledger.TypeScratchClosed, TypeVersion: 1, Actor: closure.Actor, ContextID: scratch.ContextID, Payload: payload}}
-		for _, pin := range scratch.reportPins {
+		for _, pin := range pins {
 			unpin, err := unpinDraft(pin, scratch.ContextID)
 			if err != nil {
 				return result, err
 			}
 			drafts = append(drafts, unpin)
 		}
-		if err := s.append(ctx, drafts); err != nil {
+		s.mu.Lock()
+		before := s.retainedRefs(w.ID)
+		err = s.appendLocked(ctx, drafts)
+		after := s.retainedRefs(w.ID)
+		s.mu.Unlock()
+		if err != nil {
 			return result, err
+		}
+		for ref, retained := range before {
+			if _, keep := after[ref]; !keep {
+				// A failed post-ack release is retried by Open's CAS sweep.
+				_, _, _ = s.git.repository(context.WithoutCancel(ctx), s.colony, w.CommonDir, nil, []int{0}, "update-ref", "-d", "--end-of-options", ref, retained.object)
+			}
 		}
 	}
 	err = s.git.removeWorktree(ctx, s.colony, w.CommonDir, scratch.worktree(), s.deps.removeAll)

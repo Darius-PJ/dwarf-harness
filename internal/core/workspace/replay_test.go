@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger/appender"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
@@ -243,7 +245,7 @@ func TestReplayUnknownClosureReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.reopen(t, serviceConfig())
-	if _, err := f.svc.BeginWrite(context.Background(), s.ID); !errors.Is(err, ErrClosed) {
+	if _, err := f.svc.BeginWrite(context.Background(), testWriteBinding(s)); !errors.Is(err, ErrNoScratch) {
 		t.Fatalf("unknown reason not treated as closure: %v", err)
 	}
 }
@@ -735,4 +737,466 @@ func TestReplayUnknownPromotionFailure(t *testing.T) {
 	restart := rootRequest(s)
 	restart.RestartFrom = next.RequestID
 	assertUnavailable(t, promotionError(context.Background(), f.svc, restart), "no_validator")
+}
+
+func TestTipRepairAtOpenAndBeforeUse(t *testing.T) {
+	t.Parallel()
+	history := newGitFixture(t, "sha1")
+	for _, mode := range []string{"old_open", "absent_open", "other_open", "old_observe", "old_fork", "other_writer", "other_lease", "other_admit", "other_close", "after_ack"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			f := serviceFromHistory(t, history)
+			ctx := context.Background()
+			task := mustScratch(t, f, uuid.NewV7())
+			first := mustObserve(t, mustWriter(t, f, testWriteBinding(task)))
+			var writer *Writer
+			if mode == "old_observe" || mode == "after_ack" || mode == "other_lease" {
+				writer = mustWriter(t, f, testWriteBinding(task))
+			}
+			thirdTree := integrationTree(t, f.gitFixture, map[string]string{"foreign": "do not overwrite\n"})
+			third := strings.TrimSpace(string(gitCommand(t, f.env, f.root, nil, "commit-tree", "-m", "foreign", thirdTree)))
+			if mode == "after_ack" {
+				f.svc.deps.beforeAppend = func() {
+					gitCommand(t, f.env, f.root, nil, "update-ref", task.Branch, third)
+				}
+				acknowledged, err := writer.CommitObserved(ctx)
+				assertUnavailable(t, err, "scratch_tip_mismatch")
+				if acknowledged.ID == (uuid.UUID{}) {
+					t.Fatal("post-ack failure lost the durable observation")
+				}
+				writer.Close()
+				f.svc.deps.beforeAppend = nil
+				before := f.store.Durable()
+				report := f.reopen(t, serviceConfig())
+				if len(report.Pending) == 0 || f.store.Durable() != before {
+					t.Fatalf("Open did not retain the blocked acknowledgment: %+v", report)
+				}
+				gitCommand(t, f.env, f.root, nil, "update-ref", task.Branch, first.Commit, third)
+				repaired := mustWriter(t, f, testWriteBinding(task))
+				if repaired.Scratch().TipCommit != acknowledged.Commit {
+					t.Fatal("pre-use repair did not recover acknowledged transition")
+				}
+				return
+			}
+			switch {
+			case mode == "absent_open":
+				gitCommand(t, f.env, f.root, nil, "update-ref", "-d", task.Branch, first.Commit)
+			case strings.HasPrefix(mode, "other_"):
+				gitCommand(t, f.env, f.root, nil, "update-ref", task.Branch, third, first.Commit)
+			default:
+				gitCommand(t, f.env, f.root, nil, "update-ref", task.Branch, task.BaseCommit, first.Commit)
+			}
+			before := f.store.Durable()
+			switch mode {
+			case "old_open", "absent_open", "other_open":
+				report := f.reopen(t, serviceConfig())
+				if (len(report.Pending) != 0) != (mode == "other_open") || f.store.Durable() != before {
+					t.Fatalf("tip reconciliation: %+v", report)
+				}
+			case "old_observe":
+				next := mustObserve(t, writer)
+				if parent := strings.TrimSpace(string(gitCommand(t, f.env, f.root, nil, "rev-parse", next.Commit+"^"))); parent != first.Commit {
+					t.Fatal("observation read stale branch rather than recorded tip")
+				}
+				first = next
+			case "old_fork":
+				b := testWriteBinding(task)
+				b.ContextID = uuid.NewV7()
+				temporary := mustWriter(t, f, b)
+				if temporary.Scratch().BaseCommit != first.Commit {
+					t.Fatal("temporary fork ignored repaired tip")
+				}
+			case "other_writer":
+				_, err := f.svc.BeginWrite(ctx, testWriteBinding(task))
+				assertUnavailable(t, err, "scratch_tip_mismatch")
+			case "other_lease":
+				_, err := writer.Lease(ctx)
+				assertUnavailable(t, err, "scratch_tip_mismatch")
+			case "other_admit":
+				assertUnavailable(t, promotionError(ctx, f.svc, rootRequest(task)), "scratch_tip_mismatch")
+			case "other_close":
+				_, err := f.svc.CloseScratch(ctx, ownerClosure(task))
+				assertUnavailable(t, err, "scratch_tip_mismatch")
+			}
+			want := first.Commit
+			if strings.HasPrefix(mode, "other_") {
+				want = third
+			}
+			got, err := f.git.readRef(ctx, f.colony, f.p.CommonDir, task.Branch, 40)
+			if err != nil || got != want {
+				t.Fatalf("tip was not repaired safely: %s want %s: %v", got, want, err)
+			}
+		})
+	}
+}
+
+func TestScratchCommitAndMergeRefsRetained(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	ctx := context.Background()
+	task := mustScratch(t, f, uuid.NewV7())
+	first := mustObserve(t, mustWriter(t, f, testWriteBinding(task)))
+	b := testWriteBinding(task)
+	b.ContextID = uuid.NewV7()
+	writer := mustWriter(t, f, b)
+	temporary := writer.Scratch()
+	writeTestFile(t, filepath.Join(temporary.Dir, "private.txt"), []byte("retained branch\n"))
+	source := mustObserve(t, writer)
+	second := mustObserve(t, mustWriter(t, f, testWriteBinding(task)))
+	firstRef := "refs/dwarf-harness/scratch-commits/" + first.ID.String()
+	sourceRef := "refs/dwarf-harness/scratch-commits/" + source.ID.String()
+	gitCommand(t, f.env, f.root, nil, "update-ref", "-d", firstRef, first.Commit)
+	stray := "refs/dwarf-harness/scratch-commits/" + uuid.NewV7().String()
+	gitCommand(t, f.env, f.root, nil, "update-ref", stray, task.BaseCommit)
+	before := f.store.Durable()
+	if report := f.reopen(t, serviceConfig()); len(report.Pending) != 0 || f.store.Durable() != before {
+		t.Fatalf("retention replay: %+v", report)
+	}
+	refs, err := f.svc.listRefs(ctx, f.svc.workspaces[f.w.ID], "refs/dwarf-harness/scratch-commits/")
+	if err != nil || refs[firstRef] != first.Commit || refs[stray] != "" || len(refs) != 3 {
+		t.Fatalf("open observation/fork refs not retained: %v %v", refs, err)
+	}
+	if _, err := f.svc.CloseScratch(ctx, ownerClosure(temporary)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.git.readRef(ctx, f.colony, f.p.CommonDir, sourceRef, 40)
+	if err != nil || got != "" {
+		t.Fatalf("closed observation ref leaked: %s %v", got, err)
+	}
+	gitCommand(t, f.env, f.root, nil, "gc", "--prune=now")
+	if got := string(gitCommand(t, f.env, f.root, nil, "show", source.Commit+":private.txt")); got != "retained branch\n" {
+		t.Fatal("removal lost temporary private history")
+	}
+	gitCommand(t, f.env, f.root, nil, "update-ref", firstRef, task.BaseCommit, first.Commit)
+	report := f.reopen(t, serviceConfig())
+	if len(report.Pending) == 0 {
+		t.Fatal("foreign retention ref silently accepted")
+	}
+	if got, _ := f.git.readRef(ctx, f.colony, f.p.CommonDir, firstRef, 40); got != task.BaseCommit {
+		t.Fatal("foreign retention ref overwritten")
+	}
+	gitCommand(t, f.env, f.root, nil, "update-ref", firstRef, first.Commit, task.BaseCommit)
+	if _, err := f.svc.CloseScratch(ctx, ownerClosure(task)); err != nil {
+		t.Fatal(err)
+	}
+	refs, err = f.svc.listRefs(ctx, f.svc.workspaces[f.w.ID], "refs/dwarf-harness/scratch-commits/")
+	if err != nil || len(refs) != 0 {
+		t.Fatalf("closed parent refs leaked: %v %v", refs, err)
+	}
+	gitCommand(t, f.env, f.root, nil, "cat-file", "-e", second.Commit)
+}
+
+func TestOpenFailsClosedOnF2_07RuleBreak(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	ctx := context.Background()
+	task, author := mustScratch(t, f, uuid.NewV7()), mustScratch(t, f, uuid.NewV7())
+	closed := mustScratch(t, f, uuid.NewV7())
+	if _, err := f.svc.CloseScratch(ctx, ownerClosure(closed)); err != nil {
+		t.Fatal(err)
+	}
+	parentObservation := mustObserve(t, mustWriter(t, f, testWriteBinding(task)))
+	b := testWriteBinding(task)
+	b.ContextID = uuid.NewV7()
+	siblingWriter := mustWriter(t, f, b)
+	sibling := siblingWriter.Scratch()
+	siblingWriter.Close()
+	b.ContextID, b.WriterID = author.ContextID, uuid.NewV7()
+	writer := mustWriter(t, f, b)
+	temporary := writer.Scratch()
+	writeTestFile(t, filepath.Join(temporary.Dir, "work.txt"), []byte("first\n"))
+	first := mustObserve(t, writer)
+	b.WriterID, b.ResumeScratchID = uuid.NewV7(), temporary.ID
+	writer = mustWriter(t, f, b)
+	writeTestFile(t, filepath.Join(temporary.Dir, "work.txt"), []byte("second\n"))
+	second := mustObserve(t, writer)
+	if _, err := f.svc.CloseScratch(ctx, ownerClosure(temporary)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.CloseScratch(ctx, ownerClosure(sibling)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.CloseScratch(ctx, ownerClosure(task)); err != nil {
+		t.Fatal(err)
+	}
+	commits := serviceCommits(t, f.store)
+	creationAt, observationAt, closureAt := -1, -1, -1
+	var parent ledger.ScratchChanged
+	for i, commit := range commits {
+		for _, record := range commit.Records {
+			switch record.Type {
+			case ledger.TypeScratchCreated:
+				p, _ := ledger.DecodeScratchCreated(record.Payload)
+				if p.ScratchID == temporary.ID {
+					creationAt = i
+				}
+			case ledger.TypeScratchChanged:
+				p, _ := ledger.DecodeScratchChanged(record.Payload)
+				if p.ObservationID == second.ID {
+					observationAt = i
+				}
+				if p.ObservationID == parentObservation.ID {
+					parent = p
+				}
+			case ledger.TypeScratchClosed:
+				p, _ := ledger.DecodeScratchClosed(record.Payload)
+				if p.ScratchID == temporary.ID {
+					closureAt = i
+				}
+			}
+		}
+	}
+	if creationAt < 0 || observationAt < 0 || closureAt < 0 {
+		t.Fatal("history lacks temporary lifecycle")
+	}
+	rows := []string{
+		"parent_unknown", "parent_closed", "parent_nested", "parent_same_context", "parent_fork_commit", "parent_fork_tree",
+		"observation_actor", "observation_context", "observation_refs", "observation_pin_missing", "observation_pin_id", "observation_pin_refs", "observation_pin_not_immediate",
+		"observation_id_reused", "observation_id_reused_closed", "observation_unknown", "observation_closed", "observation_workspace", "observation_author", "observation_parent",
+		"observation_previous_commit", "observation_previous_tree", "observation_revision", "observation_digest", "observation_oid_length",
+		"observation_changed_paths",
+		"observation_unpin_missing", "observation_unpin_wrong", "observation_unpin_before", "observation_unpin_repeated", "observation_unpin_early",
+		"closure_child_open", "closure_unpin_missing", "closure_unpin_before", "closure_unpin_repeated",
+	}
+	for _, name := range rows {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			at := observationAt
+			if strings.HasPrefix(name, "parent_") {
+				at = creationAt
+			}
+			if strings.HasPrefix(name, "closure_") {
+				at = closureAt
+			}
+			if name == "observation_closed" || name == "observation_id_reused_closed" {
+				at = closureAt + 1
+			}
+			source := at
+			if strings.HasPrefix(name, "observation_") {
+				source = observationAt
+			}
+			drafts := make([]ledger.Draft, len(commits[source].Records))
+			for i, record := range commits[source].Records {
+				drafts[i] = record.Draft
+			}
+			if strings.HasPrefix(name, "parent_") {
+				p, _ := ledger.DecodeScratchCreated(drafts[0].Payload)
+				switch name {
+				case "parent_unknown":
+					p.ParentScratchID = uuid.NewV7()
+				case "parent_closed":
+					p.ParentScratchID = closed.ID
+				case "parent_nested":
+					p.ParentScratchID = sibling.ID
+				case "parent_same_context":
+					p.ContextID, drafts[0].ContextID = task.ContextID, task.ContextID
+				case "parent_fork_commit":
+					p.BaseCommit = task.BaseCommit
+				case "parent_fork_tree":
+					p.AnchorTree = strings.Repeat("1", 40)
+				}
+				drafts[0].Payload = encoded(t, p)
+			} else if strings.HasPrefix(name, "observation_") {
+				p, _ := ledger.DecodeScratchChanged(drafts[0].Payload)
+				switch name {
+				case "observation_actor":
+					drafts[0].Actor = ledger.ActorAgent
+				case "observation_context":
+					drafts[0].ContextID = uuid.NewV7()
+				case "observation_refs":
+					drafts[0].BodyRefs = nil
+				case "observation_id_reused":
+					p.ObservationID = first.ID
+				case "observation_id_reused_closed":
+					p = parent
+					p.ObservationID, p.PinID = first.ID, uuid.NewV7()
+					p.PreviousCommit, p.ScratchCommit = parent.ScratchCommit, strings.Repeat("2", 40)
+					drafts, _ = observationDrafts(p, parent.PinID)
+				case "observation_closed":
+					p.ObservationID, p.PinID = uuid.NewV7(), uuid.NewV7()
+					p.PreviousCommit, p.PreviousTree = second.Commit, second.Tree
+					p.ScratchCommit, p.ScratchTree = strings.Repeat("2", 40), first.Tree
+					drafts, _ = observationDrafts(p, uuid.UUID{})
+				case "observation_unknown":
+					p.ScratchID = uuid.NewV7()
+				case "observation_workspace":
+					p.WorkspaceID = uuid.NewV7()
+				case "observation_author":
+					p.ContextID, drafts[0].ContextID = task.ContextID, task.ContextID
+				case "observation_parent":
+					p.ParentScratchID = uuid.UUID{}
+				case "observation_previous_commit":
+					p.PreviousCommit = task.BaseCommit
+				case "observation_previous_tree":
+					p.PreviousTree = strings.Repeat("1", 40)
+				case "observation_changed_paths":
+					p.ChangedPaths = nil
+				case "observation_revision":
+					p.InputsRevision++
+				case "observation_digest":
+					p.CaptureInputsSHA256 = ledger.Digest{1}
+				case "observation_oid_length":
+					p.ScratchCommit = strings.Repeat("1", 64)
+				}
+				drafts[0].Payload = encoded(t, p)
+				switch name {
+				case "observation_pin_missing":
+					drafts = append(drafts[:1], drafts[2:]...)
+				case "observation_pin_id":
+					drafts[1].Payload = encoded(t, ledger.BodyPin{PinID: uuid.NewV7()})
+				case "observation_pin_refs":
+					drafts[1].BodyRefs = []ledger.Digest{parent.ManifestSHA256}
+				case "observation_pin_not_immediate":
+					drafts[1], drafts[2] = drafts[2], drafts[1]
+				case "observation_unpin_missing":
+					drafts = drafts[:2]
+				case "observation_unpin_wrong":
+					drafts[2].Payload = encoded(t, ledger.BodyUnpin{PinID: parent.PinID})
+				case "observation_unpin_before":
+					drafts = []ledger.Draft{drafts[2], drafts[0], drafts[1]}
+				case "observation_unpin_repeated":
+					drafts = append(drafts, drafts[2])
+				case "observation_unpin_early":
+					drafts = drafts[2:]
+				}
+			} else {
+				switch name {
+				case "closure_child_open":
+					drafts[0].Payload = encoded(t, ledger.ScratchClosed{ScratchID: task.ID, ContextID: task.ContextID, Reason: "abandoned"})
+					drafts[0].ContextID = task.ContextID
+					drafts[1], _ = unpinDraft(parent.PinID, task.ContextID)
+				case "closure_unpin_missing":
+					drafts = drafts[:1]
+				case "closure_unpin_before":
+					drafts[0], drafts[1] = drafts[1], drafts[0]
+				case "closure_unpin_repeated":
+					drafts = append(drafts, drafts[1])
+				}
+			}
+			colony := t.TempDir()
+			store, err := ledgerstore.Create(colony, ledger.Defined())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			publish := func(ds []ledger.Draft) {
+				for _, draft := range ds {
+					for _, digest := range draft.BodyRefs {
+						body, err := f.store.ReadBody(ctx, digest)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, _, err := store.PublishBody(ctx, bytes.NewReader(body)); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+			for _, commit := range commits[:at] {
+				var ds []ledger.Draft
+				for _, record := range commit.Records {
+					ds = append(ds, record.Draft)
+				}
+				publish(ds)
+				if _, err := store.Append(ctx, ds); err != nil {
+					t.Fatal(err)
+				}
+			}
+			publish(drafts)
+			svc, _, err := openService(ctx, store, colony, serviceConfig(), serviceDeps{environ: func() []string { return f.env }})
+			if err != nil {
+				t.Fatalf("valid prefix: %v", err)
+			}
+			before := store.Durable()
+			if err := svc.append(ctx, drafts); !errors.Is(err, ErrInvalid) || store.Durable() != before {
+				t.Fatalf("producer accepted rule break: %v", err)
+			}
+			if err := svc.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ack, err := store.Append(ctx, drafts)
+			if name == "observation_unpin_repeated" || name == "closure_unpin_repeated" {
+				if !errors.Is(err, appender.ErrRefused) || store.Durable() != before {
+					t.Fatalf("body store accepted a repeated unpin: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("store refused envelope-valid history: %v", err)
+			}
+			reopened, _, err := openService(ctx, store, colony, serviceConfig(), serviceDeps{environ: func() []string { return f.env }})
+			if reopened != nil {
+				reopened.Close()
+			}
+			var inconsistent *InconsistentError
+			if !errors.As(err, &inconsistent) || inconsistent.Seq != ack.First {
+				t.Fatalf("want inconsistent at %d: %v", ack.First, err)
+			}
+		})
+	}
+}
+
+func TestFrozenWorkspaceGoldensReplay(t *testing.T) {
+	t.Parallel()
+	history := newGitFixture(t, "sha1")
+	for _, row := range []struct {
+		name                                        string
+		workspaces, scratches, open, requests, live int
+	}{{"05", 2, 2, 1, 0, 0}, {"06", 1, 2, 2, 4, 2}} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			logDir := filepath.Join(t.TempDir(), "log")
+			source := filepath.Join("..", "..", "..", "contract", "ledger", "testdata", "f2", row.name, "log")
+			if err := os.CopyFS(logDir, os.DirFS(source)); err != nil {
+				t.Fatal(err)
+			}
+			first, _, _ := bytes.Cut(readTestFile(t, filepath.Join(logDir, "00000000000000000001.jsonl")), []byte{'\n'})
+			_, envelope, ok := bytes.Cut(first, []byte{'\t'})
+			var header struct {
+				Colony uuid.UUID `json:"colony_id"`
+			}
+			if !ok {
+				t.Fatal("golden lacks a framed envelope")
+			}
+			if err := json.Unmarshal(envelope, &header); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ledger.Check(logDir, header.Colony); err != nil {
+				t.Fatal(err)
+			}
+			reader, err := ledger.OpenReader(logDir, ledger.ReadOptions{Colony: header.Colony, Through: ledger.ToEnd, Consume: workspaceConsumption(), AllTypes: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			fixture := history
+			fixture.colony = filepath.Join(t.TempDir(), "colony")
+			f := openFixtureService(t, fixture)
+			for {
+				commit, err := reader.Next()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				drafts := make([]ledger.Draft, len(commit.Records))
+				for i, record := range commit.Records {
+					drafts[i] = record.Draft
+				}
+				if _, err := f.svc.apply(context.Background(), drafts, commit.First, false); err != nil {
+					t.Fatalf("frozen F2-%s no longer replays: %v", row.name, err)
+				}
+			}
+			live := 0
+			for _, request := range f.svc.requests {
+				if request.ending == "" {
+					live++
+				}
+			}
+			if len(f.svc.workspaces) != row.workspaces || len(f.svc.scratches) != row.scratches || len(f.svc.openScratches) != row.open || len(f.svc.requests) != row.requests || live != row.live {
+				t.Fatalf("F2-%s projection: workspaces=%d scratches=%d open=%d requests=%d live=%d", row.name, len(f.svc.workspaces), len(f.svc.scratches), len(f.svc.openScratches), len(f.svc.requests), live)
+			}
+		})
+	}
 }

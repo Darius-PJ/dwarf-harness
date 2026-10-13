@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -173,7 +174,20 @@ func TestCloseScratchRefusesUnrepresentedEdits(t *testing.T) {
 				gitCommand(t, f.env, s.Dir, nil, "commit", "--allow-empty", "-m", "same represented tree")
 				commit = strings.TrimSpace(string(gitCommand(t, f.env, s.Dir, nil, "rev-parse", "HEAD")))
 			}
-			if _, err := f.svc.CloseScratch(context.Background(), ownerClosure(s)); err != nil {
+			before := f.store.Durable()
+			_, err := f.svc.CloseScratch(context.Background(), ownerClosure(s))
+			if moved {
+				assertUnavailable(t, err, "scratch_tip_mismatch")
+				branch, readErr := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, s.Branch, 40)
+				if readErr != nil || branch != commit || f.store.Durable() != before {
+					t.Fatalf("mismatched branch was changed or closed: %q %v", branch, readErr)
+				}
+				if _, err := os.Stat(s.Dir); err != nil {
+					t.Fatalf("mismatched scratch removed: %v", err)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err := os.Stat(s.Dir); !os.IsNotExist(err) {
@@ -238,7 +252,7 @@ func TestCloseScratchBusy(t *testing.T) {
 	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
-	release, err := f.svc.BeginWrite(context.Background(), s.ID)
+	release, err := leaseTestWriter(context.Background(), f.svc, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,6 +357,126 @@ func TestCloseScratchWhileRequestsLive(t *testing.T) {
 			assertRequestEffects(t, f, before)
 			if _, err := os.Stat(scratch.Dir); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestTemporaryClosureRepresentation(t *testing.T) {
+	t.Parallel()
+	history := newGitFixture(t, "sha1")
+	for _, mode := range []string{"observed", "dirty", "foreign", "pending_child", "report_order"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			f := serviceFromHistory(t, history)
+			ctx := context.Background()
+			task := mustScratch(t, f, uuid.NewV7())
+			if mode == "report_order" {
+				writeTestFile(t, filepath.Join(task.Dir, "base.txt"), []byte("task\ntwo\n"))
+				mustAdmit(t, f, rootRequest(task))
+				advanceMain(t, f, map[string]string{"base.txt": "other\ntwo\n"})
+				mustIntegrate(t, f)
+				writeTestFile(t, filepath.Join(task.Dir, "base.txt"), []byte("one\ntwo\n"))
+				mustObserve(t, mustWriter(t, f, testWriteBinding(task)))
+				before := serviceCommits(t, f.store)
+				var want []uuid.UUID
+				for _, commit := range before {
+					for _, record := range commit.Records {
+						if record.Type == ledger.TypeBodyPin && record.ContextID == task.ContextID {
+							p, _ := ledger.DecodeBodyPin(record.Payload)
+							want = append(want, p.PinID)
+						}
+						if record.Type == ledger.TypeBodyUnpin {
+							p, _ := ledger.DecodeBodyUnpin(record.Payload)
+							want = slices.DeleteFunc(want, func(id uuid.UUID) bool { return id == p.PinID })
+						}
+					}
+				}
+				if len(want) != 2 {
+					t.Fatalf("expected active conflict and observation pins, got %v", want)
+				}
+				if _, err := f.svc.CloseScratch(ctx, ownerClosure(task)); err != nil {
+					t.Fatal(err)
+				}
+				commits := serviceCommits(t, f.store)
+				last := commits[len(commits)-1]
+				var got []uuid.UUID
+				for _, record := range last.Records[1:] {
+					p, err := ledger.DecodeBodyUnpin(record.Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got = append(got, p.PinID)
+				}
+				if !slices.Equal(got, want) {
+					t.Fatalf("closure unpins not in original pin order: %v want %v", got, want)
+				}
+				f.reopen(t, serviceConfig())
+				return
+			}
+			b := testWriteBinding(task)
+			b.ContextID = uuid.NewV7()
+			if mode == "pending_child" {
+				entered, resume := make(chan struct{}), make(chan struct{})
+				f.svc.deps.beforeAppend = func() { close(entered); <-resume }
+				done := make(chan error, 1)
+				go func() {
+					writer, err := f.svc.BeginWrite(ctx, b)
+					if writer != nil {
+						writer.Close()
+					}
+					done <- err
+				}()
+				<-entered
+				_, err := f.svc.CloseScratch(ctx, ownerClosure(task))
+				close(resume)
+				if !errors.Is(err, ErrTemporaryChildren) {
+					t.Fatalf("parent closed while child creation was in flight: %v", err)
+				}
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			writer := mustWriter(t, f, b)
+			temporary := writer.Scratch()
+			writeTestFile(t, filepath.Join(temporary.Dir, "work.txt"), []byte("private work\n"))
+			observation := mustObserve(t, writer)
+			closure := Closure{ScratchID: temporary.ID, Actor: ledger.ActorAgent, ContextID: b.ContextID, Reason: "abandoned"}
+			if mode == "dirty" {
+				writeTestFile(t, filepath.Join(temporary.Dir, "work.txt"), []byte("unobserved\n"))
+				_, err := f.svc.CloseScratch(ctx, closure)
+				if !errors.Is(err, ErrUnrepresentedEdits) {
+					t.Fatalf("dirty temporary discarded: %v", err)
+				}
+				return
+			}
+			if mode == "foreign" {
+				closure.ContextID = uuid.NewV7()
+				_, err := f.svc.CloseScratch(ctx, closure)
+				if !errors.Is(err, ErrNotBound) {
+					t.Fatalf("foreign author discarded temporary: %v", err)
+				}
+				return
+			}
+			before := f.store.Durable()
+			if _, err := f.svc.CloseScratch(ctx, closure); err != nil {
+				t.Fatal(err)
+			}
+			if f.store.Durable() != before+2 {
+				t.Fatal("temporary closure omitted its observation unpin")
+			}
+			if _, err := os.Stat(temporary.Dir); !os.IsNotExist(err) {
+				t.Fatalf("temporary directory remains: %v", err)
+			}
+			if got, err := f.git.readRef(ctx, f.colony, f.p.CommonDir, temporary.Branch, 40); err != nil || got != observation.Commit {
+				t.Fatalf("abandonment lost the moved private branch: %s %v", got, err)
+			}
+			if _, err := f.svc.CloseScratch(ctx, closure); err != nil || f.store.Durable() != before+2 {
+				t.Fatalf("removal retry recorded twice: %v", err)
+			}
+			if _, err := f.svc.CloseScratch(ctx, ownerClosure(task)); err != nil {
+				t.Fatalf("parent remained blocked: %v", err)
 			}
 		})
 	}

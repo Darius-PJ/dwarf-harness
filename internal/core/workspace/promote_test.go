@@ -46,7 +46,7 @@ func TestRequestPromotionBusyBeforeUnavailable(t *testing.T) {
 	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
-	release, err := f.svc.BeginWrite(context.Background(), s.ID)
+	release, err := leaseTestWriter(context.Background(), f.svc, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestRequestPromotionBinding(t *testing.T) {
 	}
 	s = mustScratch(t, f, c)
 	f.reopen(t, Config{})
-	release, err := f.svc.BeginWrite(ctx, s.ID)
+	release, err := leaseTestWriter(ctx, f.svc, s)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -45,7 +45,7 @@ func TestCloseRemovalPending(t *testing.T) {
 			if f.store.Durable() != before+1 {
 				t.Fatal("closure was not durable before failed removal")
 			}
-			if _, err := f.svc.BeginWrite(context.Background(), s.ID); !errors.Is(err, ErrClosed) {
+			if _, err := f.svc.BeginWrite(context.Background(), testWriteBinding(s)); !errors.Is(err, ErrNoScratch) {
 				t.Fatalf("closed scratch accepts writes: %v", err)
 			}
 			if err := syscall.CloseHandle(handle); err != nil {

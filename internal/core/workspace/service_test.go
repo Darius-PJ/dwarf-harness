@@ -285,7 +285,7 @@ func TestUncertainAppendPoisons(t *testing.T) {
 				func() error { _, err := f.svc.Register(context.Background(), f.p); return err },
 				func() error { _, err := f.svc.UpdateInputs(context.Background(), f.w.ID, 1, f.p); return err },
 				func() error { _, err := f.svc.Scratch(context.Background(), c, f.w.ID); return err },
-				func() error { _, err := f.svc.BeginWrite(context.Background(), uuid.NewV7()); return err },
+				func() error { _, err := f.svc.BeginWrite(context.Background(), WriteBinding{}); return err },
 				func() error { _, err := f.svc.CloseScratch(context.Background(), Closure{}); return err },
 				func() error {
 					return promotionError(context.Background(), f.svc, rootRequest(Scratch{ContextID: c, WorkspaceID: f.w.ID}))
@@ -345,20 +345,24 @@ func TestCurrentInputsUnavailable(t *testing.T) {
 }
 
 func TestServiceCloseWaitsForWriters(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
-	release, err := f.svc.BeginWrite(context.Background(), s.ID)
+	release, err := leaseTestWriter(context.Background(), f.svc, s)
 	if err != nil {
 		t.Fatal(err)
 	}
+	started := make(chan struct{})
+	f.svc.deps.afterCloseStart = func() { close(started) }
 	done := make(chan error, 1)
 	go func() { done <- f.svc.Close() }()
+	<-started
 	// The write lease is itself an in-progress operation, not merely a call
 	// that ended when BeginWrite returned.
 	select {
 	case err := <-done:
 		t.Fatalf("Close passed a live writer: %v", err)
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
 	writeTestFile(t, filepath.Join(s.Dir, "base.txt"), []byte("writer completed\n"))
 	release()
@@ -673,5 +677,197 @@ func TestRequestPoisonReplay(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestWriterCloseAndServiceClose(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	ctx := context.Background()
+	task := mustScratch(t, f, uuid.NewV7())
+	b := testWriteBinding(task)
+	writer := mustWriter(t, f, b)
+	for _, forged := range []*Writer{nil, {}, {service: f.svc}} {
+		if _, err := forged.Lease(ctx); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("forged lease: %v", err)
+		}
+		if _, err := forged.CommitObserved(ctx); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("forged observation: %v", err)
+		}
+		if forged.Scratch() != (Scratch{}) {
+			t.Fatal("forged handle exposed directory")
+		}
+		forged.Close()
+	}
+	copied := *writer
+	if _, err := copied.Lease(ctx); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("copied token became authority: %v", err)
+	}
+	copied.Close()
+	release, err := writer.Lease(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	writer.Close()
+	if writer.Scratch() != (Scratch{}) {
+		t.Fatal("closed handle exposes directory")
+	}
+	if _, err := writer.Lease(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed lease: %v", err)
+	}
+	if _, err := writer.CommitObserved(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed observation: %v", err)
+	}
+	if _, err := f.svc.BeginWrite(ctx, b); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed live ID revived: %v", err)
+	}
+	b.WriterID = uuid.NewV7()
+	_, err = f.svc.BeginWrite(ctx, b)
+	assertBusy(t, err, "context_busy")
+	release()
+	release()
+	writer = mustWriter(t, f, b)
+	started := make(chan struct{})
+	f.svc.deps.afterCloseStart = func() { close(started) }
+	done := make(chan error, 1)
+	go func() { done <- f.svc.Close() }()
+	<-started
+	if _, err := f.svc.BeginWrite(ctx, testWriteBinding(task)); !errors.Is(err, ErrClosed) {
+		t.Fatalf("shutdown accepted new routing: %v", err)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("shutdown passed logical writer: %v", err)
+	default:
+	}
+	release, err = writer.Lease(ctx)
+	if err != nil {
+		t.Fatalf("owned writer could not finish during shutdown: %v", err)
+	}
+	writeTestFile(t, filepath.Join(task.Dir, "finished.txt"), []byte("finished while closing\n"))
+	release()
+	observation := mustObserve(t, writer)
+	if got := string(gitCommand(t, f.env, f.root, nil, "show", observation.Commit+":finished.txt")); got != "finished while closing\n" {
+		t.Fatal("shutdown lost the writer's observation")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"cancelled_append", "uncertain_absent", "uncertain_committed"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			fixture := serviceFromHistory(t, f.gitFixture)
+			task := mustScratch(t, fixture, uuid.NewV7())
+			writer := mustWriter(t, fixture, testWriteBinding(task))
+			writeTestFile(t, filepath.Join(task.Dir, "observed.txt"), []byte("survives uncertainty\n"))
+			before := fixture.store.Durable()
+			observeCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			if mode == "cancelled_append" {
+				fixture.svc.deps.beforeAppend = cancel
+			} else {
+				fixture.svc.store = &uncertainStore{Store: fixture.store, persist: mode == "uncertain_committed"}
+			}
+			result, err := writer.CommitObserved(observeCtx)
+			if result != (Observation{}) {
+				t.Fatal("unacknowledged append returned an observation")
+			}
+			if mode == "cancelled_append" {
+				if !errors.Is(err, context.Canceled) || fixture.store.Durable() != before {
+					t.Fatalf("definite refusal changed the log: %v", err)
+				}
+				release, err := writer.Lease(ctx)
+				if err != nil {
+					t.Fatalf("refused observation did not thaw: %v", err)
+				}
+				release()
+			} else {
+				if !errors.Is(err, ErrPoisoned) || !errors.Is(err, appender.ErrUncertain) {
+					t.Fatalf("uncertain append did not poison: %v", err)
+				}
+				if writer.Scratch() != (Scratch{}) {
+					t.Fatal("poisoned writer exposed directory")
+				}
+				if _, err := writer.Lease(ctx); !errors.Is(err, ErrPoisoned) {
+					t.Fatalf("poisoned lease: %v", err)
+				}
+				if _, err := writer.CommitObserved(ctx); !errors.Is(err, ErrPoisoned) {
+					t.Fatalf("poisoned observation: %v", err)
+				}
+			}
+			writer.Close()
+			writer.Close()
+			refs, err := fixture.svc.listRefs(ctx, fixture.svc.workspaces[fixture.w.ID], "refs/dwarf-harness/scratch-commits/")
+			wantRefs := 1
+			if mode == "cancelled_append" {
+				wantRefs = 0
+			}
+			if err != nil || len(refs) != wantRefs {
+				t.Fatalf("pre-recovery retention: %v %v", refs, err)
+			}
+			branch, err := fixture.git.readRef(ctx, fixture.colony, fixture.p.CommonDir, task.Branch, 40)
+			if err != nil || branch != task.BaseCommit {
+				t.Fatalf("unacknowledged branch moved: %s %v", branch, err)
+			}
+			report := fixture.reopen(t, serviceConfig())
+			if len(report.Pending) != 0 {
+				t.Fatal(report.Pending)
+			}
+			projected := fixture.svc.scratches[task.ID]
+			refs, err = fixture.svc.listRefs(ctx, fixture.svc.workspaces[fixture.w.ID], "refs/dwarf-harness/scratch-commits/")
+			if mode == "uncertain_committed" {
+				if fixture.store.Durable() != before+2 || projected.ObservationID == (uuid.UUID{}) || len(refs) != 1 || err != nil {
+					t.Fatalf("recovery lost committed observation: %+v %v %v", projected, refs, err)
+				}
+			} else if fixture.store.Durable() != before || projected.ObservationID != (uuid.UUID{}) || len(refs) != 0 || err != nil {
+				t.Fatalf("recovery invented an observation: %+v %v %v", projected, refs, err)
+			}
+			branch, err = fixture.git.readRef(ctx, fixture.colony, fixture.p.CommonDir, task.Branch, 40)
+			if err != nil || branch != projected.TipCommit {
+				t.Fatalf("recovery failed tip projection: %s %v", branch, err)
+			}
+		})
+	}
+}
+
+func TestWriterObservationWaitsAndThaws(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	task := mustScratch(t, f, uuid.NewV7())
+	writer := mustWriter(t, f, testWriteBinding(task))
+	release, err := writer.Lease(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen := make(chan struct{})
+	f.svc.deps.afterWriterFreeze = func() { close(frozen) }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	before := f.store.Durable()
+	go func() { _, err := writer.CommitObserved(ctx); done <- err }()
+	<-frozen
+	cancelled, cancelLease := context.WithCancel(context.Background())
+	cancelLease()
+	if _, err := writer.Lease(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lease escaped observing writer: %v", err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) || f.store.Durable() != before {
+		t.Fatalf("cancelled observation acknowledged work: %v", err)
+	}
+	release()
+	f.svc.deps.afterWriterFreeze = nil
+	lease, err := writer.Lease(context.Background())
+	if err != nil {
+		t.Fatalf("failed observation did not thaw: %v", err)
+	}
+	writeTestFile(t, filepath.Join(task.Dir, "later.txt"), []byte("later\n"))
+	lease()
+	if _, err := writer.CommitObserved(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Lease(context.Background()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("successful observation allowed another edit: %v", err)
 	}
 }

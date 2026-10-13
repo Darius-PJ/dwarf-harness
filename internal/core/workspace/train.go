@@ -310,6 +310,18 @@ func (s *Service) retainedRefs(workspaceID uuid.UUID) map[string]retainedRef {
 			refs["refs/dwarf-harness/generations/"+g.GenerationID.String()] = retainedRef{g.DerivedCommit, "generation_missing " + g.GenerationID.String()}
 		}
 	}
+	// Open parents retain all their observations, including each open child's
+	// fork. A parent cannot close while such a child remains open.
+	for id := range s.openScratches {
+		scratch := s.scratches[id]
+		if scratch.WorkspaceID != workspaceID {
+			continue
+		}
+		for _, observationID := range scratch.observationIDs {
+			observation := s.observations[observationID]
+			refs["refs/dwarf-harness/scratch-commits/"+observationID.String()] = retainedRef{observation.record.ScratchCommit, "observation_missing " + observationID.String()}
+		}
+	}
 	return refs
 }
 
@@ -317,7 +329,7 @@ func (s *Service) retainedRefs(workspaceID uuid.UUID) map[string]retainedRef {
 // every removal and restoration uses CAS and writes no ledger record.
 func (s *Service) sweepRequestRefs(ctx context.Context, w workspaceState, report *Reconciliation) {
 	retained := s.retainedRefs(w.ID)
-	for _, prefix := range []string{"refs/dwarf-harness/captures/", "refs/dwarf-harness/generations/"} {
+	for _, prefix := range []string{"refs/dwarf-harness/captures/", "refs/dwarf-harness/generations/", "refs/dwarf-harness/scratch-commits/"} {
 		refs, err := s.listRefs(ctx, w, prefix)
 		if err != nil {
 			report.Pending = append(report.Pending, fmt.Sprintf("%s: %v", prefix, err))

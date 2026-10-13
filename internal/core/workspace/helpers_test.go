@@ -146,7 +146,12 @@ func serviceConfig() Config {
 
 func newUnregisteredService(t *testing.T) *serviceFixture {
 	t.Helper()
-	f := &serviceFixture{gitFixture: newGitFixture(t, "sha1")}
+	return openFixtureService(t, newGitFixture(t, "sha1"))
+}
+
+func openFixtureService(t *testing.T, fixture gitFixture) *serviceFixture {
+	t.Helper()
+	f := &serviceFixture{gitFixture: fixture}
 	var err error
 	f.store, err = ledgerstore.Create(f.colony, ledger.Defined())
 	if err != nil {
@@ -258,4 +263,57 @@ func assertRequestEffects(t *testing.T, f *serviceFixture, before requestEffects
 	if after := snapshotRequestEffects(t, f); !reflect.DeepEqual(before, after) {
 		t.Fatalf("request changed effects: before %+v after %+v", before, after)
 	}
+}
+
+func testWriteBinding(scratch Scratch) WriteBinding {
+	agent := uuid.NewV7()
+	return WriteBinding{WriterID: uuid.NewV7(), ContextID: scratch.ContextID, AgentID: agent, TaskAgentID: agent, TaskScratchID: scratch.ID}
+}
+
+func leaseTestWriter(ctx context.Context, service *Service, scratch Scratch) (func(), error) {
+	writer, err := service.BeginWrite(ctx, testWriteBinding(scratch))
+	if err != nil {
+		return nil, err
+	}
+	release, err := writer.Lease(ctx)
+	if err != nil {
+		writer.Close()
+		return nil, err
+	}
+	return func() { release(); writer.Close() }, nil
+}
+
+func mustWriter(t *testing.T, f *serviceFixture, binding WriteBinding) *Writer {
+	t.Helper()
+	writer, err := f.svc.BeginWrite(context.Background(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(writer.Close)
+	return writer
+}
+
+func mustObserve(t *testing.T, writer *Writer) Observation {
+	t.Helper()
+	observation, err := writer.CommitObserved(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	return observation
+}
+
+func serviceFromHistory(t *testing.T, history gitFixture) *serviceFixture {
+	t.Helper()
+	fixture := gitFixture{root: filepath.Join(t.TempDir(), "repo"), colony: t.TempDir(), env: history.env}
+	gitCommand(t, fixture.env, history.root, nil, "clone", "--no-checkout", "-b", "main", history.root, fixture.root)
+	gitCommand(t, fixture.env, fixture.root, nil, "checkout", "--detach")
+	fixture.git = newGitRunner(func() []string { return fixture.env })
+	f := openFixtureService(t, fixture)
+	var err error
+	f.w, err = f.svc.Register(context.Background(), f.p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
 }

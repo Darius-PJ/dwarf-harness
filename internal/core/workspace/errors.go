@@ -32,6 +32,8 @@ var (
 	ErrRequestMismatch     = errors.New("workspace: request ID already used for a different request")
 	ErrStaleHead           = errors.New("workspace: stale request head")
 	ErrLiveRequests        = errors.New("workspace: scratch has live promotion requests")
+	ErrWriterMismatch      = errors.New("workspace: writer ID already used for a different binding")
+	ErrTemporaryChildren   = errors.New("workspace: scratch has open temporary children")
 )
 
 // GitError describes an unexpected exit without interpreting Git's messages.
