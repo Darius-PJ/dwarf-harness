@@ -189,13 +189,16 @@ func (s *Service) BeginWrite(ctx context.Context, b WriteBinding) (_ *Writer, er
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer func() { unlock() }()
 	s.mu.Lock()
 	parent = s.scratches[b.TaskScratchID]
 	w := s.workspaces[parent.WorkspaceID]
 	err = s.usableLocked()
 	if err == nil && parent.closed {
 		err = ErrNoScratch
+	}
+	if err == nil && parent.pendingMergeBack != (uuid.UUID{}) {
+		err = ErrMergeBackPending
 	}
 	s.mu.Unlock()
 	if err != nil {
@@ -209,7 +212,10 @@ func (s *Service) BeginWrite(ctx context.Context, b WriteBinding) (_ *Writer, er
 		if !exists || resumed.ParentScratchID != parent.ID || resumed.ContextID != b.ContextID {
 			return nil, ErrNotBound
 		}
-		if resumed.closed {
+		if resumed.pendingMergeBack != (uuid.UUID{}) {
+			return nil, ErrMergeBackPending
+		}
+		if resumed.closed || resumed.appliedMergeBack != (uuid.UUID{}) {
 			return nil, ErrClosed
 		}
 		scratch = resumed
@@ -233,13 +239,32 @@ func (s *Service) BeginWrite(ctx context.Context, b WriteBinding) (_ *Writer, er
 		scratch = s.scratches[created.ID]
 		s.mu.Unlock()
 	}
-	// The routing handle does not keep a physical lease. This gate waits for
-	// an exclusive pool holder, then publishes occupancy under the task lock.
+	// Do not hold routing while waiting on a merge-back's sole writer.
+	// The sole writer must reacquire routing before publishing its tip.
+	unlock()
+	unlock = func() {}
 	release, err := s.pool.beginWrite(ctx, scratch.Dir)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	relocked, err := s.lockTask(ctx, b.TaskScratchID)
+	if err != nil {
+		return nil, err
+	}
+	unlock = relocked
+	s.mu.Lock()
+	scratch = s.scratches[scratch.ID]
+	parent = s.scratches[b.TaskScratchID]
+	if scratch.pendingMergeBack != (uuid.UUID{}) || parent.pendingMergeBack != (uuid.UUID{}) {
+		err = ErrMergeBackPending
+	} else if scratch.closed || scratch.appliedMergeBack != (uuid.UUID{}) {
+		err = ErrClosed
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	if err := s.repairScratchTip(ctx, w, scratch); err != nil {
 		return nil, err
 	}
@@ -408,6 +433,15 @@ func (s *Service) repairScratchTip(ctx context.Context, w workspaceState, scratc
 	if err != nil {
 		return err
 	}
+	if scratch.ParentScratchID == (uuid.UUID{}) && scratch.pendingMergeBack != (uuid.UUID{}) {
+		s.mu.Lock()
+		plan := s.mergeBacks[scratch.pendingMergeBack].record
+		s.mu.Unlock()
+		if current != plan.ParentCommit && current != plan.TargetCommit {
+			return &UnavailableError{Reason: "merge_back_interference", Detail: current}
+		}
+		return nil
+	}
 	if current == scratch.TipCommit {
 		return nil
 	}
@@ -562,6 +596,9 @@ func (w *Writer) CommitObserved(ctx context.Context) (result Observation, err er
 	err = w.validLocked()
 	scratch = s.scratches[w.scratchID]
 	workspace := s.workspaces[scratch.WorkspaceID]
+	if err == nil && scratch.pendingMergeBack != (uuid.UUID{}) {
+		err = ErrMergeBackPending
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return result, err

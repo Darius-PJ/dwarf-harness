@@ -101,7 +101,7 @@ func copyScratchFiles(t *testing.T, from, to string) {
 func referenceTree(t *testing.T, f *captureFixture) (string, string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "reference")
-	gitCommand(t, f.f.env, f.f.root, nil, "clone", "--no-checkout", f.f.root, dir)
+	gitCommand(t, f.f.env, f.f.root, nil, "clone", "--no-hardlinks", "--no-checkout", f.f.root, dir)
 	n := f.p.Normalization
 	for _, kv := range [][2]string{{"core.autocrlf", n.AutoCRLF}, {"core.eol", n.EOL}, {"core.filemode", n.FileMode}, {"core.ignorecase", n.IgnoreCase}, {"core.longpaths", n.LongPaths}, {"core.precomposeunicode", n.PrecomposeUnicode}, {"core.symlinks", n.Symlinks}, {"core.safecrlf", "false"}} {
 		gitCommand(t, f.f.env, dir, nil, "config", kv[0], kv[1])

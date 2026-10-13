@@ -6,9 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
 // Deny deletion/replacement, but permit the host to observe the retained bytes.
@@ -113,5 +116,78 @@ func TestMaterializePinnedCRLF(t *testing.T) {
 		if got := string(gitCommand(t, f.f.env, f.f.root, nil, "cat-file", "blob", h.targetTree+":"+path)); got != text {
 			t.Fatalf("canonical blob %s: %q", path, got)
 		}
+	}
+}
+
+func TestMergeBackLockedFileRecovery(t *testing.T) {
+	t.Parallel()
+	history := newGitFixture(t, "sha1")
+	for _, mode := range []string{"modified", "deleted", "crlf"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			f := serviceFromHistory(t, history)
+			ctx := context.Background()
+			if mode == "crlf" {
+				gitCommand(t, f.env, f.root, nil, "config", "core.autocrlf", "true")
+				p, err := f.git.inspect(ctx, f.root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.svc.UpdateInputs(ctx, f.w.ID, 1, p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			task := mustScratch(t, f, uuid.NewV7())
+			binding := testWriteBinding(task)
+			binding.ContextID = uuid.NewV7()
+			writer := mustWriter(t, f, binding)
+			source := writer.Scratch()
+			writeTestFile(t, filepath.Join(source.Dir, "added.txt"), []byte("added\n"))
+			if mode == "deleted" {
+				if err := os.Remove(filepath.Join(source.Dir, "base.txt")); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeTestFile(t, filepath.Join(source.Dir, "base.txt"), []byte("replacement\n"))
+			}
+			observed := mustObserve(t, writer)
+			if mode == "crlf" {
+				result, err := f.svc.MergeBack(ctx, source.ID)
+				if err != nil || result.TargetTree != observed.Tree || string(readTestFile(t, filepath.Join(task.Dir, "base.txt"))) != "replacement\r\n" {
+					t.Fatalf("pinned CRLF service merge: %+v %v", result, err)
+				}
+				return
+			}
+			ageMaterializeFiles(t, task.Dir)
+			release := holdMaterializeFile(t, filepath.Join(task.Dir, "base.txt"))
+			result, err := f.svc.MergeBack(ctx, source.ID)
+			if err == nil || result.Outcome != ledger.MergeBackWriteFailed {
+				t.Fatalf("locked file acknowledged application: %+v %v", result, err)
+			}
+			want := ledger.MergeBackFailureGit
+			if mode == "deleted" {
+				want = ledger.MergeBackFailureVerification
+			}
+			failed := mergeBackRecord(t, f, result.ID, ledger.MergeBackWriteFailed)
+			if failed.Failure != want || string(readTestFile(t, filepath.Join(task.Dir, "base.txt"))) != "one\ntwo\n" || string(readTestFile(t, filepath.Join(task.Dir, "added.txt"))) != "added\n" {
+				t.Fatalf("wrong failure/retained partial state: %+v", failed)
+			}
+			if strings.TrimSpace(string(gitCommand(t, f.env, task.Dir, nil, "rev-parse", "HEAD"))) != task.BaseCommit {
+				t.Fatal("locked-file failure moved the parent branch")
+			}
+			release()
+			f.reopen(t, serviceConfig())
+			applied, err := f.svc.RetryMergeBack(ctx, result.ID)
+			if err != nil || applied.ID != result.ID || applied.TargetTree != observed.Tree {
+				t.Fatalf("partial-state retry: %+v %v", applied, err)
+			}
+			if mode == "deleted" {
+				if _, err := os.Stat(filepath.Join(task.Dir, "base.txt")); !os.IsNotExist(err) {
+					t.Fatalf("retry retained deleted file: %v", err)
+				}
+			} else if string(readTestFile(t, filepath.Join(task.Dir, "base.txt"))) != "replacement\n" {
+				t.Fatal("retry retained locked old bytes")
+			}
+		})
 	}
 }

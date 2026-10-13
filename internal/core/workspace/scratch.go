@@ -30,6 +30,12 @@ type scratchState struct {
 	observationPin      uuid.UUID
 	observationSequence uint64
 	observationIDs      []uuid.UUID
+	creationSequence    uint64
+	pendingMergeBack    uuid.UUID
+	appliedMergeBack    uuid.UUID
+	mergeBackIDs        []uuid.UUID
+	notices             []ScratchNotice
+	merging             bool // transient sole-writer ownership, never replayed
 }
 
 type scratchPair struct{ context, workspace uuid.UUID }
@@ -201,6 +207,9 @@ func (s *Service) scratchPins(scratch scratchState) []uuid.UUID {
 }
 
 func (s *Service) closureBusy(scratch scratchState) error {
+	if scratch.pendingMergeBack != (uuid.UUID{}) {
+		return ErrMergeBackPending
+	}
 	if scratch.ParentScratchID == (uuid.UUID{}) && s.hasTemporaryChildren(scratch.ID) {
 		return ErrTemporaryChildren
 	}
@@ -250,7 +259,10 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	if closure.Actor != ledger.ActorOwner && (closure.Actor != ledger.ActorAgent || closure.ContextID != scratch.ContextID) {
 		return result, ErrNotBound
 	}
-	if closure.Reason != "abandoned" {
+	if closure.Reason != "abandoned" && !(closure.Reason == ledger.ReasonTemporaryMergedBack && scratch.closed && scratch.appliedMergeBack != (uuid.UUID{})) {
+		return result, ErrInvalid
+	}
+	if closure.Reason == "abandoned" && scratch.appliedMergeBack != (uuid.UUID{}) {
 		return result, ErrInvalid
 	}
 	if live != 0 {
@@ -262,16 +274,16 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	if s.deps.beforeCloseReserve != nil {
 		s.deps.beforeCloseReserve()
 	}
-	unlock, err := s.lockTask(ctx, taskID(scratch.Scratch))
-	if err != nil {
-		return result, err
-	}
-	defer unlock()
 	r, err := s.pool.reserve(scratch.Dir, closureReservation)
 	if err != nil {
 		return result, err
 	}
 	defer r.release()
+	unlock, err := s.lockTask(ctx, taskID(scratch.Scratch))
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
 	// Another closure may have completed between the lookup and reservation.
 	s.mu.Lock()
 	scratch = s.scratches[closure.ScratchID]

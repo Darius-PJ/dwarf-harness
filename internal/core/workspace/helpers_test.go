@@ -306,7 +306,7 @@ func mustObserve(t *testing.T, writer *Writer) Observation {
 func serviceFromHistory(t *testing.T, history gitFixture) *serviceFixture {
 	t.Helper()
 	fixture := gitFixture{root: filepath.Join(t.TempDir(), "repo"), colony: t.TempDir(), env: history.env}
-	gitCommand(t, fixture.env, history.root, nil, "clone", "--no-checkout", "-b", "main", history.root, fixture.root)
+	gitCommand(t, fixture.env, history.root, nil, "clone", "--no-hardlinks", "--no-checkout", "-b", "main", history.root, fixture.root)
 	gitCommand(t, fixture.env, fixture.root, nil, "checkout", "--detach")
 	fixture.git = newGitRunner(func() []string { return fixture.env })
 	f := openFixtureService(t, fixture)

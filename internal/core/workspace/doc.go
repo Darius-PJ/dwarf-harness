@@ -1,6 +1,6 @@
 // Package workspace provides Core's registered Git workspaces, bound private
 // scratches, exact capture, bounded checkpoints and integration generations.
-// The service writes frozen F2-05 and F2-06 records through the colony store.
+// The service writes frozen F2-05, F2-06 and F2-07 records through the colony store.
 // Nothing here accepts a promotion or moves main. C2's product never admits,
 // captures or integrates; admit and integrate are reachable only from package
 // tests until C4 reserves real validation. No exported seal or merge exists.
@@ -147,6 +147,8 @@
 // delete CAS as generation refs. The service retains every observation commit
 // while its scratch is open, including parent observations from which open
 // temporaries forked. Closing a parent with an open child is forbidden.
+// An admission retains only the observation its scratch_observation_id names and the merge-back commits its merge_back_ids name; a named merge-back's source history is reached through its target commit (a fast-forward's is the source commit) and the source's moved branch, which removal never deletes, never through a restored observation ref.
+// A request retains its named provenance, the observation its scratch_observation_id names and the merge-back commits its merge_back_ids name, exactly as long as it retains its capture: added together in retainedRefs and released by the same compare-and-swap when the request leaves retention. An unresolved preparation retains its prepared commit until it is resolved, and an open scratch retains its own observations and applied merge-backs until it closes. An ended request retains nothing; its records stay authoritative and moved branches keep the history.
 //
 // # Typed writers and observations
 //
@@ -178,6 +180,9 @@
 // handle gives ErrClosed. Scratch returns zero for those handles or a poisoned
 // service; Close is harmless and idempotent even for an invalid handle.
 //
+// A concurrent second CommitObserved on the same writer answers
+// *BusyError{context_busy}.
+//
 // CommitObserved freezes new leases, waits within ctx for its existing leases,
 // then reserves observation exclusion and MaxBytes immediately or returns busy.
 // A lease during observation waits within its own ctx; failure thaws the writer,
@@ -205,6 +210,59 @@
 // workspace, anchor and worktree admin identity and never overwrite any other
 // value: scratch_tip_mismatch blocks routing, observation, admission and closure,
 // and appears in Open's Pending. Repair changes no files, index or record.
+//
+// # Merge-back, retry and task notices
+//
+// MergeBack accepts an observed temporary after its author closes the Writer.
+// It reserves the source first, observes its acknowledged tip, then waits within
+// ctx for the task's logical turn and sole mutation exclusion. The routing lock
+// is never held while waiting for the physical gate. The task is observed under
+// that gate; either scratch's unobserved edits give ErrUncommittedEdits.
+// A live parent request is allowed: only its protected capture window excludes
+// merge-back, and merge-back in turn makes a capture immediately scratch_busy.
+//
+// F is the temporary's recorded fork, P the task's acknowledged tip and S the
+// source's latest observation. Only P == F fast-forwards to S. Otherwise Git
+// merges F.tree, P.tree and S.tree with F explicitly supplied as the base and
+// creates a single-parent target on P, even when the trees happen to be equal.
+// A merge or derived-tree case conflict pins a report on the task, records a new
+// conflict ID and changes neither scratch. The source remains resumable or
+// abandonable; a later attempt uses a fresh ID.
+//
+// Before mutation, the target ref and parent's raw pre-write manifest precede
+// prepared plus an immediate pin of the manifest and the recorded revision's
+// exact input bodies. The inputs lock bridges snapshot to preparation pin so
+// an intervening UpdateInputs cannot release those bodies before preparation.
+// Neither scratch may be observed, closed or prepared again while unresolved;
+// normal routing and admission return ErrMergeBackPending after a failed write.
+// Materialization is followed by an applied record and preparation unpin only
+// after full files/index/ref verification. The source then closes with
+// temporary_merged_back, releasing its pins and directory but not its moved
+// branch. Repeated MergeBack returns the original applied result and finishes
+// any outstanding source removal, never applying the work twice.
+//
+// Post-preparation failures record git, index_lock, ref_mismatch, verification,
+// cancelled or interference. Cancellation uses context.WithoutCancel only for
+// that bookkeeping, never for files or refs. Unavailable workspace, Git or
+// pinned inputs leave the plan pending without inventing a failure token.
+// RetryMergeBack alone resumes a pending ID: it reads its pinned historical
+// inputs, retains the recorded target and accepts only P or target at the branch.
+// Its observed intermediate tree must have, at every path, exactly the old or
+// target entry. Third values give merge_back_interference without overwriting.
+// Retry removes an index lock only when its regular, unchanged file carries
+// this attempt's exact ownership marker; a foreign lock remains untouched.
+// Open reports merge_back_pending and validates P/target without moving either;
+// it never retries or materializes an unresolved plan.
+//
+// ScratchNotices is a context-and-task-bound, record-only, replayable cursor over
+// outcomes other than prepared. It returns copies, even for a closed task, and
+// carries the source's author and written paths separately from the parent's
+// full changed paths. It schedules no model turn or callback. Admission records
+// the latest task observation and, in applied-sequence order, exactly those
+// merge-back IDs after the preceding admission (creation for a root/new root)
+// and before this admission; sealed request trees remain immutable.
+//
+// A merge-back's applied record and its source's closure are separate commits. When the closure commit is missing after the applied acknowledgement (a crash, a cancellation or a definite append failure), Open reports merge_back_closure_pending <temporary ID> and writes nothing; the next MergeBack of that temporary, or RetryMergeBack of its attempt, re-observes the source against its acknowledged tip, appends exactly the missing temporary_merged_back closure with its observation unpin and removes the directory, never a second applied record; an applied source answers ErrInvalid to abandoned.
 //
 // # Exact capture
 //
@@ -378,9 +436,8 @@
 // uses the repository environment. Partial failure preserves the actual disk
 // state and leaves refs unmoved. The retry form takes a verified intermediate O
 // built from disk, then applies O to target by the same two-tree recipe; it
-// never resets the directory. Service merge-back preparation, blocking and
-// explicit retry bookkeeping belong to S3b, not these primitives. Their frozen
-// policy name is scratch-merge-rules/1.
+// never resets the directory. The frozen policy name for these primitives and
+// the service's prepared/result protocol is scratch-merge-rules/1.
 //
 // Conflict reports return deterministic JSON Lines bytes and their SHA-256,
 // without publishing or pinning. The header has format
@@ -522,8 +579,8 @@
 // The same journalled rule set runs before append and during Open.
 // A violation gives InconsistentError matching ErrInconsistent and its sequence.
 // Unknown closure reasons remain readable closures; the producer writes only
-// abandoned. A newer consumed record version returns the ledger reader's
-// UnsupportedVersionError.
+// abandoned and temporary_merged_back. A newer consumed record version returns
+// the ledger reader's UnsupportedVersionError.
 //
 // Current bodies are verified by ReadBody, decoded and compared with body_refs.
 // Missing or unreadable current bodies and unknown document versions make that
@@ -552,12 +609,14 @@
 // call except Close returns ErrPoisoned. Recovery requires the host to recover
 // the store and open a new service, never an in-memory guess about a commit.
 // Projections retain historical request identities and scratch names, UUID-only
-// generation, capture and lineage IDs, and per-revision input digests; memory
-// grows with history. Superseded input bodies are never read for these identity
-// checks. Other projection facts are per-scratch live counts, the live requests'
-// and latest observations' manifest pins, and each active report pin's owning
-// scratch, held until supersession or closure. Observation IDs remain UUID-only
-// historical facts after their closed scratch's observation list is released.
+// generation, capture and lineage IDs, and each inputs revision's digest and
+// exact body_refs set; the latter is bounded by recorded inputs revisions.
+// Memory grows with history, including merge-back plans and passive notices.
+// Superseded input bodies are read only by an explicit retry whose preparation
+// pin retains them, never for identity checks. Other facts are per-scratch live
+// counts, current manifest pins and each active report pin's owning scratch.
+// Observation IDs remain UUID-only historical facts after scratch closure,
+// except for observations directly named by admitted provenance.
 //
 // # Removal boundary
 //

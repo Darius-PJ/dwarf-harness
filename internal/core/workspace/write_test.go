@@ -210,6 +210,20 @@ func TestTemporaryCoexistsWithDedicated(t *testing.T) {
 	if got := mustScratch(t, f, dedicated.ContextID); got.ID != dedicated.ID {
 		t.Fatalf("temporary replaced the dedicated pair: %+v", got)
 	}
+	b.WriterID, b.ContextID = uuid.NewV7(), uuid.NewV7()
+	laterWriter := mustWriter(t, f, b)
+	laterTemporary := laterWriter.Scratch()
+	laterWriter.Close()
+	laterDedicated := mustScratch(t, f, b.ContextID)
+	if laterDedicated.ID == laterTemporary.ID || laterDedicated.ParentScratchID != (uuid.UUID{}) {
+		t.Fatalf("dedicated-after-temporary returned foreign task work: %+v", laterDedicated)
+	}
+	if got := mustScratch(t, f, b.ContextID); got.ID != laterDedicated.ID {
+		t.Fatal("dedicated-after-temporary failed to occupy its pair")
+	}
+	if _, err := f.svc.CloseScratch(context.Background(), ownerClosure(laterTemporary)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.svc.CloseScratch(context.Background(), ownerClosure(temporary)); err != nil {
 		t.Fatal(err)
 	}

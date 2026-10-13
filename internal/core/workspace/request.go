@@ -45,6 +45,7 @@ type requestState struct {
 	state      RequestState
 	ending     string
 	generation *ledger.GenerationDerived
+	sequence   uint64
 }
 
 type requestPlan struct {
@@ -128,6 +129,10 @@ func (s *Service) beginRequest(ctx context.Context, r Request) (requestPlan, *re
 		s.mu.Unlock()
 		return zero, nil, state, ErrNoScratch
 	}
+	if scratch := s.scratches[id]; scratch.pendingMergeBack != (uuid.UUID{}) && !scratch.merging {
+		s.mu.Unlock()
+		return zero, nil, state, ErrMergeBackPending
+	}
 	plan, err := s.headPlan(r, s.scratches[id])
 	s.mu.Unlock()
 	if err != nil {
@@ -144,6 +149,9 @@ func (s *Service) beginRequest(ctx context.Context, r Request) (requestPlan, *re
 	err = s.usableLocked()
 	if err == nil && s.scratches[id].closed {
 		err = ErrNoScratch
+	}
+	if err == nil && s.scratches[id].pendingMergeBack != (uuid.UUID{}) {
+		err = ErrMergeBackPending
 	}
 	if err == nil {
 		plan, err = s.headPlan(r, s.scratches[id])
@@ -206,7 +214,7 @@ func requireUnpins(drafts []ledger.Draft, after int, ids []uuid.UUID) error {
 	return nil
 }
 
-func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bool, rules *requestCommitRules, journal *[]func()) error {
+func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, seq uint64, producing bool, rules *requestCommitRules, journal *[]func()) error {
 	d := drafts[at]
 	bad := func(detail string) error { return errors.New(detail) }
 	switch d.Type {
@@ -228,6 +236,13 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 		if !exists || scratch.closed || scratch.ContextID != p.ContextID || scratch.WorkspaceID != p.WorkspaceID || s.pairs[scratchPair{p.ContextID, p.WorkspaceID}] != p.ScratchID || p.ScratchBase != scratch.BaseCommit {
 			return bad("admission does not name the pair's open scratch and base")
 		}
+		if scratch.pendingMergeBack != (uuid.UUID{}) {
+			return bad("admission names an unresolved merge-back parent")
+		}
+		observation, merges := s.admissionProvenance(scratch, p.ParentRequestID, seq)
+		if p.ScratchObservationID != observation || !slices.Equal(p.MergeBackIDs, merges) {
+			return bad("admission provenance differs from its observation or admission window")
+		}
 		r := Request{RequestID: p.RequestID, Actor: d.Actor, ContextID: p.ContextID, WorkspaceID: p.WorkspaceID, Head: p.ParentRequestID, RestartFrom: p.RestartFrom}
 		plan, err := s.headPlan(r, scratch)
 		if err != nil {
@@ -244,7 +259,7 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 			return bad("root lineage reused")
 		}
 		w := plan.workspace
-		if p.InputsRevision > w.Revision || w.revisions[p.InputsRevision] != p.CaptureInputsSHA256 {
+		if p.InputsRevision > w.Revision || w.revisions[p.InputsRevision].digest != p.CaptureInputsSHA256 {
 			return bad("admission inputs revision or digest")
 		}
 		for _, oid := range []string{p.ScratchBase, p.BaselineTree, p.DeltaBaseTree, p.SealedTree} {
@@ -257,7 +272,7 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 		}
 		oldTrain := s.trains[p.WorkspaceID]
 		s.trains[p.WorkspaceID] = append(slices.Clone(oldTrain), p.RequestID)
-		s.requests[p.RequestID] = requestState{admission: p, state: RequestState{RequestID: p.RequestID, State: RequestPending, LineageID: p.LineageID, Checkpoint: p.Checkpoint, SealedTree: p.SealedTree}}
+		s.requests[p.RequestID] = requestState{admission: p, sequence: seq, state: RequestState{RequestID: p.RequestID, State: RequestPending, LineageID: p.LineageID, Checkpoint: p.Checkpoint, SealedTree: p.SealedTree}}
 		s.usedCaptures[p.CaptureID] = true
 		if p.ParentRequestID == (uuid.UUID{}) {
 			s.usedLineages[p.LineageID] = true

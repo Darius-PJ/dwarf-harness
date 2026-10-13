@@ -295,15 +295,24 @@ type retainedRef struct{ object, missing string }
 // retainedRefs is a projection query, not a second ownership index. Hold mu.
 func (s *Service) retainedRefs(workspaceID uuid.UUID) map[string]retainedRef {
 	refs := make(map[string]retainedRef)
+	retainAdmission := func(a ledger.PromotionAdmitted) {
+		refs["refs/dwarf-harness/captures/"+a.CaptureID.String()] = retainedRef{a.SealedTree, "capture_missing " + a.RequestID.String()}
+		if id := a.ScratchObservationID; id != (uuid.UUID{}) {
+			observation := s.observations[id]
+			refs["refs/dwarf-harness/scratch-commits/"+id.String()] = retainedRef{observation.record.ScratchCommit, "observation_missing " + id.String()}
+		}
+		for _, id := range a.MergeBackIDs {
+			refs["refs/dwarf-harness/scratch-commits/"+id.String()] = retainedRef{s.mergeBacks[id].record.TargetCommit, "merge_back_missing " + id.String()}
+		}
+	}
 	// C2 has only failure endings, so every unfailed open head is live.
 	// Ticket 08 adds retention of an unfailed open head after success.
 	for _, id := range s.trains[workspaceID] {
 		r := s.requests[id]
 		a := r.admission
-		refs["refs/dwarf-harness/captures/"+a.CaptureID.String()] = retainedRef{a.SealedTree, "capture_missing " + id.String()}
+		retainAdmission(a)
 		if a.ParentRequestID != (uuid.UUID{}) {
-			parent := s.requests[a.ParentRequestID].admission
-			refs["refs/dwarf-harness/captures/"+parent.CaptureID.String()] = retainedRef{parent.SealedTree, "capture_missing " + a.ParentRequestID.String()}
+			retainAdmission(s.requests[a.ParentRequestID].admission)
 		}
 		if r.generation != nil && r.generation.Outcome == ledger.GenerationClean {
 			g := r.generation
@@ -320,6 +329,15 @@ func (s *Service) retainedRefs(workspaceID uuid.UUID) map[string]retainedRef {
 		for _, observationID := range scratch.observationIDs {
 			observation := s.observations[observationID]
 			refs["refs/dwarf-harness/scratch-commits/"+observationID.String()] = retainedRef{observation.record.ScratchCommit, "observation_missing " + observationID.String()}
+		}
+	}
+	for id, attempt := range s.mergeBacks {
+		p := attempt.record
+		if p.WorkspaceID != workspaceID || p.Outcome == ledger.MergeBackConflict {
+			continue
+		}
+		if attempt.pending() || !s.scratches[p.ParentScratchID].closed {
+			refs["refs/dwarf-harness/scratch-commits/"+id.String()] = retainedRef{p.TargetCommit, "merge_back_missing " + id.String()}
 		}
 	}
 	return refs

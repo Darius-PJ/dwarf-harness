@@ -64,17 +64,13 @@ func (s *Service) admit(ctx context.Context, plan requestPlan, token *reservatio
 		CaptureID: sealed.ID, SealedTree: sealed.Tree, ManifestSHA256: digest,
 		InputsRevision: int64(sealed.InputsRevision), CaptureInputsSHA256: ledger.Digest(sealed.InputsSHA256), PinID: pin,
 	}
-	payload, err := p.Encode()
-	if err != nil {
-		return state, fmt.Errorf("%w: %v", ErrInvalid, err)
-	}
 	pinPayload, err := (ledger.BodyPin{PinID: pin}).Encode()
 	if err != nil {
 		return state, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	refs := []ledger.Digest{digest}
 	drafts := []ledger.Draft{
-		{Type: ledger.TypePromotionAdmitted, TypeVersion: 1, Actor: r.Actor, ContextID: r.ContextID, BodyRefs: refs, Payload: payload},
+		{Type: ledger.TypePromotionAdmitted, TypeVersion: 1, Actor: r.Actor, ContextID: r.ContextID, BodyRefs: refs},
 		{Type: ledger.TypeBodyPin, TypeVersion: 1, Actor: r.Actor, ContextID: r.ContextID, BodyRefs: refs, Payload: pinPayload},
 	}
 	if s.deps.beforeAppend != nil {
@@ -82,17 +78,17 @@ func (s *Service) admit(ctx context.Context, plan requestPlan, token *reservatio
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Our own in-flight marker is still held; only an admitted identity can
-	// supersede this capture before its append.
-	if _, admitted := s.requests[r.RequestID]; admitted {
-		state, _, err = s.identity(r)
-		return state, err
-	}
 	// Integration may have failed the local parent during the seal. Return the
 	// public head refusal rather than exposing the record rule's ErrInvalid.
 	if _, err = s.headPlan(r, s.scratches[plan.scratch.ID]); err != nil {
 		return state, err
 	}
+	p.ScratchObservationID, p.MergeBackIDs = s.admissionProvenance(s.scratches[plan.scratch.ID], r.Head, s.store.Durable()+1)
+	payload, err := p.Encode()
+	if err != nil {
+		return state, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	drafts[0].Payload = payload
 	if err = s.appendLocked(ctx, drafts); err != nil {
 		return state, err
 	}

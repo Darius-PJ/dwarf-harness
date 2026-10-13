@@ -26,14 +26,19 @@ type workspaceStore interface {
 }
 
 type serviceDeps struct {
-	environ              func() []string
-	newID                func() uuid.UUID
-	beforeAppend         func()
-	removeAll            func(string) error
-	beforeRequestReserve func()
-	beforeCloseReserve   func()
-	afterCloseStart      func()
-	afterWriterFreeze    func()
+	environ                func() []string
+	newID                  func() uuid.UUID
+	beforeAppend           func()
+	removeAll              func(string) error
+	beforeRequestReserve   func()
+	beforeCloseReserve     func()
+	afterCloseStart        func()
+	afterWriterFreeze      func()
+	afterMergeBackPrepared func()
+	beforeMergeBackApplied func()
+	afterMergeBackApplied  func()
+	beforeMergeBackParent  func()
+	beforeMergeBackWait    func()
 }
 
 // Reconciliation reports best-effort filesystem repair. Pending entries explain
@@ -70,6 +75,7 @@ type Service struct {
 	writers                         map[uuid.UUID]*Writer
 	writerKeys                      map[writerKey]*Writer
 	observations                    map[uuid.UUID]observationState
+	mergeBacks                      map[uuid.UUID]mergeBackState
 	pinSequences                    map[uuid.UUID]uint64
 	openScratches, usedObservations map[uuid.UUID]bool
 	requests                        map[uuid.UUID]requestState
@@ -134,6 +140,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	s.writers = make(map[uuid.UUID]*Writer)
 	s.writerKeys = make(map[writerKey]*Writer)
 	s.observations = make(map[uuid.UUID]observationState)
+	s.mergeBacks = make(map[uuid.UUID]mergeBackState)
 	s.pinSequences = make(map[uuid.UUID]uint64)
 	s.openScratches = make(map[uuid.UUID]bool)
 	s.usedObservations = make(map[uuid.UUID]bool)
@@ -186,7 +193,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 }
 
 func workspaceConsumption() ledger.Consumption {
-	return ledger.Consumption{ledger.TypeWorkspaceRegistered: {1}, ledger.TypeCaptureInputsPinned: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}, ledger.TypeScratchChanged: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}, ledger.TypePromotionAdmitted: {1}, ledger.TypeGenerationDerived: {1}, ledger.TypePromotionFailed: {1}}
+	return ledger.Consumption{ledger.TypeWorkspaceRegistered: {1}, ledger.TypeCaptureInputsPinned: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}, ledger.TypeScratchChanged: {1}, ledger.TypeScratchMergeBack: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}, ledger.TypePromotionAdmitted: {1}, ledger.TypeGenerationDerived: {1}, ledger.TypePromotionFailed: {1}}
 }
 
 func validID(id uuid.UUID) bool   { return id[6]>>4 == 7 && id[8]&0xc0 == 0x80 }
@@ -273,6 +280,33 @@ func (s *Service) appendLocked(ctx context.Context, drafts []ledger.Draft) error
 				}
 			}
 		}
+		if draft.Type == ledger.TypeScratchCreated {
+			p, _ := ledger.DecodeScratchCreated(draft.Payload)
+			scratch := s.scratches[p.ScratchID]
+			scratch.creationSequence = committed.First + uint64(i)
+			s.scratches[p.ScratchID] = scratch
+		}
+		if draft.Type == ledger.TypePromotionAdmitted {
+			p, _ := ledger.DecodePromotionAdmitted(draft.Payload)
+			request := s.requests[p.RequestID]
+			request.sequence = committed.First + uint64(i)
+			s.requests[p.RequestID] = request
+		}
+		if draft.Type == ledger.TypeScratchMergeBack {
+			p, _ := ledger.DecodeScratchMergeBack(draft.Payload)
+			attempt := s.mergeBacks[p.MergeBackID]
+			attempt.sequence = committed.First + uint64(i)
+			s.mergeBacks[p.MergeBackID] = attempt
+			if p.Outcome != ledger.MergeBackPrepared {
+				parent := s.scratches[p.ParentScratchID]
+				for j := range parent.notices {
+					if parent.notices[j].Sequence == first+uint64(i) {
+						parent.notices[j].Sequence = attempt.sequence
+					}
+				}
+				s.scratches[p.ParentScratchID] = parent
+			}
+		}
 		if draft.Type == ledger.TypeBodyPin {
 			p, _ := ledger.DecodeBodyPin(draft.Payload)
 			if _, tracked := s.pinSequences[p.PinID]; tracked {
@@ -299,7 +333,7 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 	for i, draft := range drafts {
 		seq := first + uint64(i)
 		bad := func(detail string) error { return &InconsistentError{Seq: seq, Detail: detail} }
-		if err := s.applyRequestRecord(drafts, i, loading, &rules, &journal); err != nil {
+		if err := s.applyRequestRecord(drafts, i, seq, loading, &rules, &journal); err != nil {
 			return undo, bad(err.Error())
 		}
 		switch draft.Type {
@@ -370,9 +404,9 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 			}
 			w := old
 			if w.revisions == nil {
-				w.revisions = make(map[int64]ledger.Digest)
+				w.revisions = make(map[int64]inputsRevision)
 			}
-			w.revisions[p.Revision] = p.CaptureInputsSHA256
+			w.revisions[p.Revision] = inputsRevision{digest: p.CaptureInputsSHA256, refs: slices.Clone(draft.BodyRefs)}
 			journal = append(journal, func() { delete(w.revisions, p.Revision) })
 			w.Revision, w.InputsSHA256, w.PinID = p.Revision, p.CaptureInputsSHA256, p.PinID
 			w.refs, w.inputsSeq = slices.Clone(draft.BodyRefs), seq
@@ -427,7 +461,7 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 				return undo, bad("scratch Git IDs do not match workspace object format")
 			}
 			id := p.ScratchID
-			s.scratches[id] = scratchState{Scratch: Scratch{ID: id, WorkspaceID: p.WorkspaceID, ContextID: p.ContextID, ParentScratchID: p.ParentScratchID, Dir: filepath.Join(s.colony, "scratch", p.Dir), Branch: p.Branch, BaseCommit: p.BaseCommit, AnchorTree: p.AnchorTree, TipCommit: p.BaseCommit, TipTree: p.AnchorTree}, previousTip: p.BaseCommit}
+			s.scratches[id] = scratchState{Scratch: Scratch{ID: id, WorkspaceID: p.WorkspaceID, ContextID: p.ContextID, ParentScratchID: p.ParentScratchID, Dir: filepath.Join(s.colony, "scratch", p.Dir), Branch: p.Branch, BaseCommit: p.BaseCommit, AnchorTree: p.AnchorTree, TipCommit: p.BaseCommit, TipTree: p.AnchorTree}, previousTip: p.BaseCommit, creationSequence: seq}
 			s.openScratches[id] = true
 			if p.ParentScratchID == (uuid.UUID{}) {
 				s.pairs[pair] = id
@@ -457,6 +491,9 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 			if !exists || old.closed || old.ContextID != p.ContextID || old.WorkspaceID != p.WorkspaceID || old.ParentScratchID != p.ParentScratchID {
 				return undo, bad("observation requires its open scratch and creation parent")
 			}
+			if old.pendingMergeBack != (uuid.UUID{}) {
+				return undo, bad("observation names an unresolved merge-back scratch")
+			}
 			if old.TipCommit != p.PreviousCommit || old.TipTree != p.PreviousTree {
 				return undo, bad("observation previous tip differs from acknowledged tip")
 			}
@@ -464,7 +501,7 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 				return undo, bad("changed_paths emptiness differs from the anchor/tree identity")
 			}
 			w := s.workspaces[p.WorkspaceID]
-			if p.InputsRevision > w.Revision || w.revisions[p.InputsRevision] != p.CaptureInputsSHA256 {
+			if p.InputsRevision > w.Revision || w.revisions[p.InputsRevision].digest != p.CaptureInputsSHA256 {
 				return undo, bad("observation inputs revision or digest")
 			}
 			for _, oid := range []string{p.PreviousCommit, p.PreviousTree, p.ScratchCommit, p.ScratchTree} {
@@ -493,21 +530,37 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 			s.scratches[p.ScratchID] = next
 			s.observations[p.ObservationID] = observationState{record: p, sequence: seq}
 			s.usedObservations[p.ObservationID] = true
+			previousPinOwner, hadPinOwner := s.manifestPins[p.PinID]
 			s.manifestPins[p.PinID] = p.ObservationID
 			journal = append(journal, func() {
 				s.scratches[p.ScratchID] = old
 				delete(s.observations, p.ObservationID)
 				delete(s.usedObservations, p.ObservationID)
-				delete(s.manifestPins, p.PinID)
+				if hadPinOwner {
+					s.manifestPins[p.PinID] = previousPinOwner
+				} else {
+					delete(s.manifestPins, p.PinID)
+				}
 			})
+		case ledger.TypeScratchMergeBack:
+			if err := s.applyMergeBackRecord(drafts, i, seq, loading, &rules, &journal); err != nil {
+				return undo, bad(err.Error())
+			}
 		case ledger.TypeBodyPin:
 			p, decodeErr := ledger.DecodeBodyPin(draft.Payload)
 			if decodeErr != nil {
 				return undo, bad(decodeErr.Error())
 			}
 			if _, report := s.reportPinScratch[p.PinID]; report || s.manifestPins[p.PinID] != (uuid.UUID{}) {
+				previous, existed := s.pinSequences[p.PinID]
 				s.pinSequences[p.PinID] = seq
-				journal = append(journal, func() { delete(s.pinSequences, p.PinID) })
+				journal = append(journal, func() {
+					if existed {
+						s.pinSequences[p.PinID] = previous
+					} else {
+						delete(s.pinSequences, p.PinID)
+					}
+				})
 			}
 		case ledger.TypeBodyUnpin:
 			p, decodeErr := ledger.DecodeBodyUnpin(draft.Payload)
@@ -530,20 +583,30 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 			if p.ContextID != old.ContextID || len(draft.BodyRefs) != 0 || (draft.Actor != ledger.ActorOwner && (draft.Actor != ledger.ActorAgent || draft.ContextID != p.ContextID)) {
 				return undo, bad("closure actor, context or body_refs")
 			}
-			if loading && p.Reason != "abandoned" {
+			if loading && p.Reason != "abandoned" && p.Reason != ledger.ReasonTemporaryMergedBack {
 				return undo, bad("producer cannot write an undefined closure reason")
+			}
+			if old.pendingMergeBack != (uuid.UUID{}) {
+				return undo, bad("closure names an unresolved merge-back scratch")
 			}
 			if old.ParentScratchID == (uuid.UUID{}) && s.hasTemporaryChildren(old.ID) {
 				return undo, bad("dedicated scratch has open temporary children")
 			}
 			if p.Reason == ledger.ReasonTemporaryMergedBack {
-				return undo, bad("temporary merged-back closure has no applied merge-back")
+				applied, exists := s.mergeBacks[old.appliedMergeBack]
+				if old.ParentScratchID == (uuid.UUID{}) || !exists || !applied.applied() || applied.sequence >= first || applied.record.SourceObservationID != old.ObservationID {
+					return undo, bad("temporary merged-back closure has no current applied source")
+				}
 			}
 			closed := old
 			closed.closed = true
 			closed.observationIDs = nil
 			delete(s.openScratches, p.ScratchID)
+			retained := s.retainedRefs(old.WorkspaceID)
 			for _, observationID := range old.observationIDs {
+				if _, keep := retained["refs/dwarf-harness/scratch-commits/"+observationID.String()]; keep {
+					continue
+				}
 				observation := s.observations[observationID]
 				delete(s.observations, observationID)
 				journal = append(journal, func() { s.observations[observationID] = observation })
@@ -580,6 +643,16 @@ func sortedIDs[T any](m map[uuid.UUID]T) []uuid.UUID {
 
 func (s *Service) reconcile(ctx context.Context) Reconciliation {
 	var report Reconciliation
+	for id, attempt := range s.mergeBacks {
+		if attempt.pending() {
+			report.Pending = append(report.Pending, "merge_back_pending "+id.String())
+		}
+	}
+	for id, scratch := range s.scratches {
+		if !scratch.closed && scratch.appliedMergeBack != (uuid.UUID{}) {
+			report.Pending = append(report.Pending, "merge_back_closure_pending "+id.String())
+		}
+	}
 	pending := func(path string, err error) {
 		report.Pending = append(report.Pending, fmt.Sprintf("%s: %v", path, err))
 	}

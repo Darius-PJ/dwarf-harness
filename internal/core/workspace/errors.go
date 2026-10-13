@@ -34,6 +34,8 @@ var (
 	ErrLiveRequests        = errors.New("workspace: scratch has live promotion requests")
 	ErrWriterMismatch      = errors.New("workspace: writer ID already used for a different binding")
 	ErrTemporaryChildren   = errors.New("workspace: scratch has open temporary children")
+	ErrUncommittedEdits    = errors.New("workspace: scratch has uncommitted edits")
+	ErrMergeBackPending    = errors.New("workspace: merge-back pending")
 )
 
 // GitError describes an unexpected exit without interpreting Git's messages.

@@ -365,7 +365,7 @@ func TestCloseScratchWhileRequestsLive(t *testing.T) {
 func TestTemporaryClosureRepresentation(t *testing.T) {
 	t.Parallel()
 	history := newGitFixture(t, "sha1")
-	for _, mode := range []string{"observed", "dirty", "foreign", "pending_child", "report_order"} {
+	for _, mode := range []string{"observed", "dirty", "foreign", "pending_child", "report_order", "conflicted", "prepared"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			f := serviceFromHistory(t, history)
@@ -442,6 +442,31 @@ func TestTemporaryClosureRepresentation(t *testing.T) {
 			temporary := writer.Scratch()
 			writeTestFile(t, filepath.Join(temporary.Dir, "work.txt"), []byte("private work\n"))
 			observation := mustObserve(t, writer)
+			if mode == "conflicted" {
+				parentWriter := mustWriter(t, f, testWriteBinding(task))
+				writeTestFile(t, filepath.Join(task.Dir, "work.txt"), []byte("parent work\n"))
+				mustObserve(t, parentWriter)
+				result, err := f.svc.MergeBack(ctx, temporary.ID)
+				if err != nil || result.Outcome != ledger.MergeBackConflict {
+					t.Fatalf("conflicted temporary setup: %+v %v", result, err)
+				}
+			}
+			if mode == "prepared" {
+				callCtx, cancel := context.WithCancel(ctx)
+				f.svc.deps.afterMergeBackPrepared = cancel
+				result, err := f.svc.MergeBack(callCtx, temporary.ID)
+				cancel()
+				if !errors.Is(err, context.Canceled) || result.Outcome != ledger.MergeBackWriteFailed {
+					t.Fatalf("prepared temporary setup: %+v %v", result, err)
+				}
+				before := f.store.Durable()
+				for _, scratch := range []Scratch{temporary, task} {
+					if _, err := f.svc.CloseScratch(ctx, ownerClosure(scratch)); !errors.Is(err, ErrMergeBackPending) || f.store.Durable() != before {
+						t.Fatalf("prepared scratch closed: %v", err)
+					}
+				}
+				return
+			}
 			closure := Closure{ScratchID: temporary.ID, Actor: ledger.ActorAgent, ContextID: b.ContextID, Reason: "abandoned"}
 			if mode == "dirty" {
 				writeTestFile(t, filepath.Join(temporary.Dir, "work.txt"), []byte("unobserved\n"))
@@ -474,6 +499,12 @@ func TestTemporaryClosureRepresentation(t *testing.T) {
 			}
 			if _, err := f.svc.CloseScratch(ctx, closure); err != nil || f.store.Durable() != before+2 {
 				t.Fatalf("removal retry recorded twice: %v", err)
+			}
+			if mode == "conflicted" {
+				if err := os.Remove(filepath.Join(task.Dir, "work.txt")); err != nil {
+					t.Fatal(err)
+				}
+				mustObserve(t, mustWriter(t, f, testWriteBinding(task)))
 			}
 			if _, err := f.svc.CloseScratch(ctx, ownerClosure(task)); err != nil {
 				t.Fatalf("parent remained blocked: %v", err)

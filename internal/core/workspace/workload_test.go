@@ -155,11 +155,19 @@ func TestCaptureWorkload(t *testing.T) {
 				}
 				return total
 			}
+			var workloadService *Service
 			writeRow := func(phase string, duration time.Duration, result captureResult) {
 				row := captureWorkloadRow{Phase: phase, Files: count, CoreRawBytes: result.RawBytes, DurationMS: float64(duration) / float64(time.Millisecond), Tree: result.Tree, GitVersion: f.git.version, GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
 				row.ManifestBytes = len(result.Manifest)
 				row.RetainedScratchBytes = footprint(filepath.Join(f.colony, "scratch"))
 				row.RetainedBodyBytes = footprint(filepath.Join(f.colony, "bodies"))
+				if workloadService != nil {
+					for _, attempt := range workloadService.mergeBacks {
+						if attempt.pending() {
+							row.Unresolved++
+						}
+					}
+				}
 				for _, line := range strings.Split(string(gitCommand(t, f.env, f.root, nil, "count-objects", "-v")), "\n") {
 					key, value, ok := strings.Cut(line, ": ")
 					if !ok || (key != "count" && key != "size") {
@@ -244,6 +252,7 @@ func TestCaptureWorkload(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer svc.Close()
+			workloadService = svc
 			w, err := svc.Register(context.Background(), p)
 			if err != nil {
 				t.Fatal(err)
@@ -340,6 +349,18 @@ func TestCaptureWorkload(t *testing.T) {
 			}
 			taskWriter := mustWriter(t, sf, testWriteBinding(scratch))
 			defer taskWriter.Close()
+			if count == 10000 {
+				const samples = 32
+				start := time.Now()
+				for range samples {
+					release, err := taskWriter.Lease(context.Background())
+					if err != nil {
+						t.Fatal(err)
+					}
+					release()
+				}
+				writeRow("lease", time.Since(start)/samples, captureResult{Tree: scratch.TipTree})
+			}
 			taskObservation := observe("observe_task", taskWriter)
 			binding := testWriteBinding(scratch)
 			binding.ContextID = uuid.NewV7()
@@ -369,7 +390,95 @@ func TestCaptureWorkload(t *testing.T) {
 				b[0] = 'T'
 				writeTestFile(t, path, b)
 			}
-			observe("observe_temporary", temporaryWriter)
+			temporaryObservation := observe("observe_temporary", temporaryWriter)
+			merge := func(phase string, source Scratch, expectedTree string, expectedOutcome string) {
+				t.Helper()
+				mainBefore := fixtureMain(t, f)
+				start := time.Now()
+				result, err := svc.MergeBack(context.Background(), source.ID)
+				duration := time.Since(start)
+				if err != nil || result.Outcome != expectedOutcome || result.TargetTree != expectedTree {
+					t.Fatalf("%s: %+v %v", phase, result, err)
+				}
+				indexTree := strings.TrimSpace(string(gitCommand(t, f.env, scratch.Dir, nil, "write-tree")))
+				branch := strings.TrimSpace(string(gitCommand(t, f.env, scratch.Dir, nil, "rev-parse", "HEAD")))
+				reference := &captureFixture{f: f, p: p, s: svc.captureScratch(svc.workspaces[w.ID], scratch)}
+				actual, _ := referenceTree(t, reference)
+				if indexTree != expectedTree || actual != expectedTree || branch != result.TargetCommit || fixtureMain(t, f) != mainBefore {
+					t.Fatalf("%s files/index/refs disagree with independent Git", phase)
+				}
+				prepared := mergeBackRecord(t, sf, result.ID, ledger.MergeBackPrepared)
+				applied := mergeBackRecord(t, sf, result.ID, expectedOutcome)
+				if prepared.TargetCommit != result.TargetCommit || applied.TargetTree != expectedTree || applied.SourceObservationID != source.ObservationID {
+					t.Fatalf("%s records differ from materialized result", phase)
+				}
+				writeRow(phase, duration, manifestResult(expectedTree, prepared.ManifestSHA256))
+			}
+			temporary.ObservationID = temporaryObservation.ID
+			merge("merge_back_ff", temporary, temporaryObservation.Tree, ledger.MergeBackFastForward)
+			binding.WriterID, binding.ResumeScratchID = uuid.NewV7(), uuid.UUID{}
+			temporaryWriter = mustWriter(t, sf, binding)
+			temporary = temporaryWriter.Scratch()
+			for i := range 10 {
+				path := filepath.Join(temporary.Dir, "src", fmt.Sprintf("%05d.txt", i))
+				b := readTestFile(t, path)
+				b[0] = 'E'
+				writeTestFile(t, path, b)
+			}
+			temporaryObservation = mustObserve(t, temporaryWriter)
+			temporary.ObservationID = temporaryObservation.ID
+			taskWriter = mustWriter(t, sf, testWriteBinding(scratch))
+			for i := 10; i < 20; i++ {
+				path := filepath.Join(scratch.Dir, "src", fmt.Sprintf("%05d.txt", i))
+				b := readTestFile(t, path)
+				b[0] = 'P'
+				writeTestFile(t, path, b)
+			}
+			taskObservation = mustObserve(t, taskWriter)
+			mergedTree := strings.Fields(string(gitCommand(t, f.env, f.root, nil, "merge-tree", "--write-tree", "--merge-base="+temporary.BaseCommit, taskObservation.Commit, temporaryObservation.Commit)))[0]
+			merge("merge_back_explicit", temporary, mergedTree, ledger.MergeBackMerged)
+
+			// Exercise simultaneous typed turns outside every measurement timer.
+			for _, conflict := range []bool{false, true} {
+				taskWriter = mustWriter(t, sf, testWriteBinding(scratch))
+				binding.WriterID = uuid.NewV7()
+				temporaryWriter = mustWriter(t, sf, binding)
+				temporary = temporaryWriter.Scratch()
+				taskLease, err := taskWriter.Lease(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				sourceLease, err := temporaryWriter.Lease(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				parentName, sourceName := "parallel-parent.txt", "parallel-source.txt"
+				if conflict {
+					parentName, sourceName = "parallel-conflict.txt", "parallel-conflict.txt"
+				}
+				writeTestFile(t, filepath.Join(scratch.Dir, parentName), []byte("task\n"))
+				writeTestFile(t, filepath.Join(temporary.Dir, sourceName), []byte("author\n"))
+				next := rootRequest(scratch)
+				next.Head = request.RequestID
+				assertBusy(t, promotionError(context.Background(), svc, next), "scratch_busy")
+				sourceLease()
+				taskLease()
+				mustObserve(t, temporaryWriter)
+				mustObserve(t, taskWriter)
+				result, err := svc.MergeBack(context.Background(), temporary.ID)
+				wantOutcome := ledger.MergeBackMerged
+				if conflict {
+					wantOutcome = ledger.MergeBackConflict
+				}
+				if err != nil || result.Outcome != wantOutcome {
+					t.Fatalf("two-writer conflict=%t: %+v %v", conflict, result, err)
+				}
+				if conflict {
+					if _, err := svc.CloseScratch(context.Background(), Closure{ScratchID: temporary.ID, Actor: ledger.ActorAgent, ContextID: temporary.ContextID, Reason: "abandoned"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 		})
 	}
 }
