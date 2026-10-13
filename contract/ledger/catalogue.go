@@ -41,22 +41,27 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeScratchClosed; and ticket 06's part of F2, frozen (D118):
 // TypePromotionAdmitted, TypeGenerationDerived and
 // TypePromotionFailed; and ticket 07's part of F2, frozen (D119):
-// TypeScratchChanged and TypeScratchMergeBack. All thirteen
-// are at version 1. It never contains a type in the reserved fixture namespace.
+// TypeScratchChanged and TypeScratchMergeBack; and ticket 08's part of F2,
+// proposed for the owner's freeze (D113): TypeFinalizationIntended,
+// TypePromotionAccepted and TypePromotionNoChange. All sixteen are at
+// version 1. It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
-		{TypeCommand, 1}:             true,
-		{TypeBodyPin, 1}:             true,
-		{TypeBodyUnpin, 1}:           true,
-		{TypeBodiesCollected, 1}:     true,
-		{TypeWorkspaceRegistered, 1}: true,
-		{TypeCaptureInputsPinned, 1}: true,
-		{TypeScratchCreated, 1}:      true,
-		{TypeScratchClosed, 1}:       true,
-		{TypePromotionAdmitted, 1}:   true,
-		{TypeGenerationDerived, 1}:   true,
-		{TypePromotionFailed, 1}:     true,
-		{TypeScratchChanged, 1}:      true,
-		{TypeScratchMergeBack, 1}:    true,
+		{TypeCommand, 1}:              true,
+		{TypeBodyPin, 1}:              true,
+		{TypeBodyUnpin, 1}:            true,
+		{TypeBodiesCollected, 1}:      true,
+		{TypeWorkspaceRegistered, 1}:  true,
+		{TypeCaptureInputsPinned, 1}:  true,
+		{TypeScratchCreated, 1}:       true,
+		{TypeScratchClosed, 1}:        true,
+		{TypePromotionAdmitted, 1}:    true,
+		{TypeGenerationDerived, 1}:    true,
+		{TypePromotionFailed, 1}:      true,
+		{TypeScratchChanged, 1}:       true,
+		{TypeScratchMergeBack, 1}:     true,
+		{TypeFinalizationIntended, 1}: true,
+		{TypePromotionAccepted, 1}:    true,
+		{TypePromotionNoChange, 1}:    true,
 	}}
 }

@@ -157,12 +157,14 @@
 //
 // A Catalogue lists the record type versions a writer may append. Defined
 // returns those this contract version defines: the four F0 record types,
-// the four F2-05 types, the three F2-06 types and the two F2-07 types below,
-// each at version 1.
+// the four F2-05 types, the three F2-06 types, the two F2-07 types and the
+// three F2-08 types below, sixteen in all, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
 // F2-07 is ticket 07's part of F2, frozen (D119),
+// also by addition to format version 1.
+// F2-08 is ticket 08's part of F2, proposed for the owner's freeze (D113),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -428,6 +430,11 @@
 //   - New root: H failed; restart_from is H; both trees equal the scratch's
 //     represented tree, its anchor_tree until a later F2 part records another.
 //
+// F2-08 is that part: the represented tree is the sealed_tree of the
+// scratch's latest request ended by workspace.promotion_accepted or
+// workspace.promotion_no_change, else its anchor_tree; a log without F2-08
+// records is unaffected.
+//
 // inputs_revision is a recorded workspace revision not above its current
 // one, and capture_inputs_sha256 is that revision's digest. Git ID lengths
 // match the workspace's object_format. The K bound is service policy,
@@ -506,6 +513,8 @@
 // is canonical main. inputs_revision is recorded and not above the current
 // revision; Git ID lengths match the workspace's object_format. The
 // generation window is service policy, not a record rule.
+// F2-08 adds an optional predecessor_witness_seq naming the latest accepted
+// predecessor; a log without F2-08 records is unaffected.
 //
 // Core's workspace service produces generations and consumes their current
 // state; C4 binds attempts to generation_id and evidence to the predecessor
@@ -534,7 +543,9 @@
 //
 // Record rules: the envelope's context_id is the request's; body_refs is
 // absent. Version 1's outcomes have actor core; a later part defines its
-// outcomes' actors. request_id is admitted and not ended. For conflict,
+// outcomes' actors. F2-08 defines the outcomes cancelled and interrupted and
+// their actors; a log without F2-08 records is unaffected.
+// request_id is admitted and not ended. For conflict,
 // generation_id is the request's current generation, with outcome conflict,
 // and no live request is ahead of it in its workspace's train. For
 // dependency_failed, failed_request_id is a request of the same lineage
@@ -831,4 +842,250 @@
 // abandonment, both temporary closure reasons, and a root admission bound
 // to the latest observation and both applied merge-backs. The workspace
 // uses sha1; tests cover 64-digit Git IDs separately.
+//
+// # F2-08 record types
+//
+// These three version-1 types are ticket 08's part of F2, proposed for the
+// owner's freeze (D113), by addition to format version 1. C2 owns their
+// payload specifications. Only Core's workspace service
+// (internal/core/workspace) may append them, through appender.Appender;
+// permitted callers are enforced by review. The service checks the record
+// rules both when appending and at Open. Check, Reader, EncodeCommit and
+// these payload encoders and decoders do not enforce service record rules.
+// C2's product still admits nothing. The mechanism that writes these records
+// is ticket 08's S3, reached only by package tests until C4 (D52).
+//
+// Payloads follow F2-07's common encoding and repository-path rules above,
+// except that promotion_accepted.changed_paths is the one required path
+// array that may not be empty: neither Encode nor Decode substitutes [].
+// The optional integer predecessor_witness_seq is omitted when zero in Go
+// and refused when present with 0, null, a negative or non-integer value.
+// All Git IDs within one F2-08 payload have the same length, 40 or 64
+// lowercase hex digits; matching the workspace's object_format remains a
+// service record rule.
+//
+// predecessor_witness_seq names the sequence of the workspace's latest
+// workspace.promotion_accepted. Its presence is a service record rule, not a
+// decoder rule: present exactly when the workspace has an acknowledged
+// promotion_accepted before this record, naming the latest one, whose
+// accepted_commit/accepted_tree equal this record's
+// predecessor_commit/predecessor_tree. Absent, the predecessor is canonical
+// main as the service observed it at append, F2-06's two-halves rule (D118).
+// A generation naming a train predecessor carries no witness; its special
+// presence rule is given with the additions below.
+//
+// workspace.finalization_intended v1 (FinalizationIntended) binds one
+// intended canonical update to its request and generation.
+//
+//	key                      type           presence  rule
+//	intent_id                UUIDv7         required  a new intent
+//	request_id               UUIDv7         required  the leading live admitted request
+//	generation_id            UUIDv7         required  its current clean generation
+//	predecessor_witness_seq   integer        optional  1 through MaxInt64; the witness rule above
+//	predecessor_commit        Git object ID  required  the generation's predecessor, canonical main
+//	predecessor_tree          Git object ID  required  that predecessor's tree
+//	target_commit             Git object ID  required  the generation's derived_commit
+//	target_tree               Git object ID  required  the generation's derived_tree
+//	finalization_rules        string         required  ^[a-z][a-z0-9-]*/[1-9][0-9]*$, at most 64 bytes
+//
+// Decoder rules: predecessor_commit differs from target_commit and
+// predecessor_tree differs from target_tree. A tree-equal generation is
+// no-change, never an intent. predecessor_witness_seq, when present, is at
+// least 1, and all four Git IDs have one length.
+//
+// Record rules: actor is core; the envelope's context_id is the request's;
+// body_refs is absent. No commit index is fixed. intent_id is new.
+// request_id is admitted and live, with no live request ahead of it in its
+// workspace's train, no earlier finalization_intended naming it, and no
+// unresolved intent in the workspace. There is one unresolved intent per
+// workspace: no later intent before the predecessor's proven durable
+// outcome. generation_id is the request's current clean generation, not
+// superseded. predecessor_commit/predecessor_tree equal its predecessor
+// commit and tree, and target_commit/target_tree its derived commit and tree.
+// predecessor_witness_seq follows the witness rule above. When the generation
+// carries predecessor_request_id, that request has since ended by
+// promotion_accepted, that acceptance is the latest witness, and its accepted
+// commit and tree are the generation's predecessor: a speculative generation
+// stays finalizable without a rebuild.
+//
+// While the intent is unresolved, there is no later finalization_intended in
+// the workspace, no generation_derived superseding its generation, no
+// promotion_failed for the request other than interrupted, and no
+// promotion_no_change for it. The request stays live, so its scratch has no
+// scratch_closed under F2-06's closure rule. The intent is resolved by
+// exactly one promotion_accepted with the same intent_id or one
+// promotion_failed with outcome interrupted for the request, as below.
+//
+// Producer rules, proved by the service and not replay: the intent is
+// appended and acknowledged before the one guarded update of refs/heads/main.
+// Cancellation after the intent answers too late.
+// Durability of the update is established before the acceptance is appended.
+// The request's checkpoint slot is released only after the acceptance or the
+// ending is acknowledged.
+// Before the intent, the service preflights the encoded acceptance against
+// MaxRecordBytes and MaxCommitBytes and refuses as pathset_cap without
+// truncation or chunking.
+// Evidence and policy/check/environment/law revision bindings join by
+// addition when F4, ticket 09 and U1.L freeze them.
+//
+// workspace.promotion_accepted v1 (PromotionAccepted) resolves an intent
+// successfully and witnesses the workspace's accepted canonical tip.
+//
+//	key                      type           presence  rule
+//	intent_id                UUIDv7         required  the unresolved intent this record resolves
+//	request_id               UUIDv7         required  that intent's request
+//	generation_id            UUIDv7         required  that intent's generation
+//	predecessor_witness_seq   integer        optional  1 through MaxInt64; the witness rule above
+//	predecessor_commit        Git object ID  required  that intent's predecessor_commit
+//	predecessor_tree          Git object ID  required  that intent's predecessor_tree
+//	accepted_commit           Git object ID  required  exactly that intent's target_commit
+//	accepted_tree             Git object ID  required  exactly that intent's target_tree
+//	changed_paths             path array     required  non-empty exact predecessor_tree to accepted_tree set
+//
+// changed_paths uses F2-07's path grammar and byte ordering, includes
+// deletions and both names of a rename, and names paths, not file content.
+// A normal and a reconciled acceptance are the same record with the same
+// consumer effects: there is no recovery flag.
+//
+// Decoder rules: predecessor_commit differs from accepted_commit and
+// predecessor_tree differs from accepted_tree. changed_paths is non-empty,
+// well-formed, byte-sorted and distinct; nil, null, absent and non-array
+// values are refused. predecessor_witness_seq, when present, is at least 1;
+// all four Git IDs have one length.
+//
+// Record rules: actor is core; the envelope's context_id is the request's;
+// body_refs is absent. intent_id is the workspace's unresolved intent.
+// request_id, generation_id, predecessor_witness_seq, predecessor_commit,
+// predecessor_tree, accepted_commit and accepted_tree equal that intent's
+// bindings, accepted_* its target_*. The same commit holds, after this
+// record, one ledger.body_unpin of the request's admission pin_id, once,
+// and never a report unpin. changed_paths is the exact
+// predecessor-tree-to-accepted-tree set, computed by the service; replay
+// does not recompute it.
+//
+// After the commit, the request has ended successfully: it leaves the train,
+// its slot is released on acknowledgement, and its lineage does not fail.
+// Live requests of the lineage with larger checkpoints stay live: F2-06's
+// whole-suffix rule applies to promotion_failed only. This record becomes
+// the workspace's latest witness. The scratch's represented tree becomes
+// the admission's sealed_tree. A second acceptance for the same intent or
+// request is inconsistent.
+//
+// workspace.promotion_no_change v1 (PromotionNoChange) ends a request
+// successfully without an intended or accepted canonical effect.
+//
+//	key                      type           presence  rule
+//	request_id               UUIDv7         required  the leading live admitted request
+//	generation_id            UUIDv7         required  its current clean generation
+//	predecessor_witness_seq   integer        optional  1 through MaxInt64; the witness rule above
+//	predecessor_commit        Git object ID  required  that generation's predecessor_commit
+//	predecessor_tree          Git object ID  required  that generation's predecessor_tree
+//
+// Decoder rules are only the generic ones: required UUIDv7s, an optional
+// integer at least 1 when present, and two Git IDs of one length. Tree
+// equality with the generation and witness is a service record rule.
+// There is no intent_id, changed_paths or body_refs.
+//
+// Record rules: actor is core; the envelope's context_id is the request's;
+// body_refs is absent. The request is admitted, live and leading, and has
+// no finalization_intended. generation_id is its current clean generation,
+// whose predecessor_commit/predecessor_tree equal this record's and whose
+// derived_tree equals predecessor_tree. Trees, never commits, are compared:
+// a different derived commit with the same tree is no-change.
+// predecessor_witness_seq follows the witness rule above. The same commit
+// holds, after this record, the admission's manifest unpin, once, never a
+// report unpin. The request ends successfully as above; the witness does
+// not advance, and the represented tree becomes the admission's sealed_tree.
+// A child derived over this generation's derived_commit is stale and
+// rebuilds against the witness, a service rule. Nothing here is passing
+// validation, a delivered effect, pressure or a field source.
+//
+// F2-08 also adds this optional key as the last key of an existing v1
+// payload, after report_pin_id:
+//
+//	type                          key                      type     presence  rule
+//	workspace.generation_derived   predecessor_witness_seq  integer  optional  1 through MaxInt64; the witness rule above
+//
+// Decoder rule: when predecessor_witness_seq is present, both
+// predecessor_request_id and predecessor_generation_id are absent.
+// The F2-06 golden pins the byte-identical absent form.
+// workspace.promotion_failed gains no key: cancelled and interrupted are
+// new tokens under F2-06's existing open outcome grammar. Every reader
+// already accepts them with either optional key present or absent; the
+// decoder and encoding rules are unchanged.
+//
+// The following record rules are conditional on the new token, key or type;
+// logs without F2-08 records remain valid.
+//
+// promotion_failed with outcome cancelled: actor is owner, or agent with
+// the envelope's context_id equal to the request's. generation_id and
+// failed_request_id are absent. The request is admitted, live and has no
+// unresolved finalization_intended. F2-06's rules apply unchanged: later
+// records in the commit end the lineage's live higher checkpoints as
+// dependency_failed naming it, then the manifest unpins in ending order,
+// never a report unpin.
+//
+// promotion_failed with outcome interrupted: actor is core; both optional
+// keys are absent; the request is admitted and live. When it has an
+// unresolved intent, this ending resolves it, and no promotion_accepted
+// with that intent_id may follow. The suffix and unpin rules are as above.
+//
+// generation_derived with predecessor_witness_seq: present exactly when the
+// workspace has an acknowledged promotion_accepted before it and the
+// generation's predecessor is canonical main, with no predecessor IDs.
+// It names the latest acceptance, whose accepted commit and tree equal
+// predecessor_commit/predecessor_tree. A generation at the train's head
+// without the key is valid only while the workspace has no acceptance.
+//
+// Representation: a dedicated scratch's represented tree is the sealed_tree
+// of its latest request ended by promotion_accepted or promotion_no_change,
+// else its anchor_tree. A new root's baseline_tree and delta_base_tree equal
+// it, making F2-06's new-root case concrete; a successor keeps its parent's
+// sealed_tree. Neither base_commit nor anchor_tree changes, and acceptance
+// records no closure.
+//
+// Recovery-pending is a service rule: a workspace whose log holds live
+// requests at Open is recovery-pending; the service refuses admission,
+// integration, intents and no-change for it until its bookkeeping phase has
+// ended those requests (interrupted, with suffixes dependency_failed, D55),
+// the unresolved intent, if any, by the conditional mapping (interrupted at
+// the old tip, accepted at the intended tip, blocked otherwise); cancellation
+// of a pre-intent request and status queries remain.
+// Replay enforces record facts; it reads no Git, body or clock.
+//
+// Core writes finalization-rules/1, which names the files ref backend; the
+// checks before the canonical update (refs/heads/main a direct ref, no
+// worktree with main checked out, the target's tree and its sole parent equal
+// to the expected old tip); the one guarded
+// git update-ref --no-deref --end-of-options refs/heads/main <target> <old>
+// under the pinned core.fsync=committed and core.fsyncMethod=fsync
+// configuration; the directory flushes of the object and ref directories
+// after it and the re-read of main that establishes durability; the
+// no-change comparison by tree against the latest witness; and the order
+// intent, update, durability, acceptance, slot release. The value is Core
+// policy named in the record: any change to those rules is a new value and
+// needs no new type version; integration-rules/1, scratch-rules/1 and
+// scratch-merge-rules/1 are unchanged.
+//
+// The workspace service consumes intents, witnesses, representation and
+// retention. C3 consumes terminal results for the original context (D63);
+// C4 consumes the witness as the predecessor binding of its evidence;
+// U1.E, U3 and U4 consume accepted deltas when their gates permit; the owner
+// may inspect them. Every payload key is replay-essential. Identifiers,
+// Git IDs and paths are host-private and original-context scoped.
+// changed_paths names repository paths, never content. An intent, a
+// no-change or a too-late cancellation is never a delivered effect.
+//
+// The F2-08 golden at testdata/f2/08/log/00000000000000000001.jsonl holds
+// twenty-two commits and thirty-nine records. finalization_intended appears
+// at seqs 8, 27 and 33; promotion_accepted at 9 and 34; promotion_no_change
+// at 14; generation_derived with the witness key at 13, 26 and 32;
+// promotion_failed cancelled at 20, its cascade at 21, interrupted resolving
+// an intent at 28 and pre-intent at 38. It pins a first acceptance witnessing
+// main as observed, a no-change over it with the same tree and a different
+// commit, an owner cancellation with its cascade, a new root over the
+// represented tree, an intent interrupted at the old tip, a chained
+// acceptance naming the first as witness, and a queued successor interrupted
+// before any intent. The workspace uses sha1; tests cover 64-digit Git IDs
+// separately.
 package ledger

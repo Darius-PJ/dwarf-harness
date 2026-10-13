@@ -300,6 +300,24 @@ func (ms *members) nat(key string, required bool) int64 {
 	return int64(n)
 }
 
+// optionalNat returns an integer in [1, MaxInt64], or zero and false when
+// absent. A present zero, null or non-integer value is invalid.
+func (ms *members) optionalNat(key string) (int64, bool) {
+	if ms.err != nil {
+		return 0, false
+	}
+	raw, present := ms.m[key]
+	if !present {
+		return 0, false
+	}
+	n, ok := parseNat(raw, math.MaxInt64)
+	if !ok || n == 0 {
+		ms.err = fmt.Errorf("%s %w", key, errNat)
+		return 0, false
+	}
+	return int64(n), true
+}
+
 // text returns the required string key.
 func (ms *members) text(key string) string {
 	raw, ok := ms.get(key, true)

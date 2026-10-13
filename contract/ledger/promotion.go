@@ -29,6 +29,13 @@ const (
 	FailedDependencyFailed = "dependency_failed"
 )
 
+// These F2-08 outcomes are ticket 08's part of F2, proposed for the owner's
+// freeze (D113), under F2-06's open outcome grammar. No encoding rule changes.
+const (
+	FailedCancelled   = "cancelled"
+	FailedInterrupted = "interrupted"
+)
+
 // PromotionAdmitted is the payload of a workspace.promotion_admitted v1
 // record: a checkpoint's receipt and immutable submission. Zero optional
 // fields are absent; every non-zero ID must be a UUIDv7.
@@ -73,6 +80,7 @@ type GenerationDerived struct {
 	DerivedTree             string    `json:"derived_tree,omitzero"`
 	ConflictSHA256          Digest    `json:"conflict_sha256,omitzero"`
 	ReportPinID             uuid.UUID `json:"report_pin_id,omitzero"`
+	PredecessorWitnessSeq   int64     `json:"predecessor_witness_seq,omitzero"`
 }
 
 // PromotionFailed is the payload of a workspace.promotion_failed v1
@@ -173,6 +181,7 @@ func DecodeGenerationDerived(payload json.RawMessage) (GenerationDerived, error)
 		p.DerivedTree, _ = m.optionalText("derived_tree")
 		p.ConflictSHA256, _ = m.optionalDigest("conflict_sha256")
 		p.ReportPinID, _ = m.optionalID("report_pin_id")
+		p.PredecessorWitnessSeq, _ = m.optionalNat("predecessor_witness_seq")
 		return p.check()
 	}); err != nil {
 		return GenerationDerived{}, err
@@ -192,6 +201,10 @@ func (p GenerationDerived) check() error {
 	switch {
 	case (p.PredecessorRequestID == (uuid.UUID{})) != (p.PredecessorGenerationID == (uuid.UUID{})):
 		return errors.New("predecessor request and generation must both be present or absent")
+	case p.PredecessorWitnessSeq < 0:
+		return errors.New("predecessor_witness_seq is negative")
+	case p.PredecessorWitnessSeq != 0 && (p.PredecessorRequestID != (uuid.UUID{}) || p.PredecessorGenerationID != (uuid.UUID{})):
+		return errors.New("predecessor witness and train predecessor IDs are both present")
 	case !validGitID(p.PredecessorCommit) || !validGitID(p.PredecessorTree):
 		return errors.New("predecessor Git ID is not 40 or 64 lowercase hex digits")
 	case p.InputsRevision < 1:

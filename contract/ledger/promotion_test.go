@@ -102,6 +102,15 @@ func TestF2_06PayloadsRoundTrip(t *testing.T) {
 					values = append(values, p)
 					p.Outcome = strings.Repeat("a", 64)
 					values = append(values, p)
+					// F2-08's tokens keep F2-06's open grammar. Optional-ID
+					// restrictions belong to service record rules, not codecs.
+					for _, outcome := range []string{"cancelled", "interrupted"} {
+						for _, generation := range []uuid.UUID{{}, fid("11")} {
+							for _, failed := range []uuid.UUID{{}, fid("70")} {
+								values = append(values, PromotionFailed{RequestID: p.RequestID, Outcome: outcome, GenerationID: generation, FailedRequestID: failed})
+							}
+						}
+					}
 				}
 			}
 			for _, want := range values {
@@ -343,5 +352,67 @@ func TestPromotionAdmittedProvenance(t *testing.T) {
 	root.ScratchObservationID = uuid.MustParse("6f1c2b6e-4b1d-4c3a-9e2f-0a1b2c3d4e5f")
 	if _, err := root.Encode(); !errors.Is(err, ErrInvalid) {
 		t.Errorf("Encode non-v7 observation = %v; want ErrInvalid", err)
+	}
+}
+
+// F2-08's witness key is proposed for the owner's freeze (D113).
+func TestGenerationDerivedWitness(t *testing.T) {
+	t.Parallel()
+	for _, tc := range f2_06Payloads() {
+		base, ok := tc.p.(GenerationDerived)
+		if !ok {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			absent := mustEncode(base)
+			got, err := DecodeGenerationDerived(absent)
+			if err != nil || got != base || !bytes.Equal(mustEncode(got), absent) {
+				t.Fatalf("absent witness changed encoding: %+v, %v", got, err)
+			}
+			canonical := base
+			canonical.PredecessorRequestID, canonical.PredecessorGenerationID = uuid.UUID{}, uuid.UUID{}
+			for _, seq := range []int64{1, 1<<63 - 1} {
+				p := canonical
+				p.PredecessorWitnessSeq = seq
+				js := mustEncode(p)
+				got, err := DecodeGenerationDerived(js)
+				if err != nil || got != p || !bytes.Equal(mustEncode(got), js) {
+					t.Fatalf("witness round trip: %+v, %v; want %+v", got, err, p)
+				}
+				p.PredecessorWitnessSeq = 0
+				if !bytes.Equal(mustEncode(p), mustEncode(canonical)) {
+					t.Fatal("zero witness did not restore the absent encoding")
+				}
+			}
+			for _, value := range []string{`0`, `null`, `-1`, `1.5`, `1e1`, `"1"`, `9223372036854775808`, `true`} {
+				bad := append([]byte(`{"predecessor_witness_seq":`+value+`,`), mustEncode(canonical)[1:]...)
+				if _, err := DecodeGenerationDerived(bad); !errors.Is(err, ErrInvalid) {
+					t.Errorf("witness %s: %v; want ErrInvalid", value, err)
+				}
+			}
+			negative := canonical
+			negative.PredecessorWitnessSeq = -1
+			if _, err := negative.Encode(); !errors.Is(err, ErrInvalid) {
+				t.Errorf("negative witness Encode: %v; want ErrInvalid", err)
+			}
+			for _, ids := range [][2]uuid.UUID{
+				{fid("70"), {}}, {{}, fid("16")}, {fid("70"), fid("16")},
+			} {
+				p := canonical
+				p.PredecessorWitnessSeq = 9
+				p.PredecessorRequestID, p.PredecessorGenerationID = ids[0], ids[1]
+				bad, err := json.Marshal(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := DecodeGenerationDerived(bad); !errors.Is(err, ErrInvalid) {
+					t.Errorf("witness with predecessor IDs Decode: %v; want ErrInvalid", err)
+				}
+				if _, err := p.Encode(); !errors.Is(err, ErrInvalid) {
+					t.Errorf("witness with predecessor IDs Encode: %v; want ErrInvalid", err)
+				}
+			}
+		})
 	}
 }
