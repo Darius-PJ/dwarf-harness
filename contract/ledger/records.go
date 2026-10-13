@@ -364,3 +364,61 @@ func (ms *members) optionalDigest(key string) (Digest, bool) {
 	}
 	return d, true
 }
+
+// optionalIDs returns distinct canonical UUIDv7s in their given order.
+// Absence is nil and false; a present array must be non-empty.
+func (ms *members) optionalIDs(key string) ([]uuid.UUID, bool) {
+	raw, ok := ms.get(key, false)
+	if !ok {
+		return nil, false
+	}
+	var elems []json.RawMessage
+	if raw[0] != '[' || json.Unmarshal(raw, &elems) != nil || len(elems) == 0 {
+		ms.err = fmt.Errorf("%s is not a non-empty array", key)
+		return nil, false
+	}
+	ids := make([]uuid.UUID, len(elems))
+	seen := make(map[uuid.UUID]bool, len(elems))
+	for i, el := range elems {
+		s, ok := parseString(el)
+		if !ok {
+			ms.err = fmt.Errorf("%s element %d is not a string", key, i)
+			return nil, false
+		}
+		id, ok := parseID(s)
+		if !ok || seen[id] {
+			ms.err = fmt.Errorf("%s element %d is not a distinct canonical UUIDv7", key, i)
+			return nil, false
+		}
+		ids[i], seen[id] = id, true
+	}
+	return ids, true
+}
+
+// paths returns strictly increasing repository-relative paths. Present []
+// is a non-nil empty slice; absence is nil and false.
+func (ms *members) paths(key string, required bool) ([]string, bool) {
+	raw, ok := ms.get(key, required)
+	if !ok {
+		return nil, false
+	}
+	var elems []json.RawMessage
+	if raw[0] != '[' || json.Unmarshal(raw, &elems) != nil {
+		ms.err = fmt.Errorf("%s is not an array", key)
+		return nil, false
+	}
+	paths := make([]string, len(elems))
+	for i, el := range elems {
+		path, ok := parseString(el)
+		if !ok {
+			ms.err = fmt.Errorf("%s element %d is not a string", key, i)
+			return nil, false
+		}
+		paths[i] = path
+	}
+	if err := checkRepoPaths(paths); err != nil {
+		ms.err = fmt.Errorf("%s: %w", key, err)
+		return nil, false
+	}
+	return paths, true
+}

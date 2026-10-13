@@ -35,13 +35,14 @@ type CaptureInputsPinned struct {
 
 // ScratchCreated is the payload of a workspace.scratch_created v1 record.
 type ScratchCreated struct {
-	ScratchID   uuid.UUID `json:"scratch_id"`   // a UUIDv7
-	WorkspaceID uuid.UUID `json:"workspace_id"` // a UUIDv7
-	ContextID   uuid.UUID `json:"context_id"`   // a UUIDv7
-	Dir         string    `json:"dir"`          // 8 lowercase hex digits
-	Branch      string    `json:"branch"`       // a full refs/heads/ name
-	BaseCommit  string    `json:"base_commit"`  // 40 or 64 lowercase hex digits
-	AnchorTree  string    `json:"anchor_tree"`  // 40 or 64 lowercase hex digits
+	ScratchID       uuid.UUID `json:"scratch_id"`   // a UUIDv7
+	WorkspaceID     uuid.UUID `json:"workspace_id"` // a UUIDv7
+	ContextID       uuid.UUID `json:"context_id"`   // a UUIDv7
+	Dir             string    `json:"dir"`          // 8 lowercase hex digits
+	Branch          string    `json:"branch"`       // a full refs/heads/ name
+	BaseCommit      string    `json:"base_commit"`  // 40 or 64 lowercase hex digits
+	AnchorTree      string    `json:"anchor_tree"`  // 40 or 64 lowercase hex digits
+	ParentScratchID uuid.UUID `json:"parent_scratch_id,omitzero"`
 }
 
 // ScratchClosed is the payload of a workspace.scratch_closed v1 record.
@@ -53,6 +54,10 @@ type ScratchClosed struct {
 	ContextID uuid.UUID `json:"context_id"` // a UUIDv7
 	Reason    string    `json:"reason"`     // [a-z][a-z0-9_]*, at most 64 bytes
 }
+
+// ReasonTemporaryMergedBack is ticket 07's closure reason, proposed for
+// the owner's freeze as part of F2 (D113).
+const ReasonTemporaryMergedBack = "temporary_merged_back"
 
 // Encode returns p as a workspace.registered v1 payload. Its errors wrap
 // ErrInvalid. It checks the payload rules, not the service's record rules.
@@ -132,6 +137,7 @@ func DecodeScratchCreated(payload json.RawMessage) (ScratchCreated, error) {
 			ScratchID: m.id("scratch_id"), WorkspaceID: m.id("workspace_id"), ContextID: m.id("context_id"),
 			Dir: m.text("dir"), Branch: m.text("branch"), BaseCommit: m.text("base_commit"), AnchorTree: m.text("anchor_tree"),
 		}
+		p.ParentScratchID, _ = m.optionalID("parent_scratch_id")
 		return p.check()
 	}); err != nil {
 		return ScratchCreated{}, err
@@ -147,6 +153,8 @@ func (p ScratchCreated) check() error {
 		return errors.New("workspace_id is not a UUIDv7")
 	case !isV7(p.ContextID):
 		return errors.New("context_id is not a UUIDv7")
+	case p.ParentScratchID != (uuid.UUID{}) && !isV7(p.ParentScratchID):
+		return errors.New("parent_scratch_id is not a UUIDv7")
 	case len(p.Dir) != 8 || !isLowerHex([]byte(p.Dir)):
 		return errors.New("dir is not 8 lowercase hex digits")
 	case !validScratchBranch(p.Branch):

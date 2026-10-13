@@ -227,3 +227,35 @@ func TestF2_05PathGrammars(t *testing.T) {
 		})
 	}
 }
+
+// F2-07's parent key is proposed for the owner's freeze (D113).
+func TestScratchCreatedParent(t *testing.T) {
+	t.Parallel()
+	p := f2Payloads()[2].p.(ScratchCreated)
+	absent := mustEncode(p)
+	p.ParentScratchID = fid("53")
+	js := mustEncode(p)
+	want := append(slices.Clone(absent[:len(absent)-1]), []byte(`,"parent_scratch_id":"`+p.ParentScratchID.String()+`"}`)...)
+	if !bytes.Equal(js, want) {
+		t.Fatalf("Encode = %s; want %s", js, want)
+	}
+	got, err := DecodeScratchCreated(js)
+	if err != nil || got != p {
+		t.Fatalf("Decode = %+v, %v; want %+v", got, err, p)
+	}
+	if again, err := got.Encode(); err != nil || !bytes.Equal(again, js) {
+		t.Fatalf("re-encoding = %s, %v; want %s", again, err, js)
+	}
+	for _, value := range []string{`null`, `""`, `1`, `"00000000-0000-0000-0000-000000000000"`, `"6f1c2b6e-4b1d-4c3a-9e2f-0a1b2c3d4e5f"`} {
+		t.Run(value, func(t *testing.T) {
+			bad := append(slices.Clone(absent[:len(absent)-1]), []byte(`,"parent_scratch_id":`+value+`}`)...)
+			if _, err := DecodeScratchCreated(bad); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Decode(%s) = %v; want ErrInvalid", bad, err)
+			}
+		})
+	}
+	p.ParentScratchID[6] = 0x40
+	if _, err := p.Encode(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Encode non-v7 parent = %v; want ErrInvalid", err)
+	}
+}

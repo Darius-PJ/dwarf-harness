@@ -289,3 +289,59 @@ func TestF2_06PayloadsRefuse(t *testing.T) {
 		})
 	}
 }
+
+// F2-07's provenance keys are proposed for the owner's freeze (D113).
+func TestPromotionAdmittedProvenance(t *testing.T) {
+	t.Parallel()
+	root := f2_06Payloads()[0].p.(PromotionAdmitted)
+	absent := mustEncode(root)
+	// Sequence order need not be UUID order.
+	ids := []uuid.UUID{fid("96"), fid("95")}
+	for _, p := range []PromotionAdmitted{
+		func() PromotionAdmitted { p := root; p.ScratchObservationID = fid("5d"); return p }(),
+		func() PromotionAdmitted { p := root; p.MergeBackIDs = ids; return p }(),
+		func() PromotionAdmitted {
+			p := root
+			p.ScratchObservationID = fid("5d")
+			p.MergeBackIDs = ids
+			return p
+		}(),
+	} {
+		js := mustEncode(p)
+		got, err := DecodePromotionAdmitted(js)
+		if err != nil || !reflect.DeepEqual(got, p) {
+			t.Fatalf("Decode(%s) = %+v, %v; want %+v", js, got, err, p)
+		}
+		if again, err := got.Encode(); err != nil || !bytes.Equal(again, js) {
+			t.Fatalf("re-encoding = %s, %v; want %s", again, err, js)
+		}
+	}
+	root.MergeBackIDs = []uuid.UUID{}
+	if js := mustEncode(root); !bytes.Equal(js, absent) {
+		t.Fatalf("empty MergeBackIDs encodes as %s; want %s", js, absent)
+	}
+	for key, values := range map[string][]string{
+		"scratch_observation_id": {`null`, `""`, `"00000000-0000-0000-0000-000000000000"`, `"6f1c2b6e-4b1d-4c3a-9e2f-0a1b2c3d4e5f"`},
+		"merge_back_ids":         {`null`, `[]`, `1`, `{}`, `[""]`, `[1]`, `[null]`, `["00000000-0000-0000-0000-000000000000"]`, `["6f1c2b6e-4b1d-4c3a-9e2f-0a1b2c3d4e5f"]`, `["0199C000-0000-7000-8000-000000000095"]`, `["` + ids[0].String() + `","` + ids[0].String() + `"]`},
+	} {
+		for _, value := range values {
+			t.Run(key+"="+value, func(t *testing.T) {
+				bad := append(slices.Clone(absent[:len(absent)-1]), []byte(`,"`+key+`":`+value+`}`)...)
+				if _, err := DecodePromotionAdmitted(bad); !errors.Is(err, ErrInvalid) {
+					t.Fatalf("Decode(%s) = %v; want ErrInvalid", bad, err)
+				}
+			})
+		}
+	}
+	for _, ids := range [][]uuid.UUID{{{}}, {uuid.MustParse("6f1c2b6e-4b1d-4c3a-9e2f-0a1b2c3d4e5f")}, {fid("95"), fid("95")}} {
+		root.MergeBackIDs = ids
+		if _, err := root.Encode(); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Encode IDs %v = %v; want ErrInvalid", ids, err)
+		}
+	}
+	root.MergeBackIDs = nil
+	root.ScratchObservationID = uuid.MustParse("6f1c2b6e-4b1d-4c3a-9e2f-0a1b2c3d4e5f")
+	if _, err := root.Encode(); !errors.Is(err, ErrInvalid) {
+		t.Errorf("Encode non-v7 observation = %v; want ErrInvalid", err)
+	}
+}

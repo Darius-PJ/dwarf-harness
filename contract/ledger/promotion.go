@@ -33,23 +33,25 @@ const (
 // record: a checkpoint's receipt and immutable submission. Zero optional
 // fields are absent; every non-zero ID must be a UUIDv7.
 type PromotionAdmitted struct {
-	RequestID           uuid.UUID `json:"request_id"`
-	WorkspaceID         uuid.UUID `json:"workspace_id"`
-	ScratchID           uuid.UUID `json:"scratch_id"`
-	ContextID           uuid.UUID `json:"context_id"`
-	LineageID           uuid.UUID `json:"lineage_id"`
-	Checkpoint          int64     `json:"checkpoint"` // at least 1
-	ParentRequestID     uuid.UUID `json:"parent_request_id,omitzero"`
-	RestartFrom         uuid.UUID `json:"restart_from,omitzero"`
-	ScratchBase         string    `json:"scratch_base"`    // 40 or 64 lowercase hex digits
-	BaselineTree        string    `json:"baseline_tree"`   // 40 or 64 lowercase hex digits
-	DeltaBaseTree       string    `json:"delta_base_tree"` // 40 or 64 lowercase hex digits
-	CaptureID           uuid.UUID `json:"capture_id"`
-	SealedTree          string    `json:"sealed_tree"` // 40 or 64 lowercase hex digits
-	ManifestSHA256      Digest    `json:"manifest_sha256"`
-	InputsRevision      int64     `json:"inputs_revision"` // at least 1
-	CaptureInputsSHA256 Digest    `json:"capture_inputs_sha256"`
-	PinID               uuid.UUID `json:"pin_id"`
+	RequestID            uuid.UUID   `json:"request_id"`
+	WorkspaceID          uuid.UUID   `json:"workspace_id"`
+	ScratchID            uuid.UUID   `json:"scratch_id"`
+	ContextID            uuid.UUID   `json:"context_id"`
+	LineageID            uuid.UUID   `json:"lineage_id"`
+	Checkpoint           int64       `json:"checkpoint"` // at least 1
+	ParentRequestID      uuid.UUID   `json:"parent_request_id,omitzero"`
+	RestartFrom          uuid.UUID   `json:"restart_from,omitzero"`
+	ScratchBase          string      `json:"scratch_base"`    // 40 or 64 lowercase hex digits
+	BaselineTree         string      `json:"baseline_tree"`   // 40 or 64 lowercase hex digits
+	DeltaBaseTree        string      `json:"delta_base_tree"` // 40 or 64 lowercase hex digits
+	CaptureID            uuid.UUID   `json:"capture_id"`
+	SealedTree           string      `json:"sealed_tree"` // 40 or 64 lowercase hex digits
+	ManifestSHA256       Digest      `json:"manifest_sha256"`
+	InputsRevision       int64       `json:"inputs_revision"` // at least 1
+	CaptureInputsSHA256  Digest      `json:"capture_inputs_sha256"`
+	PinID                uuid.UUID   `json:"pin_id"`
+	ScratchObservationID uuid.UUID   `json:"scratch_observation_id,omitzero"`
+	MergeBackIDs         []uuid.UUID `json:"merge_back_ids,omitempty"`
 }
 
 // GenerationDerived is the payload of a workspace.generation_derived v1
@@ -104,6 +106,8 @@ func DecodePromotionAdmitted(payload json.RawMessage) (PromotionAdmitted, error)
 		}
 		p.ParentRequestID, _ = m.optionalID("parent_request_id")
 		p.RestartFrom, _ = m.optionalID("restart_from")
+		p.ScratchObservationID, _ = m.optionalID("scratch_observation_id")
+		p.MergeBackIDs, _ = m.optionalIDs("merge_back_ids")
 		return p.check()
 	}); err != nil {
 		return PromotionAdmitted{}, err
@@ -117,10 +121,17 @@ func (p PromotionAdmitted) check() error {
 			return errors.New("required ID is not a UUIDv7")
 		}
 	}
-	for _, id := range []uuid.UUID{p.ParentRequestID, p.RestartFrom} {
+	for _, id := range []uuid.UUID{p.ParentRequestID, p.RestartFrom, p.ScratchObservationID} {
 		if id != (uuid.UUID{}) && !isV7(id) {
 			return errors.New("optional ID is not a UUIDv7")
 		}
+	}
+	seen := make(map[uuid.UUID]bool, len(p.MergeBackIDs))
+	for _, id := range p.MergeBackIDs {
+		if !isV7(id) || seen[id] {
+			return errors.New("merge_back_ids contains a non-v7 or repeated ID")
+		}
+		seen[id] = true
 	}
 	switch {
 	case p.Checkpoint < 1:

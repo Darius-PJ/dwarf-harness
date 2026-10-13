@@ -157,9 +157,12 @@
 //
 // A Catalogue lists the record type versions a writer may append. Defined
 // returns those this contract version defines: the four F0 record types,
-// the four F2-05 types and the three F2-06 types below, each at version 1.
+// the four F2-05 types, the three F2-06 types and the two F2-07 types below,
+// each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
+// also by addition to format version 1.
+// F2-07 is ticket 07's part of F2, proposed for the owner's freeze (D113),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -331,6 +334,8 @@
 // context_id; body_refs is absent. scratch_id is new; the pair (context_id,
 // workspace_id) has no open scratch. dir and branch were never used by an
 // earlier scratch. Both Git ID lengths match the workspace's object_format.
+// F2-07 adds an optional parent_scratch_id with its own creation rules for
+// temporary scratches; a log without F2-07 records is unaffected.
 //
 // workspace.scratch_closed v1 (ScratchClosed) records an explicit closure.
 //
@@ -350,6 +355,9 @@
 // once, and context_id is the scratch's.
 // F2-06 adds rules on when a closure may be appended and what its commit
 // carries; a log without F2-06 records is unaffected.
+// F2-07 defines the reason temporary_merged_back and rules for closing
+// temporary scratches and their parents; a log without F2-07 records is
+// unaffected.
 //
 // The F2-05 golden at testdata/f2/05/log/00000000000000000001.jsonl holds
 // six commits and twelve records: two registrations and their pins, two
@@ -430,6 +438,8 @@
 // holds, after workspace.scratch_closed, one ledger.body_unpin for each
 // still-active report_pin_id of the scratch's requests, in log order of
 // their pins. A log without F2-06 records is unaffected.
+// F2-07 adds the optional provenance keys scratch_observation_id and
+// merge_back_ids; a log without F2-07 records is unaffected.
 //
 // Core's workspace service produces admissions and consumes all payload
 // keys and body_refs for identity, lineages, slots, the train and retention.
@@ -551,4 +561,274 @@
 // report unpinned, a terminal conflict with its cascade and manifest
 // unpins, a foreign-removal rebuild and a new root after failure. The
 // workspace uses sha1; tests cover 64-digit Git IDs separately.
+//
+// # F2-07 record types
+//
+// These two version-1 types are ticket 07's part of F2, proposed for the
+// owner's freeze (D113), by addition to format version 1. C2 owns their
+// payload specifications. Only Core's workspace service
+// (internal/core/workspace) may append them, through appender.Appender;
+// permitted callers are enforced by review. The service checks the record
+// rules both when appending and at Open. Check, Reader, EncodeCommit and
+// these payload encoders and decoders do not enforce service record rules.
+// C2's product still admits nothing; the service that writes these records
+// is ticket 07's S3.
+//
+// Payloads follow the F0 encoding rules above: compact JSON, keys in the
+// tabled order, errors wrapping ErrInvalid, no missing required, null known
+// or repeated keys, and unknown keys ignored for additive evolution.
+// Re-encoding a decoded payload reproduces the bytes Encode produced.
+// UUIDs are canonical lowercase non-zero UUIDv7s; digests are non-zero
+// SHA-256s. Git object IDs are 40 or 64 lowercase hex digits; matching the
+// workspace's object_format is a service record rule. Optional scalars are
+// omitted when zero in Go and refused on decode when present with a zero,
+// empty or null value. The optional changed_paths of scratch_merge_back is
+// the one exception for empty values, specified at its key below.
+//
+// A path array is a JSON array of strings, strictly increasing by UTF-8
+// byte order with no duplicates; required arrays may be empty but never
+// absent or null. Encode writes [] for a nil required path slice.
+// A repository path is valid UTF-8, non-empty and slash-separated,
+// repository-relative: no leading or trailing /, empty component (//),
+// component . or .., NUL byte or backslash. There is no normalization or
+// case folding. Every other byte Git allows is kept, including newline and
+// tab, which JSON escapes. No per-path or per-array byte cap is a contract
+// rule. Core refuses an observation whose encoded record or commit would
+// exceed MaxRecordBytes or MaxCommitBytes as pathset_cap, without truncation
+// or chunking.
+//
+// workspace.scratch_changed v1 (ScratchChanged) records a host observation
+// and advances a scratch's acknowledged private tip.
+//
+//	key                    type           presence  rule
+//	observation_id         UUIDv7         required  a new observation
+//	workspace_id           UUIDv7         required  a registered workspace
+//	scratch_id             UUIDv7         required  the observed scratch
+//	context_id             UUIDv7         required  the context authoring the observation
+//	parent_scratch_id      UUIDv7         optional  the creation parent of a temporary
+//	previous_commit        Git object ID  required  the previous acknowledged tip
+//	previous_tree          Git object ID  required  that tip's tree
+//	scratch_commit         Git object ID  required  the observed Core commit
+//	scratch_tree           Git object ID  required  the observed canonical tree
+//	written_paths          path array     required  previous_tree to scratch_tree; may be []
+//	changed_paths          path array     required  full anchor_tree to scratch_tree set; may be []
+//	inputs_revision        integer        required  1 through MaxInt64
+//	capture_inputs_sha256  digest         required  that revision's document
+//	scratch_rules          string         required  ^[a-z][a-z0-9-]*/[1-9][0-9]*$, at most 64 bytes
+//	manifest_sha256        digest         required  the raw observation manifest
+//	pin_id                 UUIDv7         required  the immediate manifest pin
+//
+// Decoder rules: scratch_commit differs from previous_commit, including an
+// observation with no tree change. written_paths is empty exactly when
+// previous_tree equals scratch_tree.
+//
+// Record rules: actor is core; the envelope's context_id equals this
+// context_id. body_refs is exactly [manifest_sha256]. The same commit holds,
+// immediately after this record, a ledger.body_pin with pin_id and the
+// same body_refs. When the scratch had an active observation-manifest pin,
+// that pin's ledger.body_unpin follows next, once: only the latest
+// observation manifest stays pinned per scratch. No commit index is fixed.
+//
+// observation_id is new. scratch_id is an open scratch of (context_id,
+// workspace_id), its dedicated scratch or one of its temporaries, with no
+// unresolved prepared attempt naming it as source or parent.
+// parent_scratch_id is present exactly when the scratch's creation record
+// carries one and equals it. previous_commit and previous_tree are its
+// acknowledged tip: initially base_commit and anchor_tree, then the latest
+// scratch_changed's scratch_commit/scratch_tree or the latest applied
+// merge-back's target_commit/target_tree targeting it. After this record
+// the scratch's tip is scratch_commit/scratch_tree. changed_paths is the
+// full set relative to its anchor_tree, never a delta. inputs_revision is
+// recorded and not above the workspace's current revision, and
+// capture_inputs_sha256 is that revision's digest. Git ID lengths match
+// object_format. Neither the represented tree nor the anchor changes.
+// Commit parentage, dates and messages are producer rules proved by the
+// service, not replay rules.
+//
+// The workspace service consumes the tip, provenance and retention facts;
+// C3 consumes private-work status, and U3/U4/U9 consume only projections
+// permitted by their grants. The owner may inspect them. All payload keys
+// and body_refs are replay-essential. Exact paths and authors are
+// context-private. Observation manifests, which list raw paths, sizes and
+// hashes, are read only through Core's authorized body reads.
+//
+// workspace.scratch_merge_back v1 (ScratchMergeBack) records a private
+// merge-back plan or result, never a canonical promotion.
+//
+//	key                    type           presence  rule
+//	merge_back_id          UUIDv7         required  the attempt's ID
+//	workspace_id           UUIDv7         required  a registered workspace
+//	scratch_id             UUIDv7         required  the source temporary
+//	parent_scratch_id      UUIDv7         required  the task destination
+//	context_id             UUIDv7         required  the parent's context
+//	authoring_context_id   UUIDv7         required  the source's context
+//	source_observation_id  UUIDv7         required  the source's latest acknowledged observation
+//	fork_commit            Git object ID  required  the source's base_commit
+//	fork_tree              Git object ID  required  the source's anchor_tree
+//	parent_commit          Git object ID  required  the destination tip at preparation or conflict
+//	parent_tree            Git object ID  required  that tip's tree
+//	source_commit          Git object ID  required  the observed source tip
+//	source_tree            Git object ID  required  that tip's tree
+//	inputs_revision        integer        required  1 through MaxInt64
+//	capture_inputs_sha256  digest         required  that revision's document
+//	integration_rules      string         required  ^[a-z][a-z0-9-]*/[1-9][0-9]*$, at most 64 bytes
+//	outcome                string         required  prepared, write_failed, fast_forward, merged or conflict; closed in v1
+//	target_commit          Git object ID  optional  present exactly for non-conflict outcomes
+//	target_tree            Git object ID  optional  present exactly for non-conflict outcomes
+//	written_paths          path array     required  fork_tree to source_tree; may be []
+//	changed_paths          path array     optional  present exactly for fast_forward or merged; this optional key may be present and empty []
+//	manifest_sha256        digest         optional  prepared: the parent's pre-write raw manifest
+//	pin_id                 UUIDv7         optional  prepared: the preparation pin
+//	conflict_sha256        digest         optional  conflict: the report body
+//	report_pin_id          UUIDv7         optional  conflict: the immediate report pin
+//	failure                string         optional  write_failed: ^[a-z][a-z0-9_]*$, at most 64 bytes
+//
+// Decoder rules: target_commit and target_tree are both present exactly
+// when outcome is not conflict. changed_paths is present exactly when
+// outcome is fast_forward or merged and may be []; nil in Go means absent,
+// while a non-nil empty slice encodes as []. manifest_sha256 and pin_id are
+// both present exactly for prepared. conflict_sha256 and report_pin_id are
+// both present exactly for conflict. failure is present exactly for
+// write_failed. Its v1 tokens are git, index_lock, ref_mismatch,
+// verification, cancelled and interference. Failure is open: Encode and
+// Decode preserve well-formed unknown tokens; a reader treats one as a
+// failure it does not know. Core writes only tokens its reading version
+// defines. written_paths is empty exactly when fork_tree equals source_tree.
+//
+// fast_forward requires parent_commit = fork_commit, target_commit =
+// source_commit and target_tree = source_tree. merged requires
+// parent_commit != fork_commit and target_commit != source_commit.
+// prepared and write_failed require target_commit = source_commit exactly
+// when parent_commit = fork_commit. context_id and authoring_context_id
+// differ: a temporary never belongs to its parent's context.
+//
+// Record rules: actor is core; the envelope's context_id is the parent's
+// context. scratch_id is an open temporary whose creation parent_scratch_id
+// equals parent_scratch_id, an open dedicated scratch of the same workspace.
+// authoring_context_id is the source's context and context_id the parent's.
+// source_observation_id is the source's latest acknowledged observation;
+// its scratch_commit/scratch_tree equal source_commit/source_tree.
+// fork_commit/fork_tree equal the source's base_commit/anchor_tree. For
+// prepared and conflict, parent_commit/parent_tree equal the parent's
+// acknowledged tip at that record.
+//
+// prepared: body_refs is the sorted distinct union of {manifest_sha256}
+// and the body_refs of the capture_inputs_pinned record of inputs_revision.
+// The same commit holds, immediately after this record, a ledger.body_pin
+// with pin_id and the same body_refs. At most one unresolved prepared
+// attempt names each source and each destination. While one is unresolved,
+// neither scratch gains a scratch_changed, a closure or another prepared
+// attempt.
+//
+// write_failed repeats the unresolved prepared attempt's plan: every key
+// from parent_scratch_id through written_paths is identical except outcome,
+// and merge_back_id, workspace_id and scratch_id are the attempt's. It has
+// no body_refs and no unpin, and leaves the attempt unresolved.
+// fast_forward and merged repeat the same plan with the same exception for
+// outcome and the same attempt IDs, including identical target_*. They
+// have no body_refs, carry changed_paths as the parent's full set relative
+// to its anchor_tree, and are followed in the same commit by the prepared
+// pin's ledger.body_unpin. After an applied record the parent's tip is
+// target_commit/target_tree, the attempt is resolved and its ID is never
+// used again.
+//
+// conflict is a new ID with no prepared phase. body_refs is exactly
+// [conflict_sha256], with an immediate ledger.body_pin with report_pin_id
+// and the same body_refs in the same commit. Both tips stay intact. The
+// report pin belongs to the parent and is released only by its closure,
+// never by a later result. A repeated attempt after a conflict is a new ID.
+// No commit index is fixed. inputs_revision is recorded and not above the
+// current revision; capture_inputs_sha256 is its digest. Git ID lengths
+// match object_format. Nothing here is a canonical request, generation or
+// accepted effect.
+//
+// The workspace service consumes private tips, retry plans, notices and
+// retention; C3 consumes passive notices in the task's next natural turn;
+// U3/U4/U9 consume permitted private-work projections, and later ticket
+// 08/C4 consume admitted provenance. The owner may inspect them. Every
+// payload key and body_refs is replay-essential. Exact paths and authors
+// are context-private, not outward hints; conflict reports are read only
+// through Core's authorized body reads.
+//
+// F2-07 also adds these keys to existing v1 payloads, in the listed order
+// after the existing last key. They have only the generic optional-key
+// decoder rules, with no cross-key rule.
+//
+//	type                          key                     type            presence  rule
+//	workspace.scratch_created      parent_scratch_id       UUIDv7          optional  after anchor_tree
+//	workspace.promotion_admitted   scratch_observation_id  UUIDv7          optional  after pin_id
+//	workspace.promotion_admitted   merge_back_ids          UUIDv7 array    optional  after scratch_observation_id; non-empty, distinct, order preserved
+//
+// Encode omits a nil or empty merge_back_ids; Decode refuses a present
+// empty array, null, non-array, non-string, non-v7 or repeated element.
+// No sorting is performed. All three keys are replay-essential when
+// present. The following record rules are conditional on the new key,
+// type or reason; logs without F2-07 records remain valid.
+//
+// Creation with parent_scratch_id: the parent is an open scratch_created
+// without a parent key, in the same workspace_id and with a different
+// context_id. The pair (context_id, workspace_id) may have an open dedicated
+// scratch: F2-05's one-open-scratch-per-pair rule governs records without
+// the parent key, and a temporary is not the pair's scratch.
+// base_commit/anchor_tree equal the parent's acknowledged tip at creation.
+// dir and branch follow the existing never-reused and
+// refs/heads/dwarf-harness/<dir> rules.
+//
+// Closure with reason temporary_merged_back requires a creation record
+// with a parent key and an acknowledged applied merge-back naming the
+// scratch as source whose source_observation_id is the scratch's latest
+// observation, with no scratch_changed after that merge-back. Actor is
+// agent with the envelope's context_id equal to the scratch's, or owner.
+// abandoned on a temporary requires no unresolved prepared attempt naming
+// it as source; the service additionally proves that its files equal its
+// acknowledged tip, a producer rule. A dedicated scratch has no
+// scratch_closed while a scratch naming it as parent is open or a prepared
+// attempt targeting it is unresolved. Every closure commit holds, after
+// scratch_closed, one ledger.body_unpin for each still-active pin the
+// scratch owns: its latest observation-manifest pin, conflict-report pins
+// of merge-backs that targeted it, and F2-06's report pins, in log order of
+// their pins, each once.
+//
+// Admission provenance: scratch_observation_id is the scratch's latest
+// acknowledged observation at admission, absent exactly when it has none.
+// merge_back_ids lists in acknowledged sequence order the applied
+// merge-backs targeting this scratch whose applied record's sequence is
+// greater than the parent admission's (greater than the scratch's creation
+// for a root or new root) and less than this admission's. It is absent
+// exactly when there are none. Replay checks membership, order and ancestry
+// from records and reads no body or Git.
+//
+// Core writes scratch-rules/1, which names the pinned host observation
+// against the scratch's acknowledged tip with the trusted names of its
+// anchor and tip, the separation of the raw manifest from the canonical
+// tree, the deterministic single-parent Core commit (its identity, the date
+// from the observation UUIDv7 and the message dwarf-harness scratch
+// observation, a blank line, scratch <ID> and observation <ID>), and the
+// order in which the retention ref, the record and the private branch move.
+//
+// Core writes scratch-merge-rules/1, which names the explicit fork base
+// passed to git merge-tree --write-tree in the integration environment of
+// integration-rules/1, the derived-tree case check, fast-forward by commit
+// identity, the deterministic single-parent merge commit on the parent
+// (message dwarf-harness scratch merge-back, a blank line, scratch <ID> and
+// merge-back <ID>), the materialization recipe (fresh private index, refresh,
+// obstruction preflight, two-tree checkout, full-tree verification, owned
+// index lock, branch compare-and-swap last) and the prepared/result protocol.
+// Each value is Core policy named in the record: any change to those rules
+// is a new value and needs no new type version; integration-rules/1 is
+// unchanged.
+//
+// The F2-07 golden at testdata/f2/07/log/00000000000000000001.jsonl holds
+// twenty-two commits and forty-one records. scratch_created with a parent
+// appears at seqs 8, 17 and 30; scratch_changed at 5, 9, 18, 20, 31 and 33;
+// scratch_merge_back at 11, 13, 23, 25, 26 and 36; scratch_closed with
+// temporary_merged_back at 15 and 28 and abandoned on a temporary at 38;
+// promotion_admitted with provenance at 40. It pins a temporary beside its
+// author's dedicated scratch, task and source observations with the
+// previous manifest unpinned, a fast-forward and an explicit-base merge
+// each with its prepared witness and unpin, a write failure between prepared
+// and applied, a conflict with its report pinned and surviving the source's
+// abandonment, both temporary closure reasons, and a root admission bound
+// to the latest observation and both applied merge-backs. The workspace
+// uses sha1; tests cover 64-digit Git IDs separately.
 package ledger

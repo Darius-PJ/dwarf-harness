@@ -31,6 +31,9 @@ const (
 	// promotionDir holds ticket 06's part of F2, frozen (D118), in one
 	// segment.
 	promotionDir = "testdata/f2/06/log"
+	// scratchChangeDir holds ticket 07's part of F2, proposed for the
+	// owner's freeze (D113), in one segment.
+	scratchChangeDir = "testdata/f2/07/log"
 )
 
 // fid returns a fixed fixture UUIDv7 ending in suffix.
@@ -39,10 +42,11 @@ func fid(suffix string) uuid.UUID {
 }
 
 var (
-	goldenColony    = fid("01")
-	catalogueColony = fid("02")
-	workspaceColony = fid("03")
-	promotionColony = fid("04")
+	goldenColony        = fid("01")
+	catalogueColony     = fid("02")
+	workspaceColony     = fid("03")
+	promotionColony     = fid("04")
+	scratchChangeColony = fid("05")
 )
 
 // The bodies and the submission that the catalogue log references.
@@ -64,6 +68,18 @@ var (
 	promotionM4  = Digest(sha256.Sum256([]byte("promotion manifest four\n")))
 	promotionCR1 = Digest(sha256.Sum256([]byte("promotion conflict report one\n")))
 	promotionCR2 = Digest(sha256.Sum256([]byte("promotion conflict report two\n")))
+)
+
+var (
+	scratchChangeI  = Digest(sha256.Sum256([]byte("scratch change capture inputs one\n")))
+	scratchChangeM1 = Digest(sha256.Sum256([]byte("scratch change manifest one\n")))
+	scratchChangeM2 = Digest(sha256.Sum256([]byte("scratch change manifest two\n")))
+	scratchChangeM3 = Digest(sha256.Sum256([]byte("scratch change manifest three\n")))
+	scratchChangeM4 = Digest(sha256.Sum256([]byte("scratch change manifest four\n")))
+	scratchChangeM5 = Digest(sha256.Sum256([]byte("scratch change manifest five\n")))
+	scratchChangeM6 = Digest(sha256.Sum256([]byte("scratch change manifest six\n")))
+	scratchChangeM7 = Digest(sha256.Sum256([]byte("scratch change manifest seven\n")))
+	scratchChangeCR = Digest(sha256.Sum256([]byte("scratch change conflict report one\n")))
 )
 
 // sortedDigests returns ds in ascending order.
@@ -301,6 +317,185 @@ func promotionInputs() []goldenCommit {
 	}
 }
 
+// scratchChangeInputs covers ticket 07's part of F2, proposed for the
+// owner's freeze (D113): observations, private merge-back plans and results,
+// temporary closures and admission provenance. The IDs are disjoint from
+// the earlier goldens.
+func scratchChangeInputs() []goldenCommit {
+	header := func(commit string, seconds int64) CommitHeader {
+		return CommitHeader{ColonyID: scratchChangeColony, CommitID: fid(commit), EventTimeNS: 1791000040000000000 + seconds*1000000000}
+	}
+	b0, a0 := strings.Repeat("c0", 20), strings.Repeat("c1", 20)
+	t1, tt1 := strings.Repeat("c2", 20), strings.Repeat("c3", 20)
+	s1, st1 := strings.Repeat("c4", 20), strings.Repeat("c5", 20)
+	s2, st2 := strings.Repeat("c6", 20), strings.Repeat("c7", 20)
+	t2, tt2 := strings.Repeat("c8", 20), strings.Repeat("c9", 20)
+	g2, gt2 := strings.Repeat("ca", 20), strings.Repeat("cb", 20)
+	s3, st3 := strings.Repeat("cc", 20), strings.Repeat("cd", 20)
+	t3, tt3 := strings.Repeat("ce", 20), strings.Repeat("cf", 20)
+	d0 := strings.Repeat("d0", 20)
+	o1 := ScratchChanged{
+		ObservationID: fid("58"), WorkspaceID: fid("43"), ScratchID: fid("53"), ContextID: fid("44"),
+		PreviousCommit: b0, PreviousTree: a0, ScratchCommit: t1, ScratchTree: tt1,
+		WrittenPaths: []string{"task.txt"}, ChangedPaths: []string{"task.txt"},
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, ScratchRules: "scratch-rules/1", ManifestSHA256: scratchChangeM1, PinID: fid("a8"),
+	}
+	o2 := ScratchChanged{
+		ObservationID: fid("59"), WorkspaceID: fid("43"), ScratchID: fid("55"), ContextID: fid("45"), ParentScratchID: fid("53"),
+		PreviousCommit: t1, PreviousTree: tt1, ScratchCommit: s1, ScratchTree: st1,
+		WrittenPaths: []string{"new.txt"}, ChangedPaths: []string{"new.txt"},
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, ScratchRules: "scratch-rules/1", ManifestSHA256: scratchChangeM2, PinID: fid("a9"),
+	}
+	o3 := ScratchChanged{
+		ObservationID: fid("5a"), WorkspaceID: fid("43"), ScratchID: fid("56"), ContextID: fid("45"), ParentScratchID: fid("53"),
+		PreviousCommit: s1, PreviousTree: st1, ScratchCommit: s2, ScratchTree: st2,
+		WrittenPaths: []string{"other.txt"}, ChangedPaths: []string{"other.txt"},
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, ScratchRules: "scratch-rules/1", ManifestSHA256: scratchChangeM3, PinID: fid("aa"),
+	}
+	o4 := ScratchChanged{
+		ObservationID: fid("5b"), WorkspaceID: fid("43"), ScratchID: fid("53"), ContextID: fid("44"),
+		PreviousCommit: s1, PreviousTree: st1, ScratchCommit: t2, ScratchTree: tt2,
+		WrittenPaths: []string{"task.txt"}, ChangedPaths: []string{"new.txt", "task.txt"},
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, ScratchRules: "scratch-rules/1", ManifestSHA256: scratchChangeM4, PinID: fid("ab"),
+	}
+	o5 := ScratchChanged{
+		ObservationID: fid("5c"), WorkspaceID: fid("43"), ScratchID: fid("57"), ContextID: fid("45"), ParentScratchID: fid("53"),
+		PreviousCommit: g2, PreviousTree: gt2, ScratchCommit: s3, ScratchTree: st3,
+		WrittenPaths: []string{"a.txt"}, ChangedPaths: []string{"a.txt"},
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, ScratchRules: "scratch-rules/1", ManifestSHA256: scratchChangeM5, PinID: fid("ac"),
+	}
+	o6 := ScratchChanged{
+		ObservationID: fid("5d"), WorkspaceID: fid("43"), ScratchID: fid("53"), ContextID: fid("44"),
+		PreviousCommit: g2, PreviousTree: gt2, ScratchCommit: t3, ScratchTree: tt3,
+		WrittenPaths: []string{"a.txt"}, ChangedPaths: []string{"a.txt", "new.txt", "other.txt", "task.txt"},
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, ScratchRules: "scratch-rules/1", ManifestSHA256: scratchChangeM6, PinID: fid("ad"),
+	}
+	mb1 := ScratchMergeBack{
+		MergeBackID: fid("95"), WorkspaceID: fid("43"), ScratchID: fid("55"), ParentScratchID: fid("53"),
+		ContextID: fid("44"), AuthoringContextID: fid("45"), SourceObservationID: fid("59"),
+		ForkCommit: t1, ForkTree: tt1, ParentCommit: t1, ParentTree: tt1, SourceCommit: s1, SourceTree: st1,
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, IntegrationRules: "scratch-merge-rules/1",
+		Outcome: MergeBackPrepared, TargetCommit: s1, TargetTree: st1, WrittenPaths: []string{"new.txt"},
+		ManifestSHA256: scratchChangeM1, PinID: fid("ae"),
+	}
+	mb1Applied := mb1
+	mb1Applied.Outcome, mb1Applied.ManifestSHA256, mb1Applied.PinID = MergeBackFastForward, Digest{}, uuid.UUID{}
+	mb1Applied.ChangedPaths = []string{"new.txt", "task.txt"}
+	mb2 := ScratchMergeBack{
+		MergeBackID: fid("96"), WorkspaceID: fid("43"), ScratchID: fid("56"), ParentScratchID: fid("53"),
+		ContextID: fid("44"), AuthoringContextID: fid("45"), SourceObservationID: fid("5a"),
+		ForkCommit: s1, ForkTree: st1, ParentCommit: t2, ParentTree: tt2, SourceCommit: s2, SourceTree: st2,
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, IntegrationRules: "scratch-merge-rules/1",
+		Outcome: MergeBackPrepared, TargetCommit: g2, TargetTree: gt2, WrittenPaths: []string{"other.txt"},
+		ManifestSHA256: scratchChangeM4, PinID: fid("af"),
+	}
+	mb2Failed := mb2
+	mb2Failed.Outcome, mb2Failed.ManifestSHA256, mb2Failed.PinID = MergeBackWriteFailed, Digest{}, uuid.UUID{}
+	mb2Failed.Failure = MergeBackFailureIndexLock
+	mb2Applied := mb2
+	mb2Applied.Outcome, mb2Applied.ManifestSHA256, mb2Applied.PinID = MergeBackMerged, Digest{}, uuid.UUID{}
+	mb2Applied.ChangedPaths = []string{"new.txt", "other.txt", "task.txt"}
+	mb3 := ScratchMergeBack{
+		MergeBackID: fid("97"), WorkspaceID: fid("43"), ScratchID: fid("57"), ParentScratchID: fid("53"),
+		ContextID: fid("44"), AuthoringContextID: fid("45"), SourceObservationID: fid("5c"),
+		ForkCommit: g2, ForkTree: gt2, ParentCommit: t3, ParentTree: tt3, SourceCommit: s3, SourceTree: st3,
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, IntegrationRules: "scratch-merge-rules/1",
+		Outcome: MergeBackConflict, WrittenPaths: []string{"a.txt"}, ConflictSHA256: scratchChangeCR, ReportPinID: fid("b4"),
+	}
+	r1 := PromotionAdmitted{
+		RequestID: fid("b5"), WorkspaceID: fid("43"), ScratchID: fid("53"), ContextID: fid("44"), LineageID: fid("b6"), Checkpoint: 1,
+		ScratchBase: b0, BaselineTree: a0, DeltaBaseTree: a0, CaptureID: fid("b7"), SealedTree: d0, ManifestSHA256: scratchChangeM7,
+		InputsRevision: 1, CaptureInputsSHA256: scratchChangeI, PinID: fid("b8"), ScratchObservationID: fid("5d"), MergeBackIDs: []uuid.UUID{fid("95"), fid("96")},
+	}
+	return []goldenCommit{
+		{header: header("17", 0), drafts: []Draft{
+			{Type: TypeWorkspaceRegistered, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(WorkspaceRegistered{WorkspaceID: fid("43"), CommonDir: "C:/fixture/repo-d/.git", ObjectFormat: "sha1"})},
+			{Type: TypeCaptureInputsPinned, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{scratchChangeI}, Payload: mustEncode(CaptureInputsPinned{WorkspaceID: fid("43"), Revision: 1, CaptureInputsSHA256: scratchChangeI, PinID: fid("a7")})},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{scratchChangeI}, Payload: mustEncode(BodyPin{PinID: fid("a7")})},
+		}},
+		{header: header("18", 1), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), Payload: mustEncode(ScratchCreated{ScratchID: fid("53"), WorkspaceID: fid("43"), ContextID: fid("44"), Dir: "9c8d7e6f", Branch: "refs/heads/dwarf-harness/9c8d7e6f", BaseCommit: b0, AnchorTree: a0})},
+		}},
+		{header: header("19", 2), drafts: []Draft{
+			{Type: TypeScratchChanged, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeM1}, Payload: mustEncode(o1)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeM1}, Payload: mustEncode(BodyPin{PinID: fid("a8")})},
+		}},
+		{header: header("1a", 3), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), Payload: mustEncode(ScratchCreated{ScratchID: fid("54"), WorkspaceID: fid("43"), ContextID: fid("45"), Dir: "0a1b2c3e", Branch: "refs/heads/dwarf-harness/0a1b2c3e", BaseCommit: b0, AnchorTree: a0})},
+		}},
+		{header: header("1b", 4), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), Payload: mustEncode(ScratchCreated{ScratchID: fid("55"), WorkspaceID: fid("43"), ContextID: fid("45"), Dir: "3d4e5f60", Branch: "refs/heads/dwarf-harness/3d4e5f60", BaseCommit: t1, AnchorTree: tt1, ParentScratchID: fid("53")})},
+		}},
+		{header: header("1c", 5), drafts: []Draft{
+			{Type: TypeScratchChanged, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), BodyRefs: []Digest{scratchChangeM2}, Payload: mustEncode(o2)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), BodyRefs: []Digest{scratchChangeM2}, Payload: mustEncode(BodyPin{PinID: fid("a9")})},
+		}},
+		{header: header("1d", 6), drafts: []Draft{
+			{Type: TypeScratchMergeBack, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: sortedDigests(scratchChangeI, scratchChangeM1), Payload: mustEncode(mb1)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: sortedDigests(scratchChangeI, scratchChangeM1), Payload: mustEncode(BodyPin{PinID: fid("ae")})},
+		}},
+		{header: header("1e", 7), drafts: []Draft{
+			{Type: TypeScratchMergeBack, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), Payload: mustEncode(mb1Applied)},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), Payload: mustEncode(BodyUnpin{PinID: fid("ae")})},
+		}},
+		{header: header("1f", 8), drafts: []Draft{
+			{Type: TypeScratchClosed, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("45"), Payload: mustEncode(ScratchClosed{ScratchID: fid("55"), ContextID: fid("45"), Reason: ReasonTemporaryMergedBack})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("45"), Payload: mustEncode(BodyUnpin{PinID: fid("a9")})},
+		}},
+		{header: header("24", 9), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), Payload: mustEncode(ScratchCreated{ScratchID: fid("56"), WorkspaceID: fid("43"), ContextID: fid("45"), Dir: "7a8b9c0d", Branch: "refs/heads/dwarf-harness/7a8b9c0d", BaseCommit: s1, AnchorTree: st1, ParentScratchID: fid("53")})},
+		}},
+		{header: header("25", 10), drafts: []Draft{
+			{Type: TypeScratchChanged, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), BodyRefs: []Digest{scratchChangeM3}, Payload: mustEncode(o3)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), BodyRefs: []Digest{scratchChangeM3}, Payload: mustEncode(BodyPin{PinID: fid("aa")})},
+		}},
+		{header: header("26", 11), drafts: []Draft{
+			{Type: TypeScratchChanged, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeM4}, Payload: mustEncode(o4)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeM4}, Payload: mustEncode(BodyPin{PinID: fid("ab")})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), Payload: mustEncode(BodyUnpin{PinID: fid("a8")})},
+		}},
+		{header: header("27", 12), drafts: []Draft{
+			{Type: TypeScratchMergeBack, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: sortedDigests(scratchChangeI, scratchChangeM4), Payload: mustEncode(mb2)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: sortedDigests(scratchChangeI, scratchChangeM4), Payload: mustEncode(BodyPin{PinID: fid("af")})},
+		}},
+		{header: header("28", 13), drafts: []Draft{
+			{Type: TypeScratchMergeBack, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), Payload: mustEncode(mb2Failed)},
+		}},
+		{header: header("29", 14), drafts: []Draft{
+			{Type: TypeScratchMergeBack, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), Payload: mustEncode(mb2Applied)},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), Payload: mustEncode(BodyUnpin{PinID: fid("af")})},
+		}},
+		{header: header("2a", 15), drafts: []Draft{
+			{Type: TypeScratchClosed, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("45"), Payload: mustEncode(ScratchClosed{ScratchID: fid("56"), ContextID: fid("45"), Reason: ReasonTemporaryMergedBack})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("45"), Payload: mustEncode(BodyUnpin{PinID: fid("aa")})},
+		}},
+		{header: header("2b", 16), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), Payload: mustEncode(ScratchCreated{ScratchID: fid("57"), WorkspaceID: fid("43"), ContextID: fid("45"), Dir: "b1c2d3e4", Branch: "refs/heads/dwarf-harness/b1c2d3e4", BaseCommit: g2, AnchorTree: gt2, ParentScratchID: fid("53")})},
+		}},
+		{header: header("2c", 17), drafts: []Draft{
+			{Type: TypeScratchChanged, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), BodyRefs: []Digest{scratchChangeM5}, Payload: mustEncode(o5)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("45"), BodyRefs: []Digest{scratchChangeM5}, Payload: mustEncode(BodyPin{PinID: fid("ac")})},
+		}},
+		{header: header("2d", 18), drafts: []Draft{
+			{Type: TypeScratchChanged, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeM6}, Payload: mustEncode(o6)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeM6}, Payload: mustEncode(BodyPin{PinID: fid("ad")})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), Payload: mustEncode(BodyUnpin{PinID: fid("ab")})},
+		}},
+		{header: header("2e", 19), drafts: []Draft{
+			{Type: TypeScratchMergeBack, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeCR}, Payload: mustEncode(mb3)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeCR}, Payload: mustEncode(BodyPin{PinID: fid("b4")})},
+		}},
+		{header: header("2f", 20), drafts: []Draft{
+			{Type: TypeScratchClosed, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("45"), Payload: mustEncode(ScratchClosed{ScratchID: fid("57"), ContextID: fid("45"), Reason: "abandoned"})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("45"), Payload: mustEncode(BodyUnpin{PinID: fid("ac")})},
+		}},
+		{header: header("30", 21), drafts: []Draft{
+			{Type: TypePromotionAdmitted, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeM7}, Payload: mustEncode(r1)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("44"), BodyRefs: []Digest{scratchChangeM7}, Payload: mustEncode(BodyPin{PinID: fid("b8")})},
+		}},
+	}
+}
+
 // goldenRecord locates one record of a golden log.
 type goldenRecord struct {
 	seq  uint64
@@ -383,6 +578,12 @@ var promotionTypes = Consumption{
 	TypeBodyPin: {1}, TypeBodyUnpin: {1},
 }
 
+var scratchChangeTypes = Consumption{
+	TypeScratchChanged: {1}, TypeScratchMergeBack: {1},
+	TypeWorkspaceRegistered: {1}, TypeCaptureInputsPinned: {1}, TypeScratchCreated: {1}, TypeScratchClosed: {1},
+	TypePromotionAdmitted: {1}, TypeBodyPin: {1}, TypeBodyUnpin: {1},
+}
+
 var (
 	golden = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(goldenDir, goldenColony, allFixtures, goldenInputs())
@@ -395,6 +596,9 @@ var (
 	})
 	promotionLog = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(promotionDir, promotionColony, promotionTypes, promotionInputs())
+	})
+	scratchChangeLog = sync.OnceValues(func() (*goldenLog, error) {
+		return buildLog(scratchChangeDir, scratchChangeColony, scratchChangeTypes, scratchChangeInputs())
 	})
 )
 
@@ -416,6 +620,11 @@ func mustWorkspace(t testing.TB) *goldenLog {
 func mustPromotion(t testing.TB) *goldenLog {
 	t.Helper()
 	return mustBuild(t, promotionLog)
+}
+
+func mustScratchChange(t testing.TB) *goldenLog {
+	t.Helper()
+	return mustBuild(t, scratchChangeLog)
 }
 
 func mustBuild(t testing.TB, build func() (*goldenLog, error)) *goldenLog {
@@ -662,6 +871,71 @@ func TestGoldenF2_06(t *testing.T) {
 	}
 }
 
+// TestGoldenF2_07 pins ticket 07's part of F2, proposed for the owner's
+// freeze (D113), without changing any earlier golden.
+func TestGoldenF2_07(t *testing.T) {
+	t.Parallel()
+	g := mustScratchChange(t)
+	if *update {
+		if err := os.MkdirAll(g.dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, data := range g.files {
+			if err := os.WriteFile(filepath.Join(g.dir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stored := snapshot(t, g.dir)
+	if got := slices.Sorted(maps.Keys(stored)); !slices.Equal(got, g.names) {
+		t.Fatalf("files = %v, want %v", got, g.names)
+	}
+	for _, name := range g.names {
+		if !bytes.Equal(stored[name], g.files[name]) {
+			t.Errorf("%s/%s differs from the F2-07 encoding", g.dir, name)
+		}
+	}
+	commits, _, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: scratchChangeTypes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := scratchChangeInputs()
+	if len(commits) != 22 || len(commits) != len(inputs) {
+		t.Fatalf("read %d commits, want 22", len(commits))
+	}
+	for i, c := range commits {
+		if len(c.Records) != len(inputs[i].drafts) {
+			t.Fatalf("commit %d: read %d records, want %d", i, len(c.Records), len(inputs[i].drafts))
+		}
+		for j, r := range c.Records {
+			var got payload
+			var err error
+			switch r.Type {
+			case TypeBodyPin, TypeBodyUnpin:
+				got, err = decodeF0(r.Type, r.Payload)
+			case TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed:
+				got, err = decodeF2_05(r.Type, r.Payload)
+			case TypePromotionAdmitted:
+				got, err = decodeF2_06(r.Type, r.Payload)
+			default:
+				got, err = decodeF2_07(r.Type, r.Payload)
+			}
+			if err != nil {
+				t.Fatalf("seq %d: decoding stored %s payload: %v", r.Seq, r.Type, err)
+			}
+			want := inputs[i].drafts[j].Payload
+			if encoded, err := got.Encode(); err != nil || !bytes.Equal(encoded, want) || !bytes.Equal(encoded, r.Payload) {
+				t.Errorf("seq %d: decoded %+v encodes as %s, %v; want %s", r.Seq, got, encoded, err, want)
+			}
+		}
+	}
+	res, err := Check(g.dir, g.colony)
+	want := CheckResult{Last: g.end(), Segment: g.final(), Size: int64(len(g.files[g.final()]))}
+	if err != nil || res != want || res.Last.Seq != 41 {
+		t.Errorf("Check = %+v, %v; want %+v with Last.Seq 41", res, err, want)
+	}
+}
+
 func TestGoldenDecodes(t *testing.T) {
 	for _, tc := range []struct {
 		g *goldenLog
@@ -680,6 +954,7 @@ func TestGoldenDecodes(t *testing.T) {
 		{mustCatalogue(t), nil},
 		{mustWorkspace(t), nil},
 		{mustPromotion(t), nil},
+		{mustScratchChange(t), nil},
 	} {
 		g := tc.g
 		commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})
