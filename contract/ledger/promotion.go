@@ -8,7 +8,7 @@ import (
 )
 
 // The F2-06 record types, each at version 1: ticket 06's part of F2,
-// proposed for the owner's freeze (D113). The package documentation
+// frozen (D118). The package documentation
 // specifies their payloads and service-owned record rules.
 const (
 	TypePromotionAdmitted = "workspace.promotion_admitted"

@@ -38,8 +38,8 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // F0's catalogue: TypeCommand, TypeBodyPin, TypeBodyUnpin and
 // TypeBodiesCollected; and the F2-05 additions:
 // TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated and
-// TypeScratchClosed; and ticket 06's part of F2, proposed for the owner's
-// freeze (D113): TypePromotionAdmitted, TypeGenerationDerived and
+// TypeScratchClosed; and ticket 06's part of F2, frozen (D118):
+// TypePromotionAdmitted, TypeGenerationDerived and
 // TypePromotionFailed, each at version 1. It never contains a type in the
 // reserved fixture namespace.
 func Defined() Catalogue {

@@ -252,8 +252,8 @@ func FuzzDecodeF2_05(f *testing.F) {
 	})
 }
 
-// FuzzDecodeF2_06 exercises ticket 06's part of F2, proposed for the owner's
-// freeze (D113), including additive unknown failure outcomes.
+// FuzzDecodeF2_06 exercises ticket 06's part of F2, frozen (D118),
+// including additive unknown failure outcomes.
 func FuzzDecodeF2_06(f *testing.F) {
 	fixtures := f2_06Payloads()
 	for i, tc := range fixtures {

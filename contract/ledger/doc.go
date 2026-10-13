@@ -159,8 +159,8 @@
 // returns those this contract version defines: the four F0 record types,
 // the four F2-05 types and the three F2-06 types below, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
-// or format version 1. F2-06 is ticket 06's part of F2, proposed for the
-// owner's freeze (D113), also by addition to format version 1.
+// or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
+// also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -359,8 +359,8 @@
 //
 // # F2-06 record types
 //
-// These three version-1 types are ticket 06's part of F2, proposed for the
-// owner's freeze (D113), by addition to format version 1. C2 owns their
+// These three version-1 types are ticket 06's part of F2, frozen by
+// addition to format version 1 (D118). C2 owns their
 // payload specifications. Only Core's workspace service
 // (internal/core/workspace) may append them, through appender.Appender;
 // permitted callers are enforced by review. The service checks the record

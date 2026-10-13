@@ -28,8 +28,8 @@ const (
 	catalogueDir = "testdata/f0/catalogue/log"
 	// workspaceDir holds the F2-05 catalogue's one-segment log.
 	workspaceDir = "testdata/f2/05/log"
-	// promotionDir holds ticket 06's part of F2, proposed for the owner's
-	// freeze (D113), in one segment.
+	// promotionDir holds ticket 06's part of F2, frozen (D118), in one
+	// segment.
 	promotionDir = "testdata/f2/06/log"
 )
 
@@ -194,8 +194,8 @@ func workspaceInputs() []goldenCommit {
 	}
 }
 
-// promotionInputs covers ticket 06's part of F2, proposed for the owner's
-// freeze (D113): admissions, generations, report retention and a failed
+// promotionInputs covers ticket 06's part of F2, frozen (D118):
+// admissions, generations, report retention and a failed
 // lineage's cascade followed by a new root. No fixture ID is reused from
 // the other goldens.
 func promotionInputs() []goldenCommit {
@@ -600,8 +600,8 @@ func TestGoldenF2_05(t *testing.T) {
 	}
 }
 
-// TestGoldenF2_06 pins ticket 06's part of F2, proposed for the owner's
-// freeze (D113), without changing any earlier golden.
+// TestGoldenF2_06 pins ticket 06's part of F2, frozen (D118), without
+// changing any earlier golden.
 func TestGoldenF2_06(t *testing.T) {
 	g := mustPromotion(t)
 	if *update {
