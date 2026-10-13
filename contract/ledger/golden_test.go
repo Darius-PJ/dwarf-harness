@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"uuid"
@@ -27,6 +28,9 @@ const (
 	catalogueDir = "testdata/f0/catalogue/log"
 	// workspaceDir holds the F2-05 catalogue's one-segment log.
 	workspaceDir = "testdata/f2/05/log"
+	// promotionDir holds ticket 06's part of F2, proposed for the owner's
+	// freeze (D113), in one segment.
+	promotionDir = "testdata/f2/06/log"
 )
 
 // fid returns a fixed fixture UUIDv7 ending in suffix.
@@ -38,6 +42,7 @@ var (
 	goldenColony    = fid("01")
 	catalogueColony = fid("02")
 	workspaceColony = fid("03")
+	promotionColony = fid("04")
 )
 
 // The bodies and the submission that the catalogue log references.
@@ -49,6 +54,16 @@ var (
 	goldenB2         = Digest(sha256.Sum256(bodyTwo))
 	goldenB3         = Digest(sha256.Sum256(bodyThree))
 	goldenSubmission = Digest(sha256.Sum256([]byte("golden submission\n")))
+)
+
+var (
+	promotionI1  = Digest(sha256.Sum256([]byte("promotion capture inputs one\n")))
+	promotionM1  = Digest(sha256.Sum256([]byte("promotion manifest one\n")))
+	promotionM2  = Digest(sha256.Sum256([]byte("promotion manifest two\n")))
+	promotionM3  = Digest(sha256.Sum256([]byte("promotion manifest three\n")))
+	promotionM4  = Digest(sha256.Sum256([]byte("promotion manifest four\n")))
+	promotionCR1 = Digest(sha256.Sum256([]byte("promotion conflict report one\n")))
+	promotionCR2 = Digest(sha256.Sum256([]byte("promotion conflict report two\n")))
 )
 
 // sortedDigests returns ds in ascending order.
@@ -179,6 +194,113 @@ func workspaceInputs() []goldenCommit {
 	}
 }
 
+// promotionInputs covers ticket 06's part of F2, proposed for the owner's
+// freeze (D113): admissions, generations, report retention and a failed
+// lineage's cascade followed by a new root. No fixture ID is reused from
+// the other goldens.
+func promotionInputs() []goldenCommit {
+	header := func(commit string, seconds int64) CommitHeader {
+		return CommitHeader{ColonyID: promotionColony, CommitID: fid(commit), EventTimeNS: 1791000030000000000 + seconds*1000000000}
+	}
+	b0, a0 := strings.Repeat("a0", 20), strings.Repeat("a1", 20)
+	b1, bt1 := strings.Repeat("a2", 20), strings.Repeat("a3", 20)
+	t1, t2, t3, t4 := strings.Repeat("b1", 20), strings.Repeat("b2", 20), strings.Repeat("b3", 20), strings.Repeat("b4", 20)
+	d1, dt1 := strings.Repeat("d1", 20), strings.Repeat("e1", 20)
+	d2, dt2 := strings.Repeat("d2", 20), strings.Repeat("e2", 20)
+	d5, dt5 := strings.Repeat("d5", 20), strings.Repeat("e5", 20)
+	r1 := PromotionAdmitted{
+		RequestID: fid("71"), WorkspaceID: fid("61"), ScratchID: fid("62"), ContextID: fid("64"), LineageID: fid("81"), Checkpoint: 1,
+		ScratchBase: b0, BaselineTree: a0, DeltaBaseTree: a0, CaptureID: fid("91"), SealedTree: t1, ManifestSHA256: promotionM1,
+		InputsRevision: 1, CaptureInputsSHA256: promotionI1, PinID: fid("a3"),
+	}
+	r2 := PromotionAdmitted{
+		RequestID: fid("72"), WorkspaceID: fid("61"), ScratchID: fid("62"), ContextID: fid("64"), LineageID: fid("81"), Checkpoint: 2, ParentRequestID: fid("71"),
+		ScratchBase: b0, BaselineTree: t1, DeltaBaseTree: t1, CaptureID: fid("92"), SealedTree: t2, ManifestSHA256: promotionM2,
+		InputsRevision: 1, CaptureInputsSHA256: promotionI1, PinID: fid("a4"),
+	}
+	r3 := PromotionAdmitted{
+		RequestID: fid("73"), WorkspaceID: fid("61"), ScratchID: fid("63"), ContextID: fid("65"), LineageID: fid("82"), Checkpoint: 1,
+		ScratchBase: b0, BaselineTree: a0, DeltaBaseTree: a0, CaptureID: fid("93"), SealedTree: t3, ManifestSHA256: promotionM3,
+		InputsRevision: 1, CaptureInputsSHA256: promotionI1, PinID: fid("a5"),
+	}
+	r4 := PromotionAdmitted{
+		RequestID: fid("74"), WorkspaceID: fid("61"), ScratchID: fid("62"), ContextID: fid("64"), LineageID: fid("83"), Checkpoint: 1, RestartFrom: fid("72"),
+		ScratchBase: b0, BaselineTree: a0, DeltaBaseTree: a0, CaptureID: fid("94"), SealedTree: t4, ManifestSHA256: promotionM4,
+		InputsRevision: 1, CaptureInputsSHA256: promotionI1, PinID: fid("a6"),
+	}
+	g1 := GenerationDerived{
+		GenerationID: fid("11"), RequestID: fid("71"), PredecessorCommit: b0, PredecessorTree: a0,
+		InputsRevision: 1, IntegrationRules: "integration-rules/1", Outcome: GenerationClean, DerivedCommit: d1, DerivedTree: dt1,
+	}
+	g2 := GenerationDerived{
+		GenerationID: fid("12"), RequestID: fid("72"), PredecessorRequestID: fid("71"), PredecessorGenerationID: fid("11"), PredecessorCommit: d1, PredecessorTree: dt1,
+		InputsRevision: 1, IntegrationRules: "integration-rules/1", Outcome: GenerationClean, DerivedCommit: d2, DerivedTree: dt2,
+	}
+	g3 := GenerationDerived{
+		GenerationID: fid("13"), RequestID: fid("73"), PredecessorRequestID: fid("72"), PredecessorGenerationID: fid("12"), PredecessorCommit: d2, PredecessorTree: dt2,
+		InputsRevision: 1, IntegrationRules: "integration-rules/1", Outcome: GenerationConflict, ConflictSHA256: promotionCR1, ReportPinID: fid("b2"),
+	}
+	g4 := GenerationDerived{
+		GenerationID: fid("14"), RequestID: fid("71"), Supersedes: fid("11"), PredecessorCommit: b1, PredecessorTree: bt1,
+		InputsRevision: 1, IntegrationRules: "integration-rules/1", Outcome: GenerationConflict, ConflictSHA256: promotionCR2, ReportPinID: fid("b3"),
+	}
+	g5 := GenerationDerived{
+		GenerationID: fid("15"), RequestID: fid("73"), Supersedes: fid("13"), PredecessorCommit: b1, PredecessorTree: bt1,
+		InputsRevision: 1, IntegrationRules: "integration-rules/1", Outcome: GenerationClean, DerivedCommit: d5, DerivedTree: dt5,
+	}
+	return []goldenCommit{
+		{header: header("06", 0), drafts: []Draft{
+			{Type: TypeWorkspaceRegistered, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(WorkspaceRegistered{WorkspaceID: fid("61"), CommonDir: "C:/fixture/repo-c/.git", ObjectFormat: "sha1"})},
+			{Type: TypeCaptureInputsPinned, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{promotionI1}, Payload: mustEncode(CaptureInputsPinned{WorkspaceID: fid("61"), Revision: 1, CaptureInputsSHA256: promotionI1, PinID: fid("a2")})},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{promotionI1}, Payload: mustEncode(BodyPin{PinID: fid("a2")})},
+		}},
+		{header: header("07", 1), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), Payload: mustEncode(ScratchCreated{ScratchID: fid("62"), WorkspaceID: fid("61"), ContextID: fid("64"), Dir: "1a2b3c4d", Branch: "refs/heads/dwarf-harness/1a2b3c4d", BaseCommit: b0, AnchorTree: a0})},
+		}},
+		{header: header("08", 2), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("65"), Payload: mustEncode(ScratchCreated{ScratchID: fid("63"), WorkspaceID: fid("61"), ContextID: fid("65"), Dir: "5e6f7a8b", Branch: "refs/heads/dwarf-harness/5e6f7a8b", BaseCommit: b0, AnchorTree: a0})},
+		}},
+		{header: header("09", 3), drafts: []Draft{
+			{Type: TypePromotionAdmitted, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("64"), BodyRefs: []Digest{promotionM1}, Payload: mustEncode(r1)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("64"), BodyRefs: []Digest{promotionM1}, Payload: mustEncode(BodyPin{PinID: fid("a3")})},
+		}},
+		{header: header("0a", 4), drafts: []Draft{
+			{Type: TypePromotionAdmitted, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("64"), BodyRefs: []Digest{promotionM2}, Payload: mustEncode(r2)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("64"), BodyRefs: []Digest{promotionM2}, Payload: mustEncode(BodyPin{PinID: fid("a4")})},
+		}},
+		{header: header("0b", 5), drafts: []Draft{
+			{Type: TypePromotionAdmitted, TypeVersion: 1, Actor: ActorOwner, ContextID: fid("65"), BodyRefs: []Digest{promotionM3}, Payload: mustEncode(r3)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, ContextID: fid("65"), BodyRefs: []Digest{promotionM3}, Payload: mustEncode(BodyPin{PinID: fid("a5")})},
+		}},
+		{header: header("0c", 6), drafts: []Draft{
+			{Type: TypeGenerationDerived, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), Payload: mustEncode(g1)},
+		}},
+		{header: header("0d", 7), drafts: []Draft{
+			{Type: TypeGenerationDerived, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), Payload: mustEncode(g2)},
+		}},
+		{header: header("0e", 8), drafts: []Draft{
+			{Type: TypeGenerationDerived, TypeVersion: 1, Actor: ActorCore, ContextID: fid("65"), BodyRefs: []Digest{promotionCR1}, Payload: mustEncode(g3)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("65"), BodyRefs: []Digest{promotionCR1}, Payload: mustEncode(BodyPin{PinID: fid("b2")})},
+		}},
+		{header: header("0f", 9), drafts: []Draft{
+			{Type: TypeGenerationDerived, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), BodyRefs: []Digest{promotionCR2}, Payload: mustEncode(g4)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), BodyRefs: []Digest{promotionCR2}, Payload: mustEncode(BodyPin{PinID: fid("b3")})},
+			{Type: TypePromotionFailed, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), Payload: mustEncode(PromotionFailed{RequestID: fid("71"), Outcome: FailedConflict, GenerationID: fid("14")})},
+			{Type: TypePromotionFailed, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), Payload: mustEncode(PromotionFailed{RequestID: fid("72"), Outcome: FailedDependencyFailed, FailedRequestID: fid("71")})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), Payload: mustEncode(BodyUnpin{PinID: fid("a3")})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("64"), Payload: mustEncode(BodyUnpin{PinID: fid("a4")})},
+		}},
+		{header: header("10", 10), drafts: []Draft{
+			{Type: TypeGenerationDerived, TypeVersion: 1, Actor: ActorCore, ContextID: fid("65"), Payload: mustEncode(g5)},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("65"), Payload: mustEncode(BodyUnpin{PinID: fid("b2")})},
+		}},
+		{header: header("16", 11), drafts: []Draft{
+			{Type: TypePromotionAdmitted, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("64"), BodyRefs: []Digest{promotionM4}, Payload: mustEncode(r4)},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("64"), BodyRefs: []Digest{promotionM4}, Payload: mustEncode(BodyPin{PinID: fid("a6")})},
+		}},
+	}
+}
+
 // goldenRecord locates one record of a golden log.
 type goldenRecord struct {
 	seq  uint64
@@ -255,6 +377,12 @@ var workspaceTypes = Consumption{
 	TypeScratchCreated: {1}, TypeScratchClosed: {1}, TypeBodyPin: {1}, TypeBodyUnpin: {1},
 }
 
+var promotionTypes = Consumption{
+	TypePromotionAdmitted: {1}, TypeGenerationDerived: {1}, TypePromotionFailed: {1},
+	TypeWorkspaceRegistered: {1}, TypeCaptureInputsPinned: {1}, TypeScratchCreated: {1},
+	TypeBodyPin: {1}, TypeBodyUnpin: {1},
+}
+
 var (
 	golden = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(goldenDir, goldenColony, allFixtures, goldenInputs())
@@ -264,6 +392,9 @@ var (
 	})
 	workspaceLog = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(workspaceDir, workspaceColony, workspaceTypes, workspaceInputs())
+	})
+	promotionLog = sync.OnceValues(func() (*goldenLog, error) {
+		return buildLog(promotionDir, promotionColony, promotionTypes, promotionInputs())
 	})
 )
 
@@ -280,6 +411,11 @@ func mustCatalogue(t testing.TB) *goldenLog {
 func mustWorkspace(t testing.TB) *goldenLog {
 	t.Helper()
 	return mustBuild(t, workspaceLog)
+}
+
+func mustPromotion(t testing.TB) *goldenLog {
+	t.Helper()
+	return mustBuild(t, promotionLog)
 }
 
 func mustBuild(t testing.TB, build func() (*goldenLog, error)) *goldenLog {
@@ -464,6 +600,68 @@ func TestGoldenF2_05(t *testing.T) {
 	}
 }
 
+// TestGoldenF2_06 pins ticket 06's part of F2, proposed for the owner's
+// freeze (D113), without changing any earlier golden.
+func TestGoldenF2_06(t *testing.T) {
+	g := mustPromotion(t)
+	if *update {
+		if err := os.MkdirAll(g.dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, data := range g.files {
+			if err := os.WriteFile(filepath.Join(g.dir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stored := snapshot(t, g.dir)
+	if got := slices.Sorted(maps.Keys(stored)); !slices.Equal(got, g.names) {
+		t.Fatalf("files = %v, want %v", got, g.names)
+	}
+	for _, name := range g.names {
+		if !bytes.Equal(stored[name], g.files[name]) {
+			t.Errorf("%s/%s differs from the F2-06 encoding", g.dir, name)
+		}
+	}
+	commits, _, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: promotionTypes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := promotionInputs()
+	if len(commits) != 12 || len(commits) != len(inputs) {
+		t.Fatalf("read %d commits, want 12", len(commits))
+	}
+	for i, c := range commits {
+		if len(c.Records) != len(inputs[i].drafts) {
+			t.Fatalf("commit %d: read %d records, want %d", i, len(c.Records), len(inputs[i].drafts))
+		}
+		for j, r := range c.Records {
+			var got payload
+			var err error
+			switch r.Type {
+			case TypeBodyPin, TypeBodyUnpin:
+				got, err = decodeF0(r.Type, r.Payload)
+			case TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated:
+				got, err = decodeF2_05(r.Type, r.Payload)
+			default:
+				got, err = decodeF2_06(r.Type, r.Payload)
+			}
+			if err != nil {
+				t.Fatalf("seq %d: decoding stored %s payload: %v", r.Seq, r.Type, err)
+			}
+			want := inputs[i].drafts[j].Payload
+			if encoded, err := got.Encode(); err != nil || !bytes.Equal(encoded, want) || !bytes.Equal(encoded, r.Payload) {
+				t.Errorf("seq %d: decoded %+v encodes as %s, %v; want %s", r.Seq, got, encoded, err, want)
+			}
+		}
+	}
+	res, err := Check(g.dir, g.colony)
+	want := CheckResult{Last: g.end(), Segment: g.final(), Size: int64(len(g.files[g.final()]))}
+	if err != nil || res != want || res.Last.Seq != 25 {
+		t.Errorf("Check = %+v, %v; want %+v with Last.Seq 25", res, err, want)
+	}
+}
+
 func TestGoldenDecodes(t *testing.T) {
 	for _, tc := range []struct {
 		g *goldenLog
@@ -481,6 +679,7 @@ func TestGoldenDecodes(t *testing.T) {
 		}},
 		{mustCatalogue(t), nil},
 		{mustWorkspace(t), nil},
+		{mustPromotion(t), nil},
 	} {
 		g := tc.g
 		commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})

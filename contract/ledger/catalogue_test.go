@@ -34,10 +34,11 @@ func TestNewCatalogue(t *testing.T) {
 		}
 	}
 
-	// Defined contains the F0 and F2-05 type versions, but never
-	// fixture records or a version the contract does not define.
+	// Defined contains F0, F2-05 and ticket 06's part of F2, proposed for
+	// the owner's freeze (D113), but never fixture records or an
+	// undefined version.
 	def := Defined()
-	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected, TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed} {
+	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected, TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed, TypePromotionAdmitted, TypeGenerationDerived, TypePromotionFailed} {
 		if !def.Contains(TypeVersion{typ, 1}) || def.Contains(TypeVersion{typ, 2}) {
 			t.Errorf("Defined() holds %s at version 1: %v, at version 2: %v; want true, false",
 				typ, def.Contains(TypeVersion{typ, 1}), def.Contains(TypeVersion{typ, 2}))
@@ -48,6 +49,8 @@ func TestNewCatalogue(t *testing.T) {
 		{"ledger.body_unpin", 1}: true, {"ledger.bodies_collected", 1}: true,
 		{"workspace.registered", 1}: true, {"workspace.capture_inputs_pinned", 1}: true,
 		{"workspace.scratch_created", 1}: true, {"workspace.scratch_closed", 1}: true,
+		{"workspace.promotion_admitted", 1}: true, {"workspace.generation_derived", 1}: true,
+		{"workspace.promotion_failed", 1}: true,
 	}
 	if !maps.Equal(def.set, want) || def.Contains(TypeVersion{"fixture.sample", 1}) {
 		t.Errorf("Defined() holds %v, want %v", def.set, want)

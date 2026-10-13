@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -67,7 +68,7 @@ func FuzzCheckTruncation(f *testing.F) {
 		dir  string
 	}
 	var targets []target
-	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f), mustWorkspace(f)} {
+	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f), mustWorkspace(f), mustPromotion(f)} {
 		dir := f.TempDir()
 		for _, name := range g.names {
 			targets = append(targets, target{g: g, name: name, dir: dir})
@@ -247,6 +248,41 @@ func FuzzDecodeF2_05(f *testing.F) {
 		again, err := decodeF2_05(typ, js)
 		if err != nil || !reflect.DeepEqual(again, p) {
 			t.Fatalf("Decode re-encoded %s = %+v, %v; want %+v", js, again, err, p)
+		}
+	})
+}
+
+// FuzzDecodeF2_06 exercises ticket 06's part of F2, proposed for the owner's
+// freeze (D113), including additive unknown failure outcomes.
+func FuzzDecodeF2_06(f *testing.F) {
+	fixtures := f2_06Payloads()
+	for i, tc := range fixtures {
+		f.Add(uint8(i), []byte(mustEncode(tc.p)))
+		f.Add(uint8(i), []byte(`{}`))
+	}
+	p := fixtures[0].p.(PromotionAdmitted)
+	p.ScratchBase, p.BaselineTree = strings.Repeat("a", 64), strings.Repeat("b", 64)
+	p.DeltaBaseTree, p.SealedTree = strings.Repeat("c", 64), strings.Repeat("d", 64)
+	f.Add(uint8(0), []byte(mustEncode(p)))
+	f.Fuzz(func(t *testing.T, kind uint8, data []byte) {
+		typ := fixtures[int(kind)%len(fixtures)].typ
+		p, err := decodeF2_06(typ, data)
+		if err != nil {
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Decode error = %v, want ErrInvalid", err)
+			}
+			return
+		}
+		js, err := p.Encode()
+		if err != nil {
+			t.Fatalf("Encode decoded %+v: %v", p, err)
+		}
+		again, err := decodeF2_06(typ, js)
+		if err != nil || !reflect.DeepEqual(again, p) {
+			t.Fatalf("Decode re-encoded %s = %+v, %v; want %+v", js, again, err, p)
+		}
+		if encoded, err := again.Encode(); err != nil || !bytes.Equal(encoded, js) {
+			t.Fatalf("re-encoding = %s, %v; want %s", encoded, err, js)
 		}
 	})
 }

@@ -312,3 +312,55 @@ func (ms *members) text(key string) string {
 	}
 	return s
 }
+
+// optionalID returns a canonical lowercase UUIDv7, or zero and false when
+// absent. A present zero, empty or non-string value is invalid.
+func (ms *members) optionalID(key string) (uuid.UUID, bool) {
+	raw, ok := ms.get(key, false)
+	if !ok {
+		return uuid.UUID{}, false
+	}
+	s, ok := parseString(raw)
+	if !ok {
+		ms.err = fmt.Errorf("%s is not a string", key)
+		return uuid.UUID{}, false
+	}
+	u, ok := parseID(s)
+	if !ok {
+		ms.err = fmt.Errorf("%s %w", key, errID)
+	}
+	return u, ok
+}
+
+// optionalText returns a non-empty string, or zero and false when absent.
+func (ms *members) optionalText(key string) (string, bool) {
+	raw, ok := ms.get(key, false)
+	if !ok {
+		return "", false
+	}
+	s, ok := parseString(raw)
+	if !ok || s == "" {
+		ms.err = fmt.Errorf("%s is not a non-empty string", key)
+		return "", false
+	}
+	return s, true
+}
+
+// optionalDigest returns a non-zero digest, or zero and false when absent.
+func (ms *members) optionalDigest(key string) (Digest, bool) {
+	raw, ok := ms.get(key, false)
+	if !ok {
+		return Digest{}, false
+	}
+	s, ok := parseString(raw)
+	if !ok {
+		ms.err = fmt.Errorf("%s is not a string", key)
+		return Digest{}, false
+	}
+	d, err := parseDigest(s)
+	if err != nil {
+		ms.err = fmt.Errorf("%s %w", key, err)
+		return Digest{}, false
+	}
+	return d, true
+}

@@ -156,9 +156,11 @@
 // # Catalogue
 //
 // A Catalogue lists the record type versions a writer may append. Defined
-// returns those this contract version defines: the four F0 record types
-// and the four F2-05 types below, each at version 1. F2-05 joined by the
-// owner's additive freeze (D115); it does not change F0 or format version 1.
+// returns those this contract version defines: the four F0 record types,
+// the four F2-05 types and the three F2-06 types below, each at version 1.
+// F2-05 joined by the owner's additive freeze (D115); it does not change F0
+// or format version 1. F2-06 is ticket 06's part of F2, proposed for the
+// owner's freeze (D113), also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -346,10 +348,207 @@
 // Record rules: actor is owner, or agent with the envelope's context_id
 // equal to this context_id; body_refs is absent. A scratch closes at most
 // once, and context_id is the scratch's.
+// F2-06 adds rules on when a closure may be appended and what its commit
+// carries; a log without F2-06 records is unaffected.
 //
 // The F2-05 golden at testdata/f2/05/log/00000000000000000001.jsonl holds
 // six commits and twelve records: two registrations and their pins, two
 // scratches, one input revision update and its pin/unpin, then one closure.
 // It pins a drive-rooted path and a POSIX path, both Git ID lengths and
 // revisions 1 and 2. Tests cover the UNC form separately.
+//
+// # F2-06 record types
+//
+// These three version-1 types are ticket 06's part of F2, proposed for the
+// owner's freeze (D113), by addition to format version 1. C2 owns their
+// payload specifications. Only Core's workspace service
+// (internal/core/workspace) may append them, through appender.Appender;
+// permitted callers are enforced by review. The service checks the record
+// rules both when appending and at Open. Check, Reader, EncodeCommit and
+// these payload encoders and decoders do not enforce service record rules.
+// C2's product never admits, captures or integrates; its mechanism tests
+// exercise these records. From C4 on, RequestPromotion admits checkpoints.
+//
+// Payloads follow the F0 encoding rules above: compact JSON, keys in the
+// tabled order, errors wrapping ErrInvalid, no missing required, null known
+// or repeated keys, and unknown keys ignored for additive evolution.
+// Re-encoding a decoded payload reproduces the bytes Encode produced.
+// An optional key is omitted when absent and refused when present with a
+// zero, empty or null value. Git object IDs are 40 or 64 lowercase hex
+// digits. A decoder accepts either length; matching the workspace's
+// object_format is a service record rule.
+//
+// workspace.promotion_admitted v1 (PromotionAdmitted) records a
+// checkpoint's admission: its request receipt and immutable submission.
+//
+//	key                    type           presence  rule
+//	request_id             UUIDv7         required  the caller's immutable request ID (D58)
+//	workspace_id           UUIDv7         required  a registered workspace
+//	scratch_id             UUIDv7         required  the pair's open scratch, which the capture read
+//	context_id             UUIDv7         required  the requesting and authoring context
+//	lineage_id             UUIDv7         required  the scratch lineage
+//	checkpoint             integer        required  1 through MaxInt64
+//	parent_request_id      UUIDv7         optional  the local parent; absent at a root
+//	restart_from           UUIDv7         optional  the failed head a new root replaces
+//	scratch_base           Git object ID  required  the physical scratch's base commit
+//	baseline_tree          Git object ID  required  the trusted eligibility baseline
+//	delta_base_tree        Git object ID  required  the delta base, bound separately
+//	capture_id             UUIDv7         required  the capture; ref refs/dwarf-harness/captures/<capture_id>
+//	sealed_tree            Git object ID  required  the submission's sealed tree
+//	manifest_sha256        digest         required  the raw manifest, a body
+//	inputs_revision        integer        required  1 through MaxInt64; the capture-inputs revision used
+//	capture_inputs_sha256  digest         required  that revision's document digest
+//	pin_id                 UUIDv7         required  the manifest's ledger.body_pin in the same commit
+//
+// Decoder rules: checkpoint is 1 exactly when parent_request_id is absent.
+// restart_from is never present with parent_request_id, so a new root has
+// checkpoint 1.
+//
+// Record rules: actor is owner or agent; the envelope's context_id equals
+// this context_id. body_refs is exactly [manifest_sha256]. The same commit
+// holds, immediately after this record, a ledger.body_pin with pin_id and
+// the same body_refs. No commit index is fixed: a ledger.command may come
+// first. request_id and capture_id were never admitted before; lineage_id
+// is new at a root or new root. scratch_id is the open scratch of
+// (context_id, workspace_id), and scratch_base is its base_commit.
+//
+// With H the scratch's latest admitted request, exactly one case applies:
+//   - Root: no H, no parent or restart; baseline_tree and delta_base_tree
+//     both equal the scratch's anchor_tree.
+//   - Successor: H has not failed; parent_request_id is H; lineage_id is
+//     H's and checkpoint is H's plus 1; both trees equal H's sealed_tree.
+//   - New root: H failed; restart_from is H; both trees equal the scratch's
+//     represented tree, its anchor_tree until a later F2 part records another.
+//
+// inputs_revision is a recorded workspace revision not above its current
+// one, and capture_inputs_sha256 is that revision's digest. Git ID lengths
+// match the workspace's object_format. The K bound is service policy,
+// checked on append only, not at Open.
+//
+// Closure is an F2-06 rule: while a request is live (admitted and not
+// ended), its scratch has no workspace.scratch_closed. A closure commit
+// holds, after workspace.scratch_closed, one ledger.body_unpin for each
+// still-active report_pin_id of the scratch's requests, in log order of
+// their pins. A log without F2-06 records is unaffected.
+//
+// Core's workspace service produces admissions and consumes all payload
+// keys and body_refs for identity, lineages, slots, the train and retention.
+// C3 consumes request state and passive results for the original context;
+// C4 consumes submissions behind generations; ticket 08's finalizer uses
+// local-parent order and accepted deltas; the owner may inspect them.
+// All payload keys and body_refs are replay-essential. The record carries
+// identifiers, Git object IDs and digests, not content. The manifest body
+// lists the scratch's paths, sizes and raw hashes, can name private files,
+// and is read only through Core's authorized body reads.
+//
+// workspace.generation_derived v1 (GenerationDerived) records one
+// integration of an admitted request over its train predecessor.
+//
+//	key                        type           presence  rule
+//	generation_id              UUIDv7         required  a new generation
+//	request_id                 UUIDv7         required  a live admitted request
+//	supersedes                 UUIDv7         optional  the request's replaced current generation
+//	predecessor_request_id     UUIDv7         optional  the train predecessor; absent for canonical main
+//	predecessor_generation_id  UUIDv7         optional  that request's current clean generation
+//	predecessor_commit         Git object ID  required  that generation's derived_commit, or main's tip
+//	predecessor_tree           Git object ID  required  the predecessor's tree
+//	inputs_revision            integer        required  1 through MaxInt64; the inputs revision the merge used
+//	integration_rules          string         required  ^[a-z][a-z0-9-]*/[1-9][0-9]*$, at most 64 bytes
+//	outcome                    string         required  clean or conflict; closed in v1
+//	derived_commit             Git object ID  optional  when clean: the integration commit, predecessor its only parent
+//	derived_tree               Git object ID  optional  when clean: the integration commit's tree
+//	conflict_sha256            digest         optional  when conflict: the conflict report, a body
+//	report_pin_id              UUIDv7         optional  when conflict: the report's ledger.body_pin
+//
+// Decoder rules: predecessor_generation_id is present exactly when
+// predecessor_request_id is. clean requires derived_commit and derived_tree
+// and refuses conflict_sha256 and report_pin_id. conflict requires
+// conflict_sha256 and report_pin_id and refuses both derived keys. Any
+// other outcome is refused in v1.
+//
+// Core writes integration-rules/1, which names the explicit-base
+// git merge-tree --write-tree command, the private bare environment in
+// which no merge driver runs and no tree .gitattributes is read, Git's
+// default merge options under the pinned configuration, in which
+// merge.renormalize, merge.conflictStyle and merge.default are unset, the
+// derived-tree case check, and the integration commit's identity, date and
+// message. The value is Core policy named in the record: any change to
+// those rules is a new value and needs no new type version.
+// The integration commit's ref is
+// refs/dwarf-harness/generations/<generation_id>.
+//
+// Record rules: actor is core; the envelope's context_id is the request's.
+// body_refs is absent when clean and exactly [conflict_sha256] when
+// conflict. A conflict's commit holds, immediately after this record, a
+// ledger.body_pin with report_pin_id and the same body_refs. generation_id
+// is new; request_id is admitted and not ended. supersedes is the request's
+// current generation, absent exactly when it has none; when present,
+// predecessor_commit differs from the superseded generation's. When the
+// superseded generation was a conflict, the commit also holds, after this
+// record and its pin (if any), the ledger.body_unpin of that generation's
+// report_pin_id.
+//
+// When predecessor_request_id is present, it names the nearest live
+// request ahead in the workspace's admission order.
+// predecessor_generation_id is that request's current generation, with
+// outcome clean, and predecessor_commit and predecessor_tree are its
+// derived ones. When absent, no live request is ahead and the predecessor
+// is canonical main. inputs_revision is recorded and not above the current
+// revision; Git ID lengths match the workspace's object_format. The
+// generation window is service policy, not a record rule.
+//
+// Core's workspace service produces generations and consumes their current
+// state; C4 binds attempts to generation_id and evidence to the predecessor
+// and derived tree; ticket 08's finalizer and owner audit consume them.
+// All payload keys and body_refs are replay-essential. Identifiers, Git
+// object IDs and digests are host-private until release under Core §13.3.
+// The conflict report body names conflicting paths and is read only through
+// Core's authorized body reads.
+//
+// workspace.promotion_failed v1 (PromotionFailed) records a request ended
+// without promotion, failing its lineage.
+//
+//	key                type    presence  rule
+//	request_id         UUIDv7  required  a live admitted request
+//	outcome            string  required  ^[a-z][a-z0-9_]*$, at most 64 bytes
+//	generation_id      UUIDv7  optional  conflict: the request's conflicting current generation
+//	failed_request_id  UUIDv7  optional  dependency_failed: the local request whose failure ended this one
+//
+// Decoder rules: conflict requires generation_id and refuses
+// failed_request_id; dependency_failed requires failed_request_id and
+// refuses generation_id. Outcome is an open token: both Encode and Decode
+// accept every other well-formed token with either optional key present or
+// absent. A reader treats an unknown outcome as a failure it does not know,
+// never as invalid. Core writes only outcomes its reading version defines;
+// this is a producer rule, not an encoding rule.
+//
+// Record rules: the envelope's context_id is the request's; body_refs is
+// absent. Version 1's outcomes have actor core; a later part defines its
+// outcomes' actors. request_id is admitted and not ended. For conflict,
+// generation_id is the request's current generation, with outcome conflict,
+// and no live request is ahead of it in its workspace's train. For
+// dependency_failed, failed_request_id is a request of the same lineage
+// with a smaller checkpoint, ended by promotion_failed earlier in the log
+// or earlier in the same commit. Every outcome, including one the reader
+// does not know, fails the lineage: after the commit's last record no
+// request of the lineage with a larger checkpoint than one ended in the
+// commit is live. After its endings the commit holds one ledger.body_unpin
+// of each ended request's admission pin_id, in the same order. An ending
+// never unpins a report pin.
+//
+// Core's workspace service produces failures and consumes lineage state,
+// slots and retention; C3 consumes terminal results (D63); C4 stops
+// superseded children; the owner may inspect them. All payload keys are
+// replay-essential. The record carries only identifiers and an outcome
+// token.
+//
+// The F2-06 golden at testdata/f2/06/log/00000000000000000001.jsonl holds
+// twelve commits and twenty-five records. promotion_admitted appears at
+// seqs 6, 8, 10 and 24; generation_derived at 12, 13, 14, 16 and 22; and
+// promotion_failed at 18 and 19. It pins a root, a successor, an owner
+// admission, a clean generation over main and one over a local parent, a
+// speculative conflict with its report pinned, supersession with the
+// report unpinned, a terminal conflict with its cascade and manifest
+// unpins, a foreign-removal rebuild and a new root after failure. The
+// workspace uses sha1; tests cover 64-digit Git IDs separately.
 package ledger
