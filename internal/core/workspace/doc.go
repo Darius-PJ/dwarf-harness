@@ -299,8 +299,9 @@
 // head, then reserves exclusion, checkpoint slot and bytes. Under the exclusion
 // it rechecks usability, scratch and head before availability or capture.
 // Availability proceeds through Git, pinned inputs, workspace, scratch and
-// anchor. RequestPromotion then unconditionally returns no_validator and
-// releases without retaining a slot. It never captures, records or moves refs.
+// anchor. RequestPromotion then unconditionally returns no_validator, with no
+// seam a test could satisfy, and releases without retaining a slot. It never
+// captures, records or moves refs.
 //
 // # Admission
 //
@@ -425,8 +426,11 @@
 // call except Close returns ErrPoisoned. Recovery requires the host to recover
 // the store and open a new service, never an in-memory guess about a commit.
 // Projections retain historical request identities and scratch names, UUID-only
-// generation and capture IDs, and per-revision input digests; memory grows with
-// history. Superseded input bodies are never read for these identity checks.
+// generation, capture and lineage IDs, and per-revision input digests; memory
+// grows with history. Superseded input bodies are never read for these identity
+// checks. Other projection facts are per-scratch live counts, the live requests'
+// manifest pins, and each active report pin's owning scratch, held until
+// supersession or closure.
 //
 // # Removal boundary
 //

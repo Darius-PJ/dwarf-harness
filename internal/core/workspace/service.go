@@ -68,7 +68,9 @@ type Service struct {
 	trains                 map[uuid.UUID][]uuid.UUID
 	integrating            map[uuid.UUID]chan struct{}
 	// UUID-only historical facts enforce F2-06's never-reused identities.
-	usedCaptures, usedGenerations map[uuid.UUID]bool
+	usedCaptures, usedGenerations, usedLineages map[uuid.UUID]bool
+	// Manifest pins belong to live requests; report pins survive until unpinned.
+	manifestPins, reportPinScratch map[uuid.UUID]uuid.UUID
 }
 
 // Open validates the durable log before reconciling disposable state. Git may be
@@ -115,6 +117,9 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	s.integrating = make(map[uuid.UUID]chan struct{})
 	s.usedCaptures = make(map[uuid.UUID]bool)
 	s.usedGenerations = make(map[uuid.UUID]bool)
+	s.usedLineages = make(map[uuid.UUID]bool)
+	s.manifestPins = make(map[uuid.UUID]uuid.UUID)
+	s.reportPinScratch = make(map[uuid.UUID]uuid.UUID)
 	s.git = newGitRunner(deps.environ)
 	s.engine = newCaptureEngine(s.git, colony)
 	reader, err := ledger.OpenReader(store.LogDir(), ledger.ReadOptions{Colony: store.Colony(), Through: store.Durable(), Consume: workspaceConsumption(), AllTypes: true})
@@ -141,9 +146,9 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 			return nil, report, err
 		}
 	}
-	for id, scratch := range s.scratches {
+	for _, scratch := range s.scratches {
 		if !scratch.closed {
-			s.pool.setLive(scratch.Dir, s.liveCount(id))
+			s.pool.setLive(scratch.Dir, scratch.live)
 		}
 	}
 	for _, id := range sortedIDs(s.workspaces) {

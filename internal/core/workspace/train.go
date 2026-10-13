@@ -257,6 +257,9 @@ func (s *Service) recordGeneration(ctx context.Context, w workspaceState, r requ
 			drafts = append(drafts, unpin)
 		}
 	}
+	if s.deps.beforeAppend != nil {
+		s.deps.beforeAppend()
+	}
 	s.mu.Lock()
 	var ended []uuid.UUID
 	if leading && g.Outcome == ledger.GenerationConflict {
@@ -267,11 +270,6 @@ func (s *Service) recordGeneration(ctx context.Context, w workspaceState, r requ
 		}
 		drafts, ended = append(drafts, endings...), ids
 	}
-	s.mu.Unlock()
-	if s.deps.beforeAppend != nil {
-		s.deps.beforeAppend()
-	}
-	s.mu.Lock()
 	before := s.retainedRefs(w.ID)
 	err = s.appendLocked(ctx, drafts)
 	if err != nil {
@@ -297,25 +295,17 @@ type retainedRef struct{ object, missing string }
 // retainedRefs is a projection query, not a second ownership index. Hold mu.
 func (s *Service) retainedRefs(workspaceID uuid.UUID) map[string]retainedRef {
 	refs := make(map[string]retainedRef)
-	for id, r := range s.requests {
+	// C2 has only failure endings, so every unfailed open head is live.
+	// Ticket 08 adds retention of an unfailed open head after success.
+	for _, id := range s.trains[workspaceID] {
+		r := s.requests[id]
 		a := r.admission
-		if a.WorkspaceID != workspaceID {
-			continue
+		refs["refs/dwarf-harness/captures/"+a.CaptureID.String()] = retainedRef{a.SealedTree, "capture_missing " + id.String()}
+		if a.ParentRequestID != (uuid.UUID{}) {
+			parent := s.requests[a.ParentRequestID].admission
+			refs["refs/dwarf-harness/captures/"+parent.CaptureID.String()] = retainedRef{parent.SealedTree, "capture_missing " + a.ParentRequestID.String()}
 		}
-		// C2 has only failure endings, so every unfailed open head is live.
-		keep := r.ending == ""
-		if !keep {
-			for _, child := range s.requests {
-				if child.ending == "" && child.admission.ParentRequestID == id {
-					keep = true
-					break
-				}
-			}
-		}
-		if keep {
-			refs["refs/dwarf-harness/captures/"+a.CaptureID.String()] = retainedRef{a.SealedTree, "capture_missing " + id.String()}
-		}
-		if r.ending == "" && r.generation != nil && r.generation.Outcome == ledger.GenerationClean {
+		if r.generation != nil && r.generation.Outcome == ledger.GenerationClean {
 			g := r.generation
 			refs["refs/dwarf-harness/generations/"+g.GenerationID.String()] = retainedRef{g.DerivedCommit, "generation_missing " + g.GenerationID.String()}
 		}

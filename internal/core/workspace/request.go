@@ -160,13 +160,7 @@ func (s *Service) beginRequest(ctx context.Context, r Request) (requestPlan, *re
 }
 
 func (s *Service) liveCount(scratchID uuid.UUID) int {
-	n := 0
-	for _, r := range s.requests {
-		if r.admission.ScratchID == scratchID && r.ending == "" {
-			n++
-		}
-	}
-	return n
+	return s.scratches[scratchID].live
 }
 
 // These commit-local obligations share the same checker during append and
@@ -245,12 +239,8 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 			if p.LineageID != plan.lineage {
 				return bad("successor changed lineage")
 			}
-		} else {
-			for _, old := range s.requests {
-				if old.admission.LineageID == p.LineageID {
-					return bad("root lineage reused")
-				}
-			}
+		} else if s.usedLineages[p.LineageID] {
+			return bad("root lineage reused")
 		}
 		w := plan.workspace
 		if p.InputsRevision > w.Revision || w.revisions[p.InputsRevision] != p.CaptureInputsSHA256 {
@@ -268,12 +258,24 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 		s.trains[p.WorkspaceID] = append(slices.Clone(oldTrain), p.RequestID)
 		s.requests[p.RequestID] = requestState{admission: p, state: RequestState{RequestID: p.RequestID, State: RequestPending, LineageID: p.LineageID, Checkpoint: p.Checkpoint, SealedTree: p.SealedTree}}
 		s.usedCaptures[p.CaptureID] = true
+		if p.ParentRequestID == (uuid.UUID{}) {
+			s.usedLineages[p.LineageID] = true
+			*journal = append(*journal, func() { delete(s.usedLineages, p.LineageID) })
+		}
+		oldPinRequest, hadPin := s.manifestPins[p.PinID]
+		s.manifestPins[p.PinID] = p.RequestID
 		next := scratch
 		next.head = p.RequestID
+		next.live++
 		s.scratches[p.ScratchID] = next
 		*journal = append(*journal, func() {
 			delete(s.requests, p.RequestID)
 			delete(s.usedCaptures, p.CaptureID)
+			if hadPin {
+				s.manifestPins[p.PinID] = oldPinRequest
+			} else {
+				delete(s.manifestPins, p.PinID)
+			}
 			s.trains[p.WorkspaceID] = oldTrain
 			s.scratches[p.ScratchID] = scratch
 		})
@@ -353,7 +355,16 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 			next := scratch
 			next.reportPins = append(slices.Clone(scratch.reportPins), p.ReportPinID)
 			s.scratches[a.ScratchID] = next
-			*journal = append(*journal, func() { s.scratches[a.ScratchID] = scratch })
+			oldPinScratch, hadPin := s.reportPinScratch[p.ReportPinID]
+			s.reportPinScratch[p.ReportPinID] = a.ScratchID
+			*journal = append(*journal, func() {
+				s.scratches[a.ScratchID] = scratch
+				if hadPin {
+					s.reportPinScratch[p.ReportPinID] = oldPinScratch
+				} else {
+					delete(s.reportPinScratch, p.ReportPinID)
+				}
+			})
 		}
 	case ledger.TypePromotionFailed:
 		p, err := ledger.DecodePromotionFailed(d.Payload)
@@ -391,7 +402,17 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 		oldTrain := s.trains[a.WorkspaceID]
 		s.trains[a.WorkspaceID] = slices.DeleteFunc(slices.Clone(oldTrain), func(id uuid.UUID) bool { return id == p.RequestID })
 		s.requests[p.RequestID] = next
-		*journal = append(*journal, func() { s.requests[p.RequestID] = old; s.trains[a.WorkspaceID] = oldTrain })
+		scratch := s.scratches[a.ScratchID]
+		nextScratch := scratch
+		nextScratch.live--
+		s.scratches[a.ScratchID] = nextScratch
+		delete(s.manifestPins, a.PinID)
+		*journal = append(*journal, func() {
+			s.requests[p.RequestID] = old
+			s.trains[a.WorkspaceID] = oldTrain
+			s.scratches[a.ScratchID] = scratch
+			s.manifestPins[a.PinID] = p.RequestID
+		})
 		if len(rules.ended) == 0 {
 			rules.firstEnding = at
 		}
@@ -418,10 +439,8 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 		if err != nil {
 			return err
 		}
-		for id, scratch := range s.scratches {
-			if !slices.Contains(scratch.reportPins, p.PinID) {
-				continue
-			}
+		if id, exists := s.reportPinScratch[p.PinID]; exists {
+			scratch := s.scratches[id]
 			after, allowed := rules.unpins[p.PinID]
 			if !allowed || at <= after || len(d.BodyRefs) != 0 {
 				return bad("report unpin requires supersession or closure, never an ending")
@@ -429,14 +448,14 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, producing bo
 			next := scratch
 			next.reportPins = slices.DeleteFunc(slices.Clone(scratch.reportPins), func(id uuid.UUID) bool { return id == p.PinID })
 			s.scratches[id] = next
-			*journal = append(*journal, func() { s.scratches[id] = scratch })
+			delete(s.reportPinScratch, p.PinID)
+			*journal = append(*journal, func() {
+				s.scratches[id] = scratch
+				s.reportPinScratch[p.PinID] = id
+			})
 		}
-		for _, r := range s.requests {
-			if r.admission.PinID == p.PinID {
-				if _, allowed := rules.unpins[p.PinID]; !allowed {
-					return bad("manifest unpin without its ending")
-				}
-			}
+		if _, live := s.manifestPins[p.PinID]; live {
+			return bad("manifest unpin without its ending")
 		}
 	}
 	return nil
@@ -446,8 +465,9 @@ func (s *Service) finishRequestCommit(drafts []ledger.Draft, rules requestCommit
 	var pins []uuid.UUID
 	for _, id := range rules.ended {
 		a := s.requests[id].admission
-		for _, r := range s.requests {
-			if r.ending == "" && r.admission.LineageID == a.LineageID && r.admission.Checkpoint > a.Checkpoint {
+		for _, liveID := range s.trains[a.WorkspaceID] {
+			r := s.requests[liveID]
+			if r.admission.LineageID == a.LineageID && r.admission.Checkpoint > a.Checkpoint {
 				return fmt.Errorf("failure leaves checkpoint %d live", r.admission.Checkpoint)
 			}
 		}

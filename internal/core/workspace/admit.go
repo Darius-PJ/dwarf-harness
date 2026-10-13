@@ -82,6 +82,12 @@ func (s *Service) admit(ctx context.Context, plan requestPlan, token *reservatio
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Our own in-flight marker is still held; only an admitted identity can
+	// supersede this capture before its append.
+	if _, admitted := s.requests[r.RequestID]; admitted {
+		state, _, err = s.identity(r)
+		return state, err
+	}
 	// Integration may have failed the local parent during the seal. Return the
 	// public head refusal rather than exposing the record rule's ErrInvalid.
 	if _, err = s.headPlan(r, s.scratches[plan.scratch.ID]); err != nil {

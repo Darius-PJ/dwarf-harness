@@ -195,6 +195,56 @@ func TestLocalParentFailureEndsSuffix(t *testing.T) {
 	}
 }
 
+func TestConcurrentSuccessorJoinsFailureEnding(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	s := mustScratch(t, f, uuid.NewV7())
+	writeTestFile(t, filepath.Join(s.Dir, "base.txt"), []byte("local\ntwo\n"))
+	requests := []Request{rootRequest(s)}
+	for range 3 {
+		r := requests[len(requests)-1]
+		mustAdmit(t, f, r)
+		next := rootRequest(s)
+		next.Head = r.RequestID
+		requests = append(requests, next)
+	}
+	advanceMain(t, f, map[string]string{"base.txt": "canonical\ntwo\n"})
+	before := len(serviceCommits(t, f.store))
+	f.svc.deps.beforeAppend = func() {
+		f.svc.deps.beforeAppend = nil
+		mustAdmit(t, f, requests[3])
+	}
+	mustIntegrate(t, f)
+	commits := serviceCommits(t, f.store)
+	if len(commits) != before+2 {
+		t.Fatalf("want successor admission and one ending commit, got %d commits", len(commits)-before)
+	}
+	var ended []uuid.UUID
+	for _, record := range commits[len(commits)-1].Records {
+		if record.Type == ledger.TypePromotionFailed {
+			p, err := ledger.DecodePromotionFailed(record.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ended = append(ended, p.RequestID)
+		}
+	}
+	want := []uuid.UUID{requests[0].RequestID, requests[1].RequestID, requests[2].RequestID, requests[3].RequestID}
+	if !slices.Equal(ended, want) {
+		t.Fatalf("ending omitted or reordered a checkpoint: %v want %v", ended, want)
+	}
+	for i, r := range requests {
+		state, err := f.svc.RequestPromotion(context.Background(), r)
+		outcome := RequestDependencyFailed
+		if i == 0 {
+			outcome = RequestConflict
+		}
+		if err != nil || state.State != outcome || (i > 0 && state.FailedRequest != requests[0].RequestID) {
+			t.Fatalf("ending %d: %+v %v", i, state, err)
+		}
+	}
+}
+
 func TestForeignRemovalRebuildsSurvivors(t *testing.T) {
 	t.Parallel()
 	f := newServiceFixture(t)

@@ -66,6 +66,14 @@ func TestAdmissionFailureRollsBack(t *testing.T) {
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	f.svc.pool.profile.CheckpointsPerPair = 1
+	// Reissue the uncommitted identities on retry: rollback must not burn them.
+	ids := [2]uuid.UUID{uuid.NewV7(), uuid.NewV7()}
+	minted := 0
+	f.svc.deps.newID = func() uuid.UUID {
+		id := ids[minted%len(ids)]
+		minted++
+		return id
+	}
 	writeTestFile(t, filepath.Join(s.Dir, "not-committed.txt"), []byte("unique manifest body\n"))
 	before := f.store.Durable()
 	f.svc.deps.beforeAppend = func() {
@@ -105,6 +113,9 @@ func TestAdmissionFailureRollsBack(t *testing.T) {
 		t.Fatalf("failed capture retained: %v %v", refs, err)
 	}
 	assertUnavailable(t, promotionError(context.Background(), f.svc, r), "no_validator")
+	if state := mustAdmit(t, f, r); state.State != RequestPending || state.Checkpoint != 1 {
+		t.Fatalf("retry after rollback: %+v", state)
+	}
 }
 
 func TestParentFailureDuringCaptureRefused(t *testing.T) {
@@ -153,6 +164,7 @@ func TestConcurrentRequestsOnePair(t *testing.T) {
 		t.Parallel()
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
+		admissions := 0
 		for _, same := range []bool{false, true} {
 			start := make(chan struct{})
 			var wg sync.WaitGroup
@@ -181,6 +193,18 @@ func TestConcurrentRequestsOnePair(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			count := 0
+			for _, commit := range serviceCommits(t, f.store) {
+				for _, record := range commit.Records {
+					if record.Type == ledger.TypePromotionAdmitted {
+						count++
+					}
+				}
+			}
+			if (!same && count == 0) || (same && count != admissions+1) {
+				t.Fatalf("same IDs %t: admissions %d -> %d", same, admissions, count)
+			}
+			admissions = count
 		}
 		var previous uuid.UUID
 		var checkpoint int64

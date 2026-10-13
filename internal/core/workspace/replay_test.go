@@ -361,6 +361,7 @@ func TestOpenFailsClosedOnF2_06RuleBreak(t *testing.T) {
 		"ending_actor", "ending_context", "ending_refs", "ending_unknown_request", "ending_ended_request", "ending_conflict_generation", "ending_clean_generation", "ending_live_predecessor",
 		"ending_dependency_actor", "ending_dependency_live", "ending_dependency_other_lineage", "ending_dependency_later", "ending_suffix_live", "ending_unpin_missing", "ending_unpin_order", "ending_unpin_before", "ending_report_unpin",
 		"closure_live", "closure_report_unpin_missing", "closure_report_unpin_order", "closure_report_unpin_before", "report_unpin_without_owner",
+		"manifest_unpin_without_ending",
 	}
 	rows = append(rows, "generation_ended_id_reused")
 	for _, name := range rows {
@@ -628,6 +629,9 @@ func TestOpenFailsClosedOnF2_06RuleBreak(t *testing.T) {
 					drafts[0], drafts[1] = drafts[1], drafts[0]
 					badAt = 0
 				}
+			} else if name == "manifest_unpin_without_ending" {
+				drafts = []ledger.Draft{{Type: ledger.TypeBodyUnpin, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: a1.ContextID, Payload: encoded(t, ledger.BodyUnpin{PinID: a1.PinID})}}
+				badAt = 0
 			} else {
 				drafts = drafts[len(drafts)-1:]
 				badAt = 0

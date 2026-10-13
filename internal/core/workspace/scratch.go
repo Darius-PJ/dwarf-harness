@@ -22,6 +22,7 @@ type scratchState struct {
 	Scratch
 	closed     bool
 	head       uuid.UUID
+	live       int
 	reportPins []uuid.UUID
 }
 
