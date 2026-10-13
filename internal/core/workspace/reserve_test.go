@@ -210,7 +210,7 @@ func TestReservationReleasedOnEveryPath(t *testing.T) {
 func TestObserveReturnsPoolButKeepsExclusion(t *testing.T) {
 	t.Parallel()
 	f := newCaptureFixture(t)
-	other, err := f.f.git.createWorktree(context.Background(), f.f.colony, f.p, f.s.InputsDir, filepath.Join(f.f.colony, "scratch", "87654321"), "second-observer")
+	other, err := f.f.git.createWorktree(context.Background(), f.f.colony, f.p, f.s.InputsDir, filepath.Join(f.f.colony, "scratch", "87654321"), "second-observer", f.s.Worktree.BaseCommit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,4 +456,263 @@ func TestConcurrentAdmissionReservations(t *testing.T) {
 		_, err := pool.reserve("a", admissionReservation)
 		assertBusy(t, err, "checkpoint_slots")
 	})
+}
+
+func TestSoleWriterWaitsForLeasesAndExcludesCapture(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		profile := ProvisionalCapacityProfile()
+		pool := testReservationPool(t, &profile)
+		lease, err := pool.beginWrite(context.Background(), "scratch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lease()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		result := make(chan *reservation, 1)
+		failed := make(chan error, 1)
+		go func() {
+			guard, err := pool.beginSoleWrite(ctx, "scratch")
+			if err != nil {
+				failed <- err
+				return
+			}
+			result <- guard
+		}()
+		synctest.Wait()
+		select {
+		case guard := <-result:
+			guard.release()
+			t.Fatal("sole writer entered while lease held")
+		default:
+		}
+		cancelled, stop := context.WithCancel(context.Background())
+		cancelResult := make(chan error, 1)
+		go func() {
+			r, err := pool.beginSoleWrite(cancelled, "scratch")
+			if r != nil {
+				r.release()
+			}
+			cancelResult <- err
+		}()
+		synctest.Wait()
+		stop()
+		synctest.Wait()
+		if err := <-cancelResult; !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiting cancellation: %v", err)
+		}
+		lease()
+		synctest.Wait()
+		var guard *reservation
+		select {
+		case guard = <-result:
+		case err := <-failed:
+			t.Fatal(err)
+		default:
+			t.Fatal("sole writer did not resume")
+		}
+		defer guard.release()
+		for _, kind := range []reservationKind{closureReservation, admissionReservation, observationReservation} {
+			_, err := pool.reserve("scratch", kind)
+			assertBusy(t, err, "scratch_busy")
+		}
+		next := make(chan func(), 1)
+		go func() {
+			release, err := pool.beginWrite(ctx, "scratch")
+			if err != nil {
+				failed <- err
+				return
+			}
+			next <- release
+		}()
+		synctest.Wait()
+		select {
+		case release := <-next:
+			release()
+			t.Fatal("lease interrupted sole writer")
+		default:
+		}
+		guard.release()
+		synctest.Wait()
+		select {
+		case release := <-next:
+			release()
+		case err := <-failed:
+			t.Fatal(err)
+		default:
+			t.Fatal("lease did not resume")
+		}
+		r, err := pool.reserve("scratch", admissionReservation)
+		if err != nil {
+			t.Fatalf("cancelled wait leaked an owner: %v", err)
+		}
+		r.release()
+	})
+}
+
+func TestObservationReservationTakesNoSlot(t *testing.T) {
+	t.Parallel()
+	profile := CapacityProfile{MaxFiles: 1, MaxBytes: 10, BytesInFlight: 10, CheckpointsPerPair: 1, GenerationWindow: 1}
+	pool := testReservationPool(t, &profile)
+	pool.setLive("scratch", 1)
+	r, err := pool.reserve("scratch", observationReservation)
+	if err != nil {
+		t.Fatalf("observation needed a checkpoint slot: %v", err)
+	}
+	defer r.release()
+	_, err = pool.reserve("other", observationReservation)
+	assertBusy(t, err, "capture_budget")
+	if _, err := r.beginCapture("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	r.keepSlot()
+	r.releaseCaptureBytes()
+	next, err := pool.reserve("other", observationReservation)
+	if err != nil {
+		t.Fatalf("observation retained bytes: %v", err)
+	}
+	next.release()
+	_, err = pool.reserve("scratch", closureReservation)
+	assertBusy(t, err, "scratch_busy")
+	r.release()
+	pool.freeSlot("scratch")
+	admission, err := pool.reserve("scratch", admissionReservation)
+	if err != nil {
+		t.Fatalf("observation kept a checkpoint slot: %v", err)
+	}
+	admission.release()
+	unconfigured := testReservationPool(t, nil)
+	_, err = unconfigured.reserve("scratch", observationReservation)
+	var unavailable *UnavailableError
+	if !errors.As(err, &unavailable) || unavailable.Reason != "no_capacity_profile" {
+		t.Fatalf("observation without profile: %v", err)
+	}
+}
+
+func TestSubordinateTokenBoundToGuard(t *testing.T) {
+	t.Parallel()
+	profile := CapacityProfile{MaxFiles: 1, MaxBytes: 10, BytesInFlight: 10, CheckpointsPerPair: 1, GenerationWindow: 1}
+	pool := testReservationPool(t, &profile)
+	guard, err := pool.beginSoleWrite(context.Background(), "scratch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.release()
+	forgedGuard := *guard
+	_, err = pool.reserveCaptureUnder(&forgedGuard)
+	assertReservationInvalid(t, err)
+	token, err := pool.reserveCaptureUnder(guard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.release()
+	_, err = pool.reserveCaptureUnder(guard)
+	assertReservationInvalid(t, err)
+	forged := *token
+	_, err = forged.beginCapture("scratch")
+	assertReservationInvalid(t, err)
+	_, err = token.beginCapture("other")
+	assertReservationInvalid(t, err)
+	other, err := pool.reserve("other", closureReservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.release()
+	token.guard = other
+	_, err = token.beginCapture("scratch")
+	assertReservationInvalid(t, err)
+	token.guard = guard
+	if _, err := token.beginCapture("scratch"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = token.beginCapture("scratch")
+	assertReservationInvalid(t, err)
+	token.releaseCaptureBytes()
+	_, err = token.beginCapture("scratch")
+	assertReservationInvalid(t, err)
+	next, err := pool.reserveCaptureUnder(guard)
+	if err != nil {
+		t.Fatalf("completed child retained bytes or registration: %v", err)
+	}
+	guard.release()
+	_, err = next.beginCapture("scratch")
+	assertReservationInvalid(t, err)
+	_, err = pool.reserveCaptureUnder(guard)
+	assertReservationInvalid(t, err)
+	other.release()
+	full, err := pool.reserve("other", observationReservation)
+	if err != nil {
+		t.Fatalf("guard release leaked child bytes: %v", err)
+	}
+	defer full.release()
+	token.release()
+	next.release()
+	next.releaseCaptureBytes()
+	guard.release()
+	_, err = pool.reserve("third", observationReservation)
+	assertBusy(t, err, "capture_budget")
+}
+
+func TestSoleWriterWaitsForExclusiveOwners(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []reservationKind{closureReservation, admissionReservation, observationReservation} {
+		synctest.Test(t, func(t *testing.T) {
+			profile := ProvisionalCapacityProfile()
+			pool := testReservationPool(t, &profile)
+			holder, err := pool.reserve("scratch", kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer holder.release()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			entered := make(chan *reservation, 2)
+			failed := make(chan error, 2)
+			for range 2 {
+				go func() {
+					r, err := pool.beginSoleWrite(ctx, "scratch")
+					if err != nil {
+						failed <- err
+						return
+					}
+					entered <- r
+				}()
+			}
+			synctest.Wait()
+			select {
+			case r := <-entered:
+				r.release()
+				t.Fatal("sole writer interrupted exclusive owner")
+			default:
+			}
+			holder.release()
+			synctest.Wait()
+			var first *reservation
+			select {
+			case first = <-entered:
+			case err := <-failed:
+				t.Fatal(err)
+			default:
+				t.Fatal("sole writer did not resume")
+			}
+			defer first.release()
+			select {
+			case second := <-entered:
+				second.release()
+				t.Fatal("two sole writers entered together")
+			default:
+			}
+			first.release()
+			synctest.Wait()
+			select {
+			case second := <-entered:
+				second.release()
+			case err := <-failed:
+				t.Fatal(err)
+			default:
+				t.Fatal("second sole writer did not resume")
+			}
+		})
+	}
 }

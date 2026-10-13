@@ -77,19 +77,27 @@ func (e *captureEngine) integrationCommit(ctx context.Context, s captureScratch,
 	if !validOID(tree, n) || !validOID(parent, n) || !validID(requestID) || !validID(generationID) {
 		return "", fmt.Errorf("%w: invalid integration provenance", ErrInvalid)
 	}
+	message := fmt.Sprintf("dwarf-harness integration\n\nrequest %s\ngeneration %s", requestID, generationID)
+	return e.deterministicCommit(ctx, s, tree, parent, generationID, message)
+}
+
+func (e *captureEngine) deterministicCommit(ctx context.Context, s captureScratch, tree, parent string, id uuid.UUID, message string) (string, error) {
+	n := oidLength(s.Inputs.ObjectFormat)
+	if !validOID(tree, n) || !validOID(parent, n) || !validID(id) {
+		return "", fmt.Errorf("%w: invalid commit provenance", ErrInvalid)
+	}
 	env, err := e.prepareIntegration(ctx, s)
 	if err != nil {
 		return "", err
 	}
 	// RFC 9562: UUIDv7's leading 48 bits are Unix milliseconds.
 	var milliseconds uint64
-	for _, b := range generationID[:6] {
+	for _, b := range id[:6] {
 		milliseconds = milliseconds<<8 | uint64(b)
 	}
 	date := fmt.Sprintf("%d +0000", milliseconds/1000)
 	env = append(env, "GIT_AUTHOR_NAME=DwarfHarness Core", "GIT_AUTHOR_EMAIL=core@dwarf-harness.invalid", "GIT_AUTHOR_DATE="+date,
 		"GIT_COMMITTER_NAME=DwarfHarness Core", "GIT_COMMITTER_EMAIL=core@dwarf-harness.invalid", "GIT_COMMITTER_DATE="+date)
-	message := fmt.Sprintf("dwarf-harness integration\n\nrequest %s\ngeneration %s", requestID, generationID)
 	out, _, err := e.git.run(ctx, s.TmpDir, env, nil, []int{0}, "-c", "core.bare=true", "commit-tree", "-p", parent, "-m", message, "--end-of-options", tree)
 	if err != nil {
 		return "", err
@@ -102,17 +110,34 @@ func (e *captureEngine) integrationCommit(ctx context.Context, s captureScratch,
 }
 
 func (g *gitRunner) createGenerationRef(ctx context.Context, colony string, p Proposal, id uuid.UUID, commit string) error {
-	if !validID(id) || !validOID(commit, oidLength(p.ObjectFormat)) {
-		return fmt.Errorf("%w: invalid generation ref", ErrInvalid)
-	}
-	return g.createRef(ctx, colony, p.CommonDir, "refs/dwarf-harness/generations/"+id.String(), commit)
+	return g.createCommitRef(ctx, colony, p, "generations", id, commit)
 }
 
 func (g *gitRunner) deleteGenerationRef(ctx context.Context, colony string, p Proposal, id uuid.UUID, commit string) error {
-	if !validID(id) || !validOID(commit, oidLength(p.ObjectFormat)) {
-		return fmt.Errorf("%w: invalid generation ref", ErrInvalid)
+	return g.deleteCommitRef(ctx, colony, p, "generations", id, commit)
+}
+
+func commitRef(p Proposal, namespace string, id uuid.UUID, commit string) (string, error) {
+	if (namespace != "generations" && namespace != "scratch-commits") || !validID(id) || !validOID(commit, oidLength(p.ObjectFormat)) {
+		return "", fmt.Errorf("%w: invalid commit retention ref", ErrInvalid)
 	}
-	_, _, err := g.repository(ctx, colony, p.CommonDir, nil, []int{0}, "update-ref", "-d", "--end-of-options", "refs/dwarf-harness/generations/"+id.String(), commit)
+	return "refs/dwarf-harness/" + namespace + "/" + id.String(), nil
+}
+
+func (g *gitRunner) createCommitRef(ctx context.Context, colony string, p Proposal, namespace string, id uuid.UUID, commit string) error {
+	ref, err := commitRef(p, namespace, id, commit)
+	if err != nil {
+		return err
+	}
+	return g.createRef(ctx, colony, p.CommonDir, ref, commit)
+}
+
+func (g *gitRunner) deleteCommitRef(ctx context.Context, colony string, p Proposal, namespace string, id uuid.UUID, commit string) error {
+	ref, err := commitRef(p, namespace, id, commit)
+	if err != nil {
+		return err
+	}
+	_, _, err = g.repository(ctx, colony, p.CommonDir, nil, []int{0}, "update-ref", "-d", "--end-of-options", ref, commit)
 	return err
 }
 

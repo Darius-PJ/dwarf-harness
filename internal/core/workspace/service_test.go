@@ -378,7 +378,7 @@ func orphanWorktree(t *testing.T, f *serviceFixture) scratchWorktree {
 	t.Helper()
 	id := uuid.NewV7()
 	w := f.svc.workspaces[f.w.ID]
-	wt, err := f.git.createWorktree(context.Background(), f.colony, w.inputs, f.svc.inputsDir(w), filepath.Join(f.colony, "scratch", shortID(id)), id.String())
+	wt, err := f.git.createWorktree(context.Background(), f.colony, w.inputs, f.svc.inputsDir(w), filepath.Join(f.colony, "scratch", shortID(id)), id.String(), fixtureMain(t, f.gitFixture))
 	if err != nil {
 		t.Fatal(err)
 	}

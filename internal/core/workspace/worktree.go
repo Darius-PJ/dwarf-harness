@@ -92,7 +92,7 @@ func (g *gitRunner) ensureMarker(ctx context.Context, colony string, p Proposal,
 	return nil
 }
 
-func (g *gitRunner) createWorktree(ctx context.Context, colony string, p Proposal, inputs, dir, id string) (scratchWorktree, error) {
+func (g *gitRunner) createWorktree(ctx context.Context, colony string, p Proposal, inputs, dir, id, base string) (scratchWorktree, error) {
 	var zero scratchWorktree
 	if g.unavailable != nil {
 		return zero, g.unavailable
@@ -121,12 +121,8 @@ func (g *gitRunner) createWorktree(ctx context.Context, colony string, p Proposa
 	if err := canonicalNotCheckedOut(entries); err != nil {
 		return zero, err
 	}
-	base, err := g.readRef(ctx, colony, p.CommonDir, "refs/heads/main^{commit}", oidLength(p.ObjectFormat))
-	if err != nil {
-		return zero, err
-	}
-	if base == "" {
-		return zero, ErrNoCanonical
+	if !validOID(base, oidLength(p.ObjectFormat)) {
+		return zero, fmt.Errorf("%w: invalid scratch base commit", ErrInvalid)
 	}
 	tree, err := g.readRef(ctx, colony, p.CommonDir, base+"^{tree}", oidLength(p.ObjectFormat))
 	if err != nil {

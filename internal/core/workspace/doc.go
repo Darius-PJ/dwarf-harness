@@ -122,10 +122,12 @@
 //
 // The service mints never-reused eight-lowercase-hex directory names from its
 // UUIDv7 IDs, reserving one scratch per context/workspace pair. Mechanics create
-// refs/heads/dwarf-harness/<dir> at main's tip, never main itself. An anchor ref
-// refs/dwarf-harness/anchors/<scratch ID> retains that base commit. Creation uses
-// worktree add --no-checkout followed by private read-tree -u --reset against
-// the anchor tree, writing the worktree's real index under pinned conversion.
+// refs/heads/dwarf-harness/<dir> at an explicit base commit, never main itself.
+// Dedicated creation passes main's tip; the record-free mechanic also supports
+// a temporary fork at its parent's acknowledged private tip. An anchor ref
+// refs/dwarf-harness/anchors/<scratch ID> retains exactly that base commit.
+// Creation uses worktree add --no-checkout followed by private read-tree -u
+// --reset against the anchor tree, writing the real index under pinned conversion.
 // A creation failure attempts cleanup; reconciliation later owns any orphan.
 // Before materialization, a recursive NUL-delimited tree listing rejects case
 // collisions over paths and directory prefixes on every platform, naming both
@@ -140,6 +142,11 @@
 // request retention permits release. Anchors are released after scratch removal.
 // Objects precede refs, which precede the service's record. This is not a
 // power-loss guarantee or a same-user security boundary (C10).
+// Scratch-commit refs refs/dwarf-harness/scratch-commits/<ID> retain private
+// observation and merge-back commits by the same zero-ID create and recorded-ID
+// delete CAS as generation refs. These are record-free primitives only: service
+// routing, observation, merge-back and notices arrive with S3 after the F2-07
+// freeze. Service.BeginWrite and existing scratch lifetimes remain unchanged.
 //
 // # Exact capture
 //
@@ -173,6 +180,12 @@
 // despite ignore rules;
 // same-capture .gitignore edits and negations govern new files under Git's
 // normal precedence with pinned local and global excludes.
+// Private observations may additionally supply trusted path names, not a union
+// tree: an anchor file and a later tip's descendant cannot coexist in one tree.
+// Present trusted names remain eligible despite ignores, including inside an
+// ignored directory; absent names and names replaced by directories are
+// deletions. Admission supplies no additional names and keeps its baseline
+// rules unchanged.
 //
 // File count and walked raw-size caps give file_cap and byte_cap respectively,
 // before the first raw read.
@@ -216,18 +229,24 @@
 // # Reservation lifetimes
 //
 // reserve takes a kind. Closure takes scratch exclusion and adds MaxBytes only
-// before observation. Admission takes exclusion, MaxBytes and one provisional
-// checkpoint slot, all or none under one mutex. It never waits for a writer or
+// before observation. Observation takes exclusion and MaxBytes, but no slot.
+// Admission takes exclusion, MaxBytes and one provisional checkpoint slot,
+// all or none under one mutex. It never waits for a writer or
 // another exclusive holder, queues a retry or interrupts a writer. Refusals are
 // ordered: no_capacity_profile, scratch_busy, checkpoint_slots, capture_budget.
 // Closure of an absent directory still needs neither a profile nor bytes.
 // BeginWrite holders are shared; a writer waits context-boundedly for an
 // exclusive holder to release and never interrupts its capture.
+// The record-free sole mutation writer waits within ctx until both the shared
+// writer count and exclusive holder are clear, then holds the same exclusion.
+// Capture, closure and admission meeting it return scratch_busy immediately;
+// another writer waits on the pool's changed channel. Cancellation while
+// waiting acquires no count, byte allowance or slot.
 //
-// Only reserve mints the unexported token. Under the same mutex, capture refuses
-// nil, unminted, wrong-scratch, used, released or bytes-less tokens with a typed
-// internal error matching ErrInvalid. Marking is atomic: one token permits one
-// capture, including concurrent attempts. The caller owns and defers release
+// The pool alone mints the unexported tokens. Under the same mutex, capture
+// refuses nil, unminted, wrong-scratch, used, released or bytes-less tokens with
+// a typed internal error matching ErrInvalid. Marking is atomic: one token
+// permits one capture, including concurrent attempts. The caller defers release
 // of exclusion through its entire operation: observe, durable close and
 // removal, or seal and admission record. The engine returns only the bytes
 // share on every outcome. release is idempotent and returns whatever parts
@@ -238,6 +257,11 @@
 // claim; setLive restores counts at Open. C4 adds the validator to this same
 // token, not a second reservation mechanism. K is per open context/workspace
 // scratch; workspace and colony checkpoint capacity are sums, not separate caps.
+// reserveCaptureUnder lends a live exclusive guard one subordinate capture
+// token at a time. The child owns only MaxBytes, no exclusion or checkpoint
+// slot, and is accepted only while both it and its guard are registered.
+// Capture returns its bytes and unregisters the child; reuse is refused.
+// Releasing the guard invalidates its child and returns bytes exactly once.
 //
 // # Record-free integration primitives
 //
@@ -266,6 +290,38 @@
 // rules. Its private configuration leaves merge.renormalize,
 // merge.conflictStyle and merge.default unset; changing these rules requires a
 // new rules value, not merely a new inputs revision.
+//
+// The shared deterministic commit primitive also creates single-parent private
+// observation and merge-back commits, even for an unchanged tree. Their dates
+// derive from the operation UUIDv7. Messages are "dwarf-harness scratch
+// observation", a blank line, "scratch <ID>", "observation <ID>"; and
+// "dwarf-harness scratch merge-back", a blank line, "scratch <temporary ID>",
+// "merge-back <ID>". An observation will move HEAD without updating the real
+// index; Core never reads that index as capture authority. Merge-back installs
+// a verified index instead.
+//
+// Record-free materialization takes an already-observed actual tree under the
+// sole mutation writer, a target tree and private branch commits. A fresh
+// private index loads actual with read-tree and update-index --refresh.
+// Filesystem preflight refuses target additions and file/directory replacements
+// obstructed by unrepresented entries, including ignored files or directories,
+// as RefusalError with reason obstructed_path and the path, without mutation.
+// read-tree -m -u --end-of-options <actual> <target> performs the checkout;
+// neither reset nor the real index is used. Re-observation with actual/target
+// trusted names must produce exactly the target before any ref write. A Git
+// exit of zero is not proof that a locked deleted file disappeared.
+//
+// Index installation verifies the worktree's regular gitfile, common-directory
+// identity, backpointer and symbolic private HEAD. It exclusively creates
+// index.lock (0600) with "dwarf-harness scratch-index <ID>" plus LF, syncs and
+// closes it, renames the private index onto index and removes only its own
+// unchanged lock. A foreign lock remains untouched and gives scratch_busy.
+// A copied installed index must write-tree to target; branch CAS is last and
+// uses the repository environment. Partial failure preserves the actual disk
+// state and leaves refs unmoved. The retry form takes a verified intermediate O
+// built from disk, then applies O to target by the same two-tree recipe; it
+// never resets the directory. Service preparation, blocking and explicit retry
+// bookkeeping belong to S3, not these primitives.
 //
 // Conflict reports return deterministic JSON Lines bytes and their SHA-256,
 // without publishing or pinning. The header has format

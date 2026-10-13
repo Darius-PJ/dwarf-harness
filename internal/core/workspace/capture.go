@@ -31,6 +31,9 @@ type captureScratch struct {
 	Inputs                      Proposal
 	Revision                    uint64
 	InputsDir, TmpDir, ColonyID string
+	// TrustedNames adds private observation eligibility, never an index or tree.
+	// Admission leaves it nil.
+	TrustedNames []string
 }
 
 type captureResult struct {
@@ -49,10 +52,13 @@ type captureResult struct {
 }
 
 type captureEngine struct {
-	git          *gitRunner
-	colony       string
-	afterRawRead func(string)
-	manifestCap  int
+	git                  *gitRunner
+	colony               string
+	afterRawRead         func(string)
+	manifestCap          int
+	beforeMergeBackFiles func()
+	afterMergeBackFiles  func()
+	afterMergeBackIndex  func()
 }
 
 func newCaptureEngine(g *gitRunner, colony string) *captureEngine {
@@ -194,6 +200,23 @@ func (e *captureEngine) capture(ctx context.Context, s captureScratch, baseline 
 	if err := checkCaseCollisions(baselinePaths); err != nil {
 		return result, err
 	}
+	if len(s.TrustedNames) != 0 {
+		// With --directory, Git hides ignored descendants when the index still
+		// names their directory as a file. Remove just those stale private
+		// entries before listing; tracked still supplies deletion eligibility.
+		var directories []string
+		for _, entry := range tracked {
+			info, err := os.Lstat(filepath.Join(s.Worktree.Dir, filepath.FromSlash(entry.Path)))
+			if err == nil && info.IsDir() {
+				directories = append(directories, entry.Path)
+			}
+		}
+		if len(directories) != 0 {
+			if _, err := call(strings.NewReader(strings.Join(directories, "\x00")+"\x00"), "update-index", "-z", "--force-remove", "--stdin"); err != nil {
+				return result, err
+			}
+		}
+	}
 	b, err = call(nil, "ls-files", "-z", "-o", "--exclude-standard")
 	if err != nil {
 		return result, err
@@ -219,7 +242,31 @@ func (e *captureEngine) capture(ctx context.Context, s captureScratch, baseline 
 	for _, path := range ignored {
 		ignoredSet[path] = true
 	}
-	walked, err := walkCapture(ctx, s.Worktree.Dir, ignoredSet)
+	// A trusted descendant prevents skipping a wholly ignored directory. Keep
+	// the original ignored listing for eligibility and the reported count.
+	walkIgnored := ignoredSet
+	if len(s.TrustedNames) != 0 {
+		walkIgnored = make(map[string]bool, len(ignoredSet))
+		for path := range ignoredSet {
+			walkIgnored[path] = true
+		}
+		known := make(map[string]bool, len(tracked))
+		for _, entry := range tracked {
+			known[entry.Path] = true
+		}
+		for _, path := range s.TrustedNames {
+			if !known[path] {
+				tracked = append(tracked, stageEntry{Path: path})
+				known[path] = true
+			}
+			for i := range path {
+				if path[i] == '/' {
+					delete(walkIgnored, path[:i+1])
+				}
+			}
+		}
+	}
+	walked, err := walkCapture(ctx, s.Worktree.Dir, walkIgnored)
 	if err != nil {
 		return result, err
 	}
@@ -473,7 +520,7 @@ func reconcileCapture(tracked []stageEntry, untracked []string, ignored map[stri
 		candidateSet[path] = true
 	}
 	for path := range walked {
-		if !candidateSet[path] && !ignored[path] {
+		if !candidateSet[path] && !ignoredCapturePath(path, ignored) {
 			return nil, nil, refuse("unobservable_path", path, "Core path not listed by Git")
 		}
 	}
@@ -486,6 +533,18 @@ func reconcileCapture(tracked []stageEntry, untracked []string, ignored map[stri
 	}
 	sort.Strings(candidates)
 	return candidates, deleted, nil
+}
+
+func ignoredCapturePath(path string, ignored map[string]bool) bool {
+	if ignored[path] {
+		return true
+	}
+	for i := range path {
+		if path[i] == '/' && ignored[path[:i+1]] {
+			return true
+		}
+	}
+	return false
 }
 
 func sameObservation(a, b fs.FileInfo) bool {

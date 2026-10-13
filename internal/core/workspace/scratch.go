@@ -128,7 +128,14 @@ func (s *Service) createScratch(ctx context.Context, pair scratchPair, w workspa
 		return Scratch{}, fmt.Errorf("%w: scratch names exhausted", ErrInvalid)
 	}
 	defer func() { s.mu.Lock(); delete(s.pendingDirs, filepath.Base(dir)); s.mu.Unlock() }()
-	wt, err := s.git.createWorktree(ctx, s.colony, w.inputs, s.inputsDir(w), dir, id.String())
+	base, err := s.git.readRef(ctx, s.colony, w.CommonDir, "refs/heads/main^{commit}", oidLength(w.ObjectFormat))
+	if err != nil {
+		return Scratch{}, err
+	}
+	if base == "" {
+		return Scratch{}, ErrNoCanonical
+	}
+	wt, err := s.git.createWorktree(ctx, s.colony, w.inputs, s.inputsDir(w), dir, id.String(), base)
 	if err != nil {
 		return Scratch{}, err
 	}

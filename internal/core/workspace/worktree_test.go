@@ -11,6 +11,46 @@ import (
 	"testing"
 )
 
+func fixtureMain(t *testing.T, f gitFixture) string {
+	t.Helper()
+	return strings.TrimSpace(string(gitCommand(t, f.env, f.root, nil, "rev-parse", "--verify", "--end-of-options", "refs/heads/main^{commit}")))
+}
+
+func TestCreateWorktreeAtExplicitCommit(t *testing.T) {
+	t.Parallel()
+	f := newGitFixture(t, "sha1")
+	p, err := f.git.inspect(context.Background(), f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := fixtureMain(t, f)
+	tree := integrationTree(t, f, map[string]string{"fork.txt": "private fork\n"})
+	base := strings.TrimSpace(string(gitCommand(t, f.env, f.root, nil, "commit-tree", "-p", main, "-m", "private fork", tree)))
+	dir := filepath.Join(f.colony, "scratch", "11223344")
+	inputs := filepath.Join(f.colony, "workspaces", "inputs", "1")
+	s, err := f.git.createWorktree(context.Background(), f.colony, p, inputs, dir, "explicit-fork", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(readTestFile(t, filepath.Join(dir, "fork.txt"))) != "private fork\n" || s.BaseCommit != base || s.AnchorTree != tree {
+		t.Fatalf("worktree did not fork explicit commit: %#v", s)
+	}
+	anchor, err := f.git.readRef(context.Background(), f.colony, p.CommonDir, s.AnchorRef, len(base))
+	if err != nil || anchor != base || fixtureMain(t, f) != main {
+		t.Fatalf("wrong retention or moved main: %s %v", anchor, err)
+	}
+	_, collision := plumbingBaseline(t, f, []stageEntry{{Path: "Dir/a", Mode: "100644"}, {Path: "dir/b", Mode: "100644"}})
+	collidingDir := filepath.Join(f.colony, "scratch", "55667788")
+	_, err = f.git.createWorktree(context.Background(), f.colony, p, inputs, collidingDir, "colliding-fork", collision)
+	assertRefusal(t, err, "case_collision")
+	if _, err := os.Lstat(collidingDir); !os.IsNotExist(err) {
+		t.Fatalf("colliding fork materialized: %v", err)
+	}
+	if fixtureMain(t, f) != main {
+		t.Fatal("explicit fork changed main")
+	}
+}
+
 func fixtureScratch(t *testing.T) (gitFixture, Proposal, scratchWorktree) {
 	t.Helper()
 	f := newGitFixture(t, "sha1")
@@ -19,7 +59,7 @@ func fixtureScratch(t *testing.T) (gitFixture, Proposal, scratchWorktree) {
 		t.Fatal(err)
 	}
 	p.Normalization.AutoCRLF = "true"
-	s, err := f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), filepath.Join(f.colony, "scratch", "01234567"), "scratch-test")
+	s, err := f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), filepath.Join(f.colony, "scratch", "01234567"), "scratch-test", fixtureMain(t, f))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +77,7 @@ func TestCreateNeverChecksOutMain(t *testing.T) {
 				t.Fatal(err)
 			}
 			p.Normalization.AutoCRLF = "true"
-			s, err := f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), filepath.Join(f.colony, "scratch", "01234567"), "scratch-test")
+			s, err := f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), filepath.Join(f.colony, "scratch", "01234567"), "scratch-test", fixtureMain(t, f))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -86,7 +126,7 @@ func TestCreationRechecksMain(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitCommand(t, f.env, f.root, nil, "checkout", "main")
-	_, err = f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), filepath.Join(f.colony, "scratch", "01234567"), "scratch-test")
+	_, err = f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), filepath.Join(f.colony, "scratch", "01234567"), "scratch-test", fixtureMain(t, f))
 	if !errors.Is(err, ErrCanonicalCheckedOut) {
 		t.Fatalf("got %v", err)
 	}

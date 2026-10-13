@@ -155,8 +155,9 @@ func TestCaptureWorkload(t *testing.T) {
 				}
 				t.Log(string(b))
 			}
+			base := fixtureMain(t, f)
 			start := time.Now()
-			worktree, err := f.git.createWorktree(context.Background(), f.colony, p, inputs, dir, uuid.NewV7().String())
+			worktree, err := f.git.createWorktree(context.Background(), f.colony, p, inputs, dir, uuid.NewV7().String(), base)
 			duration := time.Since(start)
 			if err != nil {
 				t.Fatal(err)

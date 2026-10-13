@@ -385,7 +385,7 @@ func TestCaseCollidingBaselineRefusedBeforeMaterialization(t *testing.T) {
 				t.Fatal(err)
 			}
 			dir := filepath.Join(f.colony, "scratch", "11223344")
-			_, err = f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), dir, "collision")
+			_, err = f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), dir, "collision", commit)
 			refusal := assertRefusal(t, err, "case_collision")
 			for _, path := range paths {
 				if !strings.Contains(refusal.Error(), path) {
@@ -794,7 +794,7 @@ func TestCaptureSHA256Repository(t *testing.T) {
 	p.Normalization.AutoCRLF = "true"
 	inputs := filepath.Join(f.colony, "workspaces", "inputs", "1")
 	dir := filepath.Join(f.colony, "scratch", "12345678")
-	s, err := f.git.createWorktree(context.Background(), f.colony, p, inputs, dir, "sha256-capture")
+	s, err := f.git.createWorktree(context.Background(), f.colony, p, inputs, dir, "sha256-capture", fixtureMain(t, f))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -832,5 +832,69 @@ func TestCaptureInvalidModeKeepsToken(t *testing.T) {
 	got, err := f.engine.capture(context.Background(), f.s, f.s.Worktree.AnchorTree, r, sealCapture)
 	if err != nil || got.Tree != want || got.RetentionRef == "" {
 		t.Fatalf("invalid mode burned the token: %#v %v", got, err)
+	}
+}
+
+func observeTrusted(t *testing.T, f *captureFixture, baseline string, names []string) captureResult {
+	t.Helper()
+	s := f.s
+	s.Inputs = f.p
+	s.TrustedNames = names
+	r, err := f.pool.reserve(s.Worktree.Dir, observationReservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.release()
+	got, err := f.engine.capture(context.Background(), s, baseline, r, observeCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestTrustedPathUnionEligibility(t *testing.T) {
+	t.Parallel()
+	f := newCaptureFixture(t)
+	root := f.s.Worktree.Dir
+	if err := os.Remove(filepath.Join(root, "base.txt")); err != nil {
+		t.Fatal(err)
+	}
+	deleted := observeTrusted(t, f, f.s.Worktree.AnchorTree, nil)
+	ignore := "base.txt\nunknown.txt\nhidden/\n"
+	writeTestFile(t, filepath.Join(root, ".gitignore"), []byte(ignore))
+	tip := observeTrusted(t, f, deleted.Tree, []string{"base.txt", "hidden/known"})
+	writeTestFile(t, filepath.Join(root, "base.txt"), []byte("recreated\n"))
+	writeTestFile(t, filepath.Join(root, "unknown.txt"), []byte("not tracked\n"))
+	writeTestFile(t, filepath.Join(root, "hidden", "known"), []byte("trusted descendant\n"))
+	writeTestFile(t, filepath.Join(root, "hidden", "unknown"), []byte("ignored descendant\n"))
+	names := []string{"base.txt", "hidden/known"}
+	got := observeTrusted(t, f, tip.Tree, names)
+	want := integrationTree(t, f.f, map[string]string{".gitignore": ignore, "base.txt": "recreated\n", "hidden/known": "trusted descendant\n"})
+	if got.Tree != want {
+		t.Fatalf("trusted recreated paths dropped or unknown ignored files included: %s want %s", got.Tree, want)
+	}
+	without := observeTrusted(t, f, tip.Tree, nil)
+	wantWithout := integrationTree(t, f.f, map[string]string{".gitignore": ignore})
+	if without.Tree != wantWithout {
+		t.Fatalf("ordinary eligibility changed: %s want %s", without.Tree, wantWithout)
+	}
+	if err := os.Remove(filepath.Join(root, "base.txt")); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(root, "base.txt", "child"), []byte("ignored replacement\n"))
+	replaced := observeTrusted(t, f, got.Tree, names)
+	wantReplaced := integrationTree(t, f.f, map[string]string{".gitignore": ignore, "hidden/known": "trusted descendant\n"})
+	if replaced.Tree != wantReplaced {
+		t.Fatalf("trusted name replaced by directory was not a deletion: %s want %s", replaced.Tree, wantReplaced)
+	}
+	// An actual admission still receives no additional eligibility names.
+	r, err := f.pool.reserve(root, admissionReservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.release()
+	sealed, err := f.engine.capture(context.Background(), f.s, tip.Tree, r, sealCapture)
+	if err != nil || sealed.Tree != wantWithout {
+		t.Fatalf("admission eligibility changed: %s want %s: %v", sealed.Tree, wantWithout, err)
 	}
 }
