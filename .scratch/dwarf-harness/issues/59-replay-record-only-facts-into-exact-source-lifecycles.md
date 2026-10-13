@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: U1.E local source/replay capability
-Blocked by: 04
+Blocked by: 04, 07, 08, 09, 17, 61
 
 ## What to build
 
@@ -49,3 +49,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-13 — Blocked on producer freezes. The project manager took this ticket up after ticket 06 closed. The design's gate analysis, which the ticket's build advisor confirmed, found that none of the record families it replays is frozen. No frozen record feeds a rule of the frozen law registry, so a synthetic ledger of frozen types produces no reading, and D41 allows stand-in data only against a frozen contract. It waits for five producer freezes, each asked of the owner by its producer under D40: law activation (ticket 09), graph deltas (ticket 61), scratch changed paths (ticket 07), accepted promotion (ticket 08) and validation evidence (ticket 17). `Blocked by` now lists them. The gate analysis and its ruling are kept by the project manager and land with this ticket's documents when it closes.
