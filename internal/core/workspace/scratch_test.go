@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,5 +305,34 @@ func TestAnchorRemovalPreservesMovedRef(t *testing.T) {
 	got, err = f.git.readRef(context.Background(), f.colony, f.p.CommonDir, ref, 40)
 	if err != nil || got != "" {
 		t.Fatalf("anchor retry failed: %q %v", got, err)
+	}
+}
+
+func TestCloseScratchWhileRequestsLive(t *testing.T) {
+	for _, racing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("admitted_during_reservation_%t", racing), func(t *testing.T) {
+			f := newServiceFixture(t)
+			scratch := mustScratch(t, f, uuid.NewV7())
+			r := rootRequest(scratch)
+			if racing {
+				var once sync.Once
+				f.svc.deps.beforeCloseReserve = func() { once.Do(func() { mustAdmit(t, f, r) }) }
+			} else {
+				mustAdmit(t, f, r)
+			}
+			_, err := f.svc.CloseScratch(context.Background(), ownerClosure(scratch))
+			if !errors.Is(err, ErrLiveRequests) {
+				t.Fatalf("closure passed a live request: %v", err)
+			}
+			before := snapshotRequestEffects(t, f)
+			_, err = f.svc.CloseScratch(context.Background(), ownerClosure(scratch))
+			if !errors.Is(err, ErrLiveRequests) {
+				t.Fatal(err)
+			}
+			assertRequestEffects(t, f, before)
+			if _, err := os.Stat(scratch.Dir); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

@@ -103,7 +103,7 @@ func snapshotCaptureSideEffects(t *testing.T, f gitFixture, p Proposal) captureS
 	t.Helper()
 	s := captureSideEffects{
 		Objects: string(gitCommand(t, f.env, f.root, nil, "--git-dir="+p.CommonDir, "count-objects", "-v")),
-		Refs:    string(gitCommand(t, f.env, f.root, nil, "--git-dir="+p.CommonDir, "for-each-ref", "--format=%(refname)%00%(objectname)%00", "--end-of-options", "refs/dwarf-harness/captures/")),
+		Refs:    string(gitCommand(t, f.env, f.root, nil, "--git-dir="+p.CommonDir, "for-each-ref", "--format=%(refname)%00%(objectname)%00", "--end-of-options", "refs/dwarf-harness/captures/", "refs/dwarf-harness/generations/")),
 		Tmp:     map[string]string{},
 	}
 	err := filepath.WalkDir(filepath.Join(f.colony, "workspaces"), func(path string, d fs.DirEntry, err error) error {
@@ -240,5 +240,22 @@ func serviceCommits(t *testing.T, store *ledgerstore.Store) []ledger.Commit {
 			t.Fatal(err)
 		}
 		result = append(result, c)
+	}
+}
+
+type requestEffects struct {
+	Capture captureSideEffects
+	Durable uint64
+}
+
+func snapshotRequestEffects(t *testing.T, f *serviceFixture) requestEffects {
+	t.Helper()
+	return requestEffects{snapshotCaptureSideEffects(t, f.gitFixture, f.p), f.store.Durable()}
+}
+
+func assertRequestEffects(t *testing.T, f *serviceFixture, before requestEffects) {
+	t.Helper()
+	if after := snapshotRequestEffects(t, f); !reflect.DeepEqual(before, after) {
+		t.Fatalf("request changed effects: before %+v after %+v", before, after)
 	}
 }

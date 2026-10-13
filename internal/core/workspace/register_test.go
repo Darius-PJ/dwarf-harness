@@ -216,7 +216,7 @@ func TestPinnedGitVersionGatesCapture(t *testing.T) {
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	f.svc.git.version = "2.99.0"
-	assertUnavailable(t, f.svc.RequestPromotion(context.Background(), s.ContextID, f.w.ID), "inputs_stale")
+	assertUnavailable(t, promotionError(context.Background(), f.svc, rootRequest(s)), "inputs_stale")
 	_, err := f.svc.CloseScratch(context.Background(), ownerClosure(s))
 	assertUnavailable(t, err, "inputs_stale")
 	p, err := f.svc.git.inspect(context.Background(), f.root)

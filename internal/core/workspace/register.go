@@ -31,6 +31,8 @@ type workspaceState struct {
 	refs                      []ledger.Digest
 	inputsSeq                 uint64
 	inputsError, inputsDetail string
+	// Historical digests enforce F2-06 without reading superseded bodies.
+	revisions map[int64]ledger.Digest
 }
 
 // Register is the owner's approval of a proposal. The caller authenticates the

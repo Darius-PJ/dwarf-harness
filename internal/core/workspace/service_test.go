@@ -46,6 +46,14 @@ func TestHelperScratchCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if text := os.Getenv("DWARF_WORKSPACE_CHILD_CONTEXT"); text != "" {
+		c, err := uuid.Parse(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = admission(service, rootRequest(Scratch{ContextID: c, WorkspaceID: workspaceID}))
+		t.Fatalf("parent failed to kill admission before append: %v", err)
+	}
 	if _, err := service.Scratch(context.Background(), uuid.NewV7(), workspaceID); err != nil {
 		t.Fatal(err)
 	}
@@ -159,23 +167,6 @@ func TestOpenReconciles(t *testing.T) {
 			}
 		}
 	})
-	t.Run("capture_owner_retains_ref", func(t *testing.T) {
-		f := newServiceFixture(t)
-		s := mustScratch(t, f, uuid.NewV7())
-		writeTestFile(t, filepath.Join(s.Dir, "captured.txt"), []byte("sealed content"))
-		capture, err := f.capture(s, sealCapture)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer gitCommand(t, f.env, f.root, nil, "update-ref", "-d", capture.RetentionRef, capture.Tree)
-		report := f.reopen(t, serviceConfig())
-		if len(report.Pending) != 0 {
-			t.Fatalf("capture reopen: %#v", report)
-		}
-		if tree, err := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, capture.RetentionRef, 40); err != nil || tree != capture.Tree {
-			t.Fatalf("Open released the owner's capture: tree=%q want=%q err=%v", tree, capture.Tree, err)
-		}
-	})
 	t.Run("anchor_restored_tmp_emptied", func(t *testing.T) {
 		f := newServiceFixture(t)
 		s := mustScratch(t, f, uuid.NewV7())
@@ -205,7 +196,7 @@ func TestOpenReconciles(t *testing.T) {
 		if !slices.Contains(report.Missing, s.ID) {
 			t.Fatalf("missing scratch unreported: %#v", report)
 		}
-		assertUnavailable(t, f.svc.RequestPromotion(context.Background(), s.ContextID, f.w.ID), "scratch_missing")
+		assertUnavailable(t, promotionError(context.Background(), f.svc, rootRequest(s)), "scratch_missing")
 		if _, err := f.svc.CloseScratch(context.Background(), ownerClosure(s)); err != nil {
 			t.Fatal(err)
 		}
@@ -289,7 +280,9 @@ func TestUncertainAppendPoisons(t *testing.T) {
 				func() error { _, err := f.svc.Scratch(context.Background(), c, f.w.ID); return err },
 				func() error { _, err := f.svc.BeginWrite(context.Background(), uuid.NewV7()); return err },
 				func() error { _, err := f.svc.CloseScratch(context.Background(), Closure{}); return err },
-				func() error { return f.svc.RequestPromotion(context.Background(), c, f.w.ID) },
+				func() error {
+					return promotionError(context.Background(), f.svc, rootRequest(Scratch{ContextID: c, WorkspaceID: f.w.ID}))
+				},
 			} {
 				if err := call(); !errors.Is(err, ErrPoisoned) {
 					t.Fatalf("service continued after uncertainty: %v", err)
@@ -335,7 +328,7 @@ func TestCurrentInputsUnavailable(t *testing.T) {
 			if len(report.Pending) != 1 || !strings.Contains(report.Pending[0], "inputs_unavailable") {
 				t.Fatalf("unavailable input report: %#v", report)
 			}
-			assertUnavailable(t, f.svc.RequestPromotion(context.Background(), s.ContextID, f.w.ID), "inputs_unavailable")
+			assertUnavailable(t, promotionError(context.Background(), f.svc, rootRequest(s)), "inputs_unavailable")
 			_, err := f.svc.CloseScratch(context.Background(), ownerClosure(s))
 			assertUnavailable(t, err, "inputs_unavailable")
 		})
@@ -411,5 +404,257 @@ func TestOpenReconcilesUnprovenOrMovedOrphanBranch(t *testing.T) {
 				t.Fatalf("orphan directory remains: %v", err)
 			}
 		})
+	}
+}
+
+func TestOpenSweepsUnownedRefs(t *testing.T) {
+	t.Run("killed_admission", func(t *testing.T) {
+		f := newServiceFixture(t)
+		s := mustScratch(t, f, uuid.NewV7())
+		writeTestFile(t, filepath.Join(s.Dir, "crashed.txt"), []byte("unacknowledged capture"))
+		before := f.store.Durable()
+		if err := f.svc.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHelperScratchCrash$")
+		cmd.Env = append(slices.Clone(f.env), workspaceChildColony+"="+f.colony, "DWARF_WORKSPACE_CHILD_ID="+f.w.ID.String(), "DWARF_WORKSPACE_CHILD_CONTEXT="+s.ContextID.String())
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stdin.Close()
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		stopped := false
+		defer func() {
+			if !stopped {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			}
+		}()
+		line, err := bufio.NewReader(stdout).ReadString('\n')
+		if err != nil || line != "scratch-ready\n" {
+			t.Fatalf("admission child: %q %v %s", line, err, stderr.String())
+		}
+		refs := string(gitCommand(t, f.env, f.root, nil, "for-each-ref", "--format=%(refname)", "refs/dwarf-harness/captures/"))
+		if refs == "" {
+			t.Fatal("child did not seal before append")
+		}
+		if err := cmd.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Wait(); err == nil {
+			t.Fatal("killed child succeeded")
+		}
+		stopped = true
+		f.store, _, err = ledgerstore.Open(f.colony, ledger.Defined())
+		if err != nil {
+			t.Fatal(err)
+		}
+		report := f.reopen(t, serviceConfig())
+		if len(report.Pending) != 0 || f.store.Durable() != before {
+			t.Fatalf("crash reconciliation: %+v", report)
+		}
+		refs = string(gitCommand(t, f.env, f.root, nil, "for-each-ref", "--format=%(refname)", "refs/dwarf-harness/captures/"))
+		if refs != "" {
+			t.Fatalf("unowned capture retained: %s", refs)
+		}
+	})
+	t.Run("recorded_and_failed_release", func(t *testing.T) {
+		f := newServiceFixture(t)
+		s := mustScratch(t, f, uuid.NewV7())
+		r := rootRequest(s)
+		writeTestFile(t, filepath.Join(s.Dir, "base.txt"), []byte("local\ntwo\n"))
+		mustAdmit(t, f, r)
+		a := admittedRecord(t, f, r.RequestID)
+		captureRef := "refs/dwarf-harness/captures/" + a.CaptureID.String()
+		f.reopen(t, serviceConfig())
+		if got, err := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, captureRef, 40); err != nil || got != a.SealedTree {
+			t.Fatalf("admitted retention lost: %q %v", got, err)
+		}
+		advanceMain(t, f, map[string]string{"base.txt": "canonical\ntwo\n"})
+		mustIntegrate(t, f)
+		if err := f.git.createRef(context.Background(), f.colony, f.p.CommonDir, captureRef, a.SealedTree); err != nil {
+			t.Fatal(err)
+		}
+		stray := "refs/dwarf-harness/generations/" + uuid.NewV7().String()
+		if err := f.git.createRef(context.Background(), f.colony, f.p.CommonDir, stray, s.BaseCommit); err != nil {
+			t.Fatal(err)
+		}
+		before := f.store.Durable()
+		if report := f.reopen(t, serviceConfig()); len(report.Pending) != 0 {
+			t.Fatalf("release replay: %+v", report)
+		}
+		for _, ref := range []string{captureRef, stray} {
+			if got, err := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, ref, 40); err != nil || got != "" {
+				t.Fatalf("unowned ref %s remains: %q %v", ref, got, err)
+			}
+		}
+		if f.store.Durable() != before {
+			t.Fatal("sweep wrote records")
+		}
+	})
+}
+
+func TestOpenRestoresRetainedRefs(t *testing.T) {
+	for _, mode := range []string{"missing", "different", "pruned"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newServiceFixture(t)
+			s := mustScratch(t, f, uuid.NewV7())
+			r := rootRequest(s)
+			writeTestFile(t, filepath.Join(s.Dir, "retained.txt"), []byte("retained submission only"))
+			want := mustAdmit(t, f, r)
+			mustIntegrate(t, f)
+			a := admittedRecord(t, f, r.RequestID)
+			g := generations(t, f, r.RequestID)[0]
+			refs := map[string]string{"refs/dwarf-harness/captures/" + a.CaptureID.String(): a.SealedTree, "refs/dwarf-harness/generations/" + g.GenerationID.String(): g.DerivedCommit}
+			for ref, oid := range refs {
+				gitCommand(t, f.env, f.root, nil, "update-ref", "-d", "--end-of-options", ref, oid)
+				if mode == "different" {
+					if err := f.git.createRef(context.Background(), f.colony, f.p.CommonDir, ref, s.BaseCommit); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if mode == "pruned" {
+				gitCommand(t, f.env, f.root, nil, "gc", "--prune=now")
+			}
+			before := f.store.Durable()
+			report := f.reopen(t, serviceConfig())
+			if mode == "missing" {
+				if len(report.Pending) != 0 {
+					t.Fatalf("restore: %+v", report)
+				}
+				for ref, oid := range refs {
+					if got, err := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, ref, 40); err != nil || got != oid {
+						t.Fatalf("ref not restored: %q %v", got, err)
+					}
+				}
+			} else {
+				if len(report.Pending) != 2 || !strings.Contains(strings.Join(report.Pending, "\n"), "capture_missing "+r.RequestID.String()) || !strings.Contains(strings.Join(report.Pending, "\n"), "generation_missing "+g.GenerationID.String()) {
+					t.Fatalf("missing retained objects not reported: %+v", report)
+				}
+				if mode == "different" {
+					for ref := range refs {
+						if got, err := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, ref, 40); err != nil || got != s.BaseCommit {
+							t.Fatalf("different ref overwritten: %q %v", got, err)
+						}
+					}
+				}
+			}
+			got, err := f.svc.RequestPromotion(context.Background(), r)
+			if err != nil || got != want || f.store.Durable() != before {
+				t.Fatalf("replay changed request: %+v %v", got, err)
+			}
+		})
+	}
+}
+
+func TestOpenRebuildsAdmissionState(t *testing.T) {
+	f := newServiceFixture(t)
+	s := mustScratch(t, f, uuid.NewV7())
+	r := rootRequest(s)
+	for range 4 {
+		mustAdmit(t, f, r)
+		r.Head, r.RequestID = r.RequestID, uuid.NewV7()
+	}
+	mustIntegrate(t, f)
+	before := snapshotRequestEffects(t, f)
+	// A lowered policy cannot invalidate a previously valid ledger.
+	cfg := serviceConfig()
+	cfg.Capacity.CheckpointsPerPair = 1
+	cfg.Capacity.GenerationWindow = 1
+	report := f.reopen(t, cfg)
+	if len(report.Pending) != 0 {
+		t.Fatalf("replay: %+v", report)
+	}
+	// Open empties tmp, but creates no Git objects and changes no retained ref.
+	after := snapshotRequestEffects(t, f)
+	if after.Durable != before.Durable || after.Capture.Objects != before.Capture.Objects || after.Capture.Refs != before.Capture.Refs {
+		t.Fatal("Open executed work")
+	}
+	assertBusy(t, promotionError(context.Background(), f.svc, r), "checkpoint_slots")
+	if err := promotionError(context.Background(), f.svc, rootRequest(s)); !errors.Is(err, ErrStaleHead) {
+		t.Fatalf("replayed head lost: %v", err)
+	}
+	before = snapshotRequestEffects(t, f)
+	mustIntegrate(t, f)
+	assertRequestEffects(t, f, before)
+}
+
+func TestRequestPoisonReplay(t *testing.T) {
+	for _, phase := range []string{"admission", "generation"} {
+		for _, persist := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/persist_%t", phase, persist), func(t *testing.T) {
+				f := newServiceFixture(t)
+				cfg := serviceConfig()
+				cfg.Capacity.CheckpointsPerPair = 1
+				f.reopen(t, cfg)
+				s := mustScratch(t, f, uuid.NewV7())
+				r := rootRequest(s)
+				if phase == "generation" {
+					mustAdmit(t, f, r)
+				}
+				f.svc.store = &uncertainStore{Store: f.store, persist: persist}
+				var err error
+				if phase == "admission" {
+					_, err = admission(f.svc, r)
+				} else {
+					err = f.svc.integrate(context.Background(), f.w.ID)
+				}
+				if !errors.Is(err, ErrPoisoned) || !errors.Is(err, appender.ErrUncertain) {
+					t.Fatalf("uncertain %s: %v", phase, err)
+				}
+				prefix := "refs/dwarf-harness/captures/"
+				if phase == "generation" {
+					prefix = "refs/dwarf-harness/generations/"
+				}
+				refs, err := f.svc.listRefs(context.Background(), f.svc.workspaces[f.w.ID], prefix)
+				if err != nil || len(refs) != 1 {
+					t.Fatalf("uncertainty lost retained ref: %v %v", refs, err)
+				}
+				before := snapshotRequestEffects(t, f)
+				if _, err := f.svc.RequestPromotion(context.Background(), r); !errors.Is(err, ErrPoisoned) {
+					t.Fatalf("poisoned replay: %v", err)
+				}
+				if err := f.svc.integrate(context.Background(), f.w.ID); !errors.Is(err, ErrPoisoned) {
+					t.Fatalf("poisoned integration: %v", err)
+				}
+				assertRequestEffects(t, f, before)
+				if report := f.reopen(t, cfg); len(report.Pending) != 0 {
+					t.Fatalf("recovery: %+v", report)
+				}
+				after, err := f.svc.listRefs(context.Background(), f.svc.workspaces[f.w.ID], prefix)
+				want := 0
+				if persist {
+					want = 1
+				}
+				if err != nil || len(after) != want {
+					t.Fatalf("record-based recovery refs: %v %v", after, err)
+				}
+				if phase == "admission" && !persist {
+					assertUnavailable(t, promotionError(context.Background(), f.svc, r), "no_validator")
+				} else {
+					if state, err := f.svc.RequestPromotion(context.Background(), r); err != nil || state.State != RequestPending {
+						t.Fatalf("recovered identity: %+v %v", state, err)
+					}
+					next := rootRequest(s)
+					next.Head = r.RequestID
+					assertBusy(t, promotionError(context.Background(), f.svc, next), "checkpoint_slots")
+				}
+			})
+		}
 	}
 }

@@ -26,10 +26,12 @@ type workspaceStore interface {
 }
 
 type serviceDeps struct {
-	environ      func() []string
-	newID        func() uuid.UUID
-	beforeAppend func()
-	removeAll    func(string) error
+	environ              func() []string
+	newID                func() uuid.UUID
+	beforeAppend         func()
+	removeAll            func(string) error
+	beforeRequestReserve func()
+	beforeCloseReserve   func()
 }
 
 // Reconciliation reports best-effort filesystem repair. Pending entries explain
@@ -61,6 +63,12 @@ type Service struct {
 	usedDirs, usedBranches map[string]bool
 	pendingDirs            map[string]bool
 	creating               map[scratchPair]chan struct{}
+	requests               map[uuid.UUID]requestState
+	inFlight               map[uuid.UUID]bool
+	trains                 map[uuid.UUID][]uuid.UUID
+	integrating            map[uuid.UUID]chan struct{}
+	// UUID-only historical facts enforce F2-06's never-reused identities.
+	usedCaptures, usedGenerations map[uuid.UUID]bool
 }
 
 // Open validates the durable log before reconciling disposable state. Git may be
@@ -101,6 +109,12 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 		deps.removeAll = os.RemoveAll
 	}
 	s := &Service{store: store, colony: colony, deps: deps, pool: pool, closeDone: make(chan struct{}), inputsLock: make(chan struct{}, 1), workspaces: map[uuid.UUID]workspaceState{}, scratches: map[uuid.UUID]scratchState{}, pairs: map[scratchPair]uuid.UUID{}, usedDirs: map[string]bool{}, usedBranches: map[string]bool{}, pendingDirs: map[string]bool{}, creating: map[scratchPair]chan struct{}{}}
+	s.requests = make(map[uuid.UUID]requestState)
+	s.inFlight = make(map[uuid.UUID]bool)
+	s.trains = make(map[uuid.UUID][]uuid.UUID)
+	s.integrating = make(map[uuid.UUID]chan struct{})
+	s.usedCaptures = make(map[uuid.UUID]bool)
+	s.usedGenerations = make(map[uuid.UUID]bool)
 	s.git = newGitRunner(deps.environ)
 	s.engine = newCaptureEngine(s.git, colony)
 	reader, err := ledger.OpenReader(store.LogDir(), ledger.ReadOptions{Colony: store.Colony(), Through: store.Durable(), Consume: workspaceConsumption(), AllTypes: true})
@@ -127,6 +141,11 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 			return nil, report, err
 		}
 	}
+	for id, scratch := range s.scratches {
+		if !scratch.closed {
+			s.pool.setLive(scratch.Dir, s.liveCount(id))
+		}
+	}
 	for _, id := range sortedIDs(s.workspaces) {
 		w, err := s.loadInputs(ctx, s.workspaces[id])
 		if err != nil {
@@ -145,7 +164,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 }
 
 func workspaceConsumption() ledger.Consumption {
-	return ledger.Consumption{ledger.TypeWorkspaceRegistered: {1}, ledger.TypeCaptureInputsPinned: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}}
+	return ledger.Consumption{ledger.TypeWorkspaceRegistered: {1}, ledger.TypeCaptureInputsPinned: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}, ledger.TypePromotionAdmitted: {1}, ledger.TypeGenerationDerived: {1}, ledger.TypePromotionFailed: {1}}
 }
 
 func validID(id uuid.UUID) bool   { return id[6]>>4 == 7 && id[8]&0xc0 == 0x80 }
@@ -186,6 +205,12 @@ func (s *Service) Close() error {
 func (s *Service) append(ctx context.Context, drafts []ledger.Draft) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.appendLocked(ctx, drafts)
+}
+
+// Admission transfers its slot and endings release theirs under this same
+// lock, after acknowledgement, before another operation can observe them.
+func (s *Service) appendLocked(ctx context.Context, drafts []ledger.Draft) error {
 	if s.poisoned {
 		return ErrPoisoned
 	}
@@ -227,9 +252,13 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 			undo()
 		}
 	}()
+	rules := requestCommitRules{unpins: make(map[uuid.UUID]int)}
 	for i, draft := range drafts {
 		seq := first + uint64(i)
 		bad := func(detail string) error { return &InconsistentError{Seq: seq, Detail: detail} }
+		if err := s.applyRequestRecord(drafts, i, loading, &rules, &journal); err != nil {
+			return undo, bad(err.Error())
+		}
 		switch draft.Type {
 		case ledger.TypeWorkspaceRegistered:
 			p, decodeErr := ledger.DecodeWorkspaceRegistered(draft.Payload)
@@ -297,6 +326,11 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 				return undo, bad("inputs pin ID or body_refs differ")
 			}
 			w := old
+			if w.revisions == nil {
+				w.revisions = make(map[int64]ledger.Digest)
+			}
+			w.revisions[p.Revision] = p.CaptureInputsSHA256
+			journal = append(journal, func() { delete(w.revisions, p.Revision) })
 			w.Revision, w.InputsSHA256, w.PinID = p.Revision, p.CaptureInputsSHA256, p.PinID
 			w.refs, w.inputsSeq = slices.Clone(draft.BodyRefs), seq
 			if loading {
@@ -371,6 +405,9 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 			delete(s.pairs, pair)
 			journal = append(journal, func() { s.scratches[id] = old; s.pairs[pair] = id })
 		}
+	}
+	if err := s.finishRequestCommit(drafts, rules); err != nil {
+		return undo, &InconsistentError{Seq: first + uint64(rules.firstEnding), Detail: err.Error()}
 	}
 	return undo, nil
 }
@@ -536,6 +573,7 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 	for _, id := range sortedIDs(s.workspaces) {
 		w := s.workspaces[id]
 		if usable[id] {
+			s.sweepRequestRefs(ctx, w, &report)
 			if _, _, err := s.git.repository(ctx, s.colony, w.CommonDir, nil, []int{0}, "worktree", "prune", "--expire=now"); err != nil {
 				pending(w.CommonDir, err)
 			}

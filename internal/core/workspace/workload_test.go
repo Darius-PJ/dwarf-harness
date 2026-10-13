@@ -10,10 +10,14 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
 // DWARF_CAPTURE_WORKLOAD_OUT names an external JSONL results file. Measurements
@@ -49,15 +53,18 @@ func captureWorkloadWithin(root, path string) bool {
 }
 
 type captureWorkloadRow struct {
-	Phase        string  `json:"phase"`
-	Files        int     `json:"files"`
-	CoreRawBytes int64   `json:"core_raw_bytes"`
-	DurationMS   float64 `json:"duration_ms"`
-	Tree         string  `json:"tree"`
-	GitVersion   string  `json:"git_version"`
-	GoVersion    string  `json:"go_version"`
-	GOOS         string  `json:"goos"`
-	GOARCH       string  `json:"goarch"`
+	Phase         string  `json:"phase"`
+	Files         int     `json:"files"`
+	CoreRawBytes  int64   `json:"core_raw_bytes"`
+	DurationMS    float64 `json:"duration_ms"`
+	Tree          string  `json:"tree"`
+	GitVersion    string  `json:"git_version"`
+	GoVersion     string  `json:"go_version"`
+	GOOS          string  `json:"goos"`
+	GOARCH        string  `json:"goarch"`
+	ManifestBytes int     `json:"manifest_bytes"`
+	LooseObjects  int64   `json:"loose_objects"`
+	LooseKiB      int64   `json:"loose_kib"`
 }
 
 func TestCaptureWorkload(t *testing.T) {
@@ -107,7 +114,12 @@ func TestCaptureWorkload(t *testing.T) {
 				t.Fatal(err)
 			}
 			p.Normalization.AutoCRLF = "true"
-			if err := f.git.ensureMarker(context.Background(), f.colony, p, "workload-colony"); err != nil {
+			store, err := ledgerstore.Create(f.colony, ledger.Defined())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if err := f.git.ensureMarker(context.Background(), f.colony, p, store.Colony().String()); err != nil {
 				t.Fatal(err)
 			}
 			baseline := strings.TrimSpace(string(gitCommand(t, f.env, f.root, nil, "rev-parse", "--verify", "--end-of-options", "main^{tree}")))
@@ -115,6 +127,22 @@ func TestCaptureWorkload(t *testing.T) {
 			dir := filepath.Join(f.colony, "scratch", fmt.Sprintf("%08x", count))
 			writeRow := func(phase string, duration time.Duration, result captureResult) {
 				row := captureWorkloadRow{Phase: phase, Files: count, CoreRawBytes: result.RawBytes, DurationMS: float64(duration) / float64(time.Millisecond), Tree: result.Tree, GitVersion: f.git.version, GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
+				row.ManifestBytes = len(result.Manifest)
+				for _, line := range strings.Split(string(gitCommand(t, f.env, f.root, nil, "count-objects", "-v")), "\n") {
+					key, value, ok := strings.Cut(line, ": ")
+					if !ok || (key != "count" && key != "size") {
+						continue
+					}
+					n, err := strconv.ParseInt(value, 10, 64)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if key == "count" {
+						row.LooseObjects = n
+					} else {
+						row.LooseKiB = n
+					}
+				}
 				b, err := json.Marshal(row)
 				if err != nil {
 					t.Fatal(err)
@@ -138,7 +166,7 @@ func TestCaptureWorkload(t *testing.T) {
 			}
 			writeRow("creation", duration, captureResult{Tree: worktree.AnchorTree})
 			profile := ProvisionalCapacityProfile()
-			fixture := &captureFixture{f: f, p: p, s: captureScratch{Worktree: worktree, Inputs: p, Revision: 1, InputsDir: inputs, TmpDir: filepath.Join(f.colony, "workspaces", "00112233", "tmp"), ColonyID: "workload-colony"}, engine: newCaptureEngine(f.git, f.colony), pool: testReservationPool(t, &profile)}
+			fixture := &captureFixture{f: f, p: p, s: captureScratch{Worktree: worktree, Inputs: p, Revision: 1, InputsDir: inputs, TmpDir: filepath.Join(f.colony, "workspaces", "00112233", "tmp"), ColonyID: store.Colony().String()}, engine: newCaptureEngine(f.git, f.colony), pool: testReservationPool(t, &profile)}
 			for _, phase := range []string{"fresh_observe", "warm_observe"} {
 				start = time.Now()
 				got := mustCapture(t, fixture, observeCapture)
@@ -171,6 +199,78 @@ func TestCaptureWorkload(t *testing.T) {
 				t.Fatal("closure observation changed or retained the candidate")
 			}
 			writeRow("closure_observe", duration, observed)
+			// Service phases include manifest publication and durable records;
+			// the preceding mechanism phases remain in the loose-object counts.
+			gitCommand(t, f.env, f.root, nil, "config", "core.autocrlf", "true")
+			p, err = f.git.inspect(context.Background(), f.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc, _, err := openService(context.Background(), store, f.colony, Config{Capacity: &profile}, serviceDeps{environ: func() []string { return f.env }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer svc.Close()
+			w, err := svc.Register(context.Background(), p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sf := &serviceFixture{gitFixture: f, store: store, svc: svc, p: p, w: w}
+			scratch := mustScratch(t, sf, uuid.NewV7())
+			request := rootRequest(scratch)
+			start = time.Now()
+			rootState := mustAdmit(t, sf, request)
+			duration = time.Since(start)
+			admissionResult := func(state RequestState) captureResult {
+				a := admittedRecord(t, sf, state.RequestID)
+				body, err := store.ReadBody(context.Background(), a.ManifestSHA256)
+				if err != nil {
+					t.Fatal(err)
+				}
+				result := captureResult{Tree: state.SealedTree, Manifest: body}
+				for _, line := range bytes.Split(bytes.TrimSpace(body), []byte{'\n'})[1:] {
+					var entry manifestEntry
+					if err := json.Unmarshal(line, &entry); err != nil {
+						t.Fatal(err)
+					}
+					result.RawBytes += entry.Size
+				}
+				return result
+			}
+			if rootState.SealedTree != baseline {
+				t.Fatal("root admission differs from reference baseline")
+			}
+			writeRow("admit_root", duration, admissionResult(rootState))
+			for i := range 10 {
+				path := filepath.Join(scratch.Dir, "src", fmt.Sprintf("%05d.txt", i))
+				b := readTestFile(t, path)
+				b[0] = 'Y'
+				writeTestFile(t, path, b)
+			}
+			request.Head, request.RequestID = request.RequestID, uuid.NewV7()
+			start = time.Now()
+			successor := mustAdmit(t, sf, request)
+			duration = time.Since(start)
+			refFixture := &captureFixture{f: f, p: p, s: svc.captureScratch(svc.workspaces[w.ID], scratch)}
+			want, _ = referenceTree(t, refFixture)
+			if successor.SealedTree != want {
+				t.Fatal("successor admission differs from reference Git")
+			}
+			writeRow("admit_successor", duration, admissionResult(successor))
+			for _, phase := range []string{"integrate_two", "rebuild_two"} {
+				if phase == "rebuild_two" {
+					advanceMain(t, sf, nil)
+				}
+				start = time.Now()
+				mustIntegrate(t, sf)
+				duration = time.Since(start)
+				gs := generations(t, sf, successor.RequestID)
+				g := gs[len(gs)-1]
+				if g.DerivedTree != want {
+					t.Fatal("integrated workload differs from reference Git")
+				}
+				writeRow(phase, duration, captureResult{Tree: g.DerivedTree})
+			}
 		})
 	}
 }

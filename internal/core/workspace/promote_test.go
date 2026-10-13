@@ -17,16 +17,18 @@ func assertUnavailable(t *testing.T, err error, reason string) {
 		t.Fatalf("want unavailable %s, got %v", reason, err)
 	}
 }
-
-func TestRequestPromotionIsUnavailable(t *testing.T) {
+func TestRequestPromotionUnavailableInC2(t *testing.T) {
 	f := newServiceFixture(t)
 	s := mustScratch(t, f, uuid.NewV7())
 	writeTestFile(t, filepath.Join(s.Dir, "new.txt"), []byte("must not be captured\n"))
 	before := f.store.Durable()
 	effects := snapshotCaptureSideEffects(t, f.gitFixture, f.p)
 	main := string(gitCommand(t, f.env, f.root, nil, "rev-parse", "refs/heads/main"))
-	err := f.svc.RequestPromotion(context.Background(), s.ContextID, f.w.ID)
+	r := rootRequest(s)
+	f.svc.pool.profile.CheckpointsPerPair = 1
+	err := promotionError(context.Background(), f.svc, r)
 	assertUnavailable(t, err, "no_validator")
+	assertUnavailable(t, promotionError(context.Background(), f.svc, r), "no_validator")
 	if f.store.Durable() != before {
 		t.Fatal("unavailable promotion wrote a record")
 	}
@@ -49,13 +51,13 @@ func TestRequestPromotionBusyBeforeUnavailable(t *testing.T) {
 	defer release()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	assertBusy(t, f.svc.RequestPromotion(ctx, s.ContextID, f.w.ID), "scratch_busy")
+	assertBusy(t, promotionError(ctx, f.svc, rootRequest(s)), "scratch_busy")
 	f.svc.git.unavailable = ErrGitUnavailable
-	assertBusy(t, f.svc.RequestPromotion(ctx, s.ContextID, f.w.ID), "scratch_busy")
+	assertBusy(t, promotionError(ctx, f.svc, rootRequest(s)), "scratch_busy")
 	f.svc.git.unavailable = nil
 	writeTestFile(t, filepath.Join(s.Dir, "base.txt"), []byte("writer continues\n"))
 	release()
-	assertUnavailable(t, f.svc.RequestPromotion(context.Background(), s.ContextID, f.w.ID), "no_validator")
+	assertUnavailable(t, promotionError(context.Background(), f.svc, rootRequest(s)), "no_validator")
 
 	other := mustScratch(t, f, uuid.NewV7())
 	entered := make(chan struct{})
@@ -75,12 +77,12 @@ func TestRequestPromotionBusyBeforeUnavailable(t *testing.T) {
 		done <- err
 	}()
 	<-entered
-	assertBusy(t, f.svc.RequestPromotion(context.Background(), s.ContextID, f.w.ID), "capture_budget")
+	assertBusy(t, promotionError(context.Background(), f.svc, rootRequest(s)), "capture_budget")
 	close(resume)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	assertUnavailable(t, f.svc.RequestPromotion(context.Background(), s.ContextID, f.w.ID), "no_validator")
+	assertUnavailable(t, promotionError(context.Background(), f.svc, rootRequest(s)), "no_validator")
 }
 
 func TestRequestPromotionBinding(t *testing.T) {
@@ -98,7 +100,7 @@ func TestRequestPromotionBinding(t *testing.T) {
 		{"no_scratch", c, f.w.ID, ErrNoScratch},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			if err := f.svc.RequestPromotion(ctx, row.context, row.workspace); !errors.Is(err, row.want) {
+			if err := promotionError(ctx, f.svc, rootRequest(Scratch{ContextID: row.context, WorkspaceID: row.workspace})); !errors.Is(err, row.want) {
 				t.Fatalf("got %v, want %v", err, row.want)
 			}
 		})
@@ -107,7 +109,7 @@ func TestRequestPromotionBinding(t *testing.T) {
 	if _, err := f.svc.CloseScratch(ctx, ownerClosure(s)); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.svc.RequestPromotion(ctx, c, f.w.ID); !errors.Is(err, ErrNoScratch) {
+	if err := promotionError(ctx, f.svc, rootRequest(s)); !errors.Is(err, ErrNoScratch) {
 		t.Fatalf("closed pair: %v", err)
 	}
 	s = mustScratch(t, f, c)
@@ -117,7 +119,7 @@ func TestRequestPromotionBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	assertUnavailable(t, f.svc.RequestPromotion(ctx, c, f.w.ID), "no_capacity_profile")
+	assertUnavailable(t, promotionError(ctx, f.svc, rootRequest(s)), "no_capacity_profile")
 }
 
 func TestRequestPromotionUnavailablePreconditions(t *testing.T) {
@@ -137,7 +139,7 @@ func TestRequestPromotionUnavailablePreconditions(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			assertUnavailable(t, f.svc.RequestPromotion(context.Background(), s.ContextID, f.w.ID), reason)
+			assertUnavailable(t, promotionError(context.Background(), f.svc, rootRequest(s)), reason)
 		})
 	}
 }

@@ -3,50 +3,22 @@ package workspace
 import (
 	"context"
 	"os"
-	"uuid"
 )
 
-// RequestPromotion checks binding, profile, reservation and availability, in
-// that order. C2 has no validator: no_validator is unconditional. This call
-// never captures, appends, queues, retries, or changes a ref.
-func (s *Service) RequestPromotion(ctx context.Context, contextID, workspaceID uuid.UUID) error {
+// RequestPromotion returns an admitted ID's state, or checks a new request
+// through reservation and availability. C2's no_validator is unconditional:
+// this call never captures, appends, queues, retries or changes a ref.
+func (s *Service) RequestPromotion(ctx context.Context, r Request) (RequestState, error) {
 	if err := s.start(); err != nil {
-		return err
+		return RequestState{}, err
 	}
 	defer s.ops.Done()
-	if !validID(contextID) || !validID(workspaceID) {
-		return ErrInvalid
+	_, token, state, err := s.beginRequest(ctx, r)
+	if err != nil || token == nil {
+		return state, err
 	}
-	s.mu.Lock()
-	w, ok := s.workspaces[workspaceID]
-	id, bound := s.pairs[scratchPair{contextID, workspaceID}]
-	scratch := s.scratches[id].Scratch
-	s.mu.Unlock()
-	if !ok {
-		return ErrUnknownWorkspace
-	}
-	if !bound {
-		return ErrNoScratch
-	}
-	r, err := s.pool.reserve(scratch.Dir, admissionReservation)
-	if err != nil {
-		return err
-	}
-	defer r.release()
-	// Binding may have ended before reservation. A closure cannot now race us.
-	s.mu.Lock()
-	closed, poisoned := s.scratches[id].closed, s.poisoned
-	s.mu.Unlock()
-	if poisoned {
-		return ErrPoisoned
-	}
-	if closed {
-		return ErrNoScratch
-	}
-	if err := s.captureReady(ctx, w, scratch); err != nil {
-		return err
-	}
-	return &UnavailableError{Reason: "no_validator"}
+	defer token.release()
+	return RequestState{}, &UnavailableError{Reason: "no_validator"}
 }
 
 func (s *Service) workspaceReady(ctx context.Context, w workspaceState) error {

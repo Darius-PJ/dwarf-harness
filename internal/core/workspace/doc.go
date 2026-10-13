@@ -1,8 +1,9 @@
 // Package workspace provides Core's registered Git workspaces, bound private
-// scratches, exact capture, checkpoint reservations and integration primitives.
-// The service writes the four frozen F2-05 workspace record types through the
-// colony store. Nothing here accepts a promotion or moves main; there is no
-// capture-only product command or exported seal, merge or commit entry point.
+// scratches, exact capture, bounded checkpoints and integration generations.
+// The service writes frozen F2-05 and F2-06 records through the colony store.
+// Nothing here accepts a promotion or moves main. C2's product never admits,
+// captures or integrates; admit and integrate are reachable only from package
+// tests until C4 reserves real validation. No exported seal or merge exists.
 //
 // # Git and its environments
 //
@@ -135,16 +136,16 @@
 // format-sized zero old ID. A lost race rereads the marker; another colony is
 // refused. A matching marker allows interrupted registration to resume. Marker,
 // anchor and capture ref creation is compare-and-swap, never overwrite.
-// Captures retain trees under refs/dwarf-harness/captures/<capture ID>; their
-// later owners release them. Anchors are released after scratch removal.
+// Captures retain trees under refs/dwarf-harness/captures/<capture ID> until
+// request retention permits release. Anchors are released after scratch removal.
 // Objects precede refs, which precede the service's record. This is not a
 // power-loss guarantee or a same-user security boundary (C10).
 //
 // # Exact capture
 //
 // A capture takes a physical scratch, a trusted baseline tree, a live reserved
-// token and observe or seal mode. The baseline is the anchor in ticket 05;
-// ticket 06 can supply a local parent's sealed tree. Scratch HEAD, its index,
+// token and observe or seal mode. Roots use the anchor tree; successors use
+// their latest admitted local parent's sealed tree. Scratch HEAD, its index,
 // assume-unchanged, skip-worktree and stat-only hints are never authority.
 // Preconditions are an explicit profile, available Git at the pinned version,
 // a usable workspace with this colony's marker, and a present scratch directory.
@@ -209,8 +210,8 @@
 // Observe creates no retention ref. The private index and its lock artifact
 // are removed on every outcome. A refusal returns no result and retains
 // nothing. A retained tree and its blobs survive scratch, index, HEAD,
-// attribute, ignore and live-config changes and git gc --prune=now; ticket 06
-// and later terminal-state owners release the retention ref.
+// attribute, ignore and live-config changes and git gc --prune=now; request
+// endings release refs only after their durable acknowledgement.
 //
 // # Reservation lifetimes
 //
@@ -271,8 +272,95 @@
 // dwarf-harness/conflict-report, version 1, cause (merge or case_collision) and
 // paths (the true distinct total). Up to 10,000 {"path":"..."} rows follow in
 // path-byte order, each once. Any non-UTF-8 path gives ErrInvalid and no result,
-// including a path beyond the row limit. S3 owns publication and pinning.
-// These primitives have no product caller, write no record and move no main ref.
+// including a path beyond the row limit. The service publishes and pins each
+// conflict report in its generation's commit. These primitives move no main ref.
+//
+// # Requests, identity and lineages
+//
+// Request carries a UUIDv7 RequestID, Actor (owner or agent), ContextID,
+// WorkspaceID, Head and RestartFrom. Same-ID identity is exact equality of
+// context, workspace, head and restart; Actor is not a binding. An admitted ID
+// returns its recorded state before scratch, capacity or Git checks, including
+// after closure and restart. Changed bindings give ErrRequestMismatch. An ID
+// being admitted gives request_in_flight immediately. Other refusals consume no
+// ID and write nothing. RequestState exposes only the context's own submission,
+// lineage, checkpoint, failed local request and terminal conflict report.
+//
+// The latest admitted request is the scratch's head. A root has no prior head;
+// a successor names the unfailed head and keeps its lineage at checkpoint n+1.
+// After failure a new root names the failed head in RestartFrom, mints a new
+// lineage and starts at checkpoint 1. Roots and new roots use the represented
+// anchor tree for eligibility and delta base; successors bind the parent's
+// sealed tree for both. Neither a foreign train predecessor nor the mutable
+// scratch index supplies eligibility. HeadError reveals only this scratch's
+// head and whether restart is required.
+//
+// beginRequest checks service usability, binding, identity, open scratch and
+// head, then reserves exclusion, checkpoint slot and bytes. Under the exclusion
+// it rechecks usability, scratch and head before availability or capture.
+// Availability proceeds through Git, pinned inputs, workspace, scratch and
+// anchor. RequestPromotion then unconditionally returns no_validator and
+// releases without retaining a slot. It never captures, records or moves refs.
+//
+// # Admission
+//
+// admit marks the ID in flight, seals against the bound local baseline,
+// publishes the manifest and verifies its digest. Its commit is admission
+// immediately followed by the manifest pin, with the same body_refs. Objects
+// precede the capture ref, which precedes body publication and the record.
+// The append rule repeats the head check: a parent failed during capture gives
+// HeadError with RestartRequired. Definite failure releases the capture ref by
+// CAS and returns the provisional slot; uncertain append poisons the service
+// and retains the ref for Open. Only acknowledgement transfers the slot with
+// keepSlot, under the service lock. Endings free each slot once after their
+// acknowledgement; Open restores counts, never checking the current K policy.
+//
+// # The train and generations
+//
+// Each workspace's train is its live requests in admission-record order.
+// integrate serializes calls per workspace with context-bounded waiting and
+// re-reads the train and main after each acknowledged derivation. Only the
+// leading GenerationWindow positions receive generations. Their predecessor
+// is the nearest live request's current clean generation or canonical main.
+// Currency compares predecessor commits, not trees: a changed predecessor
+// requires a new generation even if the tree stays identical.
+//
+// A derivation binds current inputs, merges the submission's local delta over
+// the predecessor, and records either the clean integration commit and its CAS
+// ref, or a pinned conflict report. Supersession releases the old report pin
+// in the superseding commit, and the old generation ref after acknowledgement.
+// A speculative conflict stays pending and private; requests behind it wait.
+// A leading conflict ends that request and every live higher checkpoint of its
+// lineage, in checkpoint order, as dependency_failed. The same commit unpins
+// their manifests in ending order, never their conflict reports. Surviving
+// foreign lineages rebuild over changed predecessors; they are not ended.
+// A repeated integrate with nothing to do records nothing and runs no merge.
+//
+// One journalled rule set checks F2-06 at append and Open: bindings, identities,
+// lineage/head/baseline, historical input digests, format-sized Git IDs,
+// immediate pins, current generations, nearest-live predecessors, supersession
+// unpins, whole failure suffixes and ordered manifest/closure unpins. K and the
+// window are policy, not replay validity. integrate binds observed main commit
+// and tree at append. Open checks no live predecessor and absent predecessor
+// IDs, not a historical main tip, which F2-06 does not record.
+//
+// # Request retention and replay sweep
+//
+// A capture is retained while its request is live, a live child names it as
+// parent, or it is an open scratch's unfailed head. With C2's failure-only
+// endings the last condition implies the first. Current clean generations of
+// live requests retain their refs; terminal requests drop generation payloads.
+// Post-acknowledgement release deletes only the recorded object by CAS; a
+// failed deletion waits for Open. Conflict report pins survive terminal state
+// until closure unless a superseding generation already released them.
+//
+// Open lists capture and generation namespaces once each per usable workspace,
+// deletes unretained refs by CAS, and recreates missing retained refs against
+// zero at their recorded objects. Missing objects give capture_missing
+// <request> or generation_missing <generation> in Pending. A ref at a different
+// object is reported and never overwritten. Open reads no manifest or clock,
+// starts no capture or integration and writes no record. Live requests retain
+// their slots, captures and current generations.
 //
 // # Service lifecycle and records
 //
@@ -321,10 +409,9 @@
 // durable closures whose directory, branch or anchor remains, restores missing
 // open anchors when their objects survive, and reports missing scratches and
 // unfinished repairs. Pruning runs once per usable workspace, not per closed
-// scratch. Reconciliation writes no record and reads no clock. Only unrecorded
-// anchor refs are swept in usable repositories; capture refs are released by
-// their owners. Ticket 06 adds the record-aware sweep of captures no admission
-// record names. An orphan's regular .git file identifies its registered workspace
+// scratch. Reconciliation writes no record and reads no clock. Unrecorded
+// anchors and unretained capture/generation refs are swept in usable
+// repositories. An orphan's regular .git file identifies its registered workspace
 // by os.SameFile; exactly one matching UUID-suffix anchor proves its base.
 // Missing or ambiguous proof permits directory removal only (and pruning only
 // in a verified workspace); the branch is retained and named in Pending. A moved
@@ -337,14 +424,19 @@
 // appender.ErrUncertain or appender.ErrPoisoned poisons the service: every later
 // call except Close returns ErrPoisoned. Recovery requires the host to recover
 // the store and open a new service, never an in-memory guess about a commit.
-// Projections retain historical identities and names; memory grows with history.
+// Projections retain historical request identities and scratch names, UUID-only
+// generation and capture IDs, and per-revision input digests; memory grows with
+// history. Superseded input bodies are never read for these identity checks.
 //
 // # Removal boundary
 //
 // CloseScratch proves a scratch has no unrepresented eligible edits before
-// durably recording scratch_closed. Its only represented tree in ticket 05 is
-// its anchor; a capture refusal blocks closure. An owner, or the bound context's
-// agent, may close it. Ignored entries are scratch-local and discarded;
+// durably recording scratch_closed. The represented tree remains its anchor:
+// admission never represents delivery. A capture refusal blocks closure. An
+// owner, or the bound context's agent, may close it. After authority and again
+// under exclusion, live requests give ErrLiveRequests without observation.
+// Closure records scratch_closed followed by all still-active report unpins
+// in pin order. Ignored entries are scratch-local and discarded;
 // ClosureResult.IgnoredEntries counts Git's ignored listing, with an ignored
 // directory counted once and no path reported. Removal-only retries report zero.
 // A missing directory may close without observation.
@@ -372,13 +464,16 @@
 // be at least MaxBytes. Otherwise configuration gives ErrInvalid. A nil
 // Config.Capacity gives no_capacity_profile. ProvisionalCapacityProfile returns
 // 100,000 files, 1 GiB per capture, 20 GiB in flight, four live checkpoints per
-// pair and a four-generation workspace window. S3 applies the window to trains.
+// pair and a four-generation workspace window, enforced over each train.
 // These are calibration inputs, not measured capacity, a colony cap or a
 // service level.
 //
 // Reads are sequential in v1. The opt-in DWARF_CAPTURE_WORKLOAD_OUT harness
-// records creation, fresh and warm observe, a seal after ten edits, and closure
-// observation for 1,000 and 10,000 roughly 800-byte files. Results and work
+// records creation, fresh and warm observe, a seal after ten edits, closure
+// observation, root and successor admission, two integrations and their rebuild
+// after a same-tree main advance, for 1,000 and 10,000 roughly 800-byte files.
+// Each row includes manifest bytes and Git's loose object count and KiB.
+// Results and work
 // directories stay outside the repository. It skips under -race, leaves
 // Defender enabled and adds no exclusions, compares trees with reference Git,
 // and has no timing threshold. Burst concurrency remains C4's feasibility gate.
@@ -386,12 +481,11 @@
 // give unreadable. With filemode=false, tracked executable modes are preserved
 // and new files get 100644. Linux and macOS CI require Git at least 2.45.
 //
-// C2 has no validator: no_validator is unconditional, with no injectable seam,
-// until C4 wires the real validator. RequestPromotion checks binding, then the
-// profile, then immediate reservation, then Git, workspace and scratch
-// availability. It returns unavailable and releases. It never captures, records,
-// waits, queues, retries or changes refs.
-// Replay reads no clock. Observe and refused captures can leave loose objects;
-// plumbing never triggers gc --auto. Their maintenance policy remains open for
-// ticket 06 or later, not 05.
+// # Loose objects
+//
+// Observe and refused captures can leave loose objects. Core runs no object
+// maintenance: no gc, prune or repack. Git worktree prune only removes stale
+// worktree registration, not objects. The harness measures object cost rather
+// than assuming automatic collection; maintenance policy is revisited at C4's
+// capacity gate, not silently applied to the owner's repository.
 package workspace

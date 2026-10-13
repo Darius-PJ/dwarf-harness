@@ -3,6 +3,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
+	"uuid"
 )
 
 var (
@@ -28,6 +29,9 @@ var (
 	ErrClosed              = errors.New("workspace: closed")
 	ErrPoisoned            = errors.New("workspace: poisoned; recovery required")
 	ErrInconsistent        = errors.New("workspace: inconsistent history")
+	ErrRequestMismatch     = errors.New("workspace: request ID already used for a different request")
+	ErrStaleHead           = errors.New("workspace: stale request head")
+	ErrLiveRequests        = errors.New("workspace: scratch has live promotion requests")
 )
 
 // GitError describes an unexpected exit without interpreting Git's messages.
@@ -91,3 +95,12 @@ func (e *InconsistentError) Error() string {
 	return fmt.Sprintf("%v at sequence %d: %s", ErrInconsistent, e.Seq, e.Detail)
 }
 func (e *InconsistentError) Unwrap() error { return ErrInconsistent }
+
+// HeadError reveals only this context's local head, never train state.
+type HeadError struct {
+	Head            uuid.UUID
+	RestartRequired bool
+}
+
+func (e *HeadError) Error() string { return fmt.Sprintf("%v: %s", ErrStaleHead, e.Head) }
+func (e *HeadError) Unwrap() error { return ErrStaleHead }

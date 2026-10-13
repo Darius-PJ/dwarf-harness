@@ -20,7 +20,9 @@ type Scratch struct {
 
 type scratchState struct {
 	Scratch
-	closed bool
+	closed     bool
+	head       uuid.UUID
+	reportPins []uuid.UUID
 }
 
 type scratchPair struct{ context, workspace uuid.UUID }
@@ -224,6 +226,7 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	s.mu.Lock()
 	scratch, ok := s.scratches[closure.ScratchID]
 	w := s.workspaces[scratch.WorkspaceID]
+	live := s.liveCount(scratch.ID)
 	s.mu.Unlock()
 	if !ok {
 		return result, ErrNoScratch
@@ -234,6 +237,12 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	if closure.Reason != "abandoned" {
 		return result, ErrInvalid
 	}
+	if live != 0 {
+		return result, ErrLiveRequests
+	}
+	if s.deps.beforeCloseReserve != nil {
+		s.deps.beforeCloseReserve()
+	}
 	r, err := s.pool.reserve(scratch.Dir, closureReservation)
 	if err != nil {
 		return result, err
@@ -242,7 +251,15 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 	// Another closure may have completed between the lookup and reservation.
 	s.mu.Lock()
 	scratch = s.scratches[closure.ScratchID]
+	live = s.liveCount(scratch.ID)
+	err = s.usableLocked()
 	s.mu.Unlock()
+	if err != nil {
+		return result, err
+	}
+	if live != 0 {
+		return result, ErrLiveRequests
+	}
 	if !scratch.closed {
 		_, statErr := os.Lstat(scratch.Dir)
 		if statErr != nil && !os.IsNotExist(statErr) {
@@ -271,7 +288,15 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 		if err != nil {
 			return result, err
 		}
-		if err := s.append(ctx, []ledger.Draft{{Type: ledger.TypeScratchClosed, TypeVersion: 1, Actor: closure.Actor, ContextID: scratch.ContextID, Payload: payload}}); err != nil {
+		drafts := []ledger.Draft{{Type: ledger.TypeScratchClosed, TypeVersion: 1, Actor: closure.Actor, ContextID: scratch.ContextID, Payload: payload}}
+		for _, pin := range scratch.reportPins {
+			unpin, err := unpinDraft(pin, scratch.ContextID)
+			if err != nil {
+				return result, err
+			}
+			drafts = append(drafts, unpin)
+		}
+		if err := s.append(ctx, drafts); err != nil {
 			return result, err
 		}
 	}
