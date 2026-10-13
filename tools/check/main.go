@@ -36,6 +36,10 @@ func run(w io.Writer) int {
 	return runAll(w, steps(root))
 }
 
+// testTimeout is the per-package limit of the tests and race steps (D122).
+// Go's own default is 10 minutes per test binary.
+const testTimeout = "20m"
+
 // step is one check. run returns nil when the step passes.
 type step struct {
 	title string
@@ -53,7 +57,7 @@ func steps(root string) []step {
 		{"staticcheck", goStep("0", "tool", "staticcheck", "./...")},
 		{"govulncheck", goStep("0", "tool", "govulncheck", "-db", "https://vuln.go.dev", "./...")},
 		{"import boundary", func(w io.Writer) error { return checkBoundary(w, root) }},
-		{"tests", goStep("0", "test", "./...")},
+		{"tests", goStep("0", "test", "-timeout", testTimeout, "./...")},
 		{"race", func(w io.Writer) error { return checkRace(w, root) }},
 		{"cross builds", func(w io.Writer) error { return checkCrossBuilds(w, root) }},
 	}
