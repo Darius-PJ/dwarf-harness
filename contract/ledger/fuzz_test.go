@@ -337,8 +337,8 @@ func FuzzDecodeF2_07(f *testing.F) {
 	})
 }
 
-// FuzzDecodeF2_08 exercises ticket 08's part of F2, proposed for the owner's
-// freeze (D113), including the optional witness and non-empty path set.
+// FuzzDecodeF2_08 exercises ticket 08's part of F2, frozen (D123),
+// including the optional witness and non-empty path set.
 func FuzzDecodeF2_08(f *testing.F) {
 	fixtures := f2_08Payloads()
 	for i, tc := range fixtures {

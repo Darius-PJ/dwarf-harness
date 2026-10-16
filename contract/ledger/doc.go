@@ -164,7 +164,7 @@
 // also by addition to format version 1.
 // F2-07 is ticket 07's part of F2, frozen (D119),
 // also by addition to format version 1.
-// F2-08 is ticket 08's part of F2, proposed for the owner's freeze (D113),
+// F2-08 is ticket 08's part of F2, frozen (D123),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -845,8 +845,8 @@
 //
 // # F2-08 record types
 //
-// These three version-1 types are ticket 08's part of F2, proposed for the
-// owner's freeze (D113), by addition to format version 1. C2 owns their
+// These three version-1 types are ticket 08's part of F2, frozen by
+// addition to format version 1 (D123). C2 owns their
 // payload specifications. Only Core's workspace service
 // (internal/core/workspace) may append them, through appender.Appender;
 // permitted callers are enforced by review. The service checks the record

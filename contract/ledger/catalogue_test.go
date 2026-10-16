@@ -36,7 +36,7 @@ func TestNewCatalogue(t *testing.T) {
 
 	// Defined contains F0, F2-05 and ticket 06's part of F2, frozen
 	// (D118), and ticket 07's part, frozen (D119), plus ticket 08's part,
-	// proposed for the owner's freeze (D113), but never fixture records
+	// frozen (D123), but never fixture records
 	// or an undefined version.
 	def := Defined()
 	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected, TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed, TypePromotionAdmitted, TypeGenerationDerived, TypePromotionFailed, TypeScratchChanged, TypeScratchMergeBack, TypeFinalizationIntended, TypePromotionAccepted, TypePromotionNoChange} {

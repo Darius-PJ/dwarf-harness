@@ -29,8 +29,8 @@ const (
 	FailedDependencyFailed = "dependency_failed"
 )
 
-// These F2-08 outcomes are ticket 08's part of F2, proposed for the owner's
-// freeze (D113), under F2-06's open outcome grammar. No encoding rule changes.
+// These F2-08 outcomes are ticket 08's part of F2, frozen (D123),
+// under F2-06's open outcome grammar. No encoding rule changes.
 const (
 	FailedCancelled   = "cancelled"
 	FailedInterrupted = "interrupted"

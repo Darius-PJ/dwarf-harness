@@ -355,7 +355,7 @@ func TestPromotionAdmittedProvenance(t *testing.T) {
 	}
 }
 
-// F2-08's witness key is proposed for the owner's freeze (D113).
+// F2-08's witness key is frozen (D123).
 func TestGenerationDerivedWitness(t *testing.T) {
 	t.Parallel()
 	for _, tc := range f2_06Payloads() {

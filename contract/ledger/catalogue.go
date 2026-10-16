@@ -42,7 +42,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypePromotionAdmitted, TypeGenerationDerived and
 // TypePromotionFailed; and ticket 07's part of F2, frozen (D119):
 // TypeScratchChanged and TypeScratchMergeBack; and ticket 08's part of F2,
-// proposed for the owner's freeze (D113): TypeFinalizationIntended,
+// frozen (D123): TypeFinalizationIntended,
 // TypePromotionAccepted and TypePromotionNoChange. All sixteen are at
 // version 1. It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {

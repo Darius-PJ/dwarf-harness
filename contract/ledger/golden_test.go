@@ -34,8 +34,8 @@ const (
 	// scratchChangeDir holds ticket 07's part of F2, frozen (D119),
 	// in one segment.
 	scratchChangeDir = "testdata/f2/07/log"
-	// finalizationDir holds ticket 08's part of F2, proposed for the
-	// owner's freeze (D113), in one segment.
+	// finalizationDir holds ticket 08's part of F2, frozen (D123),
+	// in one segment.
 	finalizationDir = "testdata/f2/08/log"
 )
 
@@ -511,8 +511,8 @@ func scratchChangeInputs() []goldenCommit {
 	}
 }
 
-// finalizationInputs covers ticket 08's part of F2, proposed for the owner's
-// freeze (D113): accepted witnesses, no-change and failure endings. Its IDs
+// finalizationInputs covers ticket 08's part of F2, frozen (D123):
+// accepted witnesses, no-change and failure endings. Its IDs
 // are disjoint from the earlier goldens.
 func finalizationInputs() []goldenCommit {
 	header := func(commit string, seconds int64) CommitHeader {
@@ -1135,8 +1135,8 @@ func TestGoldenF2_07(t *testing.T) {
 	}
 }
 
-// TestGoldenF2_08 pins ticket 08's part of F2, proposed for the owner's
-// freeze (D113), without changing any earlier golden.
+// TestGoldenF2_08 pins ticket 08's part of F2, frozen (D123), without
+// changing any earlier golden.
 func TestGoldenF2_08(t *testing.T) {
 	t.Parallel()
 	g := mustFinalization(t)

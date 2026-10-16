@@ -8,7 +8,7 @@ import (
 )
 
 // The F2-08 record types, each at version 1: ticket 08's part of F2,
-// proposed for the owner's freeze (D113). The package documentation
+// frozen (D123). The package documentation
 // specifies their payloads and service-owned record rules.
 const (
 	TypeFinalizationIntended = "workspace.finalization_intended"

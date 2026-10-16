@@ -12,8 +12,8 @@ import (
 	"testing"
 )
 
-// These fixtures cover ticket 08's part of F2, proposed for the owner's
-// freeze (D113), through its public payload encoders and decoders.
+// These fixtures cover ticket 08's part of F2, frozen (D123), through
+// its public payload encoders and decoders.
 func decodeF2_08(typ string, js json.RawMessage) (payload, error) {
 	switch typ {
 	case TypeFinalizationIntended:
