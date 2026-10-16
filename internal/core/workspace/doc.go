@@ -490,8 +490,9 @@
 // a successor names the unfailed head and keeps its lineage at checkpoint n+1.
 // After failure a new root names the failed head in RestartFrom, mints a new
 // lineage and starts at checkpoint 1. Roots and new roots use the represented
-// anchor tree for eligibility and delta base; successors bind the parent's
-// sealed tree for both. Neither a foreign train predecessor nor the mutable
+// tree for eligibility and delta base: the latest successful request's sealed
+// tree, else the anchor. Successors bind the parent's sealed tree for both.
+// Neither a foreign train predecessor nor the mutable
 // scratch index supplies eligibility. HeadError reveals only this scratch's
 // head and whether restart is required.
 //
@@ -545,12 +546,50 @@
 // and tree at append. Open checks no live predecessor and absent predecessor
 // IDs, not a historical main tip, which F2-06 does not record.
 //
+// # Mechanical finalization (F2-08, frozen D123)
+//
+// finalize and noChange are unexported and package-test-only until C4; the
+// product's unconditional no_validator is unchanged. Under lockTrain they bind
+// the leading live request, its current clean generation and successful local
+// parent. The latest promotion_accepted is the workspace's witness; subsequent
+// canonical predecessors must match its sequence, commit and tree. A generation
+// built over a train predecessor stays current when that exact generation has
+// since become the latest accepted witness. A main moved outside that witness
+// blocks publication rather than reanchoring.
+//
+// Before any intent, finalize verifies Git preflight, computes the exact
+// predecessor-to-target path set (deletions and both rename names, distinct and
+// byte-sorted), and encodes the complete acceptance/unpin commit against ledger
+// caps. pathset_cap writes no intent. Tree equality dispatches to noChangeLocked:
+// one promotion_no_change and manifest unpin, no intent or canonical update.
+// A child of its unaccepted derived commit must rebuild against actual main.
+//
+// Otherwise the order is acknowledged finalization_intended, one guarded CAS,
+// canonical storage durability, then acknowledged promotion_accepted and its
+// manifest unpin. Only that acknowledgement releases the K-slot and blocker,
+// then the train lock, then unneeded refs by recorded-object CAS. A refused CAS
+// observed at the old tip ends interrupted with the live local suffix
+// dependency_failed in the same commit. A third tip, durability error or failed
+// acceptance append holds finalizing and finalization_pending without another
+// update-ref. Open replays that blocker; S3a does not resolve held intents.
+//
+// Both success kinds advance representation to the admission's sealed tree,
+// never the cumulative derived tree. They leave the base, anchor, private tip,
+// files and mutable index unchanged, take no writer/task lock and do not close
+// the scratch. Replay enforces F2-08 from records alone, including witness
+// presence/equality, intent identity/currency and its sole resolution,
+// cancellation authority, interrupted suffixes, and manifest-only unpins.
+// Terminal record kind decides success: an unknown promotion_failed token is
+// unknown_failure with FailureOutcome, even when its text spells accepted.
+//
 // # Request retention and replay sweep
 //
 // A capture is retained while its request is live, a live child names it as
-// parent, or it is an open scratch's unfailed head. With C2's failure-only
-// endings the last condition implies the first. Current clean generations of
-// live requests retain their refs; terminal requests drop generation payloads.
+// parent, or it is an open dedicated scratch's unfailed head or represented
+// request. The represented capture survives a later head's failure. Current
+// clean generations, including an unresolved intent's, retain their refs;
+// success releases generation refs after acknowledgement (accepted commits are
+// retained by main). Terminal requests drop generation payloads.
 // Post-acknowledgement release deletes only the recorded object by CAS; a
 // failed deletion waits for Open. Conflict report pins survive terminal state
 // until closure unless a superseding generation already released them.
@@ -649,11 +688,13 @@
 // # Removal boundary
 //
 // CloseScratch proves a scratch has no unrepresented eligible edits before
-// durably recording scratch_closed. A dedicated scratch remains represented by
-// its anchor: admission and private observation never represent delivery.
-// A temporary's abandoned closure instead compares to its acknowledged private
-// tip, initially its fork tree, with anchor/tip trusted names. Unobserved edits
-// give ErrUnrepresentedEdits. An owner or the bound author's context may close it.
+// durably recording scratch_closed. A dedicated scratch compares with its
+// represented sealed tree, initially the anchor, using anchor, private-tip and
+// represented names as trusted eligibility. Admission and private observation
+// alone never advance representation. A temporary's abandoned closure instead
+// compares to its acknowledged private tip, initially its fork tree.
+// Unrepresented edits give ErrUnrepresentedEdits. An owner or the bound author
+// may close it.
 // Authority, live requests and open/pending children are checked before and
 // under exclusion; they give ErrNotBound, ErrLiveRequests or ErrTemporaryChildren.
 // Live writers give scratch_busy. Closure records scratch_closed followed by all

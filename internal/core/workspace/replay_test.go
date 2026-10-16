@@ -705,7 +705,7 @@ func TestReplayUnknownPromotionFailure(t *testing.T) {
 	mustAdmit(t, f, first)
 	mustAdmit(t, f, next)
 	drafts := []ledger.Draft{
-		{Type: ledger.TypePromotionFailed, TypeVersion: 1, Actor: ledger.ActorAgent, ContextID: s.ContextID, Payload: encoded(t, ledger.PromotionFailed{RequestID: first.RequestID, Outcome: "future_failure", GenerationID: uuid.NewV7(), FailedRequestID: uuid.NewV7()})},
+		{Type: ledger.TypePromotionFailed, TypeVersion: 1, Actor: ledger.ActorAgent, ContextID: s.ContextID, Payload: encoded(t, ledger.PromotionFailed{RequestID: first.RequestID, Outcome: "accepted", GenerationID: uuid.NewV7(), FailedRequestID: uuid.NewV7()})},
 		{Type: ledger.TypePromotionFailed, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: s.ContextID, Payload: encoded(t, ledger.PromotionFailed{RequestID: next.RequestID, Outcome: ledger.FailedDependencyFailed, FailedRequestID: first.RequestID})},
 	}
 	for _, r := range []Request{first, next} {
@@ -728,12 +728,17 @@ func TestReplayUnknownPromotionFailure(t *testing.T) {
 		t.Fatalf("future failure replay: %+v", report)
 	}
 	got, err := f.svc.RequestPromotion(context.Background(), first)
-	if err != nil || got.State != "future_failure" {
+	if err != nil || got.State != RequestUnknownFailure || got.FailureOutcome == "" {
 		t.Fatalf("unknown outcome rejected or misclassified: %+v %v", got, err)
 	}
 	got, err = f.svc.RequestPromotion(context.Background(), next)
 	if err != nil || got.State != RequestDependencyFailed || got.FailedRequest != first.RequestID {
 		t.Fatalf("unknown outcome failed to end its lineage: %+v %v", got, err)
+	}
+	successor := rootRequest(s)
+	successor.Head = next.RequestID
+	if err := promotionError(context.Background(), f.svc, successor); !errors.Is(err, ErrStaleHead) {
+		t.Fatalf("unknown failure allowed a successor: %v", err)
 	}
 	restart := rootRequest(s)
 	restart.RestartFrom = next.RequestID
@@ -1227,7 +1232,7 @@ func TestFrozenWorkspaceGoldensReplay(t *testing.T) {
 	for _, row := range []struct {
 		name                                        string
 		workspaces, scratches, open, requests, live int
-	}{{"05", 2, 2, 1, 0, 0}, {"06", 1, 2, 2, 4, 2}, {"07", 1, 5, 2, 1, 1}} {
+	}{{"05", 2, 2, 1, 0, 0}, {"06", 1, 2, 2, 4, 2}, {"07", 1, 5, 2, 1, 1}, {"08", 1, 1, 1, 7, 0}} {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
 			logDir := filepath.Join(t.TempDir(), "log")
@@ -1743,4 +1748,262 @@ func snapshotReplayPrefixes(t *testing.T, f *serviceFixture, commits []ledger.Co
 		}
 	}
 	return result
+}
+
+// This real history has the frozen F2-08 golden's twenty-two commit shapes and
+// sequence numbers, but binds actual Git objects and published manifest bodies.
+func finalizationReplayHistory(t *testing.T) (*serviceFixture, []ledger.Commit) {
+	t.Helper()
+	f := newServiceFixture(t)
+	scratch := mustScratch(t, f, uuid.NewV7())
+	end := func(r Request, outcome string, actor ledger.Actor) {
+		t.Helper()
+		f.svc.mu.Lock()
+		drafts, ended, err := f.svc.endingDrafts(f.svc.requests[r.RequestID], outcome, actor, r.ContextID, uuid.UUID{})
+		f.svc.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.svc.finishFinalization(context.Background(), f.w.ID, drafts, ended); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r1 := rootRequest(scratch)
+	writeTestFile(t, filepath.Join(scratch.Dir, "one.txt"), []byte("one\n"))
+	mustAdmit(t, f, r1)
+	mustIntegrate(t, f)
+	mustFinalize(t, f, r1)
+	r2 := rootRequest(scratch)
+	r2.Head = r1.RequestID
+	mustAdmit(t, f, r2)
+	mustIntegrate(t, f)
+	mustFinalize(t, f, r2)
+	r3, r4 := rootRequest(scratch), rootRequest(scratch)
+	r3.Head, r4.Head = r2.RequestID, r3.RequestID
+	mustAdmit(t, f, r3)
+	mustAdmit(t, f, r4)
+	end(r3, ledger.FailedCancelled, ledger.ActorOwner)
+	r5 := rootRequest(scratch)
+	r5.RestartFrom = r4.RequestID
+	writeTestFile(t, filepath.Join(scratch.Dir, "five.txt"), []byte("five\n"))
+	mustAdmit(t, f, r5)
+	mustIntegrate(t, f)
+	g := currentGeneration(t, f, r5)
+	witness := f.svc.witnesses[f.w.ID]
+	intent := ledger.FinalizationIntended{IntentID: uuid.NewV7(), RequestID: r5.RequestID, GenerationID: g.GenerationID, PredecessorWitnessSeq: int64(witness.sequence), PredecessorCommit: g.PredecessorCommit, PredecessorTree: g.PredecessorTree, TargetCommit: g.DerivedCommit, TargetTree: g.DerivedTree, FinalizationRules: "finalization-rules/1"}
+	if err := f.svc.append(context.Background(), []ledger.Draft{{Type: ledger.TypeFinalizationIntended, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: r5.ContextID, Payload: encoded(t, intent)}}); err != nil {
+		t.Fatal(err)
+	}
+	end(r5, ledger.FailedInterrupted, ledger.ActorCore)
+	r6 := rootRequest(scratch)
+	r6.RestartFrom = r5.RequestID
+	mustAdmit(t, f, r6)
+	mustIntegrate(t, f)
+	mustFinalize(t, f, r6)
+	r7 := rootRequest(scratch)
+	r7.Head = r6.RequestID
+	mustAdmit(t, f, r7)
+	end(r7, ledger.FailedInterrupted, ledger.ActorCore)
+	commits := serviceCommits(t, f.store)
+	if len(commits) != 22 || f.store.Durable() != 39 {
+		t.Fatalf("F2-08 shape drift: commits=%d durable=%d", len(commits), f.store.Durable())
+	}
+	return f, commits
+}
+
+func TestOpenFailsClosedOnF2_08RuleBreak(t *testing.T) {
+	t.Parallel()
+	f, commits := finalizationReplayHistory(t)
+	type row struct {
+		name   string
+		seq    uint64
+		cut    uint64
+		change func([]ledger.Draft) []ledger.Draft
+		open   bool
+	}
+	var rows []row
+	payload := func(key string, value any) func([]ledger.Draft) []ledger.Draft {
+		return func(drafts []ledger.Draft) []ledger.Draft {
+			var p map[string]any
+			if err := json.Unmarshal(drafts[0].Payload, &p); err != nil {
+				t.Fatal(err)
+			}
+			if value == nil {
+				delete(p, key)
+			} else {
+				p[key] = value
+			}
+			b, err := json.Marshal(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			drafts[0].Payload = b
+			return drafts
+		}
+	}
+	add := func(name string, seq uint64, change func([]ledger.Draft) []ledger.Draft) {
+		rows = append(rows, row{name: name, seq: seq, change: change})
+	}
+	for _, seq := range []uint64{8, 9, 14, 20, 28, 38} {
+		add(fmt.Sprintf("%d_context", seq), seq, func(d []ledger.Draft) []ledger.Draft { d[0].ContextID = uuid.NewV7(); return d })
+		add(fmt.Sprintf("%d_body_refs", seq), seq, func(d []ledger.Draft) []ledger.Draft { d[0].BodyRefs = []ledger.Digest{f.w.InputsSHA256}; return d })
+		add(fmt.Sprintf("%d_actor", seq), seq, func(d []ledger.Draft) []ledger.Draft {
+			d[0].Actor = ledger.ActorOwner
+			if seq == 20 {
+				d[0].Actor = ledger.ActorCore
+			}
+			return d
+		})
+		add(fmt.Sprintf("%d_unadmitted", seq), seq, payload("request_id", uuid.NewV7()))
+	}
+	for _, seq := range []uint64{8, 9, 14} {
+		add(fmt.Sprintf("%d_generation", seq), seq, payload("generation_id", uuid.NewV7()))
+		add(fmt.Sprintf("%d_predecessor_commit", seq), seq, payload("predecessor_commit", strings.Repeat("a", 40)))
+		add(fmt.Sprintf("%d_predecessor_tree", seq), seq, payload("predecessor_tree", strings.Repeat("b", 40)))
+	}
+	for _, seq := range []uint64{13, 14, 26, 27, 32, 33, 34} {
+		add(fmt.Sprintf("%d_missing_witness", seq), seq, payload("predecessor_witness_seq", nil))
+		add(fmt.Sprintf("%d_stale_witness", seq), seq, payload("predecessor_witness_seq", 8))
+	}
+	add("first_intent_unearned_witness", 8, payload("predecessor_witness_seq", 7))
+	add("first_acceptance_unearned_witness", 9, payload("predecessor_witness_seq", 7))
+	add("generation_witness_commit", 26, payload("predecessor_commit", strings.Repeat("a", 40)))
+	add("generation_witness_tree", 26, payload("predecessor_tree", strings.Repeat("b", 40)))
+	add("intent_target_commit", 8, payload("target_commit", strings.Repeat("c", 40)))
+	add("intent_target_tree", 8, payload("target_tree", strings.Repeat("d", 40)))
+	add("acceptance_target_commit", 9, payload("accepted_commit", strings.Repeat("c", 40)))
+	add("acceptance_target_tree", 9, payload("accepted_tree", strings.Repeat("d", 40)))
+	add("acceptance_intent", 9, payload("intent_id", uuid.NewV7()))
+	add("reused_intent_identity", 27, func(d []ledger.Draft) []ledger.Draft {
+		first, _ := ledger.DecodeFinalizationIntended(commits[4].Records[0].Payload)
+		return payload("intent_id", first.IntentID)(d)
+	})
+	for _, seq := range []uint64{9, 14, 20, 28, 38} {
+		add(fmt.Sprintf("%d_missing_unpin", seq), seq, func(d []ledger.Draft) []ledger.Draft { return d[:len(d)-1] })
+		add(fmt.Sprintf("%d_early_unpin", seq), seq, func(d []ledger.Draft) []ledger.Draft { return append([]ledger.Draft{d[len(d)-1]}, d[:len(d)-1]...) })
+		add(fmt.Sprintf("%d_duplicate_unpin", seq), seq, func(d []ledger.Draft) []ledger.Draft { return append(d, d[len(d)-1]) })
+	}
+	for _, seq := range []uint64{20, 28, 38} {
+		add(fmt.Sprintf("%d_generation_key", seq), seq, payload("generation_id", uuid.NewV7()))
+		add(fmt.Sprintf("%d_dependency_key", seq), seq, payload("failed_request_id", uuid.NewV7()))
+	}
+	add("cancelled_live_suffix", 20, func(d []ledger.Draft) []ledger.Draft { return []ledger.Draft{d[0], d[2]} })
+	add("cancelled_suffix_not_dependency", 20, func(d []ledger.Draft) []ledger.Draft {
+		p, _ := ledger.DecodePromotionFailed(d[1].Payload)
+		p.Outcome, p.FailedRequestID = ledger.FailedInterrupted, uuid.UUID{}
+		d[1].Payload = encoded(t, p)
+		return d
+	})
+	add("new_root_anchor_not_representation", 24, payload("baseline_tree", f.svc.scratches[f.svc.requests[committedRequest(t, commits, 24)].admission.ScratchID].AnchorTree))
+	add("new_root_delta_not_representation", 24, payload("delta_base_tree", f.svc.scratches[f.svc.requests[committedRequest(t, commits, 24)].admission.ScratchID].AnchorTree))
+	// Cross-record obligations: use the ordinary record shape at another cut.
+	rows = append(rows,
+		row{name: "second_intent", seq: 8, cut: 9},
+		row{name: "second_acceptance", seq: 9, cut: 11},
+		row{name: "acceptance_after_interrupted", seq: 34, cut: 30, change: func(d []ledger.Draft) []ledger.Draft {
+			i, _ := ledger.DecodeFinalizationIntended(commits[14].Records[0].Payload)
+			p, _ := ledger.DecodePromotionAccepted(d[0].Payload)
+			p.IntentID, p.RequestID, p.GenerationID = i.IntentID, i.RequestID, i.GenerationID
+			p.AcceptedCommit, p.AcceptedTree = i.TargetCommit, i.TargetTree
+			d[0].Payload = encoded(t, p)
+			return d
+		}},
+		row{name: "cancelled_intent", seq: 28, change: payload("outcome", ledger.FailedCancelled)},
+		row{name: "unknown_failure_intent", seq: 28, change: payload("outcome", "accepted")},
+		row{name: "generation_supersedes_intent", seq: 26, cut: 28, change: func(d []ledger.Draft) []ledger.Draft {
+			p, _ := ledger.DecodeGenerationDerived(d[0].Payload)
+			p.Supersedes, p.GenerationID, p.PredecessorCommit = p.GenerationID, uuid.NewV7(), strings.Repeat("a", 40)
+			d[0].Payload = encoded(t, p)
+			return d
+		}},
+		row{name: "no_change_has_intent", seq: 14, cut: 28, change: func(d []ledger.Draft) []ledger.Draft {
+			i, _ := ledger.DecodeFinalizationIntended(commits[14].Records[0].Payload)
+			return payload("request_id", i.RequestID)(payload("generation_id", i.GenerationID)(d))
+		}},
+		row{name: "no_change_unequal_tree", seq: 14, cut: 8, change: func(d []ledger.Draft) []ledger.Draft {
+			g, _ := ledger.DecodeGenerationDerived(commits[3].Records[0].Payload)
+			return payload("request_id", g.RequestID)(payload("generation_id", g.GenerationID)(payload("predecessor_commit", g.PredecessorCommit)(payload("predecessor_tree", g.PredecessorTree)(payload("predecessor_witness_seq", nil)(d)))))
+		}},
+	)
+	indices := map[uint64]int{}
+	for i, c := range commits {
+		indices[c.First] = i
+	}
+	var cuts []int
+	for i := range rows {
+		r := &rows[i]
+		if r.cut == 0 {
+			r.cut = r.seq
+		}
+		switch r.name {
+		case "26_missing_witness", "27_missing_witness", "34_missing_witness", "14_missing_witness", "20_actor", "28_generation_key":
+			r.open = true
+			cuts = append(cuts, indices[r.cut])
+		}
+	}
+	prefixes := snapshotReplayPrefixes(t, f, commits, cuts)
+	// C-type cut: all rules exercise the exact append/replay apply path; one
+	// genuine Open per new record type (and the conditional old types) proves
+	// reader consumption and fail-closed routing without repeated Git sweeps.
+	fixture := f.gitFixture
+	fixture.colony = t.TempDir()
+	projection := openFixtureService(t, fixture).svc
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			var undos []func()
+			defer func() {
+				for i := len(undos) - 1; i >= 0; i-- {
+					undos[i]()
+				}
+			}()
+			cut := indices[r.cut]
+			for _, c := range commits[:cut] {
+				var drafts []ledger.Draft
+				for _, record := range c.Records {
+					drafts = append(drafts, record.Draft)
+				}
+				undo, err := projection.apply(context.Background(), drafts, c.First, false)
+				if err != nil {
+					t.Fatalf("valid prefix: %v", err)
+				}
+				undos = append(undos, undo)
+			}
+			var drafts []ledger.Draft
+			for _, record := range commits[indices[r.seq]].Records {
+				drafts = append(drafts, record.Draft)
+			}
+			if r.change != nil {
+				drafts = r.change(drafts)
+			}
+			for _, producing := range []bool{true, false} {
+				undo, err := projection.apply(context.Background(), drafts, r.cut, producing)
+				if err == nil {
+					undo()
+					t.Fatalf("rule break accepted producing=%t", producing)
+				}
+				var inconsistent *InconsistentError
+				if !errors.As(err, &inconsistent) {
+					t.Fatalf("wrong replay refusal: %v", err)
+				}
+			}
+			if r.open {
+				assertF207History(t, f, prefixes[cut], drafts, false, false)
+			}
+		})
+	}
+}
+
+func committedRequest(t *testing.T, commits []ledger.Commit, seq uint64) uuid.UUID {
+	t.Helper()
+	for _, c := range commits {
+		if c.First == seq {
+			p, err := ledger.DecodePromotionAdmitted(c.Records[0].Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return p.RequestID
+		}
+	}
+	t.Fatal("admission not found")
+	return uuid.UUID{}
 }

@@ -40,6 +40,28 @@ func TestRequestPromotionUnavailableInC2(t *testing.T) {
 	if string(readTestFile(t, filepath.Join(s.Dir, "new.txt"))) != "must not be captured\n" {
 		t.Fatal("unavailable promotion changed scratch")
 	}
+	mustAdmit(t, f, r)
+	mustIntegrate(t, f)
+	mustFinalize(t, f, r)
+	for _, outcome := range []string{RequestAccepted, RequestNoChange} {
+		got, err := f.svc.RequestPromotion(context.Background(), r)
+		if err != nil || got.State != outcome {
+			t.Fatalf("mechanical terminal lookup: %+v %v", got, err)
+		}
+		next := rootRequest(s)
+		next.Head = r.RequestID
+		before := snapshotRequestEffects(t, f)
+		main := fixtureMain(t, f.gitFixture)
+		assertUnavailable(t, promotionError(context.Background(), f.svc, next), "no_validator")
+		assertRequestEffects(t, f, before)
+		assertCanonicalTip(t, f, main)
+		if outcome == RequestAccepted {
+			r = next
+			mustAdmit(t, f, r)
+			mustIntegrate(t, f)
+			mustFinalize(t, f, r)
+		}
+	}
 }
 
 func TestRequestPromotionBusyBeforeUnavailable(t *testing.T) {

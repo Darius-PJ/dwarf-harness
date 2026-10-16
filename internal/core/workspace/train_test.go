@@ -639,3 +639,63 @@ func TestTrainMutationLockShared(t *testing.T) {
 	}
 	release()
 }
+
+func TestSuccessfulEndingsKeepConflictReports(t *testing.T) {
+	t.Parallel()
+	history := newGitFixture(t, "sha1")
+	for _, outcome := range []string{RequestAccepted, RequestNoChange} {
+		t.Run(outcome, func(t *testing.T) {
+			t.Parallel()
+			f := serviceFromHistory(t, history)
+			scratch := mustScratch(t, f, uuid.NewV7())
+			failed := rootRequest(scratch)
+			writeTestFile(t, filepath.Join(scratch.Dir, "base.txt"), []byte("local\ntwo\n"))
+			mustAdmit(t, f, failed)
+			advanceMain(t, f, map[string]string{"base.txt": "foreign\ntwo\n"})
+			mustIntegrate(t, f)
+			conflict := currentGeneration(t, f, failed)
+			if conflict.Outcome != ledger.GenerationConflict {
+				t.Fatal("fixture did not retain a conflict report")
+			}
+			writeTestFile(t, filepath.Join(scratch.Dir, "base.txt"), []byte("foreign\ntwo\n"))
+			if outcome == RequestAccepted {
+				writeTestFile(t, filepath.Join(scratch.Dir, "accepted.txt"), []byte("accepted\n"))
+			}
+			r := rootRequest(scratch)
+			r.RestartFrom = failed.RequestID
+			mustAdmit(t, f, r)
+			mustIntegrate(t, f)
+			g := currentGeneration(t, f, r)
+			f.svc.deps.beforeFinalizeStep = func(step string) {
+				if step != "acceptance" && step != "no_change" {
+					return
+				}
+				f.svc.mu.Lock()
+				admitted := f.svc.requests[r.RequestID].admission
+				intent := f.svc.intents[f.w.ID]
+				f.svc.mu.Unlock()
+				draft := ledger.Draft{Type: ledger.TypePromotionNoChange, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: r.ContextID, Payload: encoded(t, ledger.PromotionNoChange{RequestID: r.RequestID, GenerationID: g.GenerationID, PredecessorCommit: g.PredecessorCommit, PredecessorTree: g.PredecessorTree})}
+				if step == "acceptance" {
+					draft.Type = ledger.TypePromotionAccepted
+					draft.Payload = encoded(t, ledger.PromotionAccepted{IntentID: intent.IntentID, RequestID: r.RequestID, GenerationID: g.GenerationID, PredecessorCommit: g.PredecessorCommit, PredecessorTree: g.PredecessorTree, AcceptedCommit: g.DerivedCommit, AcceptedTree: g.DerivedTree, ChangedPaths: []string{"accepted.txt"}})
+				}
+				unpin, _ := unpinDraft(admitted.PinID, r.ContextID)
+				report, _ := unpinDraft(conflict.ReportPinID, r.ContextID)
+				before := f.store.Durable()
+				if err := f.svc.append(context.Background(), []ledger.Draft{draft, unpin, report}); !errors.Is(err, ErrInvalid) || f.store.Durable() != before {
+					t.Fatalf("success released conflict report: %v", err)
+				}
+			}
+			if got := mustFinalize(t, f, r); got.State != outcome {
+				t.Fatalf("ending: %+v", got)
+			}
+			f.svc.deps.beforeFinalizeStep = nil
+			if _, err := f.store.Collect(context.Background(), ledgerstore.CollectPolicy{Actor: ledger.ActorOwner, BeforeNS: math.MaxInt64}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.store.ReadBody(context.Background(), conflict.ConflictSHA256); err != nil {
+				t.Fatalf("success collected retained report: %v", err)
+			}
+		})
+	}
+}

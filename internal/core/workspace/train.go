@@ -32,6 +32,11 @@ func (s *Service) integrate(ctx context.Context, workspaceID uuid.UUID) error {
 		w := s.workspaces[workspaceID]
 		train := slices.Clone(s.trains[workspaceID])
 		err := s.usableLocked()
+		if err == nil {
+			if _, pending := s.intents[workspaceID]; pending {
+				err = &UnavailableError{Reason: "finalization_pending"}
+			}
+		}
 		s.mu.Unlock()
 		if err != nil {
 			return err
@@ -45,6 +50,13 @@ func (s *Service) integrate(ctx context.Context, workspaceID uuid.UUID) error {
 		commit, tree, err := s.mainTip(ctx, w)
 		if err != nil {
 			return err
+		}
+		s.mu.Lock()
+		witness := s.witnesses[workspaceID]
+		matches := s.witnessMatches(workspaceID, int64(witness.sequence), commit, tree)
+		s.mu.Unlock()
+		if !matches {
+			return &UnavailableError{Reason: "predecessor_not_current"}
 		}
 		var previousRequest, previousGeneration uuid.UUID
 		restart := false
@@ -154,6 +166,11 @@ func (s *Service) derive(ctx context.Context, w workspaceState, scratch Scratch,
 	id := s.deps.newID()
 	s.mu.Unlock()
 	g := ledger.GenerationDerived{GenerationID: id, RequestID: r.admission.RequestID, PredecessorRequestID: previousRequest, PredecessorGenerationID: previousGeneration, PredecessorCommit: commit, PredecessorTree: tree, InputsRevision: w.Revision, IntegrationRules: "integration-rules/1"}
+	if previousRequest == (uuid.UUID{}) {
+		s.mu.Lock()
+		g.PredecessorWitnessSeq = int64(s.witnesses[w.ID].sequence)
+		s.mu.Unlock()
+	}
 	if r.generation != nil {
 		g.Supersedes = r.generation.GenerationID
 	}
@@ -199,7 +216,7 @@ func unpinDraft(pin, contextID uuid.UUID) (ledger.Draft, error) {
 	return ledger.Draft{Type: ledger.TypeBodyUnpin, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: contextID, Payload: payload}, err
 }
 
-func (s *Service) endingDrafts(r requestState, generation uuid.UUID) ([]ledger.Draft, []uuid.UUID, error) {
+func (s *Service) endingDrafts(r requestState, outcome string, actor ledger.Actor, contextID, generation uuid.UUID) ([]ledger.Draft, []uuid.UUID, error) {
 	ended := []uuid.UUID{r.admission.RequestID}
 	for _, id := range s.trains[r.admission.WorkspaceID] {
 		a := s.requests[id].admission
@@ -209,15 +226,17 @@ func (s *Service) endingDrafts(r requestState, generation uuid.UUID) ([]ledger.D
 	}
 	var drafts []ledger.Draft
 	for i, id := range ended {
-		p := ledger.PromotionFailed{RequestID: id, Outcome: ledger.FailedConflict, GenerationID: generation}
+		p := ledger.PromotionFailed{RequestID: id, Outcome: outcome, GenerationID: generation}
+		endingActor, endingContext := actor, contextID
 		if i != 0 {
 			p.Outcome, p.GenerationID, p.FailedRequestID = ledger.FailedDependencyFailed, uuid.UUID{}, r.admission.RequestID
+			endingActor, endingContext = ledger.ActorCore, s.requests[id].admission.ContextID
 		}
 		payload, err := p.Encode()
 		if err != nil {
 			return nil, nil, err
 		}
-		drafts = append(drafts, ledger.Draft{Type: ledger.TypePromotionFailed, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: r.admission.ContextID, Payload: payload})
+		drafts = append(drafts, ledger.Draft{Type: ledger.TypePromotionFailed, TypeVersion: 1, Actor: endingActor, ContextID: endingContext, Payload: payload})
 	}
 	for _, id := range ended {
 		p := s.requests[id].admission
@@ -272,7 +291,7 @@ func (s *Service) recordGeneration(ctx context.Context, w workspaceState, r requ
 	s.mu.Lock()
 	var ended []uuid.UUID
 	if leading && g.Outcome == ledger.GenerationConflict {
-		endings, ids, e := s.endingDrafts(r, g.GenerationID)
+		endings, ids, e := s.endingDrafts(r, ledger.FailedConflict, ledger.ActorCore, r.admission.ContextID, g.GenerationID)
 		if e != nil {
 			s.mu.Unlock()
 			return e
@@ -314,8 +333,6 @@ func (s *Service) retainedRefs(workspaceID uuid.UUID) map[string]retainedRef {
 			refs["refs/dwarf-harness/scratch-commits/"+id.String()] = retainedRef{s.mergeBacks[id].record.TargetCommit, "merge_back_missing " + id.String()}
 		}
 	}
-	// C2 has only failure endings, so every unfailed open head is live.
-	// Ticket 08 adds retention of an unfailed open head after success.
 	for _, id := range s.trains[workspaceID] {
 		r := s.requests[id]
 		a := r.admission
@@ -334,6 +351,12 @@ func (s *Service) retainedRefs(workspaceID uuid.UUID) map[string]retainedRef {
 		scratch := s.scratches[id]
 		if scratch.WorkspaceID != workspaceID {
 			continue
+		}
+		if head, ok := s.requests[scratch.head]; ok && head.ending != ledger.TypePromotionFailed {
+			retainAdmission(head.admission)
+		}
+		if represented, ok := s.requests[scratch.representedRequest]; ok {
+			retainAdmission(represented.admission)
 		}
 		for _, observationID := range scratch.observationIDs {
 			observation := s.observations[observationID]

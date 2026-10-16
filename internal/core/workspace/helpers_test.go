@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -11,7 +12,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -316,4 +319,51 @@ func serviceFromHistory(t *testing.T, history gitFixture) *serviceFixture {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// A real foreign update-ref transaction holds the canonical lock after prepare.
+// EOF/abort releases its own lock; the service must not remove it or retry.
+func holdCanonicalTransaction(t *testing.T, f *serviceFixture, old, target string) func() {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	cmd := exec.CommandContext(ctx, "git", "update-ref", "--stdin")
+	cmd.Dir, cmd.Env = f.root, f.env
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var once sync.Once
+	abort := func() {
+		once.Do(func() {
+			_, _ = io.WriteString(stdin, "abort\n")
+			_ = stdin.Close()
+			if err := cmd.Wait(); err != nil {
+				t.Errorf("foreign update-ref: %v: %s", err, stderr.String())
+			}
+			cancel()
+		})
+	}
+	t.Cleanup(abort)
+	if _, err := io.WriteString(stdin, "start\nupdate refs/heads/main "+target+" "+old+"\nprepare\n"); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(stdout)
+	for _, want := range []string{"start: ok\n", "prepare: ok\n"} {
+		if got, err := reader.ReadString('\n'); err != nil || got != want {
+			t.Fatalf("foreign transaction handshake: %q %v", got, err)
+		}
+	}
+	return abort
 }

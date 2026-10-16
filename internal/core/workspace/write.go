@@ -378,8 +378,8 @@ func (w *Writer) Lease(ctx context.Context) (func(), error) {
 	if err == nil {
 		err = w.validLocked()
 	}
-	if err == nil && s.scratches[w.scratchID].tipRepairFailed {
-		err = &UnavailableError{Reason: "scratch_tip_mismatch"}
+	if err == nil {
+		err = s.scratches[w.scratchID].tipRepairFailed
 	}
 	if err != nil {
 		if release != nil {
@@ -429,9 +429,12 @@ func (w *Writer) Close() {
 // unexpected value, checks out files, changes the real index or appends records.
 func (s *Service) repairScratchTip(ctx context.Context, w workspaceState, scratch scratchState) (err error) {
 	defer func() {
+		if ctx.Err() != nil {
+			return
+		}
 		s.mu.Lock()
 		current := s.scratches[scratch.ID]
-		current.tipRepairFailed = err != nil
+		current.tipRepairFailed = err
 		s.scratches[scratch.ID] = current
 		s.mu.Unlock()
 	}()

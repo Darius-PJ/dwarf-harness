@@ -24,6 +24,8 @@ type scratchState struct {
 	Scratch
 	closed              bool
 	head                uuid.UUID
+	representedRequest  uuid.UUID
+	representedTree     string
 	live                int
 	reportPins          []uuid.UUID
 	previousTip         string
@@ -36,7 +38,7 @@ type scratchState struct {
 	mergeBackIDs        []uuid.UUID
 	notices             []ScratchNotice
 	merging             bool          // transient sole-writer ownership, never replayed
-	tipRepairFailed     bool          // transient projection health, refreshed by repair
+	tipRepairFailed     error         // transient projection health, refreshed by repair
 	childrenChanged     chan struct{} // transient pending-creation completion
 }
 
@@ -317,14 +319,20 @@ func (s *Service) CloseScratch(ctx context.Context, closure Closure) (ClosureRes
 			if err := r.reserveCaptureBytes(); err != nil {
 				return result, err
 			}
-			cs := s.captureScratch(w, scratch.Scratch)
-			represented := scratch.AnchorTree
+			cs, err := s.privateCaptureScratch(ctx, w, scratch.Scratch)
+			if err != nil {
+				return result, err
+			}
+			represented := scratch.representedTree
+			names, err := s.engine.treeNames(ctx, cs, represented)
+			if err != nil {
+				return result, err
+			}
+			cs.TrustedNames = append(cs.TrustedNames, names...)
+			slices.Sort(cs.TrustedNames)
+			cs.TrustedNames = slices.Compact(cs.TrustedNames)
 			if scratch.ParentScratchID != (uuid.UUID{}) {
 				represented = scratch.TipTree
-				cs, err = s.privateCaptureScratch(ctx, w, scratch.Scratch)
-				if err != nil {
-					return result, err
-				}
 			}
 			observed, err := s.engine.capture(ctx, cs, represented, r, observeCapture)
 			if err != nil {

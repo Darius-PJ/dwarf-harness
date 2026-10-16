@@ -431,3 +431,40 @@ func TestScratchPathsetBoundIsExplicit(t *testing.T) {
 		t.Fatalf("preflight measured only payload bytes: %v", err)
 	}
 }
+
+func TestWriterRepairCancellationKeepsLease(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	scratch := mustScratch(t, f, uuid.NewV7())
+	writer := mustWriter(t, f, testWriteBinding(scratch))
+	defer writer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	binding := testWriteBinding(scratch)
+	binding.ContextID = uuid.NewV7()
+	if _, err := f.svc.BeginWrite(ctx, binding); !errors.Is(err, context.Canceled) {
+		t.Fatalf("foreign cancelled writer: %v", err)
+	}
+	// Exercise cancellation inside repair, not merely at BeginWrite's entry.
+	f.svc.mu.Lock()
+	w, current := f.svc.workspaces[f.w.ID], f.svc.scratches[scratch.ID]
+	f.svc.mu.Unlock()
+	if err := f.svc.repairScratchTip(ctx, w, current); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled repair: %v", err)
+	}
+	release, err := writer.Lease(context.Background())
+	if err != nil {
+		t.Fatalf("foreign cancellation poisoned task lease: %v", err)
+	}
+	release()
+	// A real refusal preserves its cause rather than inventing tip mismatch.
+	f.svc.git.unavailable = ErrGitUnavailable
+	err = f.svc.repairScratchTip(context.Background(), w, current)
+	if err == nil {
+		t.Fatal("unavailable Git repaired a scratch")
+	}
+	_, leaseErr := writer.Lease(context.Background())
+	if !errors.Is(leaseErr, err) {
+		t.Fatalf("lease lost refusing cause: repair=%v lease=%v", err, leaseErr)
+	}
+}

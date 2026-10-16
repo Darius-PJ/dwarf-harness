@@ -137,7 +137,7 @@ func TestGuardedMainUpdate(t *testing.T) {
 			if format != "sha1" {
 				return
 			}
-			for _, row := range []string{"symbolic", "wrong-tree", "wrong-parent", "non-fast-forward", "merge", "third-tip"} {
+			for _, row := range []string{"symbolic", "wrong-tree", "wrong-parent", "non-fast-forward", "merge", "tag", "third-tip"} {
 				t.Run(row, func(t *testing.T) {
 					t.Parallel()
 					f, w := finalizationFixture(t, h, true)
@@ -153,6 +153,9 @@ func TestGuardedMainUpdate(t *testing.T) {
 						target = h.root
 					case "merge":
 						target = h.merge
+					case "tag":
+						gitCommand(t, f.env, f.root, nil, "tag", "-a", "target-tag", "-m", "annotated target", h.target)
+						target = strings.TrimSpace(string(gitCommand(t, f.env, f.root, nil, "rev-parse", "refs/tags/target-tag")))
 					case "third-tip":
 						gitCommand(t, f.env, f.root, nil, "update-ref", "refs/heads/main", h.other, h.old)
 					}

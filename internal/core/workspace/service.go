@@ -39,6 +39,8 @@ type serviceDeps struct {
 	afterMergeBackApplied  func()
 	beforeMergeBackParent  func()
 	beforeMergeBackWait    func()
+	beforeFinalizeStep     func(string)
+	beforeStoreAppend      func([]ledger.Draft)
 }
 
 // Reconciliation reports best-effort filesystem repair. Pending entries explain
@@ -82,6 +84,9 @@ type Service struct {
 	inFlight                        map[uuid.UUID]bool
 	trains                          map[uuid.UUID][]uuid.UUID
 	integrating                     map[uuid.UUID]chan struct{}
+	intents                         map[uuid.UUID]ledger.FinalizationIntended
+	witnesses                       map[uuid.UUID]acceptedWitness
+	usedIntents                     map[uuid.UUID]bool
 	// UUID-only historical facts enforce F2-06's never-reused identities.
 	usedCaptures, usedGenerations, usedLineages map[uuid.UUID]bool
 	// Manifest pins belong to live requests/latest observations; report pins survive until unpinned.
@@ -130,6 +135,9 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	s.inFlight = make(map[uuid.UUID]bool)
 	s.trains = make(map[uuid.UUID][]uuid.UUID)
 	s.integrating = make(map[uuid.UUID]chan struct{})
+	s.intents = make(map[uuid.UUID]ledger.FinalizationIntended)
+	s.witnesses = make(map[uuid.UUID]acceptedWitness)
+	s.usedIntents = make(map[uuid.UUID]bool)
 	s.usedCaptures = make(map[uuid.UUID]bool)
 	s.usedGenerations = make(map[uuid.UUID]bool)
 	s.usedLineages = make(map[uuid.UUID]bool)
@@ -193,7 +201,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 }
 
 func workspaceConsumption() ledger.Consumption {
-	return ledger.Consumption{ledger.TypeWorkspaceRegistered: {1}, ledger.TypeCaptureInputsPinned: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}, ledger.TypeScratchChanged: {1}, ledger.TypeScratchMergeBack: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}, ledger.TypePromotionAdmitted: {1}, ledger.TypeGenerationDerived: {1}, ledger.TypePromotionFailed: {1}}
+	return ledger.Consumption{ledger.TypeWorkspaceRegistered: {1}, ledger.TypeCaptureInputsPinned: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}, ledger.TypeScratchChanged: {1}, ledger.TypeScratchMergeBack: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}, ledger.TypePromotionAdmitted: {1}, ledger.TypeGenerationDerived: {1}, ledger.TypePromotionFailed: {1}, ledger.TypeFinalizationIntended: {1}, ledger.TypePromotionAccepted: {1}, ledger.TypePromotionNoChange: {1}}
 }
 
 func validID(id uuid.UUID) bool   { return id[6]>>4 == 7 && id[8]&0xc0 == 0x80 }
@@ -251,6 +259,9 @@ func (s *Service) appendLocked(ctx context.Context, drafts []ledger.Draft) error
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
+	if s.deps.beforeStoreAppend != nil {
+		s.deps.beforeStoreAppend(drafts)
+	}
 	committed, err := s.store.Append(ctx, drafts)
 	if err != nil {
 		undo()
@@ -262,6 +273,13 @@ func (s *Service) appendLocked(ctx context.Context, drafts []ledger.Draft) error
 	}
 	// Other Core producers may have appended between Durable and Append.
 	for i, draft := range drafts {
+		if draft.Type == ledger.TypePromotionAccepted {
+			p, _ := ledger.DecodePromotionAccepted(draft.Payload)
+			id := s.requests[p.RequestID].admission.WorkspaceID
+			witness := s.witnesses[id]
+			witness.sequence = committed.First + uint64(i)
+			s.witnesses[id] = witness
+		}
 		if draft.Type == ledger.TypeCaptureInputsPinned {
 			p, _ := ledger.DecodeCaptureInputsPinned(draft.Payload)
 			w := s.workspaces[p.WorkspaceID]
@@ -334,6 +352,9 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 		seq := first + uint64(i)
 		bad := func(detail string) error { return &InconsistentError{Seq: seq, Detail: detail} }
 		if err := s.applyRequestRecord(drafts, i, seq, loading, &rules, &journal); err != nil {
+			return undo, bad(err.Error())
+		}
+		if err := s.applyFinalizationRecord(drafts, i, seq, &rules, &journal); err != nil {
 			return undo, bad(err.Error())
 		}
 		switch draft.Type {
@@ -461,7 +482,7 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 				return undo, bad("scratch Git IDs do not match workspace object format")
 			}
 			id := p.ScratchID
-			s.scratches[id] = scratchState{Scratch: Scratch{ID: id, WorkspaceID: p.WorkspaceID, ContextID: p.ContextID, ParentScratchID: p.ParentScratchID, Dir: filepath.Join(s.colony, "scratch", p.Dir), Branch: p.Branch, BaseCommit: p.BaseCommit, AnchorTree: p.AnchorTree, TipCommit: p.BaseCommit, TipTree: p.AnchorTree}, previousTip: p.BaseCommit, creationSequence: seq}
+			s.scratches[id] = scratchState{Scratch: Scratch{ID: id, WorkspaceID: p.WorkspaceID, ContextID: p.ContextID, ParentScratchID: p.ParentScratchID, Dir: filepath.Join(s.colony, "scratch", p.Dir), Branch: p.Branch, BaseCommit: p.BaseCommit, AnchorTree: p.AnchorTree, TipCommit: p.BaseCommit, TipTree: p.AnchorTree}, previousTip: p.BaseCommit, representedTree: p.AnchorTree, creationSequence: seq}
 			s.openScratches[id] = true
 			if p.ParentScratchID == (uuid.UUID{}) {
 				s.pairs[pair] = id

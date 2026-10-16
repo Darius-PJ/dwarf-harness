@@ -32,12 +32,19 @@ type RequestState struct {
 	SealedTree     string
 	FailedRequest  uuid.UUID
 	ConflictReport ledger.Digest
+	FailureOutcome string
 }
 
 const (
 	RequestPending          = "pending"
 	RequestConflict         = "conflict"
 	RequestDependencyFailed = "dependency_failed"
+	RequestFinalizing       = "finalizing"
+	RequestAccepted         = "accepted"
+	RequestNoChange         = "no_change"
+	RequestCancelled        = "cancelled"
+	RequestInterrupted      = "interrupted"
+	RequestUnknownFailure   = "unknown_failure"
 )
 
 type requestState struct {
@@ -46,6 +53,11 @@ type requestState struct {
 	ending     string
 	generation *ledger.GenerationDerived
 	sequence   uint64
+	intent     *ledger.FinalizationIntended
+}
+
+func (r requestState) successful() bool {
+	return r.ending == ledger.TypePromotionAccepted || r.ending == ledger.TypePromotionNoChange
 }
 
 type requestPlan struct {
@@ -74,9 +86,9 @@ func (s *Service) identity(r Request) (RequestState, bool, error) {
 }
 
 func (s *Service) headPlan(r Request, scratch scratchState) (requestPlan, error) {
-	plan := requestPlan{request: r, scratch: scratch.Scratch, workspace: s.workspaces[r.WorkspaceID], baseline: scratch.AnchorTree, checkpoint: 1}
+	plan := requestPlan{request: r, scratch: scratch.Scratch, workspace: s.workspaces[r.WorkspaceID], baseline: scratch.representedTree, checkpoint: 1}
 	h := s.requests[scratch.head]
-	failed := h.ending != ""
+	failed := h.ending == ledger.TypePromotionFailed
 	zero := uuid.UUID{}
 	switch {
 	case scratch.head == zero && r.Head == zero && r.RestartFrom == zero:
@@ -178,6 +190,7 @@ type requestCommitRules struct {
 	unpins                  map[uuid.UUID]int
 	ended                   []uuid.UUID
 	firstEnding, lastEnding int
+	cascades                map[uuid.UUID][]uuid.UUID
 }
 
 func matchingPin(drafts []ledger.Draft, at int, id uuid.UUID, refs []ledger.Digest) bool {
@@ -301,7 +314,7 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, seq uint64, 
 			return err
 		}
 		old, exists := s.requests[p.RequestID]
-		if !exists || old.ending != "" {
+		if !exists || old.ending != "" || old.intent != nil {
 			return bad("generation requires a live admitted request")
 		}
 		a := old.admission
@@ -344,9 +357,15 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, seq uint64, 
 			if p.PredecessorRequestID != (uuid.UUID{}) {
 				return bad("leading generation must name canonical predecessor")
 			}
+			if !s.witnessMatches(a.WorkspaceID, p.PredecessorWitnessSeq, p.PredecessorCommit, p.PredecessorTree) {
+				return bad("generation witness is absent, stale or differs from predecessor")
+			}
 			// Historical main tips are not in F2-06. Replay checks the absence
 			// of a live predecessor; integrate binds the observed main objects.
 		} else {
+			if p.PredecessorWitnessSeq != 0 {
+				return bad("speculative generation carries a canonical witness")
+			}
 			prev := s.requests[train[position-1]].generation
 			if prev == nil || prev.Outcome != ledger.GenerationClean || p.PredecessorRequestID != train[position-1] || p.PredecessorGenerationID != prev.GenerationID || p.PredecessorCommit != prev.DerivedCommit || p.PredecessorTree != prev.DerivedTree {
 				return bad("generation predecessor is not the nearest live clean generation")
@@ -396,7 +415,18 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, seq uint64, 
 			return bad("failure context or body refs")
 		}
 		next := old
-		next.ending, next.state.State = p.Outcome, p.Outcome
+		next.ending, next.state.State = ledger.TypePromotionFailed, p.Outcome
+		if old.intent != nil && p.Outcome != ledger.FailedInterrupted {
+			return bad("only interrupted may fail an unresolved intent")
+		}
+		for root, suffix := range rules.cascades {
+			if position := slices.Index(suffix, p.RequestID); position >= 0 {
+				if position != 0 || p.Outcome != ledger.FailedDependencyFailed || p.FailedRequestID != root {
+					return bad("cancelled or interrupted suffix must be dependency_failed in checkpoint order")
+				}
+				rules.cascades[root] = suffix[1:]
+			}
+		}
 		switch p.Outcome {
 		case ledger.FailedConflict:
 			if d.Actor != ledger.ActorCore || old.generation == nil || old.generation.GenerationID != p.GenerationID || old.generation.Outcome != ledger.GenerationConflict || s.trains[a.WorkspaceID][0] != p.RequestID {
@@ -405,14 +435,41 @@ func (s *Service) applyRequestRecord(drafts []ledger.Draft, at int, seq uint64, 
 			next.state.ConflictReport = old.generation.ConflictSHA256
 		case ledger.FailedDependencyFailed:
 			parent, exists := s.requests[p.FailedRequestID]
-			if d.Actor != ledger.ActorCore || !exists || parent.ending == "" || parent.admission.LineageID != a.LineageID || parent.admission.Checkpoint >= a.Checkpoint {
+			if d.Actor != ledger.ActorCore || !exists || parent.ending != ledger.TypePromotionFailed || parent.admission.LineageID != a.LineageID || parent.admission.Checkpoint >= a.Checkpoint {
 				return bad("dependency failure requires an earlier failed local checkpoint")
 			}
 			next.state.FailedRequest = p.FailedRequestID
+		case ledger.FailedCancelled, ledger.FailedInterrupted:
+			if p.GenerationID != (uuid.UUID{}) || p.FailedRequestID != (uuid.UUID{}) {
+				return bad("cancelled or interrupted has optional failure keys")
+			}
+			if rules.cascades == nil {
+				rules.cascades = make(map[uuid.UUID][]uuid.UUID)
+			}
+			for _, id := range s.trains[a.WorkspaceID] {
+				other := s.requests[id].admission
+				if other.LineageID == a.LineageID && other.Checkpoint > a.Checkpoint {
+					rules.cascades[p.RequestID] = append(rules.cascades[p.RequestID], id)
+				}
+			}
+			if p.Outcome == ledger.FailedCancelled {
+				if d.Actor != ledger.ActorOwner && d.Actor != ledger.ActorAgent {
+					return bad("cancellation requires owner or request context agent")
+				}
+			} else {
+				if d.Actor != ledger.ActorCore {
+					return bad("interrupted requires core")
+				}
+				if pending, ok := s.intents[a.WorkspaceID]; ok && pending.RequestID == p.RequestID {
+					delete(s.intents, a.WorkspaceID)
+					*journal = append(*journal, func() { s.intents[a.WorkspaceID] = pending })
+				}
+			}
 		default:
 			if producing {
 				return bad("producer cannot write an undefined failure outcome")
 			}
+			next.state.State, next.state.FailureOutcome = RequestUnknownFailure, p.Outcome
 		}
 		next.generation = nil
 		oldTrain := s.trains[a.WorkspaceID]
