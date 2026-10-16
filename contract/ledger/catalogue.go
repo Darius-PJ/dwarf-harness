@@ -44,7 +44,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeScratchChanged and TypeScratchMergeBack; and ticket 08's part of F2,
 // frozen (D123): TypeFinalizationIntended,
 // TypePromotionAccepted and TypePromotionNoChange; and ticket 09's part of F2,
-// proposed for the owner's freeze (D113): TypePolicyActivationRequested,
+// frozen (D124): TypePolicyActivationRequested,
 // TypePolicyActivationHoldChanged, TypePolicyActivationEnded and
 // TypePolicyActivated. All twenty are at version 1. It never contains a type
 // in the reserved fixture namespace.

@@ -14,8 +14,8 @@ import (
 	"uuid"
 )
 
-// These fixtures cover ticket 09's part of F2, proposed for the owner's
-// freeze (D113), through its public payload encoders and decoders.
+// These fixtures cover ticket 09's part of F2, frozen (D124), through
+// its public payload encoders and decoders.
 func decodeF2_09(typ string, js json.RawMessage) (payload, error) {
 	switch typ {
 	case TypePolicyActivationRequested:

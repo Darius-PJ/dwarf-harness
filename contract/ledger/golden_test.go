@@ -37,8 +37,8 @@ const (
 	// finalizationDir holds ticket 08's part of F2, frozen (D123),
 	// in one segment.
 	finalizationDir = "testdata/f2/08/log"
-	// activationDir holds ticket 09's part of F2, proposed for the owner's
-	// freeze (D113), in one segment.
+	// activationDir holds ticket 09's part of F2, frozen (D124),
+	// in one segment.
 	activationDir = "testdata/f2/09/log"
 )
 
@@ -685,8 +685,8 @@ func finalizationInputs() []goldenCommit {
 	}
 }
 
-// activationInputs covers ticket 09's part of F2, proposed for the owner's
-// freeze (D113): retained approvals, clock holds, CAS controls and switches.
+// activationInputs covers ticket 09's part of F2, frozen (D124):
+// retained approvals, clock holds, CAS controls and switches.
 func activationInputs() []goldenCommit {
 	header := func(commit string, seconds int64) CommitHeader {
 		return CommitHeader{ColonyID: activationColony, CommitID: fid(commit), EventTimeNS: 1791000060000000000 + seconds*1000000000}
@@ -1382,8 +1382,8 @@ func TestGoldenF2_08(t *testing.T) {
 	}
 }
 
-// TestGoldenF2_09 pins ticket 09's part of F2, proposed for the owner's
-// freeze (D113), including references to actual earlier envelope hashes.
+// TestGoldenF2_09 pins ticket 09's part of F2, frozen (D124),
+// including references to actual earlier envelope hashes.
 func TestGoldenF2_09(t *testing.T) {
 	t.Parallel()
 	g := mustActivation(t)

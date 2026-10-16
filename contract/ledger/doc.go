@@ -166,7 +166,7 @@
 // also by addition to format version 1.
 // F2-08 is ticket 08's part of F2, frozen (D123),
 // also by addition to format version 1.
-// F2-09 is ticket 09's part of F2, proposed for the owner's freeze (D113),
+// F2-09 is ticket 09's part of F2, frozen (D124),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -1095,8 +1095,8 @@
 //
 // # F2-09 record types
 //
-// These four version-1 types are ticket 09's part of F2, proposed for the
-// owner's freeze (D113), by addition to format version 1. C2 owns their
+// These four version-1 types are ticket 09's part of F2, frozen by
+// addition to format version 1 (D124). C2 owns their
 // payload specifications. Only Core's workspace service
 // (internal/core/workspace) may append them, through appender.Appender;
 // permitted callers are enforced by review. The service checks the record
@@ -1307,7 +1307,8 @@
 // and recovery for the owner. C4 consumes the active manifest and intent
 // binding as the policy, check, environment and law revisions of its
 // evidence. U1.E consumes law activation when its gate permits; the owner
-// may inspect these records. Every payload key is replay-essential.
+// may inspect these records. Every payload key is replay-essential, and
+// body_refs on the request and the activation.
 // Workspace IDs, approvals, artifact digests, schedules and manifests are
 // host-private, never federation exports. A control is never accepted
 // delivery, field activity, permission to run checks or proof of engine

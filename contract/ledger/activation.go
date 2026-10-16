@@ -9,7 +9,7 @@ import (
 )
 
 // The F2-09 record types, each at version 1: ticket 09's part of F2,
-// proposed for the owner's freeze (D113). The package documentation
+// frozen (D124). The package documentation
 // specifies their payloads and service-owned record rules.
 const (
 	TypePolicyActivationRequested   = "workspace.policy_activation_requested"
@@ -18,21 +18,21 @@ const (
 	TypePolicyActivated             = "workspace.policy_activated"
 )
 
-// F2-09's closed schedule tokens, proposed for the owner's freeze (D113).
+// F2-09's closed schedule tokens, frozen (D124).
 const (
 	ScheduleImmediate = "immediate"
 	ScheduleNotBefore = "not_before"
 )
 
-// F2-09's closed hold tokens, proposed for the owner's freeze (D113).
+// F2-09's closed hold tokens, frozen (D124).
 const (
 	HoldDue            = "due"
 	HoldClockUntrusted = "clock_untrusted"
 	HoldNone           = "none"
 )
 
-// F2-09's version-1 outcomes under an open outcome grammar, proposed for
-// the owner's freeze (D113). Readers also accept other well-formed tokens.
+// F2-09's version-1 outcomes under an open outcome grammar, frozen
+// (D124). Readers also accept other well-formed tokens.
 const (
 	ActivationCancelled = "cancelled"
 	ActivationReplaced  = "replaced"

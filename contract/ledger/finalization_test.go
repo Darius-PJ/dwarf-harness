@@ -210,7 +210,7 @@ func TestF2_08PayloadsRefuse(t *testing.T) {
 }
 
 // TestFinalizationIntendedActivationBinding covers ticket 09's optional
-// binding, proposed for the owner's freeze (D113), without changing F2-08.
+// binding, frozen (D124), without changing F2-08.
 func TestFinalizationIntendedActivationBinding(t *testing.T) {
 	t.Parallel()
 	p := f2_08Payloads()[0].p.(FinalizationIntended)
