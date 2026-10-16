@@ -728,20 +728,34 @@ func (s *Service) mergeParent(ctx context.Context, id, retry uuid.UUID) (scratch
 		if err == nil && parent.pendingMergeBack != retry {
 			err = ErrMergeBackPending
 		}
-		busy := s.pendingChildren[id] != 0
-		for _, writer := range s.writers {
-			busy = busy || writer.scratchID == id
+		waiting = nil
+		if s.pendingChildren[id] != 0 {
+			waiting = parent.childrenChanged
 		}
-		if err == nil && !busy {
+		for _, writer := range s.writers {
+			if writer.scratchID == id {
+				waiting = writer.changed
+				break
+			}
+		}
+		if err == nil && waiting == nil {
 			parent.merging = true
 			s.scratches[id] = parent
 		}
 		s.mu.Unlock()
-		if err != nil || busy {
+		if err != nil || waiting != nil {
 			unlock()
 			guard.release()
 			if err != nil {
 				return parent, nil, nil, err
+			}
+			if s.deps.beforeMergeBackWait != nil {
+				s.deps.beforeMergeBackWait()
+			}
+			select {
+			case <-ctx.Done():
+				return parent, nil, nil, ctx.Err()
+			case <-waiting:
 			}
 			continue
 		}
@@ -803,16 +817,6 @@ func (s *Service) MergeBack(ctx context.Context, temporaryID uuid.UUID) (result 
 		return result, err
 	}
 	defer sourceGuard.release()
-	// Keep the inputs revision's own pin through the handoff to preparation.
-	if err := s.lockInputs(ctx); err != nil {
-		return result, err
-	}
-	inputsHeld := true
-	defer func() {
-		if inputsHeld {
-			<-s.inputsLock
-		}
-	}()
 	s.mu.Lock()
 	w := s.workspaces[source.WorkspaceID]
 	observation := s.observations[source.ObservationID].record
@@ -837,6 +841,19 @@ func (s *Service) MergeBack(ctx context.Context, temporaryID uuid.UUID) (result 
 	}
 	defer guard.release()
 	defer unlock()
+	// Keep the inputs revision's own pin through the handoff to preparation.
+	if err := s.lockInputs(ctx); err != nil {
+		return result, err
+	}
+	inputsHeld := true
+	defer func() {
+		if inputsHeld {
+			<-s.inputsLock
+		}
+	}()
+	s.mu.Lock()
+	w = s.workspaces[source.WorkspaceID]
+	s.mu.Unlock()
 	if err := s.repairScratchTip(ctx, w, parent); err != nil {
 		return result, err
 	}

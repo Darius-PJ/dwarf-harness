@@ -714,46 +714,169 @@ func TestMergeBackWaitsForProtectedWindow(t *testing.T) {
 
 func TestMergeBackWaitsForTaskTurn(t *testing.T) {
 	t.Parallel()
+	history := newGitFixture(t, "sha1")
+	for _, mode := range []string{"task_work", "inputs_update"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			f := serviceFromHistory(t, history)
+			task := mustScratch(t, f, uuid.NewV7())
+			source, _ := observedTemporary(t, f, task, map[string]string{"source.txt": "source\n"})
+			writer := mustWriter(t, f, testWriteBinding(task))
+			lease, err := writer.Lease(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			lease()
+			ctx, cancel := context.WithCancel(context.Background())
+			f.svc.deps.beforeMergeBackWait = cancel
+			before := f.store.Durable()
+			_, err = f.svc.MergeBack(ctx, source.ID)
+			if !errors.Is(err, context.Canceled) || f.store.Durable() != before {
+				t.Fatalf("tool gap allowed merge or recorded cancellation before prepared: %v", err)
+			}
+			entered := make(chan struct{})
+			var waiting atomic.Bool
+			f.svc.deps.beforeMergeBackWait = func() {
+				if waiting.CompareAndSwap(false, true) {
+					close(entered)
+				}
+			}
+			mergeCtx, stop := context.WithTimeout(context.Background(), 2*time.Minute)
+			done := make(chan struct{})
+			var result MergeBackResult
+			var mergeErr error
+			go func() {
+				result, mergeErr = f.svc.MergeBack(mergeCtx, source.ID)
+				close(done)
+			}()
+			defer func() { stop(); <-done }()
+			select {
+			case <-entered:
+			case <-done:
+				t.Fatalf("merge did not wait for the task turn: %v", mergeErr)
+			}
+			var updated Workspace
+			if mode == "inputs_update" {
+				p := f.p
+				p.LocalExcludes = HostFile{Present: true, Bytes: []byte("ignored-later\n")}
+				updateCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				updated, err = f.svc.UpdateInputs(updateCtx, f.w.ID, f.w.Revision, p)
+				cancel()
+				if err != nil {
+					t.Fatalf("input update blocked behind the task writer: %v", err)
+				}
+			}
+			writeTestFile(t, filepath.Join(task.Dir, "parent.txt"), []byte("parent\n"))
+			mustObserve(t, writer)
+			<-done
+			if mergeErr != nil {
+				t.Fatal(mergeErr)
+			}
+			if string(readTestFile(t, filepath.Join(task.Dir, "parent.txt"))) != "parent\n" || string(readTestFile(t, filepath.Join(task.Dir, "source.txt"))) != "source\n" {
+				t.Fatal("merge lost task-turn work")
+			}
+			if mode == "inputs_update" {
+				plan := mergeBackRecord(t, f, result.ID, ledger.MergeBackPrepared)
+				if plan.InputsRevision != updated.Revision || plan.CaptureInputsSHA256 != updated.InputsSHA256 {
+					t.Fatal("merge prepared with the inputs from before its wait")
+				}
+			}
+		})
+	}
+}
+
+// Done announces a real context-aware wait, not a retry through Err.
+type mergeParentWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	entered atomic.Bool
+}
+
+func (c *mergeParentWaitContext) Done() <-chan struct{} {
+	if c.entered.CompareAndSwap(false, true) {
+		close(c.waiting)
+	}
+	return c.Context.Done()
+}
+
+func TestMergeBackWaitsForPendingChild(t *testing.T) {
+	t.Parallel()
 	f := newServiceFixture(t)
 	task := mustScratch(t, f, uuid.NewV7())
-	source, _ := observedTemporary(t, f, task, map[string]string{"source.txt": "source\n"})
-	writer := mustWriter(t, f, testWriteBinding(task))
-	lease, err := writer.Lease(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	held := make(chan *reservation, 1)
+	f.svc.deps.beforeAppend = func() {
+		f.svc.mu.Lock()
+		var dir string
+		for name := range f.svc.pendingDirs {
+			dir = filepath.Join(f.colony, "scratch", name)
+		}
+		f.svc.mu.Unlock()
+		guard, err := f.svc.pool.reserve(dir, closureReservation)
+		if err != nil {
+			t.Error(err)
+			cancel()
+		}
+		held <- guard
+	}
+	b := testWriteBinding(task)
+	b.ContextID = uuid.NewV7()
+	created := make(chan struct{})
+	var creationErr error
+	go func() {
+		writer, err := f.svc.BeginWrite(ctx, b)
+		if writer != nil {
+			writer.Close()
+		}
+		creationErr = err
+		close(created)
+	}()
+	defer func() { cancel(); <-created }()
+	var childGuard *reservation
+	select {
+	case childGuard = <-held:
+		defer childGuard.release()
+	case <-created:
+		t.Fatalf("temporary creation did not reach append: %v", creationErr)
+	}
+	// Creation has dropped routing but cannot finish its pool wait.
+	unlock, err := f.svc.lockTask(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lease()
-	ctx, cancel := context.WithCancel(context.Background())
-	f.svc.deps.beforeMergeBackWait = cancel
-	before := f.store.Durable()
-	_, err = f.svc.MergeBack(ctx, source.ID)
-	if !errors.Is(err, context.Canceled) || f.store.Durable() != before {
-		t.Fatalf("tool gap allowed merge or recorded cancellation before prepared: %v", err)
-	}
-	entered := make(chan struct{})
-	var waiting atomic.Bool
+	unlock()
+	waitCtx := &mergeParentWaitContext{Context: ctx, waiting: make(chan struct{})}
+	var waits atomic.Int32
 	f.svc.deps.beforeMergeBackWait = func() {
-		if waiting.CompareAndSwap(false, true) {
-			close(entered)
+		if waits.Add(1) > 1 {
+			cancel()
 		}
 	}
-	done := make(chan error, 1)
+	done := make(chan struct{})
+	var mergeErr error
 	go func() {
-		_, err := f.svc.MergeBack(context.Background(), source.ID)
-		done <- err
+		_, guard, unlock, err := f.svc.mergeParent(waitCtx, task.ID, uuid.UUID{})
+		if err == nil {
+			unlock()
+			guard.release()
+		}
+		mergeErr = err
+		close(done)
 	}()
+	defer func() { cancel(); <-done }()
 	select {
-	case <-entered:
-	case err := <-done:
-		t.Fatalf("merge did not wait for the task turn: %v", err)
+	case <-waitCtx.waiting:
+		childGuard.release()
+	case <-done:
+		t.Fatalf("merge retried pending creation without waiting: %v", mergeErr)
 	}
-	writeTestFile(t, filepath.Join(task.Dir, "parent.txt"), []byte("parent\n"))
-	mustObserve(t, writer)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	<-done
+	if mergeErr != nil || waits.Load() != 1 {
+		t.Fatalf("pending-child wait did not resume once: waits=%d, err=%v", waits.Load(), mergeErr)
 	}
-	if string(readTestFile(t, filepath.Join(task.Dir, "parent.txt"))) != "parent\n" || string(readTestFile(t, filepath.Join(task.Dir, "source.txt"))) != "source\n" {
-		t.Fatal("merge lost task-turn work")
+	<-created
+	if creationErr != nil {
+		t.Fatalf("temporary creation failed after release: %v", creationErr)
 	}
 }
 

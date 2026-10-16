@@ -221,11 +221,23 @@ func (s *Service) BeginWrite(ctx context.Context, b WriteBinding) (_ *Writer, er
 		scratch = resumed
 	} else if b.ContextID != parent.ContextID {
 		s.mu.Lock()
+		if s.pendingChildren[parent.ID] == 0 {
+			current := s.scratches[parent.ID]
+			current.childrenChanged = make(chan struct{})
+			s.scratches[parent.ID] = current
+		}
 		s.pendingChildren[parent.ID]++
 		s.mu.Unlock()
 		defer func() {
 			s.mu.Lock()
 			s.pendingChildren[parent.ID]--
+			current := s.scratches[parent.ID]
+			close(current.childrenChanged)
+			current.childrenChanged = nil
+			if s.pendingChildren[parent.ID] != 0 {
+				current.childrenChanged = make(chan struct{})
+			}
+			s.scratches[parent.ID] = current
 			s.mu.Unlock()
 		}()
 		if err := s.repairScratchTip(ctx, w, parent); err != nil {
@@ -366,14 +378,8 @@ func (w *Writer) Lease(ctx context.Context) (func(), error) {
 	if err == nil {
 		err = w.validLocked()
 	}
-	if err == nil {
-		workspace := s.workspaces[scratch.WorkspaceID]
-		s.mu.Unlock()
-		err = s.repairScratchTip(ctx, workspace, scratch)
-		s.mu.Lock()
-		if err == nil {
-			err = w.validLocked()
-		}
+	if err == nil && s.scratches[w.scratchID].tipRepairFailed {
+		err = &UnavailableError{Reason: "scratch_tip_mismatch"}
 	}
 	if err != nil {
 		if release != nil {
@@ -421,7 +427,14 @@ func (w *Writer) Close() {
 
 // repairScratchTip projects only an acknowledged transition. It never moves an
 // unexpected value, checks out files, changes the real index or appends records.
-func (s *Service) repairScratchTip(ctx context.Context, w workspaceState, scratch scratchState) error {
+func (s *Service) repairScratchTip(ctx context.Context, w workspaceState, scratch scratchState) (err error) {
+	defer func() {
+		s.mu.Lock()
+		current := s.scratches[scratch.ID]
+		current.tipRepairFailed = err != nil
+		s.scratches[scratch.ID] = current
+		s.mu.Unlock()
+	}()
 	if err := s.captureReady(ctx, w, scratch.Scratch); err != nil {
 		return err
 	}

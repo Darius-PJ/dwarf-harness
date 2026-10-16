@@ -171,6 +171,8 @@
 // ResumeScratchID attaches only to an open temporary of that context and task;
 // a foreign binding gives ErrNotBound and a closed temporary gives ErrClosed.
 // Resume creates no directory or record; omitting it never reuses old work.
+// Pool waits precede the task lock, which permits only immediate-or-busy reserves;
+// BeginWrite drops routing across its pool wait.
 //
 // Writer.Lease protects each physical tool edit through the shared pool and
 // returns an idempotent release. Writer.Close marks the handle closed at once,
@@ -179,6 +181,7 @@
 // wrong-service handle gives ErrInvalid; a closed or successfully observed
 // handle gives ErrClosed. Scratch returns zero for those handles or a poisoned
 // service; Close is harmless and idempotent even for an invalid handle.
+// Lease runs no Git and refuses while the most recent tip repair failed.
 //
 // A concurrent second CommitObserved on the same writer answers
 // *BusyError{context_busy}.

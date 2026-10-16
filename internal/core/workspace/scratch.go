@@ -35,7 +35,9 @@ type scratchState struct {
 	appliedMergeBack    uuid.UUID
 	mergeBackIDs        []uuid.UUID
 	notices             []ScratchNotice
-	merging             bool // transient sole-writer ownership, never replayed
+	merging             bool          // transient sole-writer ownership, never replayed
+	tipRepairFailed     bool          // transient projection health, refreshed by repair
+	childrenChanged     chan struct{} // transient pending-creation completion
 }
 
 type scratchPair struct{ context, workspace uuid.UUID }

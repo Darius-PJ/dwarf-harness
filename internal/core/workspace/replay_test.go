@@ -779,6 +779,30 @@ func TestTipRepairAtOpenAndBeforeUse(t *testing.T) {
 				}
 				return
 			}
+			if mode == "other_lease" {
+				gitCommand(t, f.env, f.root, nil, "update-ref", task.Branch, third, first.Commit)
+				b := testWriteBinding(task)
+				b.ContextID = uuid.NewV7()
+				_, err := f.svc.BeginWrite(ctx, b)
+				assertUnavailable(t, err, "scratch_tip_mismatch")
+				release, err := writer.Lease(ctx)
+				if release != nil {
+					release()
+				}
+				assertUnavailable(t, err, "scratch_tip_mismatch")
+				gitCommand(t, f.env, f.root, nil, "update-ref", task.Branch, task.BaseCommit, third)
+				mustWriter(t, f, b)
+				// Leasing must use the repaired projection, even without Git.
+				gitPath := f.svc.git.path
+				f.svc.git.path = filepath.Join(t.TempDir(), "missing-git")
+				release, err = writer.Lease(ctx)
+				f.svc.git.path = gitPath
+				if err != nil {
+					t.Fatalf("lease after successful repair: %v", err)
+				}
+				release()
+				return
+			}
 			switch {
 			case mode == "absent_open":
 				gitCommand(t, f.env, f.root, nil, "update-ref", "-d", task.Branch, first.Commit)
@@ -809,9 +833,6 @@ func TestTipRepairAtOpenAndBeforeUse(t *testing.T) {
 				}
 			case "other_writer":
 				_, err := f.svc.BeginWrite(ctx, testWriteBinding(task))
-				assertUnavailable(t, err, "scratch_tip_mismatch")
-			case "other_lease":
-				_, err := writer.Lease(ctx)
 				assertUnavailable(t, err, "scratch_tip_mismatch")
 			case "other_admit":
 				assertUnavailable(t, promotionError(ctx, f.svc, rootRequest(task)), "scratch_tip_mismatch")
@@ -1415,7 +1436,7 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 	rows := []string{
 		"actor", "envelope_context", "source_unknown", "source_dedicated", "source_author", "parent_unknown", "parent_wrong", "workspace",
 		"source_observation", "source_commit", "source_tree", "fork_commit", "fork_tree", "parent_commit", "parent_tree", "revision", "digest", "oid_length",
-		"prepared_refs", "prepared_pin_missing", "prepared_pin_wrong", "prepared_pin_refs", "prepared_reused", "prepared_parent_pending", "pending_observation", "pending_closure",
+		"prepared_refs", "prepared_pin_missing", "prepared_pin_wrong", "prepared_pin_refs", "prepared_reused", "prepared_parent_pending", "pending_observation", "pending_closure", "pending_admission",
 		"failure_without_prepared", "failure_plan", "failure_refs", "failure_unpin", "unknown_failure_readable",
 		"applied_plan", "applied_unpin_missing", "applied_unpin_wrong", "applied_unpin_before", "applied_refs", "applied_changed", "applied_id_reused",
 		"conflict_refs", "conflict_pin_missing", "conflict_pin_wrong", "conflict_unpin_early",
@@ -1573,6 +1594,17 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 						Payload: encoded(t, ledger.ScratchClosed{ScratchID: secondSource.ID, ContextID: secondSource.ContextID, Reason: "abandoned"})}}
 					unpin, _ := unpinDraft(secondPin, secondSource.ContextID)
 					drafts = append(drafts, unpin)
+					assertF207History(t, f, prefixes[at], drafts, false, false)
+					return
+				case "pending_admission":
+					at++
+					drafts = nil
+					for _, r := range commits[indices["admission"]].Records {
+						drafts = append(drafts, r.Draft)
+					}
+					admission, _ := ledger.DecodePromotionAdmitted(drafts[0].Payload)
+					admission.ScratchObservationID, admission.MergeBackIDs = taskObservation.ID, nil
+					drafts[0].Payload = encoded(t, admission)
 					assertF207History(t, f, prefixes[at], drafts, false, false)
 					return
 				case "failure_without_prepared":
