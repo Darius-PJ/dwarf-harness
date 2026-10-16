@@ -1,9 +1,10 @@
 // Package workspace provides Core's registered Git workspaces, bound private
 // scratches, exact capture, bounded checkpoints and integration generations.
 // The service writes frozen F2-05, F2-06 and F2-07 records through the colony store.
-// Nothing here accepts a promotion or moves main. C2's product never admits,
-// captures or integrates; admit and integrate are reachable only from package
-// tests until C4 reserves real validation. No exported seal or merge exists.
+// Nothing here accepts a promotion. C2's product never admits, captures,
+// integrates or moves main; admit, integrate and the record-free canonical
+// primitives are reachable only from package tests until C4 reserves real
+// validation. No exported seal or merge exists.
 //
 // # Git and its environments
 //
@@ -55,6 +56,12 @@
 //     Pinned inputs are rematerialized before use. Only pinned info/attributes
 //     and the pinned attributes file apply; tree .gitattributes and the
 //     repository's configured merge drivers do not.
+//
+// core.fsync=committed is objects|reference in Git's code at 2.45 and 2.55,
+// although Git's documentation describes it as objects. Ticket 08's Git probes
+// (818-820, 1285-1288), cited by its design ruling P14, verified the reference
+// flush on the pinned Windows Git. Changing the pinned Git re-verifies that
+// fact; there is no second per-command fsync recipe.
 //
 // Paths are absolute at the filesystem boundary; repository-relative paths use
 // slash separators. Positional revisions and paths follow --end-of-options.
@@ -381,6 +388,24 @@
 // slot, and is accepted only while both it and its guard are registered.
 // Capture returns its bytes and unregisters the child; reuse is refused.
 // Releasing the guard invalidates its child and returns bytes exactly once.
+//
+// # Record-free canonical primitives
+//
+// lockTrain is the per-workspace exclusion shared by integration and canonical
+// mutation. It never holds the service mutex across Git or a channel wait.
+// guardedMainUpdate requires the files ref backend, a nonsymbolic main checked
+// out nowhere, and the exact target tree with old as its only parent. It issues
+// one update-ref --no-deref --end-of-options refs/heads/main <target> <old>.
+// Regardless of the command's exit, a cancellation-independent ref read decides
+// moved, refused or third. No retry, rollback or foreign-lock removal occurs.
+//
+// hardenCanonicalStorage Lstat-validates real directories and calls
+// durable.SyncDir on existing object fanouts and objects/pack, then objects,
+// refs/heads, refs and the common directory, child before parent. It returns
+// every error and re-reads main's exact target commit and tree after flushing.
+// Git already flushed the ref file; Core does not reopen and sync it again.
+// A ref effect or completed flush is not ledger acceptance. These primitives
+// write no ledger record and have no product caller.
 //
 // # Record-free integration primitives
 //

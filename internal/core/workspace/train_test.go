@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -545,4 +546,96 @@ func TestConcurrentIntegrationWaitsWithinContext(t *testing.T) {
 	if got := generations(t, f, r.RequestID); len(got) != 1 {
 		t.Fatalf("concurrent integration duplicated generation: %+v", got)
 	}
+}
+
+func TestTrainMutationLockShared(t *testing.T) {
+	t.Parallel()
+	h := newFinalizationHistory(t, "sha1")
+	f, w := finalizationFixture(t, h, false)
+	// Register a second repository in the same colony, not another Service.
+	other := filepath.Join(t.TempDir(), "other")
+	gitCommand(t, h.env, h.gitFixture.root, nil, "clone", "--no-hardlinks", "--no-checkout", "-b", "main", h.gitFixture.root, other)
+	gitCommand(t, h.env, other, nil, "checkout", "--detach")
+	otherProposal, err := f.svc.git.inspect(context.Background(), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherWorkspace, err := f.svc.Register(context.Background(), otherProposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := mustScratch(t, f, uuid.NewV7())
+	mustAdmit(t, f, rootRequest(scratch))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	entered, continueIntegration := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	f.svc.deps.beforeAppend = func() {
+		once.Do(func() {
+			close(entered)
+			select {
+			case <-continueIntegration:
+			case <-ctx.Done():
+			}
+		})
+	}
+	integrated := make(chan error, 1)
+	go func() { integrated <- f.svc.integrate(ctx, w.ID) }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	waiter := &mergeParentWaitContext{Context: ctx, waiting: make(chan struct{})}
+	finalized := make(chan error, 1)
+	go func() {
+		release, err := f.svc.lockTrain(waiter, w.ID)
+		if err == nil {
+			before := f.store.Durable()
+			var state mainUpdateState
+			state, err = f.svc.guardedMainUpdate(ctx, w, h.old, h.target, h.tree)
+			if err == nil && (state != mainUpdateMoved || f.store.Durable() != before) {
+				err = fmt.Errorf("record-free finalization: state=%v durable=%d/%d", state, before, f.store.Durable())
+			}
+			release()
+		}
+		finalized <- err
+	}()
+	select {
+	case <-waiter.waiting:
+	case err := <-finalized:
+		t.Fatalf("finalization bypassed integration lock: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	// This must finish while the first workspace is still held.
+	if err := f.svc.integrate(ctx, otherWorkspace.ID); err != nil {
+		t.Fatalf("other workspace serialized behind first: %v", err)
+	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if release, err := f.svc.lockTrain(cancelled, w.ID); !errors.Is(err, context.Canceled) || release != nil {
+		t.Fatalf("cancelled wait acquired a lock: %v", err)
+	}
+	assertCanonicalTip(t, f, h.old)
+	close(continueIntegration)
+	if err := <-integrated; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-finalized; err != nil {
+		t.Fatal(err)
+	}
+	assertCanonicalTip(t, f, h.target)
+	// Also exercise the opposite order: integration must wait for the same
+	// channel while a finalizer owns it, and cancellation must not release it.
+	release, err := f.svc.lockTrain(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, stop = context.WithCancel(ctx)
+	stop()
+	if err := f.svc.integrate(cancelled, w.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("integration bypassed finalizer lock: %v", err)
+	}
+	release()
 }

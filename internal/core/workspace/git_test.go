@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -134,5 +136,56 @@ func TestRefArgumentDoesNotBecomeOption(t *testing.T) {
 	got, err := f.git.readRef(context.Background(), f.colony, common, "-dash-ref", 40)
 	if err != nil || got != oid {
 		t.Fatalf("literal ref argument: %q, %v", got, err)
+	}
+}
+
+func TestGitAfterStartCancellationAndWaitDelay(t *testing.T) {
+	t.Parallel()
+	for _, waitDelay := range []bool{false, true} {
+		t.Run(map[bool]string{false: "context-kill", true: "wait-delay-kill"}[waitDelay], func(t *testing.T) {
+			t.Parallel()
+			g := newGitRunner(nil)
+			reader, writer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			defer writer.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var observed *exec.Cmd
+			g.afterStart = func(cmd *exec.Cmd) {
+				observed = cmd
+				if waitDelay {
+					// Delay, but do not fake, termination: WaitDelay must kill
+					// this real Git process blocked on the open stdin pipe.
+					cmd.Cancel = func() error { return nil }
+				}
+				cancel()
+			}
+			_, _, err = g.run(ctx, "", inspectionEnvironment(os.Environ()), reader, []int{0, -1, 1, 128}, "hash-object", "--stdin")
+			var ge *GitError
+			if !errors.As(err, &ge) || !errors.Is(err, context.Canceled) || observed == nil || observed.ProcessState == nil || observed.ProcessState.Success() {
+				t.Fatalf("cancelled child was not waited or lost cause: cmd=%v err=%v", observed, err)
+			}
+		})
+	}
+}
+
+func TestGitAfterStartExpectedExitAndStartFailure(t *testing.T) {
+	t.Parallel()
+	f := newGitFixture(t, "sha1")
+	calls := 0
+	var observed *exec.Cmd
+	f.git.afterStart = func(cmd *exec.Cmd) { calls++; observed = cmd }
+	_, exit, err := f.git.run(context.Background(), f.root, inspectionEnvironment(f.env), nil, []int{1}, "symbolic-ref", "-q", "HEAD")
+	if err != nil || exit != 1 || calls != 1 || observed.ProcessState == nil || observed.ProcessState.ExitCode() != 1 {
+		t.Fatalf("expected real exit changed: exit=%d calls=%d err=%v", exit, calls, err)
+	}
+	f.git.path = filepath.Join(t.TempDir(), "missing-git")
+	_, exit, err = f.git.run(context.Background(), "", inspectionEnvironment(f.env), nil, []int{-1}, "version")
+	var ge *GitError
+	if !errors.As(err, &ge) || exit != -1 || calls != 1 {
+		t.Fatalf("failed Start invoked hook or became expected: exit=%d calls=%d err=%v", exit, calls, err)
 	}
 }

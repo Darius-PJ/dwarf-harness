@@ -19,6 +19,7 @@ type gitRunner struct {
 	unavailable        error
 	environ            func() []string
 	beforeAnchorDelete func()
+	afterStart         func(*exec.Cmd)
 }
 
 func newGitRunner(environ func() []string) *gitRunner {
@@ -117,7 +118,13 @@ func (g *gitRunner) runOutput(ctx context.Context, dir string, env []string, in 
 	var stderr limitedStderr
 	cmd.Stdout = out
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		if g.afterStart != nil {
+			g.afterStart(cmd)
+		}
+		err = cmd.Wait()
+	}
 	exit := 0
 	if err != nil {
 		exit = -1

@@ -22,35 +22,11 @@ func (s *Service) integrate(ctx context.Context, workspaceID uuid.UUID) error {
 	if !validID(workspaceID) {
 		return ErrInvalid
 	}
-	for {
-		s.mu.Lock()
-		if err := s.usableLocked(); err != nil {
-			s.mu.Unlock()
-			return err
-		}
-		if _, ok := s.workspaces[workspaceID]; !ok {
-			s.mu.Unlock()
-			return ErrUnknownWorkspace
-		}
-		waiting := s.integrating[workspaceID]
-		if waiting == nil {
-			s.integrating[workspaceID] = make(chan struct{})
-			s.mu.Unlock()
-			break
-		}
-		s.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-waiting:
-		}
+	release, err := s.lockTrain(ctx, workspaceID)
+	if err != nil {
+		return err
 	}
-	defer func() {
-		s.mu.Lock()
-		close(s.integrating[workspaceID])
-		delete(s.integrating, workspaceID)
-		s.mu.Unlock()
-	}()
+	defer release()
 	for {
 		s.mu.Lock()
 		w := s.workspaces[workspaceID]
@@ -105,6 +81,39 @@ func (s *Service) integrate(ctx context.Context, workspaceID uuid.UUID) error {
 		}
 		if !restart {
 			return nil
+		}
+	}
+}
+
+// lockTrain excludes all train mutations in one workspace, not admissions or
+// other workspaces. Callers hold the release through the whole operation.
+func (s *Service) lockTrain(ctx context.Context, workspaceID uuid.UUID) (func(), error) {
+	for {
+		s.mu.Lock()
+		if err := s.usableLocked(); err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
+		if _, ok := s.workspaces[workspaceID]; !ok {
+			s.mu.Unlock()
+			return nil, ErrUnknownWorkspace
+		}
+		waiting := s.integrating[workspaceID]
+		if waiting == nil {
+			s.integrating[workspaceID] = make(chan struct{})
+			s.mu.Unlock()
+			return func() {
+				s.mu.Lock()
+				close(s.integrating[workspaceID])
+				delete(s.integrating, workspaceID)
+				s.mu.Unlock()
+			}, nil
+		}
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-waiting:
 		}
 	}
 }
