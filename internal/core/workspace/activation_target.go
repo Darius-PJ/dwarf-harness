@@ -11,18 +11,11 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-// ActivationWorkspacePolicy binds one workspace to opaque local artifacts.
-// Their identity does not establish an available validation gate in C2.
-type ActivationWorkspacePolicy struct {
-	WorkspaceID                            uuid.UUID
-	CheckPolicyHash, EnvironmentPolicyHash ledger.Digest
-}
-
 // ActivationTarget is the full configured policy map, not a per-workspace
 // patch. WorkspacePolicies must be distinct and ascending by UUID bytes.
 type ActivationTarget struct {
 	FieldLawSHA256, ValidationPolicyHash ledger.Digest
-	WorkspacePolicies                    []ActivationWorkspacePolicy
+	WorkspacePolicies                    []ledger.WorkspacePolicy
 }
 
 func validateActivationTarget(target ActivationTarget) error {
@@ -79,7 +72,7 @@ func validateActivationArtifacts(target ActivationTarget, artifacts map[ledger.D
 	if err != nil {
 		return nil, fmt.Errorf("%w: validation policy: %w", ErrInvalid, err)
 	}
-	if policy.SHA256 != law.Digest(target.ValidationPolicyHash) {
+	if ledger.Digest(policy.SHA256) != target.ValidationPolicyHash {
 		return nil, fmt.Errorf("%w: validation policy differs from its digest", ErrInvalid)
 	}
 	return refs, nil
@@ -88,7 +81,7 @@ func validateActivationArtifacts(target ActivationTarget, artifacts map[ledger.D
 // activationAffectedWorkspaces compares validated complete targets. A nil
 // prior is bootstrap; no registration or unresolved-intent set enlarges it.
 func activationAffectedWorkspaces(prior *ActivationTarget, next ActivationTarget) []uuid.UUID {
-	old := make(map[uuid.UUID]ActivationWorkspacePolicy)
+	old := make(map[uuid.UUID]ledger.WorkspacePolicy)
 	global := prior == nil
 	if prior != nil {
 		global = prior.FieldLawSHA256 != next.FieldLawSHA256 || prior.ValidationPolicyHash != next.ValidationPolicyHash

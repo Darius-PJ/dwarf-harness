@@ -1,6 +1,6 @@
 // Package workspace provides Core's registered Git workspaces, bound private
 // scratches, exact capture, bounded checkpoints and integration generations.
-// The service writes frozen F2-05, F2-06 and F2-07 records through the colony store.
+// The service writes frozen F2-05 to F2-09 records through the colony store.
 // Nothing here accepts a promotion. C2's product never admits, captures,
 // integrates or moves main; admit, integrate and the record-free canonical
 // primitives are reachable only from package tests until C4 reserves real
@@ -712,6 +712,96 @@
 // counts, current manifest pins and each active report pin's owning scratch.
 // Observation IDs remain UUID-only historical facts after scratch closure,
 // except for observations directly named by admitted provenance.
+//
+// # Policy activation (F2-09)
+//
+// RequestActivation, ReplaceActivation and CancelActivation are owner commands;
+// ActivationStatus and ActivePolicy are inert owner-only views. Actor states
+// authority, authenticated by C3. C2 still answers no_validator after activation:
+// retained check and environment bodies have identity, not executable meaning.
+// No activation path admits promotion, takes a train lock or performs Git work.
+//
+// One pending approval names exact law, validation policy and workspace-local
+// artifacts. Admission copies and validates bytes, loads the globals through
+// contract/law's StandardV1 loaders, checks every body against MaxBodyBytes, then
+// publishes them outside mu. A request and its immediate permanent body_pin form
+// one commit. Replacement is [ended/replaced, requested, pin], repeating the
+// expected pending ID and revision in both records. Cancellation is one ended
+// record. Neither replacement, cancellation nor activation ever unpins approval
+// bytes. The pending request itself is C2's owner authorization; reapproval uses
+// new request, approval and pin identities.
+//
+// Same-ID/same-binding replay precedes clocks, bodies, slot and CAS checks.
+// Changed binding gives ErrActivationMismatch; an unknown ID gives
+// ErrUnknownActivation; non-owner access gives ErrNotBound. A second pending
+// request gives activation_pending, an in-flight ID activation_in_flight.
+// Replacement and cancellation repeat the (ID, revision) CAS under mu.
+// Stale revisions and stale or wrong-presence expected active hashes wrap
+// ErrRevision with expected/current details; an unknown hash gives ErrInvalid.
+// Refusals consume no ID. Revision is the actual latest request/hold/ending
+// sequence, not a predicted sequencer value.
+//
+// Schedule is immediate or not_before. Timestamp text is strict RFC3339 with
+// explicit known offset, seconds and at most nine fractional digits, normalized
+// to checked signed-64 UTC ns. Scheduled time must follow trusted admission;
+// immediate uses admission. Time is eligibility, never a promised switch time.
+// Trust requires a representable live sample at or above the greatest trusted
+// in-process or recorded admission, due/none observation and effective instant.
+// Envelope and UUID times are not activation authority. Untrusted admission
+// writes nothing. A rollback never lowers the floor.
+//
+// All F2-09 record rules are enforced at append and Open. Requests and their
+// pins have owner actor, no caller-context fields, exact sorted distinct target
+// body_refs, fresh identities and the atomic shapes above. Every policy and
+// affected ID is registered. Expected hash names the latest activation, absent
+// only at genesis. Scope is target IDs at bootstrap; thereafter a global change
+// affects prior union target IDs, otherwise only added, removed or changed
+// entries. Legacy intents never enlarge bootstrap scope.
+//
+// Core's single-record hold_changed has no caller context or body_refs.
+// clock_untrusted may follow no hold or none; trusted recovery below eligibility
+// records none, otherwise due. Trusted observations respect the floor; none
+// requires clock_untrusted and a pre-due instant. Only changed holds are written.
+// Due is final until the request ends or applies. Endings match pending ID,
+// request hash and revision; known outcomes require owner and their stated
+// grouping. Future outcome tokens remain terminal, not applied, with their
+// future actor/grouping left uninterpreted. Endings remove only their own hold.
+//
+// A one-record policy_activated commit binds every shared request field, its
+// exact retained body_refs and request envelope hash, epoch previous+1 without
+// overflow, and a trusted effective instant at or above eligibility and floor.
+// It waits for every affected unresolved intent, not unrelated work or a second
+// recovery predicate. Retained bytes' presence and digests are rechecked outside
+// mu; missing or corrupt target gives target_unavailable without dropping the
+// hold. Pending identity/revision, current manifest, clock and intents are
+// rechecked under mu immediately before the switch; effective time is never
+// backdated. Request and activation identities are hydrated under mu from one
+// bounded Reader commit after acknowledgment, checking bounds, types and IDs.
+// The reader scans from the start of that segment, bounded by segment size.
+// Hydration failure poisons the service; an acknowledged commit is never undone.
+//
+// The finalizer retains its train lock and all Git preflight, then enters mu
+// for the activation guard, intent encoding and append together. A due or clock
+// hold refuses affected new intents; a guarded clock recovery records none or
+// due and wakes coordination. An intent durable before the hold drains normally.
+// After the first activation every new intent carries the current activation's
+// envelope hash and needs a local manifest entry, else policy_unavailable.
+// Before that first activation the key is absent. Generations and no-change
+// have no activation key and are not gated.
+//
+// Open reconstructs controls, hashes, revisions, active manifest and floor from
+// the commits already read: no clock, timer, publication or activation append.
+// While coordination is stopped, a pending request without a durable due or
+// clock_untrusted hold fences its affected set activation_recovery_pending;
+// Reconciliation.Pending lists each workspace. The same fence applies to new
+// admission or replacement before resume. Cancellation and queries still work.
+// resumeActivationControls restores eligibility under live checks and starts
+// one goroutine, independently of reconcilePromotions and without writer proof.
+// The loop owns one timer, armed only from a trusted pre-due sample and clamped
+// to time.Duration's maximum. Replacement/ending discards it; regression arms
+// nothing. Owner controls, explicit resume/clock notification, guarded entries,
+// timer expiry and acknowledged affected intent endings feed a size-one wake
+// channel. Close cancels coordination, stops its timer and drains the goroutine.
 //
 // # Removal boundary
 //

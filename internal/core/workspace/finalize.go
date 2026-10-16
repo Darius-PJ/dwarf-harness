@@ -294,12 +294,17 @@ func (s *Service) finalizeRequest(ctx context.Context, requestID, generationID u
 	if err := preflightObservation(s.store.Colony(), intentID, drafts); err != nil {
 		return r.state, err
 	}
-	payload, err = intent.Encode()
-	if err != nil {
-		return r.state, err
-	}
 	s.finalizeStep("intent")
-	if err := s.append(ctx, []ledger.Draft{{Type: ledger.TypeFinalizationIntended, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: r.admission.ContextID, Payload: payload}}); err != nil {
+	s.mu.Lock()
+	intent.ActivationRecordHash, err = s.guardActivationIntentLocked(w.ID)
+	if err == nil {
+		payload, err = intent.Encode()
+	}
+	if err == nil {
+		err = s.appendLocked(ctx, []ledger.Draft{{Type: ledger.TypeFinalizationIntended, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: r.admission.ContextID, Payload: payload}})
+	}
+	s.mu.Unlock()
+	if err != nil {
 		return r.state, err
 	}
 	s.finalizeStep("cas")

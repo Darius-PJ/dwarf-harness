@@ -40,9 +40,9 @@ func activationTestArtifacts(t *testing.T) (ActivationTarget, map[ledger.Digest]
 		return d
 	}
 	target := ActivationTarget{FieldLawSHA256: add(field), ValidationPolicyHash: add(policy)}
-	target.WorkspacePolicies = []ActivationWorkspacePolicy{
-		{activationWorkspaceID(1), add(check), add(environment)},
-		{activationWorkspaceID(2), add(check), add(environment)},
+	target.WorkspacePolicies = []ledger.WorkspacePolicy{
+		{WorkspaceID: activationWorkspaceID(1), CheckPolicyHash: add(check), EnvironmentPolicyHash: add(environment)},
+		{WorkspaceID: activationWorkspaceID(2), CheckPolicyHash: add(check), EnvironmentPolicyHash: add(environment)},
 	}
 	return target, artifacts
 }
@@ -93,7 +93,7 @@ func TestActivationArtifactSet(t *testing.T) {
 			t.Fatalf("law bytes lost identity at ledger boundary: %v", err)
 		}
 		policy, err := law.LoadValidationPolicy(artifacts[target.ValidationPolicyHash], law.StandardV1())
-		if err != nil || policy.SHA256 != law.Digest(target.ValidationPolicyHash) {
+		if err != nil || ledger.Digest(policy.SHA256) != target.ValidationPolicyHash {
 			t.Fatalf("policy bytes lost identity at law boundary: %v", err)
 		}
 	})
@@ -197,7 +197,7 @@ func TestActivationAffectedWorkspaces(t *testing.T) {
 		{"removed", func(p *ActivationTarget) { p.WorkspacePolicies = p.WorkspacePolicies[1:] }, []uuid.UUID{activationWorkspaceID(1)}},
 		{"all_removed", func(p *ActivationTarget) { p.WorkspacePolicies = nil }, []uuid.UUID{activationWorkspaceID(1), activationWorkspaceID(2)}},
 		{"added", func(p *ActivationTarget) {
-			p.WorkspacePolicies = append(p.WorkspacePolicies, ActivationWorkspacePolicy{activationWorkspaceID(3), ledger.Digest{3}, ledger.Digest{4}})
+			p.WorkspacePolicies = append(p.WorkspacePolicies, ledger.WorkspacePolicy{WorkspaceID: activationWorkspaceID(3), CheckPolicyHash: ledger.Digest{3}, EnvironmentPolicyHash: ledger.Digest{4}})
 		}, []uuid.UUID{activationWorkspaceID(3)}},
 		{"removed_and_added", func(p *ActivationTarget) {
 			p.WorkspacePolicies[0] = p.WorkspacePolicies[1]

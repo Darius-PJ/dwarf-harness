@@ -24,6 +24,8 @@ var (
 	ErrRevision            = errors.New("workspace: inputs revision changed")
 	ErrUnknownWorkspace    = errors.New("workspace: unknown workspace")
 	ErrUnknownRequest      = errors.New("workspace: unknown request")
+	ErrUnknownActivation   = errors.New("workspace: unknown activation")
+	ErrActivationMismatch  = errors.New("workspace: activation ID already used for a different binding")
 	ErrNoScratch           = errors.New("workspace: no open scratch")
 	ErrNotBound            = errors.New("workspace: caller is not bound")
 	ErrUnrepresentedEdits  = errors.New("workspace: unrepresented edits")

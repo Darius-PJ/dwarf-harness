@@ -62,6 +62,17 @@ func TestRequestPromotionUnavailableInC2(t *testing.T) {
 			mustFinalize(t, f, r)
 		}
 	}
+	activation := activationForWorkspace(t, f, &activationClock{ns: 100})
+	activation.Schedule = ActivationSchedule{Mode: "immediate"}
+	mustActivation(t, f.svc, activation)
+	if err := f.svc.advanceActivation(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	next := rootRequest(s)
+	next.Head = r.RequestID
+	afterActivation := snapshotRequestEffects(t, f)
+	assertUnavailable(t, promotionError(context.Background(), f.svc, next), "no_validator")
+	assertRequestEffects(t, f, afterActivation)
 }
 
 func TestRequestPromotionBusyBeforeUnavailable(t *testing.T) {

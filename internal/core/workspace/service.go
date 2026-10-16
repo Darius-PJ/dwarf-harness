@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -41,6 +43,7 @@ type serviceDeps struct {
 	beforeMergeBackWait    func()
 	beforeFinalizeStep     func(string)
 	beforeStoreAppend      func([]ledger.Draft)
+	activationNow          func() (time.Time, error)
 }
 
 // Reconciliation reports best-effort filesystem repair. Pending entries explain
@@ -88,6 +91,18 @@ type Service struct {
 	witnesses                       map[uuid.UUID]acceptedWitness
 	usedIntents                     map[uuid.UUID]bool
 	recoveryPending                 map[uuid.UUID]bool
+	activations                     map[uuid.UUID]activationState
+	activationInFlight              map[uuid.UUID]bool
+	activationIdentities            map[uuid.UUID]bool
+	activationPins                  map[uuid.UUID]uuid.UUID
+	activationHashes                map[ledger.Digest]bool
+	pendingActivation               uuid.UUID
+	activePolicy                    ActivePolicy
+	activationFloor                 int64
+	activationLoopStarted           bool
+	activationWake                  chan struct{}
+	activationContext               context.Context
+	stopActivation                  context.CancelFunc
 	// UUID-only historical facts enforce F2-06's never-reused identities.
 	usedCaptures, usedGenerations, usedLineages map[uuid.UUID]bool
 	// Manifest pins belong to live requests/latest observations; report pins survive until unpinned.
@@ -131,6 +146,9 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	if deps.removeAll == nil {
 		deps.removeAll = os.RemoveAll
 	}
+	if deps.activationNow == nil {
+		deps.activationNow = func() (time.Time, error) { return time.Now(), nil }
+	}
 	s := &Service{store: store, colony: colony, deps: deps, pool: pool, closeDone: make(chan struct{}), inputsLock: make(chan struct{}, 1), workspaces: map[uuid.UUID]workspaceState{}, scratches: map[uuid.UUID]scratchState{}, pairs: map[scratchPair]uuid.UUID{}, usedDirs: map[string]bool{}, usedBranches: map[string]bool{}, pendingDirs: map[string]bool{}, creating: map[scratchPair]chan struct{}{}}
 	s.requests = make(map[uuid.UUID]requestState)
 	s.inFlight = make(map[uuid.UUID]bool)
@@ -154,6 +172,14 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	s.pinSequences = make(map[uuid.UUID]uint64)
 	s.openScratches = make(map[uuid.UUID]bool)
 	s.usedObservations = make(map[uuid.UUID]bool)
+	s.activations = make(map[uuid.UUID]activationState)
+	s.activationInFlight = make(map[uuid.UUID]bool)
+	s.activationIdentities = make(map[uuid.UUID]bool)
+	s.activationPins = make(map[uuid.UUID]uuid.UUID)
+	s.activationHashes = make(map[ledger.Digest]bool)
+	s.activationFloor = math.MinInt64
+	s.activationWake = make(chan struct{}, 1)
+	s.activationContext, s.stopActivation = context.WithCancel(context.Background())
 	s.git = newGitRunner(deps.environ)
 	s.engine = newCaptureEngine(s.git, colony)
 	reader, err := ledger.OpenReader(store.LogDir(), ledger.ReadOptions{Colony: store.Colony(), Through: store.Durable(), Consume: workspaceConsumption(), AllTypes: true})
@@ -177,6 +203,9 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 			drafts[i] = record.Draft
 		}
 		if _, err := s.apply(ctx, drafts, commit.First, false); err != nil {
+			return nil, report, err
+		}
+		if err := s.hydrateActivationCommit(commit, drafts, commit.First, commit.Last); err != nil {
 			return nil, report, err
 		}
 	}
@@ -208,7 +237,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 }
 
 func workspaceConsumption() ledger.Consumption {
-	return ledger.Consumption{ledger.TypeWorkspaceRegistered: {1}, ledger.TypeCaptureInputsPinned: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}, ledger.TypeScratchChanged: {1}, ledger.TypeScratchMergeBack: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}, ledger.TypePromotionAdmitted: {1}, ledger.TypeGenerationDerived: {1}, ledger.TypePromotionFailed: {1}, ledger.TypeFinalizationIntended: {1}, ledger.TypePromotionAccepted: {1}, ledger.TypePromotionNoChange: {1}}
+	return ledger.Consumption{ledger.TypeWorkspaceRegistered: {1}, ledger.TypeCaptureInputsPinned: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}, ledger.TypeScratchChanged: {1}, ledger.TypeScratchMergeBack: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1}, ledger.TypePromotionAdmitted: {1}, ledger.TypeGenerationDerived: {1}, ledger.TypePromotionFailed: {1}, ledger.TypeFinalizationIntended: {1}, ledger.TypePromotionAccepted: {1}, ledger.TypePromotionNoChange: {1}, ledger.TypePolicyActivationRequested: {1}, ledger.TypePolicyActivationHoldChanged: {1}, ledger.TypePolicyActivationEnded: {1}, ledger.TypePolicyActivated: {1}}
 }
 
 func validID(id uuid.UUID) bool   { return id[6]>>4 == 7 && id[8]&0xc0 == 0x80 }
@@ -238,6 +267,7 @@ func (s *Service) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.stopActivation()
 	s.mu.Unlock()
 	if s.deps.afterCloseStart != nil {
 		s.deps.afterCloseStart()
@@ -261,6 +291,12 @@ func (s *Service) appendLocked(ctx context.Context, drafts []ledger.Draft) error
 	if s.poisoned {
 		return ErrPoisoned
 	}
+	var affectedIntents []uuid.UUID
+	for _, id := range s.activations[s.pendingActivation].request.AffectedWorkspaceIDs {
+		if _, unresolved := s.intents[id]; unresolved {
+			affectedIntents = append(affectedIntents, id)
+		}
+	}
 	first := s.store.Durable() + 1
 	undo, err := s.apply(ctx, drafts, first, true)
 	if err != nil {
@@ -276,6 +312,9 @@ func (s *Service) appendLocked(ctx context.Context, drafts []ledger.Draft) error
 			s.poisoned = true
 			return fmt.Errorf("%w: %w", ErrPoisoned, err)
 		}
+		return err
+	}
+	if err := s.hydrateActivationAppend(drafts, committed); err != nil {
 		return err
 	}
 	// Other Core producers may have appended between Durable and Append.
@@ -339,6 +378,12 @@ func (s *Service) appendLocked(ctx context.Context, drafts []ledger.Draft) error
 			}
 		}
 	}
+	for _, id := range affectedIntents {
+		if _, unresolved := s.intents[id]; !unresolved {
+			s.wakeActivationLocked()
+			break
+		}
+	}
 	return nil
 }
 
@@ -358,6 +403,9 @@ func (s *Service) apply(ctx context.Context, drafts []ledger.Draft, first uint64
 	for i, draft := range drafts {
 		seq := first + uint64(i)
 		bad := func(detail string) error { return &InconsistentError{Seq: seq, Detail: detail} }
+		if err := s.applyActivationRecord(drafts, i, seq, loading, &journal); err != nil {
+			return undo, bad(err.Error())
+		}
 		if err := s.applyRequestRecord(drafts, i, seq, loading, &rules, &journal); err != nil {
 			return undo, bad(err.Error())
 		}
@@ -673,6 +721,11 @@ func (s *Service) reconcile(ctx context.Context) Reconciliation {
 	var report Reconciliation
 	for id := range s.recoveryPending {
 		report.Pending = append(report.Pending, "promotion_recovery_pending "+id.String())
+	}
+	if r, exists := s.activations[s.pendingActivation]; exists && s.activationRecoveryPendingLocked(r) {
+		for _, id := range r.request.AffectedWorkspaceIDs {
+			report.Pending = append(report.Pending, "activation_recovery_pending "+id.String())
+		}
 	}
 	for id, attempt := range s.mergeBacks {
 		if attempt.pending() {
