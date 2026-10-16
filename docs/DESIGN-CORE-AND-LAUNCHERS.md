@@ -686,7 +686,7 @@ Both SDKs are viable and expose per-request headers, raw JSON/responses/stream e
 | Agent/Corps structure | Design only | Relationship/board context growth, broker queues, Diplomat/Grand fan-out, Griot updates and per-context accounting |
 | Child cleanup | Design only | Surviving descendant count after normal and abnormal shutdown; target zero |
 | Colony log | C1's ledger and body store (A.10): cold and warm recovery, durable appends under steady, burst and saturating load, body publication, old command-ID lookups, explicit collection, peak memory and disk, measured on one Windows NTFS machine against an assumed workload at 12, 20 and 60 contexts. Candidate prototypes (A.8): with our own log, 0.52 ms per durable one-event commit and 29 ms to read 20,000 events back | Budgets for startup replay time and index memory; the measured triggers for a SQLite index and for snapshots (D34); owner-agreed thresholds |
-| Workspaces | C2's scratch creation and exact capture (A.11): creation, a fresh and a warm observe, a seal after ten edits and a closure's observe, at 1,000 and 10,000 files, one capture at a time, measured on one Windows NTFS machine. C2's checkpoints and integration (A.12): a root and a successor admission, and the integration of their two-request train and its rebuild after `main` moved, at the same sizes, one call at a time, with Git's loose-object counts, measured once on the same machine. Git operations on synthetic repositories (A.7) | The concurrent cost of captures, admissions and integrations in a synchronized burst, with conflicts and full generation windows, C4's feasibility gate; a maintenance policy for loose objects, revisited at C4's capacity gate; observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
+| Workspaces | C2's scratch creation and exact capture (A.11): creation, a fresh and a warm observe, a seal after ten edits and a closure's observe, at 1,000 and 10,000 files, one capture at a time, measured on one Windows NTFS machine. C2's checkpoints and integration (A.12): a root and a successor admission, and the integration of their two-request train and its rebuild after `main` moved, at the same sizes, one call at a time, with Git's loose-object counts, measured once on the same machine. C2's temporary scratches and merge-back (A.13): a task's and a temporary's observation, a temporary's creation, and a fast-forward and an explicit-base merge-back, at the same sizes, and a writer's lease at 10,000 files, one call at a time, with the retained scratch and body bytes, measured once on the same machine. Git operations on synthetic repositories (A.7) | The concurrent cost of captures, admissions, integrations, observations and merge-backs in a synchronized burst, with conflicts, full generation windows and several temporaries per task, C4's feasibility gate; a maintenance policy for loose objects, revisited at C4's capacity gate; observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
 | Promotion capacity | Illustrative model only (§3.5); no concurrent integrated benchmark | Real every-change accepted throughput/latency and burst drain; lane/queue bounds; speculative rework, ordered finalization and whole-process resource costs under the plan above |
 
 ## 9. Rollout (proposed)
@@ -1022,7 +1022,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 
 **Unchanged.** D94's prohibitions on emergency or timeout promotion, waived handoff (other than the owner's unrecoverable declaration) and GUI bypass; exactly one holder per office; D82 grants, D83 retirement history and D85 private-memory limits; D22/D63/D79 one-shot paid attempts, passive results and no bookkeeping model calls. Records, encodings and the calibration of the allotment, proposal cap and restart bursts remain producer work; no implementation is claimed.
 
-## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09, 2026-10-10, 2026-10-12 and 2026-10-13
+## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09, 2026-10-10, 2026-10-12, 2026-10-13 and 2026-10-15
 
 ### A.1 Setup and limits
 
@@ -1032,7 +1032,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 - Adapter runs used a local fake provider with canned streaming responses. Figures are medians of five runs unless noted.
 - The machine ran about twice as slowly as during the earlier language study. Compare values within a table, not timing numbers across sessions.
 - The old combined prototype included terminal and external-browser paths. Only relevant terminal/adapter/router results are retained below; its full record is archived in `superceeded-Design.md`, in the archive folder `../dwarfharness/`, outside this repository. No native UI, concurrent launcher attachment or Corps workload was measured.
-- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02, A.10 from 2026-10-09 and 2026-10-10, A.11 from 2026-10-12, and A.12 from 2026-10-13; each states its own setup.
+- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02, A.10 from 2026-10-09 and 2026-10-10, A.11 from 2026-10-12, A.12 from 2026-10-13, and A.13 from 2026-10-15; each states its own setup.
 
 ### A.2 Standalone prototype binary sizes
 
@@ -1446,6 +1446,71 @@ Fields: `phase`, `files`, `duration_ms` ÷ 1,000, `core_raw_bytes`, `manifest_by
 - The harness records wall time and Git's loose-object figures only, with no CPU time or memory figure. The five phases before admission repeat A.11's, a second single measurement on the same machine.
 - No other build or test ran during the run; the project manager's agent session only read and wrote text files.
 - The harness ran at fcf23e4. The review's fix-up 02edd7b, to which `main` then moved, changed product code the phases time, the projection's scans and the locking of an ending commit, but not the harness, and the harness was not run again.
+
+### A.13 Temporary scratches and merge-back (C2, ticket 07)
+
+**Setup:** 2026-10-15, on the owner's machine, the one A.11 describes, with no antivirus exclusion added by the build; go1.27.2, windows/amd64, without the race detector; Git 2.55.0.windows.3. The workload's repositories, colonies and scratches lay in temporary directories under `%TEMP%`, outside the repository, which the harness checks. The harness is `TestCaptureWorkload` in `internal/core/workspace/workload_test.go` at commit 1ebb83b. It ran once, alone, with `DWARF_CAPTURE_WORKLOAD_OUT` naming a results file outside the repository, and wrote one JSON line per timed phase; each line also records the Git and Go versions and the platform. The raw results are [`ticket-07-capture-workload.jsonl`](../.scratch/dwarf-harness/c2-evidence/ticket-07-capture-workload.jsonl). Under the tables, "Fields" names the JSON fields each reports.
+
+**Workload, synthetic.** For each size, 1,000 and 10,000 files, the harness runs A.12's nine phases, `creation` to `rebuild_two`, as A.11 and A.12 describe them. The service's scratch, whose context admitted the two requests, then serves as the task, holding the ten edits its successor sealed. Ticket 07's phases follow, each one call timed from `time.Now` to `time.Since`, Git's child processes included:
+
+- `lease`, at 10,000 files only: the task's context takes a typed writer on its own scratch, then takes and releases 32 physical leases, one after another, with no edit; the time is the mean per lease;
+- `observe_task`: one `CommitObserved` by that writer, the task's first observation: a capture against its acknowledged tip, still its anchor, with the anchor's and the tip's paths as trusted names; the observation's Core commit and retention ref; the manifest's publication; one commit holding `workspace.scratch_changed` and its pin; and the private branch's move;
+- `temporary_first_write`: one `BeginWrite` by another context of the same agent, which creates a temporary scratch forked from the task's observed commit: its worktree and files, its anchor, and the `workspace.scratch_created` record naming its parent;
+- `observe_temporary`: outside the timer, the first byte of ten files in the temporary is changed; then one `CommitObserved` by its writer, as for the task, after which the writer closes;
+- `merge_back_ff`: one `MergeBack` of the temporary. The task has not moved since the fork, so the merge-back fast-forwards it to the temporary's observed commit, through the steps the package documentation describes: observing the temporary and the task to check that neither has unobserved edits, the prepared record and its pins, writing and verifying the task's files, index and branch, the applied record, and the temporary's closure with `temporary_merged_back` and the removal of its directory;
+- `merge_back_explicit`: outside the timer, a new temporary for the same context forks the task's new tip, the first byte of ten of its files is changed and observed, and the task's writer changes the first byte of ten other files and observes them, so the task has moved since the fork; then one `MergeBack`, which merges the fork, the task's tip and the temporary's tip with the fork as the explicit base and makes one target commit on the task's tip, through the same steps.
+
+Outside every timer, the harness then runs two writers at once, on the task and on a new temporary, first with a clean and then with a conflicting merge-back, and the conflicted temporary's author abandons it; these write no line.
+
+**Model, an assumption.** The sources fix only promotion rates: 12 or 20 code-working pairs, each offering one change per 600 s, 72 and 120 an hour (D78, B15; `ROADMAP-CORE.md` C2). Ticket 07's design adds a provisional three active turns per agent, the task's writer and up to two writers from the agent's other contexts, and leaves the share of changes written through a temporary unmeasured, allowing for anything from none to all (ticket 07's design brief, §5.3, in `.scratch/dwarf-harness/c2-evidence/`). Its cost model: each temporary is a full checkout of its task's files; each observation, and each merge-back's checks and verification, read the scratch's files, O(files + raw bytes); a merge writes only the changed paths; and a merge-back holds only its own task. The harness measures one call at a time, in one task with one temporary at a time: the cost of a single change, not of a burst.
+
+**Phases.** Two tables give every line of the results. The first holds ticket 07's phases, in the order the harness wrote them: five at 1,000 files, then `lease` and five at 10,000. The second holds the nine phases A.12 describes, at 1,000 files and then at 10,000, in the same order: a second single measurement of each on the same machine, and of the first five a third, after A.11's.
+
+| Phase | Files | Time (s) | Raw bytes | Manifest bytes | Scratch bytes | Body bytes | Unresolved | Loose objects | Loose (KiB) |
+|---|---|---|---|---|---|---|---|---|---|
+| `observe_task` | 1,000 | 1.48 | 801,000 | 176,079 | 801,110 | 352,791 | 0 | 31 | 50 |
+| `temporary_first_write` | 1,000 | 1.43 | 0 | 0 | 1,602,220 | 352,791 | 0 | 31 | 50 |
+| `observe_temporary` | 1,000 | 1.40 | 801,000 | 176,079 | 1,602,220 | 528,870 | 0 | 44 | 74 |
+| `merge_back_ff` | 1,000 | 3.85 | 801,000 | 176,079 | 801,110 | 528,870 | 0 | 44 | 74 |
+| `merge_back_explicit` | 1,000 | 3.96 | 801,000 | 176,079 | 801,110 | 881,028 | 0 | 73 | 148 |
+| `lease` | 10,000 | 0 | 0 | 0 | 8,010,112 | 3,520,791 | 0 | 30 | 484 |
+| `observe_task` | 10,000 | 5.00 | 8,010,000 | 1,760,079 | 8,010,112 | 3,520,791 | 0 | 31 | 484 |
+| `temporary_first_write` | 10,000 | 6.49 | 0 | 0 | 16,020,224 | 3,520,791 | 0 | 31 | 484 |
+| `observe_temporary` | 10,000 | 4.67 | 8,010,000 | 1,760,079 | 16,020,224 | 5,280,870 | 0 | 44 | 726 |
+| `merge_back_ff` | 10,000 | 16.5 | 8,010,000 | 1,760,079 | 8,010,112 | 5,280,870 | 0 | 44 | 726 |
+| `merge_back_explicit` | 10,000 | 16.9 | 8,010,000 | 1,760,079 | 8,010,112 | 8,801,028 | 0 | 73 | 1,451 |
+
+| Phase | Files | Time (s) | Raw bytes read | Manifest bytes | Loose objects | Loose (KiB) |
+|---|---|---|---|---|---|---|
+| `creation` | 1,000 | 0.876 | 0 | 0 | 1 | 0 |
+| `fresh_observe` | 1,000 | 8.97 | 801,000 | 176,079 | 1 | 0 |
+| `warm_observe` | 1,000 | 0.700 | 801,000 | 176,079 | 1 | 0 |
+| `seal_10_edits` | 1,000 | 0.834 | 801,000 | 176,079 | 13 | 24 |
+| `closure_observe` | 1,000 | 0.749 | 801,000 | 176,079 | 13 | 24 |
+| `admit_root` | 1,000 | 3.79 | 801,000 | 176,079 | 13 | 24 |
+| `admit_successor` | 1,000 | 1.06 | 801,000 | 176,079 | 25 | 48 |
+| `integrate_two` | 1,000 | 0.653 | 0 | 0 | 27 | 49 |
+| `rebuild_two` | 1,000 | 0.719 | 0 | 0 | 30 | 49 |
+| `creation` | 10,000 | 5.87 | 0 | 0 | 1 | 0 |
+| `fresh_observe` | 10,000 | 73.3 | 8,010,000 | 1,760,079 | 1 | 0 |
+| `warm_observe` | 10,000 | 3.82 | 8,010,000 | 1,760,079 | 1 | 0 |
+| `seal_10_edits` | 10,000 | 4.06 | 8,010,000 | 1,760,079 | 13 | 241 |
+| `closure_observe` | 10,000 | 3.84 | 8,010,000 | 1,760,079 | 13 | 241 |
+| `admit_root` | 10,000 | 73.2 | 8,010,000 | 1,760,079 | 13 | 241 |
+| `admit_successor` | 10,000 | 4.02 | 8,010,000 | 1,760,079 | 25 | 483 |
+| `integrate_two` | 10,000 | 0.648 | 0 | 0 | 27 | 483 |
+| `rebuild_two` | 10,000 | 0.737 | 0 | 0 | 30 | 484 |
+
+Fields: the first table reports `phase`, `files`, `duration_ms` ÷ 1,000, `core_raw_bytes`, `manifest_bytes`, `retained_scratch_bytes`, `retained_body_bytes`, `unresolved`, `loose_objects` and `loose_kib`; the second, A.12's fields. Raw bytes are the sum of the sizes that the phase's manifest lists: for an observation, the manifest it published; for a merge-back, the task's pre-write manifest that its prepared record pins. Manifest bytes are that manifest's length. A lease and a temporary's creation have no manifest and report 0 for both. Scratch bytes and body bytes are the total sizes of the regular files under the colony's `scratch/` and `bodies/` directories just after the phase, without a `.tmp` directory at their top; unresolved counts the service's merge-back attempts still pending. The loose figures are the `count` and `size` lines of `git count-objects -v` in the workspace repository just after the phase, so each also counts what the earlier phases of the same size left loose. The harness fails unless each observation's tree is the one reference Git stages from the same files under the same settings, the private branch points at its commit, its record names both, and neither `main` nor the scratch's index changed; the temporary's base is the task's observed commit and its files equal the task's; and after each merge-back the task's files, index and branch hold the expected target, `main` is unchanged, and the prepared and applied records name that target, which for the explicit merge is `git merge-tree --write-tree` of the two tips with the fork as base. It did not fail.
+
+**Limits:**
+
+- One machine and one run, as in A.11: Windows 10 on NTFS, and each figure a single measurement of one call, not a median, except the lease's mean of 32 in a row, on a synthetic repository of one directory of small files, not on a real workspace. No budget, threshold or pass mark is set, nothing passes or fails one, and no figure is a capacity claim (D78, §8.6).
+- One task and one temporary at a time, from one other context, and both timed merges clean. Conflicts, a failed write and its retry, interference, several temporaries per task, several tasks and a synchronized burst were not timed; the two writers at once ran outside every timer. Their concurrent cost remains C4's feasibility gate (`ROADMAP-CORE.md` C2), and turn scheduling is C3's.
+- `lease` ran at 1ebb83b, where a lease reads a flag the last tip repair left and runs no Git, with no other writer and no moved branch; at b6d2cf4, before the review's fix-up, a lease ran Git and took 107.3 ms (B26). Its 0 ms is the clock's step, not zero work: the 32 leases finished within one step of the monotonic clock, about 0.5 ms here (A.10).
+- Scratch and body bytes cover the colony's directories only, not the workspace repository's objects or the worktrees' administrative files. The loose figures are what `git count-objects -v` reported in one fresh repository per size; Core runs no maintenance (B25). Neither is a disk budget.
+- `observe_task` is the task's first observation; neither the file cache nor antivirus scanning was controlled or observed.
+- The harness records wall time and the byte and object figures only, with no CPU time or memory figure.
 
 ## Appendix B — Sources and decision provenance
 
