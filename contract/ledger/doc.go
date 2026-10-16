@@ -157,14 +157,16 @@
 //
 // A Catalogue lists the record type versions a writer may append. Defined
 // returns those this contract version defines: the four F0 record types,
-// the four F2-05 types, the three F2-06 types, the two F2-07 types and the
-// three F2-08 types below, sixteen in all, each at version 1.
+// the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
+// F2-08 types and the four F2-09 types below, twenty in all, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
 // F2-07 is ticket 07's part of F2, frozen (D119),
 // also by addition to format version 1.
 // F2-08 is ticket 08's part of F2, frozen (D123),
+// also by addition to format version 1.
+// F2-09 is ticket 09's part of F2, proposed for the owner's freeze (D113),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -927,6 +929,8 @@
 // truncation or chunking.
 // Evidence and policy/check/environment/law revision bindings join by
 // addition when F4, ticket 09 and U1.L freeze them.
+// F2-09 adds an optional activation_record_hash binding the active manifest;
+// a log without F2-09 records is unaffected.
 //
 // workspace.promotion_accepted v1 (PromotionAccepted) resolves an intent
 // successfully and witnesses the workspace's accepted canonical tip.
@@ -1088,4 +1092,237 @@
 // acceptance naming the first as witness, and a queued successor interrupted
 // before any intent. The workspace uses sha1; tests cover 64-digit Git IDs
 // separately.
+//
+// # F2-09 record types
+//
+// These four version-1 types are ticket 09's part of F2, proposed for the
+// owner's freeze (D113), by addition to format version 1. C2 owns their
+// payload specifications. Only Core's workspace service
+// (internal/core/workspace) may append them, through appender.Appender;
+// permitted callers are enforced by review. The service checks the record
+// rules both when appending and at Open. Check, Reader, EncodeCommit and
+// these payload encoders and decoders do not enforce service record rules.
+// C2's product still answers no_validator. Ticket 09's S3a supplies the
+// mechanism that writes these records, reached only by package tests until
+// C3/C4 (D52).
+//
+// Payloads follow F2-07's common encoding rules above. UTC ns fields are
+// signed int64 JSON decimal integers, from MinInt64 through MaxInt64:
+// zero and either sign are permitted, but -0, leading zeros, fractions,
+// exponents, strings, null and overflow are not. Ordering against earlier
+// records and the live clock is a service rule; the local comparisons below
+// are decoder rules. workspace_policies and affected_workspace_ids are
+// required arrays, possibly [], never null; Encode substitutes [] for nil.
+// A workspace_policies element emits workspace_id, check_policy_hash and
+// environment_policy_hash in that order: a canonical UUIDv7 and two non-zero
+// digests. Elements are strictly ascending by the workspace ID's 16 bytes.
+// affected_workspace_ids contains canonical UUIDv7 strings in the same
+// strict order. Neither array permits duplicate IDs. observed_utc_ns is
+// present exactly as hold requires. outcome is an open token,
+// ^[a-z][a-z0-9_]*$, at most 64 bytes.
+//
+// workspace.policy_activation_requested v1 (PolicyActivationRequested)
+// records the owner's exact approval of a retained target and schedule.
+//
+//	key                          type           presence  rule
+//	request_id                   UUIDv7         required  new request; later the activation_id
+//	owner_approval_id            UUIDv7         required  new exact approval, never reused
+//	field_law_sha256             digest         required  retained law artifact
+//	validation_policy_hash       digest         required  retained validation policy artifact
+//	workspace_policies           array          required  the complete local policy map
+//	affected_workspace_ids       UUIDv7 array    required  derived scope, strictly ascending
+//	expected_active_record_hash  digest         optional  latest activation's envelope hash; absent at genesis
+//	schedule                     string         required  immediate or not_before
+//	admission_utc_ns              signed integer required  trusted admission observation
+//	not_before_utc_ns             signed integer required  eligibility instant, not a promised switch time
+//	replaces_request_id          UUIDv7         optional  request ended immediately before this record
+//	replaces_revision            integer        optional  its current revision, 1 through MaxInt64
+//	pin_id                       UUIDv7         required  new permanent artifact pin
+//
+// Decoder rules: schedule is closed. immediate requires not_before_utc_ns
+// equal to admission_utc_ns; not_before requires it strictly greater.
+// replaces_request_id and replaces_revision are both present or both absent;
+// replaces_request_id differs from request_id. The two global digests and
+// every element's two digests are non-zero. request_id, owner_approval_id
+// and pin_id are distinct.
+//
+// Record rules: actor is owner; agent_id, execution_session_id, context_id,
+// turn_id and operation_id are absent. body_refs is exactly the sorted
+// distinct union of field_law_sha256, validation_policy_hash and every
+// element's check_policy_hash and environment_policy_hash. A ledger.body_pin
+// with pin_id, the same actor and body_refs and no caller-context fields
+// immediately follows. This pin is permanent: a ledger.body_unpin naming it
+// is inconsistent. The request, approval and pin IDs are new. The commit
+// contains only this request at index 0 and its pin at index 1, or an ended
+// with outcome replaced at index 0 naming this request, this request at
+// index 1 and its pin at index 2. There is no pending request before this
+// record: one pending request per colony. Every workspace_policies element
+// names a registered workspace. expected_active_record_hash equals the
+// latest policy_activated envelope hash, or is absent when none exists.
+// affected_workspace_ids is derived against that manifest, or the empty
+// genesis map: the union of its and this record's workspace IDs when law
+// or validation policy differs, else exactly the IDs whose entry is added,
+// removed or changed; at genesis, this record's workspace IDs. Every
+// affected ID is registered. Replacement keys name the ended at index 0
+// and its expected_pending_revision. The initial revision is this request
+// record's sequence; thereafter it is the sequence of the latest
+// hold_changed or ended for the request.
+//
+// Producer rules, proved by the service and not replay: every artifact's
+// bytes were verified against its digest, law and policy loaded through
+// the frozen contract/law loaders, and all bytes published before the
+// request commit. Check and environment bytes have identity, not interpreted
+// meaning. Approved bytes remain retained for the life of the log, even
+// after replacement, cancellation or activation. admission_utc_ns is a
+// trusted live sample; a not_before schedule is strictly after it. The
+// pending request is the owner's authorization until CAS cancellation or
+// replacement; reapproval is a new request with new identities.
+//
+// workspace.policy_activation_hold_changed v1 (PolicyActivationHoldChanged)
+// changes only the pending request's activation hold.
+//
+//	key                             type           presence     rule
+//	request_id                      UUIDv7         required     pending request
+//	activation_request_record_hash  digest         required     that request's envelope hash
+//	hold                            string         required     due, clock_untrusted or none
+//	observed_utc_ns                  signed integer conditional  present exactly for due or none
+//
+// Decoder rules: hold is closed. due and none require observed_utc_ns,
+// including a present zero; clock_untrusted refuses that key. The Go field
+// is a plain int64: Encode omits it for clock_untrusted and refuses a
+// nonzero value in that case. An untrusted clock supplies no fabricated
+// instant; a known observation raises the durable clock floor.
+//
+// Record rules: actor is core; all caller-context fields and body_refs are
+// absent; this is a one-record commit. request_id names the pending request
+// and the hash names its request record. hold differs from the current hold,
+// initially no hold. due requires observed_utc_ns at least not_before_utc_ns
+// and at least the durable clock floor: the greatest recorded admission_utc_ns,
+// due/none observed_utc_ns and effective_utc_ns before it. none requires a
+// current clock_untrusted hold and an observation at least the floor but
+// below not_before_utc_ns. A due hold is final until the request ends or
+// applies. clock_untrusted is appendable from no hold or none. A known
+// observation raises the floor; this record's sequence becomes the revision.
+//
+// workspace.policy_activation_ended v1 (PolicyActivationEnded) ends an
+// approval request without applying its target.
+//
+//	key                             type     presence  rule
+//	request_id                      UUIDv7   required  pending request
+//	activation_request_record_hash  digest   required  that request's envelope hash
+//	expected_pending_revision       integer  required  current revision, 1 through MaxInt64
+//	outcome                         string   required  open token; v1 writes cancelled and replaced
+//	replacement_request_id          UUIDv7   optional  required for replaced, refused for cancelled
+//
+// Decoder rules: replaced requires replacement_request_id differing from
+// request_id; cancelled refuses it. Every other well-formed outcome accepts
+// that key present or absent. A reader treats an unknown outcome as an ending
+// it does not know: terminal and not applied, never invalid. C3's revocation
+// of an approval, when F3 defines it, joins as an additive ended outcome
+// under this open token grammar.
+//
+// Record rules: actor is owner for cancelled and replaced; caller-context
+// fields and body_refs are absent. request_id and its hash name the pending
+// request; expected_pending_revision equals its current revision. cancelled
+// is a one-record commit; replaced is index 0 of the three-record group above,
+// and replacement_request_id is the request at index 1. The ended request
+// is terminal and leaves the pending slot, which a replacement fills in the
+// same commit. Only that request's hold is removed: ticket 08's unresolved-
+// intent and recovery-pending fences are untouched, and no approval pin is
+// unpinned. Producers write only outcomes their version defines; later
+// additions define their own actor and grouping rules.
+//
+// workspace.policy_activated v1 (PolicyActivated) switches the colony's
+// active manifest once, at an actual trusted instant.
+//
+//	key                             type           presence  rule
+//	activation_id                   UUIDv7         required  pending request_id
+//	epoch                           integer        required  previous epoch plus 1; 1 through MaxInt64
+//	field_law_sha256                digest         required  requested law artifact
+//	validation_policy_hash          digest         required  requested validation policy artifact
+//	workspace_policies              array          required  requested complete local map
+//	owner_approval_id               UUIDv7         required  requested approval
+//	activation_request_record_hash  digest         required  request record's envelope hash
+//	expected_active_record_hash     digest         optional  absent exactly at epoch 1
+//	not_before_utc_ns                signed integer required  requested eligibility instant
+//	effective_utc_ns                 signed integer required  actual switch instant
+//
+// Decoder rules: effective_utc_ns is at least not_before_utc_ns;
+// expected_active_record_hash is absent exactly when epoch is 1;
+// activation_id and owner_approval_id differ; required digests are non-zero
+// and workspace_policies is strictly ascending. effective_sequence and this
+// activation record's own hash are the envelope's Seq and Record.Hash, never
+// payload members: the manifest tuple of DESIGN-UNDERCURRENT (lines 456–458)
+// and contract/law (lines 242–248) needs the actual committed identity,
+// not a self-hash or a guessed sequencer number.
+//
+// Record rules: actor is core; caller-context fields are absent; this is a
+// one-record commit. body_refs is the request's union, already permanently
+// pinned, with no new pin. activation_id is the pending request, whose
+// current hold is due. owner_approval_id, both global digests,
+// workspace_policies, activation_request_record_hash,
+// expected_active_record_hash and not_before_utc_ns equal that request's.
+// effective_utc_ns is at least not_before_utc_ns and the durable clock floor.
+// epoch is the preceding activation's plus 1, or 1 at genesis; exhaustion
+// cannot wrap. No workspace in affected_workspace_ids has an unresolved
+// finalization_intended. After the commit the manifest and its envelope
+// hash and sequence are the colony's active identity, the request is applied
+// once and its hold is gone.
+//
+// Producer rules, not replay: immediately before append, under the sequencer,
+// the switch rechecks the pending ID and revision, retained bytes' presence
+// and digests, trusted time and absence of affected unresolved intents.
+// effective_utc_ns is never backdated to the planned instant.
+//
+// F2-09 also adds this optional last key to an existing v1 payload, after
+// finalization_rules, with only the generic optional-digest decoder rule:
+// present zero or null is refused.
+//
+//	type                             key                     type    presence  rule
+//	workspace.finalization_intended   activation_record_hash  digest  optional  active manifest's envelope hash
+//
+// This names the policy_activated record current when the intent was
+// appended, with a workspace_policies entry for that intent's workspace.
+// Its presence is a service record rule, not a decoder rule. Every intent
+// before the log's first policy_activated may omit it; once one exists,
+// every new workspace intent carries it and an unconfigured workspace
+// cannot intend. No key is added to promotion_accepted, promotion_no_change
+// or generation_derived.
+//
+// Replay reconstructs the pending request, revision, hold, active manifest,
+// epoch and clock floor from committed envelopes and hashes; it reads no
+// clock, starts no timer, publishes no body, runs no Git, check or model
+// work and appends nothing. The service alone samples time, arms one timer,
+// verifies artifact bytes and performs the switch. Actual request and
+// activation hashes come from committed envelopes read back after
+// acknowledgement, never predicted from Durable()+1 or hashed into payloads;
+// that bounded read scans from the start of the commit's segment, the same
+// segment-bounded cost ledgerstore's rescans pay. The conditional intent-key
+// rule applies only after the first activation; a stale or wrong-presence
+// expected manifest is refused at admission and never recorded; a log
+// without F2-09 records is unaffected.
+//
+// The workspace service consumes every key for the pending slot, holds,
+// active manifest, clock floor and retention. C3 consumes controls, status
+// and recovery for the owner. C4 consumes the active manifest and intent
+// binding as the policy, check, environment and law revisions of its
+// evidence. U1.E consumes law activation when its gate permits; the owner
+// may inspect these records. Every payload key is replay-essential.
+// Workspace IDs, approvals, artifact digests, schedules and manifests are
+// host-private, never federation exports. A control is never accepted
+// delivery, field activity, permission to run checks or proof of engine
+// readiness.
+//
+// The F2-09 golden at testdata/f2/09/log/00000000000000000001.jsonl holds
+// twenty-two commits and thirty-four records. policy_activation_requested
+// appears at seqs 7, 11, 17, 20 and 24; policy_activation_hold_changed at
+// 9, 13, 14, 15, 22 and 26; policy_activation_ended replaced at 16 and
+// cancelled at 19; policy_activated at 10, 23 and 27; finalization_intended
+// with activation_record_hash at 32. It pins a genesis activation of an
+// immediate request, a scheduled request held for an untrusted clock,
+// released and then due, replaced by CAS in one commit, its replacement
+// cancelled, a checks-only change affecting one workspace activated later
+// than scheduled, a global change over it, and an intent binding the
+// manifest then current. W1 uses sha1; tests cover 64-digit Git IDs in the
+// extended intent separately.
 package ledger

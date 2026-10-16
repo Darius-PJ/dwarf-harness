@@ -43,25 +43,32 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypePromotionFailed; and ticket 07's part of F2, frozen (D119):
 // TypeScratchChanged and TypeScratchMergeBack; and ticket 08's part of F2,
 // frozen (D123): TypeFinalizationIntended,
-// TypePromotionAccepted and TypePromotionNoChange. All sixteen are at
-// version 1. It never contains a type in the reserved fixture namespace.
+// TypePromotionAccepted and TypePromotionNoChange; and ticket 09's part of F2,
+// proposed for the owner's freeze (D113): TypePolicyActivationRequested,
+// TypePolicyActivationHoldChanged, TypePolicyActivationEnded and
+// TypePolicyActivated. All twenty are at version 1. It never contains a type
+// in the reserved fixture namespace.
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
-		{TypeCommand, 1}:              true,
-		{TypeBodyPin, 1}:              true,
-		{TypeBodyUnpin, 1}:            true,
-		{TypeBodiesCollected, 1}:      true,
-		{TypeWorkspaceRegistered, 1}:  true,
-		{TypeCaptureInputsPinned, 1}:  true,
-		{TypeScratchCreated, 1}:       true,
-		{TypeScratchClosed, 1}:        true,
-		{TypePromotionAdmitted, 1}:    true,
-		{TypeGenerationDerived, 1}:    true,
-		{TypePromotionFailed, 1}:      true,
-		{TypeScratchChanged, 1}:       true,
-		{TypeScratchMergeBack, 1}:     true,
-		{TypeFinalizationIntended, 1}: true,
-		{TypePromotionAccepted, 1}:    true,
-		{TypePromotionNoChange, 1}:    true,
+		{TypeCommand, 1}:                     true,
+		{TypeBodyPin, 1}:                     true,
+		{TypeBodyUnpin, 1}:                   true,
+		{TypeBodiesCollected, 1}:             true,
+		{TypeWorkspaceRegistered, 1}:         true,
+		{TypeCaptureInputsPinned, 1}:         true,
+		{TypeScratchCreated, 1}:              true,
+		{TypeScratchClosed, 1}:               true,
+		{TypePromotionAdmitted, 1}:           true,
+		{TypeGenerationDerived, 1}:           true,
+		{TypePromotionFailed, 1}:             true,
+		{TypeScratchChanged, 1}:              true,
+		{TypeScratchMergeBack, 1}:            true,
+		{TypeFinalizationIntended, 1}:        true,
+		{TypePromotionAccepted, 1}:           true,
+		{TypePromotionNoChange, 1}:           true,
+		{TypePolicyActivationRequested, 1}:   true,
+		{TypePolicyActivationHoldChanged, 1}: true,
+		{TypePolicyActivationEnded, 1}:       true,
+		{TypePolicyActivated, 1}:             true,
 	}}
 }

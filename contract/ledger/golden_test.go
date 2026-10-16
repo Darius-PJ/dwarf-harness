@@ -37,6 +37,9 @@ const (
 	// finalizationDir holds ticket 08's part of F2, frozen (D123),
 	// in one segment.
 	finalizationDir = "testdata/f2/08/log"
+	// activationDir holds ticket 09's part of F2, proposed for the owner's
+	// freeze (D113), in one segment.
+	activationDir = "testdata/f2/09/log"
 )
 
 // fid returns a fixed fixture UUIDv7 ending in suffix.
@@ -51,6 +54,7 @@ var (
 	promotionColony     = fid("04")
 	scratchChangeColony = fid("05")
 	finalizationColony  = fid("40")
+	activationColony    = fid("32")
 )
 
 // The bodies and the submission that the catalogue log references.
@@ -117,6 +121,7 @@ type goldenCommit struct {
 	header     CommitHeader
 	newSegment bool // the commit starts a new segment
 	drafts     []Draft
+	build      func(g *goldenLog) []Draft // lazy drafts naming earlier record hashes
 }
 
 func goldenInputs() []goldenCommit {
@@ -680,6 +685,155 @@ func finalizationInputs() []goldenCommit {
 	}
 }
 
+// activationInputs covers ticket 09's part of F2, proposed for the owner's
+// freeze (D113): retained approvals, clock holds, CAS controls and switches.
+func activationInputs() []goldenCommit {
+	header := func(commit string, seconds int64) CommitHeader {
+		return CommitHeader{ColonyID: activationColony, CommitID: fid(commit), EventTimeNS: 1791000060000000000 + seconds*1000000000}
+	}
+	digest := func(body string) Digest { return Digest(sha256.Sum256([]byte(body))) }
+	i1, i2 := digest("activation capture inputs one\n"), digest("activation capture inputs two\n")
+	law, law2 := digest("activation field law one\n"), digest("activation field law two\n")
+	policy, policy2 := digest("activation validation policy one\n"), digest("activation validation policy two\n")
+	k1, k1b := digest("activation check policy w1 one\n"), digest("activation check policy w1 two\n")
+	e1 := digest("activation environment policy w1 one\n")
+	k2, e2 := digest("activation check policy w2 one\n"), digest("activation environment policy w2 one\n")
+	manifest := digest("activation manifest one\n")
+	policies := []WorkspacePolicy{{fid("33"), k1, e1}, {fid("34"), k2, e2}}
+	changed := []WorkspacePolicy{{fid("33"), k1b, e1}, {fid("34"), k2, e2}}
+	both := []uuid.UUID{fid("33"), fid("34")}
+	a1 := PolicyActivationRequested{
+		RequestID: fid("39"), OwnerApprovalID: fid("49"), FieldLawSHA256: law, ValidationPolicyHash: policy,
+		WorkspacePolicies: policies, AffectedWorkspaceIDs: both, Schedule: ScheduleImmediate,
+		AdmissionUTCNS: 1791000100000000000, NotBeforeUTCNS: 1791000100000000000, PinID: fid("87"),
+	}
+	a2 := PolicyActivationRequested{
+		RequestID: fid("3a"), OwnerApprovalID: fid("4a"), FieldLawSHA256: law, ValidationPolicyHash: policy2,
+		WorkspacePolicies: policies, AffectedWorkspaceIDs: both, Schedule: ScheduleNotBefore,
+		AdmissionUTCNS: 1791000103000000000, NotBeforeUTCNS: 1791000200000000000, PinID: fid("88"),
+	}
+	a3 := PolicyActivationRequested{
+		RequestID: fid("3b"), OwnerApprovalID: fid("4b"), FieldLawSHA256: law, ValidationPolicyHash: policy2,
+		WorkspacePolicies: policies, AffectedWorkspaceIDs: both, Schedule: ScheduleNotBefore,
+		AdmissionUTCNS: 1791000201000000000, NotBeforeUTCNS: 1791000300000000000,
+		ReplacesRequestID: a2.RequestID, ReplacesRevision: 15, PinID: fid("89"),
+	}
+	a5 := PolicyActivationRequested{
+		RequestID: fid("3c"), OwnerApprovalID: fid("4c"), FieldLawSHA256: law, ValidationPolicyHash: policy,
+		WorkspacePolicies: changed, AffectedWorkspaceIDs: []uuid.UUID{fid("33")}, Schedule: ScheduleNotBefore,
+		AdmissionUTCNS: 1791000301000000000, NotBeforeUTCNS: 1791000400000000000, PinID: fid("8a"),
+	}
+	a7 := PolicyActivationRequested{
+		RequestID: fid("3d"), OwnerApprovalID: fid("4d"), FieldLawSHA256: law2, ValidationPolicyHash: policy,
+		WorkspacePolicies: changed, AffectedWorkspaceIDs: both, Schedule: ScheduleImmediate,
+		AdmissionUTCNS: 1791000406000000000, NotBeforeUTCNS: 1791000406000000000, PinID: fid("8b"),
+	}
+	refs := func(p PolicyActivationRequested) []Digest {
+		ds := []Digest{p.FieldLawSHA256, p.ValidationPolicyHash}
+		for _, wp := range p.WorkspacePolicies {
+			ds = append(ds, wp.CheckPolicyHash, wp.EnvironmentPolicyHash)
+		}
+		return slices.Compact(sortedDigests(ds...))
+	}
+	request := func(p PolicyActivationRequested, prior uint64) func(*goldenLog) []Draft {
+		return func(g *goldenLog) []Draft {
+			if prior != 0 {
+				p.ExpectedActiveRecordHash = g.hash(prior)
+			}
+			return []Draft{
+				{Type: TypePolicyActivationRequested, TypeVersion: 1, Actor: ActorOwner, BodyRefs: refs(p), Payload: mustEncode(p)},
+				{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: refs(p), Payload: mustEncode(BodyPin{PinID: p.PinID})},
+			}
+		}
+	}
+	hold := func(p PolicyActivationRequested, seq uint64, value string, observed int64) func(*goldenLog) []Draft {
+		return func(g *goldenLog) []Draft {
+			return []Draft{{Type: TypePolicyActivationHoldChanged, TypeVersion: 1, Actor: ActorCore, Payload: mustEncode(PolicyActivationHoldChanged{
+				RequestID: p.RequestID, ActivationRequestRecordHash: g.hash(seq), Hold: value, ObservedUTCNS: observed,
+			})}}
+		}
+	}
+	activate := func(p PolicyActivationRequested, seq, prior uint64, epoch, effective int64) func(*goldenLog) []Draft {
+		return func(g *goldenLog) []Draft {
+			v := PolicyActivated{
+				ActivationID: p.RequestID, Epoch: epoch, FieldLawSHA256: p.FieldLawSHA256, ValidationPolicyHash: p.ValidationPolicyHash,
+				WorkspacePolicies: p.WorkspacePolicies, OwnerApprovalID: p.OwnerApprovalID, ActivationRequestRecordHash: g.hash(seq),
+				NotBeforeUTCNS: p.NotBeforeUTCNS, EffectiveUTCNS: effective,
+			}
+			if prior != 0 {
+				v.ExpectedActiveRecordHash = g.hash(prior)
+			}
+			return []Draft{{Type: TypePolicyActivated, TypeVersion: 1, Actor: ActorCore, BodyRefs: refs(p), Payload: mustEncode(v)}}
+		}
+	}
+	b0, t0, d1, t1 := strings.Repeat("f4", 20), strings.Repeat("f5", 20), strings.Repeat("f6", 20), strings.Repeat("f7", 20)
+	return []goldenCommit{
+		{header: header("cb", 0), drafts: []Draft{
+			{Type: TypeWorkspaceRegistered, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(WorkspaceRegistered{WorkspaceID: fid("33"), CommonDir: "C:/fixture/repo-f/.git", ObjectFormat: "sha1"})},
+			{Type: TypeCaptureInputsPinned, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{i1}, Payload: mustEncode(CaptureInputsPinned{WorkspaceID: fid("33"), Revision: 1, CaptureInputsSHA256: i1, PinID: fid("37")})},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{i1}, Payload: mustEncode(BodyPin{PinID: fid("37")})},
+		}},
+		{header: header("cc", 1), drafts: []Draft{
+			{Type: TypeWorkspaceRegistered, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(WorkspaceRegistered{WorkspaceID: fid("34"), CommonDir: "/fixture/repo-g/.git", ObjectFormat: "sha256"})},
+			{Type: TypeCaptureInputsPinned, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{i2}, Payload: mustEncode(CaptureInputsPinned{WorkspaceID: fid("34"), Revision: 1, CaptureInputsSHA256: i2, PinID: fid("38")})},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{i2}, Payload: mustEncode(BodyPin{PinID: fid("38")})},
+		}},
+		{header: header("cd", 2), build: request(a1, 0)},
+		{header: header("ce", 3), build: hold(a1, 7, HoldDue, 1791000101000000000)},
+		{header: header("cf", 4), build: activate(a1, 7, 0, 1, 1791000102000000000)},
+		{header: header("da", 5), build: request(a2, 10)},
+		{header: header("db", 6), build: hold(a2, 11, HoldClockUntrusted, 0)},
+		{header: header("dc", 7), build: hold(a2, 11, HoldNone, 1791000104000000000)},
+		{header: header("dd", 8), build: hold(a2, 11, HoldDue, 1791000200000000000)},
+		{header: header("de", 9), build: func(g *goldenLog) []Draft {
+			return append([]Draft{{Type: TypePolicyActivationEnded, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(PolicyActivationEnded{
+				RequestID: a2.RequestID, ActivationRequestRecordHash: g.hash(11), ExpectedPendingRevision: 15, Outcome: ActivationReplaced, ReplacementRequestID: a3.RequestID,
+			})}}, request(a3, 10)(g)...)
+		}},
+		{header: header("df", 10), build: func(g *goldenLog) []Draft {
+			return []Draft{{Type: TypePolicyActivationEnded, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(PolicyActivationEnded{
+				RequestID: a3.RequestID, ActivationRequestRecordHash: g.hash(17), ExpectedPendingRevision: 17, Outcome: ActivationCancelled,
+			})}}
+		}},
+		{header: header("f4", 11), build: request(a5, 10)},
+		{header: header("f5", 12), build: hold(a5, 20, HoldDue, 1791000400000000000)},
+		{header: header("f6", 13), build: activate(a5, 20, 10, 2, 1791000405000000000)},
+		{header: header("f7", 14), build: request(a7, 23)},
+		{header: header("f8", 15), build: hold(a7, 24, HoldDue, 1791000407000000000)},
+		{header: header("f9", 16), build: activate(a7, 24, 23, 3, 1791000408000000000)},
+		{header: header("fa", 17), drafts: []Draft{
+			{Type: TypeScratchCreated, TypeVersion: 1, Actor: ActorCore, ContextID: fid("35"), Payload: mustEncode(ScratchCreated{ScratchID: fid("36"), WorkspaceID: fid("33"), ContextID: fid("35"), Dir: "6b7c8d9e", Branch: "refs/heads/dwarf-harness/6b7c8d9e", BaseCommit: b0, AnchorTree: t0})},
+		}},
+		{header: header("fb", 18), drafts: []Draft{
+			{Type: TypePromotionAdmitted, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("35"), BodyRefs: []Digest{manifest}, Payload: mustEncode(PromotionAdmitted{
+				RequestID: fid("8d"), WorkspaceID: fid("33"), ScratchID: fid("36"), ContextID: fid("35"), LineageID: fid("8c"), Checkpoint: 1,
+				ScratchBase: b0, BaselineTree: t0, DeltaBaseTree: t0, CaptureID: fid("8e"), SealedTree: t1, ManifestSHA256: manifest,
+				InputsRevision: 1, CaptureInputsSHA256: i1, PinID: fid("8f"),
+			})},
+			{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorAgent, ContextID: fid("35"), BodyRefs: []Digest{manifest}, Payload: mustEncode(BodyPin{PinID: fid("8f")})},
+		}},
+		{header: header("fc", 19), drafts: []Draft{
+			{Type: TypeGenerationDerived, TypeVersion: 1, Actor: ActorCore, ContextID: fid("35"), Payload: mustEncode(GenerationDerived{
+				GenerationID: fid("9f"), RequestID: fid("8d"), PredecessorCommit: b0, PredecessorTree: t0,
+				InputsRevision: 1, IntegrationRules: "integration-rules/1", Outcome: GenerationClean, DerivedCommit: d1, DerivedTree: t1,
+			})},
+		}},
+		{header: header("fd", 20), build: func(g *goldenLog) []Draft {
+			return []Draft{{Type: TypeFinalizationIntended, TypeVersion: 1, Actor: ActorCore, ContextID: fid("35"), Payload: mustEncode(FinalizationIntended{
+				IntentID: fid("b9"), RequestID: fid("8d"), GenerationID: fid("9f"), PredecessorCommit: b0, PredecessorTree: t0,
+				TargetCommit: d1, TargetTree: t1, FinalizationRules: "finalization-rules/1", ActivationRecordHash: g.hash(27),
+			})}}
+		}},
+		{header: header("fe", 21), drafts: []Draft{
+			{Type: TypePromotionAccepted, TypeVersion: 1, Actor: ActorCore, ContextID: fid("35"), Payload: mustEncode(PromotionAccepted{
+				IntentID: fid("b9"), RequestID: fid("8d"), GenerationID: fid("9f"), PredecessorCommit: b0, PredecessorTree: t0,
+				AcceptedCommit: d1, AcceptedTree: t1, ChangedPaths: []string{"policy.txt"},
+			})},
+			{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: fid("35"), Payload: mustEncode(BodyUnpin{PinID: fid("8f")})},
+		}},
+	}
+}
+
 // goldenRecord locates one record of a golden log.
 type goldenRecord struct {
 	seq  uint64
@@ -710,6 +864,14 @@ type goldenLog struct {
 
 func (g *goldenLog) record(seq uint64) goldenRecord { return g.records[seq-1] }
 
+func (g *goldenLog) hash(seq uint64) Digest {
+	d, err := parseDigest(string(g.record(seq).line[:64]))
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
 // end returns the chain position after the whole golden log.
 func (g *goldenLog) end() Chain { return g.commits[len(g.commits)-1].after }
 
@@ -722,6 +884,10 @@ func buildLog(dir string, colony uuid.UUID, consume Consumption, inputs []golden
 	chain := Genesis()
 	var seg string
 	for i, c := range inputs {
+		if c.drafts == nil {
+			c.drafts = c.build(g)
+			g.inputs[i].drafts = c.drafts
+		}
 		if i == 0 || c.newSegment {
 			seg = SegmentName(chain.Seq + 1)
 			g.names = append(g.names, seg)
@@ -775,6 +941,14 @@ var finalizationTypes = Consumption{
 	TypeBodyPin: {1}, TypeBodyUnpin: {1},
 }
 
+var activationTypes = Consumption{
+	TypePolicyActivationRequested: {1}, TypePolicyActivationHoldChanged: {1},
+	TypePolicyActivationEnded: {1}, TypePolicyActivated: {1},
+	TypeFinalizationIntended: {1}, TypePromotionAccepted: {1},
+	TypeWorkspaceRegistered: {1}, TypeCaptureInputsPinned: {1}, TypeScratchCreated: {1},
+	TypePromotionAdmitted: {1}, TypeGenerationDerived: {1}, TypeBodyPin: {1}, TypeBodyUnpin: {1},
+}
+
 var (
 	golden = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(goldenDir, goldenColony, allFixtures, goldenInputs())
@@ -793,6 +967,9 @@ var (
 	})
 	finalizationLog = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(finalizationDir, finalizationColony, finalizationTypes, finalizationInputs())
+	})
+	activationLog = sync.OnceValues(func() (*goldenLog, error) {
+		return buildLog(activationDir, activationColony, activationTypes, activationInputs())
 	})
 )
 
@@ -824,6 +1001,11 @@ func mustScratchChange(t testing.TB) *goldenLog {
 func mustFinalization(t testing.TB) *goldenLog {
 	t.Helper()
 	return mustBuild(t, finalizationLog)
+}
+
+func mustActivation(t testing.TB) *goldenLog {
+	t.Helper()
+	return mustBuild(t, activationLog)
 }
 
 func mustBuild(t testing.TB, build func() (*goldenLog, error)) *goldenLog {
@@ -1200,6 +1382,119 @@ func TestGoldenF2_08(t *testing.T) {
 	}
 }
 
+// TestGoldenF2_09 pins ticket 09's part of F2, proposed for the owner's
+// freeze (D113), including references to actual earlier envelope hashes.
+func TestGoldenF2_09(t *testing.T) {
+	t.Parallel()
+	g := mustActivation(t)
+	if *update {
+		if err := os.MkdirAll(g.dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, data := range g.files {
+			if err := os.WriteFile(filepath.Join(g.dir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stored := snapshot(t, g.dir)
+	if got := slices.Sorted(maps.Keys(stored)); !slices.Equal(got, g.names) {
+		t.Fatalf("files = %v, want %v", got, g.names)
+	}
+	for _, name := range g.names {
+		if !bytes.Equal(stored[name], g.files[name]) {
+			t.Errorf("%s/%s differs from the F2-09 encoding", g.dir, name)
+		}
+	}
+	commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: activationTypes})
+	if err != nil || len(commits) != 22 || cursor != 34 {
+		t.Fatalf("read %d commits, cursor %d: %v; want 22, 34", len(commits), cursor, err)
+	}
+	requestSeq := map[uint64]uint64{9: 7, 10: 7, 13: 11, 14: 11, 15: 11, 16: 11, 19: 17, 22: 20, 23: 20, 26: 24, 27: 24}
+	priorSeq := map[uint64]uint64{11: 10, 17: 10, 20: 10, 23: 10, 24: 23, 27: 23}
+	for i, c := range commits {
+		if len(c.Records) != len(g.inputs[i].drafts) {
+			t.Fatalf("commit %d: read %d records, want %d", i, len(c.Records), len(g.inputs[i].drafts))
+		}
+		for j, r := range c.Records {
+			var got payload
+			var err error
+			switch r.Type {
+			case TypeBodyPin, TypeBodyUnpin:
+				got, err = decodeF0(r.Type, r.Payload)
+			case TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated:
+				got, err = decodeF2_05(r.Type, r.Payload)
+			case TypePromotionAdmitted, TypeGenerationDerived:
+				got, err = decodeF2_06(r.Type, r.Payload)
+			case TypeFinalizationIntended, TypePromotionAccepted:
+				got, err = decodeF2_08(r.Type, r.Payload)
+			default:
+				got, err = decodeF2_09(r.Type, r.Payload)
+			}
+			if err != nil {
+				t.Fatalf("seq %d: %v", r.Seq, err)
+			}
+			want := g.inputs[i].drafts[j].Payload
+			if encoded, err := got.Encode(); err != nil || !bytes.Equal(encoded, want) || !bytes.Equal(encoded, r.Payload) {
+				t.Errorf("seq %d: re-encoding = %s, %v; want %s", r.Seq, encoded, err, want)
+			}
+			var requestHash, priorHash Digest
+			switch p := got.(type) {
+			case PolicyActivationRequested:
+				priorHash = p.ExpectedActiveRecordHash
+			case PolicyActivationHoldChanged:
+				requestHash = p.ActivationRequestRecordHash
+			case PolicyActivationEnded:
+				requestHash = p.ActivationRequestRecordHash
+			case PolicyActivated:
+				requestHash, priorHash = p.ActivationRequestRecordHash, p.ExpectedActiveRecordHash
+			case FinalizationIntended:
+				if p.ActivationRecordHash != g.hash(27) {
+					t.Errorf("intent binds %s, want activation seq 27 hash %s", p.ActivationRecordHash, g.hash(27))
+				}
+			}
+			for key, binding := range map[string]struct {
+				got Digest
+				seq uint64
+			}{
+				"activation_request_record_hash": {requestHash, requestSeq[r.Seq]},
+				"expected_active_record_hash":    {priorHash, priorSeq[r.Seq]},
+			} {
+				var want Digest
+				if binding.seq != 0 {
+					want = g.hash(binding.seq)
+				}
+				if binding.got != want {
+					t.Errorf("seq %d %s = %s; want seq %d hash %s", r.Seq, key, binding.got, binding.seq, want)
+				}
+			}
+		}
+	}
+	res, err := Check(g.dir, g.colony)
+	want := CheckResult{Last: g.end(), Segment: g.final(), Size: int64(len(g.files[g.final()]))}
+	if err != nil || res != want || res.Last.Seq != 34 {
+		t.Errorf("Check = %+v, %v; want %+v with Last.Seq 34", res, err, want)
+	}
+}
+
+func TestF2_09Compatibility(t *testing.T) {
+	t.Parallel()
+	g := mustActivation(t)
+	commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: finalizationTypes})
+	wantSeqs := []uint64{1, 2, 3, 4, 5, 6, 8, 12, 18, 21, 25, 28, 29, 30, 31, 32, 33, 34}
+	wantLasts := []uint64{3, 6, 8, 12, 18, 21, 25, 28, 30, 31, 32, 34}
+	if err != nil || cursor != 34 || !slices.Equal(seqs(commits), wantSeqs) || !slices.Equal(lasts(commits), wantLasts) {
+		t.Fatalf("F2-08 consumer: seqs %v, Lasts %v, cursor %d, error %v; want %v, %v, 34", seqs(commits), lasts(commits), cursor, err, wantSeqs, wantLasts)
+	}
+	// Resuming from each delivered commit preserves the skipped-record cursor.
+	for i, c := range commits {
+		got, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, After: c.Last, Through: ToEnd, Consume: finalizationTypes})
+		if err != nil || cursor != 34 || !slices.Equal(seqs(got), seqs(commits[i+1:])) {
+			t.Errorf("After %d: seqs %v, cursor %d, error %v", c.Last, seqs(got), cursor, err)
+		}
+	}
+}
+
 func TestGoldenDecodes(t *testing.T) {
 	for _, tc := range []struct {
 		g *goldenLog
@@ -1220,6 +1515,7 @@ func TestGoldenDecodes(t *testing.T) {
 		{mustPromotion(t), nil},
 		{mustScratchChange(t), nil},
 		{mustFinalization(t), nil},
+		{mustActivation(t), nil},
 	} {
 		g := tc.g
 		commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})

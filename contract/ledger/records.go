@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"uuid"
 )
 
@@ -316,6 +317,60 @@ func (ms *members) optionalNat(key string) (int64, bool) {
 		return 0, false
 	}
 	return int64(n), true
+}
+
+var errInt = errors.New("is not a signed decimal int64")
+
+// signed returns a signed decimal int64, or zero and false when optional
+// and absent. Zero is a value; negative zero is not a canonical integer.
+func (ms *members) signed(key string, required bool) (int64, bool) {
+	raw, ok := ms.get(key, required)
+	if !ok {
+		return 0, false
+	}
+	digits := raw
+	if len(digits) > 0 && digits[0] == '-' {
+		digits = digits[1:]
+	}
+	valid := len(digits) > 0 && (len(digits) == 1 || digits[0] != '0') && string(raw) != "-0"
+	for _, c := range digits {
+		valid = valid && c >= '0' && c <= '9'
+	}
+	n, err := strconv.ParseInt(string(raw), 10, 64)
+	if !valid || err != nil {
+		ms.err = fmt.Errorf("%s %w", key, errInt)
+		return 0, false
+	}
+	return n, true
+}
+
+// sortedIDs returns a required array of strictly ascending canonical UUIDv7s.
+// A present [] is a non-nil empty slice.
+func (ms *members) sortedIDs(key string) ([]uuid.UUID, bool) {
+	raw, ok := ms.get(key, true)
+	if !ok {
+		return nil, false
+	}
+	var elems []json.RawMessage
+	if raw[0] != '[' || json.Unmarshal(raw, &elems) != nil {
+		ms.err = fmt.Errorf("%s is not an array", key)
+		return nil, false
+	}
+	ids := make([]uuid.UUID, len(elems))
+	for i, el := range elems {
+		s, ok := parseString(el)
+		if !ok {
+			ms.err = fmt.Errorf("%s element %d is not a string", key, i)
+			return nil, false
+		}
+		id, ok := parseID(s)
+		if !ok || i > 0 && bytes.Compare(ids[i-1][:], id[:]) >= 0 {
+			ms.err = fmt.Errorf("%s element %d is not a strictly ascending canonical UUIDv7", key, i)
+			return nil, false
+		}
+		ids[i] = id
+	}
+	return ids, true
 }
 
 // text returns the required string key.

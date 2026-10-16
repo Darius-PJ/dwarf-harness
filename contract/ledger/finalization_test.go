@@ -208,3 +208,34 @@ func TestF2_08PayloadsRefuse(t *testing.T) {
 		})
 	}
 }
+
+// TestFinalizationIntendedActivationBinding covers ticket 09's optional
+// binding, proposed for the owner's freeze (D113), without changing F2-08.
+func TestFinalizationIntendedActivationBinding(t *testing.T) {
+	t.Parallel()
+	p := f2_08Payloads()[0].p.(FinalizationIntended)
+	g := mustFinalization(t)
+	absent := g.inputs[4].drafts[0].Payload
+	if got := mustEncode(p); !bytes.Equal(got, absent) {
+		t.Fatalf("absent binding = %s; want frozen payload %s", got, absent)
+	}
+	for _, width := range []int{20, 32} {
+		p.PredecessorCommit, p.PredecessorTree = strings.Repeat("e6", width), strings.Repeat("e7", width)
+		p.TargetCommit, p.TargetTree = strings.Repeat("e9", width), strings.Repeat("e8", width)
+		base := mustEncode(p)
+		p.ActivationRecordHash = goldenB1
+		want := append(bytes.Clone(base[:len(base)-1]), []byte(`,"activation_record_hash":"`+goldenB1.String()+`"}`)...)
+		js := mustEncode(p)
+		got, err := DecodeFinalizationIntended(js)
+		if err != nil || got != p || !bytes.Equal(js, want) || !bytes.Equal(mustEncode(got), want) {
+			t.Fatalf("binding round-trip = %+v, %v, %s; want %+v, %s", got, err, js, p, want)
+		}
+		for _, value := range []string{`"` + strings.Repeat("0", 64) + `"`, `null`, `"abc"`, `"` + strings.Repeat("A", 64) + `"`, `1`} {
+			bad := append(bytes.Clone(base[:len(base)-1]), []byte(`,"activation_record_hash":`+value+`}`)...)
+			if _, err := DecodeFinalizationIntended(bad); !errors.Is(err, ErrInvalid) {
+				t.Errorf("Decode(%s) = %v; want ErrInvalid", bad, err)
+			}
+		}
+		p.ActivationRecordHash = Digest{}
+	}
+}

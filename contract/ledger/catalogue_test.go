@@ -36,10 +36,10 @@ func TestNewCatalogue(t *testing.T) {
 
 	// Defined contains F0, F2-05 and ticket 06's part of F2, frozen
 	// (D118), and ticket 07's part, frozen (D119), plus ticket 08's part,
-	// frozen (D123), but never fixture records
-	// or an undefined version.
+	// frozen (D123), and ticket 09's part, proposed for the owner's freeze
+	// (D113), but never fixture records or an undefined version.
 	def := Defined()
-	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected, TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed, TypePromotionAdmitted, TypeGenerationDerived, TypePromotionFailed, TypeScratchChanged, TypeScratchMergeBack, TypeFinalizationIntended, TypePromotionAccepted, TypePromotionNoChange} {
+	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected, TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed, TypePromotionAdmitted, TypeGenerationDerived, TypePromotionFailed, TypeScratchChanged, TypeScratchMergeBack, TypeFinalizationIntended, TypePromotionAccepted, TypePromotionNoChange, TypePolicyActivationRequested, TypePolicyActivationHoldChanged, TypePolicyActivationEnded, TypePolicyActivated} {
 		if !def.Contains(TypeVersion{typ, 1}) || def.Contains(TypeVersion{typ, 2}) {
 			t.Errorf("Defined() holds %s at version 1: %v, at version 2: %v; want true, false",
 				typ, def.Contains(TypeVersion{typ, 1}), def.Contains(TypeVersion{typ, 2}))
@@ -55,6 +55,10 @@ func TestNewCatalogue(t *testing.T) {
 		{"workspace.scratch_changed", 1}:  true, {"workspace.scratch_merge_back", 1}: true,
 		{"workspace.finalization_intended", 1}: true,
 		{"workspace.promotion_accepted", 1}:    true, {"workspace.promotion_no_change", 1}: true,
+		{"workspace.policy_activation_requested", 1}:    true,
+		{"workspace.policy_activation_hold_changed", 1}: true,
+		{"workspace.policy_activation_ended", 1}:        true,
+		{"workspace.policy_activated", 1}:               true,
 	}
 	if !maps.Equal(def.set, want) || def.Contains(TypeVersion{"fixture.sample", 1}) {
 		t.Errorf("Defined() holds %v, want %v", def.set, want)

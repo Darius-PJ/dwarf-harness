@@ -69,7 +69,7 @@ func FuzzCheckTruncation(f *testing.F) {
 		dir  string
 	}
 	var targets []target
-	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f), mustWorkspace(f), mustPromotion(f), mustScratchChange(f), mustFinalization(f)} {
+	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f), mustWorkspace(f), mustPromotion(f), mustScratchChange(f), mustFinalization(f), mustActivation(f)} {
 		dir := f.TempDir()
 		for _, name := range g.names {
 			targets = append(targets, target{g: g, name: name, dir: dir})
@@ -351,6 +351,8 @@ func FuzzDecodeF2_08(f *testing.F) {
 	f.Add(uint8(0), []byte(mustEncode(wide)))
 	wide.PredecessorWitnessSeq = 1<<63 - 1
 	f.Add(uint8(0), []byte(mustEncode(wide)))
+	wide.ActivationRecordHash = goldenB1
+	f.Add(uint8(0), []byte(mustEncode(wide)))
 	accepted := fixtures[2].p.(PromotionAccepted)
 	accepted.ChangedPaths = []string{"a\tb\nc"}
 	f.Add(uint8(2), []byte(mustEncode(accepted)))
@@ -368,6 +370,37 @@ func FuzzDecodeF2_08(f *testing.F) {
 			t.Fatalf("Encode decoded %+v: %v", p, err)
 		}
 		again, err := decodeF2_08(typ, js)
+		if err != nil || !reflect.DeepEqual(again, p) {
+			t.Fatalf("Decode re-encoded %s = %+v, %v; want %+v", js, again, err, p)
+		}
+		if encoded, err := again.Encode(); err != nil || !bytes.Equal(encoded, js) {
+			t.Fatalf("re-encoding = %s, %v; want %s", encoded, err, js)
+		}
+	})
+}
+
+// FuzzDecodeF2_09 exercises ticket 09's part of F2, proposed for the owner's
+// freeze (D113), including signed instants and additive unknown outcomes.
+func FuzzDecodeF2_09(f *testing.F) {
+	fixtures := f2_09Payloads()
+	for i, tc := range fixtures {
+		f.Add(uint8(i), []byte(mustEncode(tc.p)))
+		f.Add(uint8(i), []byte(`{}`))
+	}
+	f.Fuzz(func(t *testing.T, kind uint8, data []byte) {
+		typ := fixtures[int(kind)%len(fixtures)].typ
+		p, err := decodeF2_09(typ, data)
+		if err != nil {
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Decode error = %v, want ErrInvalid", err)
+			}
+			return
+		}
+		js, err := p.Encode()
+		if err != nil {
+			t.Fatalf("Encode decoded %+v: %v", p, err)
+		}
+		again, err := decodeF2_09(typ, js)
 		if err != nil || !reflect.DeepEqual(again, p) {
 			t.Fatalf("Decode re-encoded %s = %+v, %v; want %+v", js, again, err, p)
 		}

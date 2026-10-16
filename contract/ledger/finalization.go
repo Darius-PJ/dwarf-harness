@@ -29,6 +29,7 @@ type FinalizationIntended struct {
 	TargetCommit          string    `json:"target_commit"`
 	TargetTree            string    `json:"target_tree"`
 	FinalizationRules     string    `json:"finalization_rules"`
+	ActivationRecordHash  Digest    `json:"activation_record_hash,omitzero"`
 }
 
 // PromotionAccepted is the payload of a workspace.promotion_accepted v1
@@ -75,6 +76,7 @@ func DecodeFinalizationIntended(payload json.RawMessage) (FinalizationIntended, 
 			TargetCommit: m.text("target_commit"), TargetTree: m.text("target_tree"), FinalizationRules: m.text("finalization_rules"),
 		}
 		p.PredecessorWitnessSeq, _ = m.optionalNat("predecessor_witness_seq")
+		p.ActivationRecordHash, _ = m.optionalDigest("activation_record_hash")
 		return p.check()
 	}); err != nil {
 		return FinalizationIntended{}, err
