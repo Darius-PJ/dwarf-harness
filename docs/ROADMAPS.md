@@ -226,7 +226,7 @@ These rules implement D41, D42, D78, D79 and D116; the existing repository worki
 
 1. **Assignment.** The owner assigns one agent per step, or per part of a step where the roadmap splits it.
 2. **Isolation.** Each agent works in its own git worktree and branch.
-3. **Integration.** Commit on your own branch whenever the tests you touched pass. Before `main` moves: rebase onto `main`, run `go run ./tools/check`, then fast-forward `main` (D46). A commit that changes only Markdown files since a passing check needs only the document check instead: links resolve and files are LF (D128). `main` only moves forward.
+3. **Integration.** Commit on your own branch whenever the tests you touched pass. Before `main` moves: rebase onto `main`, run `go run ./tools/check`, then fast-forward `main` (D46). A commit that changes only Markdown files since a passing check needs only the document check instead: links resolve and files are LF (D128). A slice merge runs the check with `-race=false`; each ticket's last code slice runs it in full (D129). `main` only moves forward.
 4. **Owner sign-off first** for changes that touch a frozen contract, an owner decision or a new dependency.
 5. **When blocked,** stop at the step's stop point, set its status to *Blocked* with the reason here and in the roadmap, and report. Never write a stub, placeholder or fake of what the step waits for. Tests may use stand-in data only against a frozen contract.
 6. **Decisions.** A build decision that revises a [PROPOSAL] or [INFERENCE] gets a B entry in `DECISIONS.md`. Anything a document marks as awaiting the owner goes back to the owner.
