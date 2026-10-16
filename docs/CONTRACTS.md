@@ -1,6 +1,6 @@
 # Contracts between roadmaps
 
-**Status:** each contract's version and status are in the [register](#register) below, and each step's on the [status board](ROADMAPS.md#status-board). This register implements D40; these boundaries are design entries, not a freeze or permission to build. A contract's producer owns its schema, and consumers build against it only after the owner freezes it.
+**Status:** each contract's version and status are in the [register](#register) below, and each step's on the [status board](ROADMAPS.md#status-board). This register implements D40; these boundaries are design entries, not a freeze or permission to build. A contract's producer owns its schema, and consumers build against it only after it is frozen (D40; since D125 the project manager freezes a completed slice).
 
 ## What a contract is
 
@@ -13,7 +13,7 @@
 | State | Who changes it | How |
 |---|---|---|
 | *Draft* | The owning step | Freely |
-| *Frozen* | The owner freezes it | By addition only: new optional fields, new types, new type versions with upgraders |
+| *Frozen* | The project manager freezes a completed slice once the build advisor has approved it (D125; the owner before) | By addition only: new optional fields, new types, new type versions with upgraders |
 | Breaking change to a frozen contract | Owner | A decision entry listing every step it affects; consuming roadmaps update those steps' status |
 
 Freezing is the moment another roadmap's agent may start building against the contract (D20). Record each freeze as a decision entry and update the version and status columns below.
