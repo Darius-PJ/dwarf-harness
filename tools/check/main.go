@@ -1,8 +1,10 @@
 // Command check is the integration gate (D42), run as go run ./tools/check
-// from the module.
+// from the module. By default, -race=true runs all nine steps. Slice merges
+// use go run ./tools/check -race=false to skip step 7 (race) under D129;
+// that mode does not require DWARF_CC. A ticket's last slice keeps race enabled.
 //
-// It runs every step in order, even after a failure, prints each step's
-// commands and its PASS or FAIL verdict, and exits non-zero if any step
+// It runs the enabled steps in order, even after a failure, prints each step's
+// commands and its PASS, FAIL or SKIP verdict, and exits non-zero if any step
 // failed. Every child go command sets GOTOOLCHAIN=local and an explicit
 // CGO_ENABLED itself instead of inheriting them (D28, D45).
 package main
@@ -11,6 +13,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -22,18 +25,42 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Stdout))
+	os.Exit(run(os.Stdout, os.Args[1:]))
 }
 
-// run locates the module, runs every step and returns the exit status.
-func run(w io.Writer) int {
+// run parses arguments, locates the module and returns the check's exit status.
+func run(w io.Writer, args []string) int {
+	race, err := parseArgs(w, args)
+	if err != nil {
+		return 2
+	}
 	root, err := moduleRoot(w)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL: locating the module: %v\n", err)
 		return 1
 	}
 	fmt.Fprintf(w, "module root: %s\n", root)
-	return runAll(w, steps(root))
+	return runAll(w, steps(root), race)
+}
+
+func parseArgs(w io.Writer, args []string) (bool, error) {
+	flags := flag.NewFlagSet("check", flag.ContinueOnError)
+	flags.SetOutput(w)
+	race := flags.Bool("race", true, "run step 7 with the race detector (D129)")
+	flags.Usage = func() {
+		fmt.Fprintln(w, "usage: go run ./tools/check [-race=false]")
+		flags.PrintDefaults()
+	}
+	if err := flags.Parse(args); err != nil {
+		return false, err
+	}
+	if flags.NArg() != 0 {
+		err := fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), " "))
+		fmt.Fprintln(w, err)
+		flags.Usage()
+		return false, err
+	}
+	return *race, nil
 }
 
 // testTimeout is the per-package limit of the tests and race steps (D122, D127).
@@ -63,35 +90,45 @@ func steps(root string) []step {
 	}
 }
 
-// runAll runs every step, whatever the earlier verdicts, and returns 1 if any
-// step failed and 0 otherwise.
-func runAll(w io.Writer, steps []step) int {
-	failed := make([]bool, len(steps))
+// runAll runs the enabled steps, whatever the earlier verdicts, and returns 1
+// if any step failed and 0 otherwise. Only step 7 can be skipped (D129).
+func runAll(w io.Writer, steps []step, race bool) int {
+	verdicts := make([]string, len(steps))
+	skipped := 0
 	for i, s := range steps {
 		fmt.Fprintf(w, "\n== Step %d: %s\n", i, s.title)
+		if i == 7 && !race {
+			verdicts[i] = "SKIP"
+			skipped++
+			fmt.Fprintf(w, "SKIP step %d (%s): -race=false (D129)\n", i, s.title)
+			continue
+		}
 		if err := s.run(w); err != nil {
-			failed[i] = true
+			verdicts[i] = "FAIL"
 			fmt.Fprintf(w, "FAIL step %d (%s): %v\n", i, s.title, err)
 			continue
 		}
+		verdicts[i] = "PASS"
 		fmt.Fprintf(w, "PASS step %d (%s)\n", i, s.title)
 	}
 
 	fmt.Fprintf(w, "\n== Summary\n")
 	n := 0
 	for i, s := range steps {
-		verdict := "PASS"
-		if failed[i] {
-			verdict = "FAIL"
+		if verdicts[i] == "FAIL" {
 			n++
 		}
-		fmt.Fprintf(w, "%s  %d %s\n", verdict, i, s.title)
+		fmt.Fprintf(w, "%s  %d %s\n", verdicts[i], i, s.title)
 	}
 	if n > 0 {
 		fmt.Fprintf(w, "check FAILED: %d of %d steps failed\n", n, len(steps))
 		return 1
 	}
-	fmt.Fprintf(w, "check PASSED: all %d steps passed\n", len(steps))
+	if skipped > 0 {
+		fmt.Fprintf(w, "check PASSED: %d of %d steps passed, race skipped (D129)\n", len(steps)-skipped, len(steps))
+	} else {
+		fmt.Fprintf(w, "check PASSED: all %d steps passed\n", len(steps))
+	}
 	return 0
 }
 

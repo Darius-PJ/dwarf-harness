@@ -117,7 +117,7 @@ func TestRunAll(t *testing.T) {
 				}}
 			}
 			var out strings.Builder
-			code := runAll(&out, steps)
+			code := runAll(&out, steps, true)
 			if code != tt.wantCode {
 				t.Errorf("exit status %d, want %d", code, tt.wantCode)
 			}
@@ -132,6 +132,118 @@ func TestRunAll(t *testing.T) {
 				if want := fmt.Sprintf("%s step %d ", verdict, i); !strings.Contains(out.String(), want) {
 					t.Errorf("output lacks %q:\n%s", want, out.String())
 				}
+			}
+		})
+	}
+}
+
+func TestRaceFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		failLast bool
+		wantRan  []int
+		wantCode int
+		wantLast string
+	}{
+		{
+			name:     "default runs all nine steps",
+			wantRan:  []int{0, 1, 2, 3, 4, 5, 6, 7, 8},
+			wantLast: "check PASSED: all 9 steps passed\n",
+		},
+		{
+			name:     "race disabled",
+			args:     []string{"-race=false"},
+			wantRan:  []int{0, 1, 2, 3, 4, 5, 6, 8},
+			wantLast: "check PASSED: 8 of 9 steps passed, race skipped (D129)\n",
+		},
+		{
+			name:     "failure after skipped race",
+			args:     []string{"-race=false"},
+			failLast: true,
+			wantRan:  []int{0, 1, 2, 3, 4, 5, 6, 8},
+			wantCode: 1,
+			wantLast: "check FAILED: 1 of 9 steps failed\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DWARF_CC", "")
+			var out strings.Builder
+			race, err := parseArgs(&out, tt.args)
+			if err != nil {
+				t.Fatalf("parseArgs: %v\n%s", err, out.String())
+			}
+			checks := steps("")
+			var ran []int
+			// Exercise the real step order without launching any checks,
+			// especially the full repository's race tests.
+			for i := range checks {
+				checks[i].run = func(io.Writer) error {
+					ran = append(ran, i)
+					if tt.failLast && i == 8 {
+						return errors.New("planted cross-build failure")
+					}
+					return nil
+				}
+			}
+			if code := runAll(&out, checks, race); code != tt.wantCode {
+				t.Errorf("exit status %d, want %d", code, tt.wantCode)
+			}
+			if !slices.Equal(ran, tt.wantRan) {
+				t.Errorf("steps run %v, want %v", ran, tt.wantRan)
+			}
+			log := out.String()
+			if !strings.HasSuffix(log, tt.wantLast) {
+				t.Errorf("output does not end with %q:\n%s", tt.wantLast, log)
+			}
+			wantRace := []string{"PASS step 7 (race)", "PASS  7 race"}
+			if tt.args != nil {
+				wantRace = []string{"SKIP step 7 (race): -race=false (D129)", "SKIP  7 race"}
+				if strings.Contains(log, "PASS step 7") || strings.Contains(log, "PASS  7") {
+					t.Errorf("skipped race reported as passed:\n%s", log)
+				}
+			}
+			for _, want := range wantRace {
+				if !strings.Contains(log, "\n"+want+"\n") {
+					t.Errorf("output lacks line %q:\n%s", want, log)
+				}
+			}
+			verdict := "PASS"
+			if tt.failLast {
+				verdict = "FAIL"
+			}
+			if want := "\n" + verdict + "  8 cross builds\n"; !strings.Contains(log, want) {
+				t.Errorf("summary lacks %q:\n%s", want, log)
+			}
+		})
+	}
+}
+
+func TestRunRejectsArguments(t *testing.T) {
+	// Even a parser regression must not start the real check or its race step.
+	t.Chdir(t.TempDir())
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"unknown flag", []string{"-unknown"}},
+		{"malformed boolean", []string{"-race=maybe"}},
+		{"positional argument", []string{"-race=false", "extra"}},
+		{"argument after terminator", []string{"--", "extra"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out strings.Builder
+			if code := run(&out, tt.args); code != 2 {
+				t.Errorf("exit status %d, want 2", code)
+			}
+			log := out.String()
+			if !strings.Contains(log, "usage:") || !strings.Contains(log, "-race") {
+				t.Errorf("output lacks usage with the supported flag:\n%s", log)
+			}
+			if strings.Contains(log, "$ ") || strings.Contains(log, "== Step") {
+				t.Errorf("invalid arguments launched a check:\n%s", log)
 			}
 		})
 	}
