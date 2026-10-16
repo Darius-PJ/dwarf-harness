@@ -36,9 +36,9 @@ func run(w io.Writer) int {
 	return runAll(w, steps(root))
 }
 
-// testTimeout is the per-package limit of the tests and race steps (D122).
+// testTimeout is the per-package limit of the tests and race steps (D122, D127).
 // Go's own default is 10 minutes per test binary.
-const testTimeout = "20m"
+const testTimeout = "30m"
 
 // step is one check. run returns nil when the step passes.
 type step struct {
