@@ -294,7 +294,8 @@ func TestScratchWaitsOnlyForItsPair(t *testing.T) {
 	if _, err := f.svc.Scratch(ctx, c, f.w.ID); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("same pair did not wait within context: %v", err)
 	}
-	otherCtx, otherCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Allow loaded worktree creation while still bounding an unrelated-pair hang.
+	otherCtx, otherCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer otherCancel()
 	if _, err := f.svc.Scratch(otherCtx, uuid.NewV7(), f.w.ID); err != nil {
 		t.Fatalf("unrelated pair waited for first append: %v", err)

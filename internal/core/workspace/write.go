@@ -429,7 +429,7 @@ func (w *Writer) Close() {
 // unexpected value, checks out files, changes the real index or appends records.
 func (s *Service) repairScratchTip(ctx context.Context, w workspaceState, scratch scratchState) (err error) {
 	defer func() {
-		if ctx.Err() != nil {
+		if err != nil && ctx.Err() != nil {
 			return
 		}
 		s.mu.Lock()

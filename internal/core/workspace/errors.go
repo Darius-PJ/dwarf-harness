@@ -23,6 +23,7 @@ var (
 	ErrStaleProposal       = errors.New("workspace: stale proposal")
 	ErrRevision            = errors.New("workspace: inputs revision changed")
 	ErrUnknownWorkspace    = errors.New("workspace: unknown workspace")
+	ErrUnknownRequest      = errors.New("workspace: unknown request")
 	ErrNoScratch           = errors.New("workspace: no open scratch")
 	ErrNotBound            = errors.New("workspace: caller is not bound")
 	ErrUnrepresentedEdits  = errors.New("workspace: unrepresented edits")

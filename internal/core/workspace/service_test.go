@@ -500,6 +500,12 @@ func TestOpenSweepsUnownedRefs(t *testing.T) {
 		if got, err := f.git.readRef(context.Background(), f.colony, f.p.CommonDir, captureRef, 40); err != nil || got != a.SealedTree {
 			t.Fatalf("admitted retention lost: %q %v", got, err)
 		}
+		// P16 interrupts pre-intent requests at recovery; exercise failed release on a fresh restart.
+		assertRecoveryOnce(t, f, r, nil, RequestInterrupted)
+		r.RequestID, r.RestartFrom = uuid.NewV7(), r.RequestID
+		mustAdmit(t, f, r)
+		a = admittedRecord(t, f, r.RequestID)
+		captureRef = "refs/dwarf-harness/captures/" + a.CaptureID.String()
 		advanceMain(t, f, map[string]string{"base.txt": "canonical\ntwo\n"})
 		mustIntegrate(t, f)
 		if err := f.git.createRef(context.Background(), f.colony, f.p.CommonDir, captureRef, a.SealedTree); err != nil {
@@ -552,7 +558,7 @@ func TestOpenRestoresRetainedRefs(t *testing.T) {
 			before := f.store.Durable()
 			report := f.reopen(t, serviceConfig())
 			if mode == "missing" {
-				if len(report.Pending) != 0 {
+				if !slices.Equal(report.Pending, []string{"promotion_recovery_pending " + f.w.ID.String()}) {
 					t.Fatalf("restore: %+v", report)
 				}
 				for ref, oid := range refs {
@@ -561,7 +567,7 @@ func TestOpenRestoresRetainedRefs(t *testing.T) {
 					}
 				}
 			} else {
-				if len(report.Pending) != 2 || !strings.Contains(strings.Join(report.Pending, "\n"), "capture_missing "+r.RequestID.String()) || !strings.Contains(strings.Join(report.Pending, "\n"), "generation_missing "+g.GenerationID.String()) {
+				if len(report.Pending) != 3 || !slices.Contains(report.Pending, "promotion_recovery_pending "+f.w.ID.String()) || !strings.Contains(strings.Join(report.Pending, "\n"), "capture_missing "+r.RequestID.String()) || !strings.Contains(strings.Join(report.Pending, "\n"), "generation_missing "+g.GenerationID.String()) {
 					t.Fatalf("missing retained objects not reported: %+v", report)
 				}
 				if mode == "different" {
@@ -596,7 +602,7 @@ func TestOpenRebuildsAdmissionState(t *testing.T) {
 	cfg.Capacity.CheckpointsPerPair = 1
 	cfg.Capacity.GenerationWindow = 1
 	report := f.reopen(t, cfg)
-	if len(report.Pending) != 0 {
+	if !slices.Equal(report.Pending, []string{"promotion_recovery_pending " + f.w.ID.String()}) {
 		t.Fatalf("replay: %+v", report)
 	}
 	// Open empties tmp, but creates no Git objects and changes no retained ref.
@@ -604,12 +610,29 @@ func TestOpenRebuildsAdmissionState(t *testing.T) {
 	if after.Durable != before.Durable || after.Capture.Objects != before.Capture.Objects || after.Capture.Refs != before.Capture.Refs {
 		t.Fatal("Open executed work")
 	}
-	assertBusy(t, promotionError(context.Background(), f.svc, r), "checkpoint_slots")
+	token, err := f.svc.pool.reserve(s.Dir, admissionReservation)
+	if token != nil {
+		token.release()
+		t.Fatal("Open lost occupied checkpoint slots")
+	}
+	assertBusy(t, err, "checkpoint_slots")
+	assertUnavailable(t, promotionError(context.Background(), f.svc, r), "promotion_recovery_pending")
+	before = snapshotRequestEffects(t, f)
+	assertUnavailable(t, f.svc.integrate(context.Background(), f.w.ID), "promotion_recovery_pending")
+	assertRequestEffects(t, f, before)
+	if result, err := f.svc.reconcilePromotions(context.Background(), f.w.ID, nil); err != nil || result.Interrupted != 1 {
+		t.Fatalf("queued bookkeeping: %+v %v", result, err)
+	}
+	if state, err := f.svc.RequestPromotion(context.Background(), Request{RequestID: r.Head, Actor: r.Actor, ContextID: r.ContextID, WorkspaceID: r.WorkspaceID, Head: f.svc.requests[r.Head].admission.ParentRequestID}); err != nil || state.State != RequestDependencyFailed {
+		t.Fatalf("replayed suffix: %+v %v", state, err)
+	}
 	if err := promotionError(context.Background(), f.svc, rootRequest(s)); !errors.Is(err, ErrStaleHead) {
 		t.Fatalf("replayed head lost: %v", err)
 	}
 	before = snapshotRequestEffects(t, f)
-	mustIntegrate(t, f)
+	if result, err := f.svc.reconcilePromotions(context.Background(), f.w.ID, nil); err != nil || result != (promotionRecovery{}) {
+		t.Fatalf("repeated bookkeeping: %+v %v", result, err)
+	}
 	assertRequestEffects(t, f, before)
 }
 
@@ -654,7 +677,9 @@ func TestRequestPoisonReplay(t *testing.T) {
 					t.Fatalf("poisoned integration: %v", err)
 				}
 				assertRequestEffects(t, f, before)
-				if report := f.reopen(t, cfg); len(report.Pending) != 0 {
+				report := f.reopen(t, cfg)
+				live := phase == "generation" || persist
+				if slices.Contains(report.Pending, "promotion_recovery_pending "+f.w.ID.String()) != live {
 					t.Fatalf("recovery: %+v", report)
 				}
 				after, err := f.svc.listRefs(context.Background(), f.svc.workspaces[f.w.ID], prefix)
@@ -673,7 +698,25 @@ func TestRequestPoisonReplay(t *testing.T) {
 					}
 					next := rootRequest(s)
 					next.Head = r.RequestID
-					assertBusy(t, promotionError(context.Background(), f.svc, next), "checkpoint_slots")
+					token, err := f.svc.pool.reserve(s.Dir, admissionReservation)
+					if token != nil {
+						token.release()
+						t.Fatal("replayed request lost its slot")
+					}
+					assertBusy(t, err, "checkpoint_slots")
+					assertUnavailable(t, promotionError(context.Background(), f.svc, next), "promotion_recovery_pending")
+					assertUnavailable(t, f.svc.integrate(context.Background(), f.w.ID), "promotion_recovery_pending")
+					if result, err := f.svc.reconcilePromotions(context.Background(), f.w.ID, nil); err != nil || result.Interrupted != 1 {
+						t.Fatalf("recovered ending: %+v %v", result, err)
+					}
+					state, err := f.svc.RequestPromotion(context.Background(), r)
+					if err != nil || state.State != RequestInterrupted {
+						t.Fatalf("interrupted state: %+v %v", state, err)
+					}
+					before := f.store.Durable()
+					if result, err := f.svc.reconcilePromotions(context.Background(), f.w.ID, nil); err != nil || result != (promotionRecovery{}) || f.store.Durable() != before {
+						t.Fatalf("duplicate ending: %+v %v", result, err)
+					}
 				}
 			})
 		}

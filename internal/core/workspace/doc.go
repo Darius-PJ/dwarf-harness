@@ -571,7 +571,8 @@
 // observed at the old tip ends interrupted with the live local suffix
 // dependency_failed in the same commit. A third tip, durability error or failed
 // acceptance append holds finalizing and finalization_pending without another
-// update-ref. Open replays that blocker; S3a does not resolve held intents.
+// update-ref. An unresolved intent survives Open as the workspace's blocker;
+// only reconcilePromotions resolves it under the five-row bookkeeping mapping.
 //
 // Both success kinds advance representation to the admission's sealed tree,
 // never the cumulative derived tree. They leave the base, anchor, private tip,
@@ -581,6 +582,33 @@
 // cancellation authority, interrupted suffixes, and manifest-only unpins.
 // Terminal record kind decides success: an unknown promotion_failed token is
 // unknown_failure with FailureOutcome, even when its text spells accepted.
+//
+// CancelPromotion authorizes only the owner or an agent in the admission's
+// context. Before intent it ends the request cancelled and its live local suffix
+// dependency_failed, with manifest unpins in checkpoint order in one commit.
+// Foreign survivors wait for explicit integration to rebuild stale generations.
+// An intact intent or acceptance answers too_late; cancellation repeats without
+// writing, and other terminal results answer already_terminal. An admission in
+// flight answers request_in_flight. Turn and writer lifetimes never cancel it.
+//
+// Open marks each workspace with live requests promotion_recovery_pending.
+// Admission, integration, finalization and no-change refuse until the explicit
+// bookkeeping phase runs; cancellation and status queries remain available.
+// reconcilePromotions first handles the unresolved intent, then interrupts every
+// other live request in admission order with its local dependent suffix. A
+// blocked intent keeps only its own request and slot. Pre-intent requests need
+// no writer proof: without an acknowledged intent no conforming Core issued CAS.
+//
+// Intent reconciliation requires exclusive ownership after a distinct prior
+// Service has drained, or completed Wait results for the known prior Core and
+// Git writers. A store lock, missing PID, timeout or dead Core alone proves
+// nothing. Under lockTrain, old main resolves interrupted; exact target main
+// completes storage durability and one missing acceptance with changed_paths
+// recomputed from the intent's recorded trees; absent/third/unreadable main or
+// unmet prerequisites retain the blocker. A durable acceptance is never repeated.
+// No path retries update-ref, capture, integration or validation. Completed
+// bookkeeping without an unresolved intent is a no-op. This conditional C2
+// proof does not fence unknown processes or grandchildren; that belongs to C10.
 //
 // # Request retention and replay sweep
 //
@@ -735,16 +763,31 @@
 // records creation, fresh and warm observe, a seal after ten edits, closure
 // observation, root and successor admission, two integrations and their rebuild
 // after a same-tree main advance, plus observe_task, temporary_first_write and
-// observe_temporary, for 1,000 and 10,000 roughly 800-byte files. Each row includes
-// manifest bytes, Git's loose object count and KiB, and retained scratch/body
-// footprint. Service observations compare files, index, refs and ledger against
-// independent Git outside the timers. Results and work
+// observe_temporary, for 1,000 and 10,000 roughly 800-byte files. F2-08 adds
+// finalization_baseline (read-only preflight), intent, guarded_main, durability,
+// acceptance_release, no_change, recovery_old and recovery_intended. Each row
+// includes manifest bytes, Git's loose object count and KiB, retained
+// scratch/body footprint, cumulative ledger records/bytes, live pins and retained
+// refs. Phase timers exclude the diagnostic snapshots between them. Service
+// observations compare files, index, refs and ledger against independent Git
+// outside the timers. Results and work
 // directories stay outside the repository. It skips under -race, leaves
 // Defender enabled and adds no exclusions, compares trees with reference Git,
 // and has no timing threshold. Burst concurrency remains C4's feasibility gate.
 // Windows long paths Git cannot list give unobservable_path; sharing violations
 // give unreadable. With filemode=false, tracked executable modes are preserved
 // and new files get 100644. Linux and macOS CI require Git at least 2.45.
+//
+// Calculation, not a throughput claim or SLA: assuming one change per 600 s for
+// each of 12/20 pairs gives 72/120 changes per hour; four-checkpoint bursts give
+// 48/80 requests. A ref-changing finalization adds three records (intent,
+// acceptance, manifest unpin), no-change two, and each failed checkpoint two.
+// There is no baseline record or evidence placeholder. With finalization cost F
+// seconds, serialized mechanical capacity cannot exceed 3600/F per hour and
+// those bursts take at least 48F/80F seconds before integration, validation and
+// contention. The provisional 150/hour target requires F <= 24 s. C4 measures
+// real validation, rework, resources, backlog and latency; these opt-in phases
+// measure only disposable mechanics, not validated accepted throughput.
 //
 // # Loose objects
 //

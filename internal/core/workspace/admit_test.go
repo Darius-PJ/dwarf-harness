@@ -273,7 +273,7 @@ func TestAdmissionUsesRecordedInputsRevision(t *testing.T) {
 	if err := os.Remove(filepath.Join(f.colony, "bodies", old[:2], old)); err != nil {
 		t.Fatal(err)
 	}
-	if report := f.reopen(t, serviceConfig()); len(report.Pending) != 0 {
+	if report := f.reopen(t, serviceConfig()); len(report.Pending) != 1 || report.Pending[0] != "promotion_recovery_pending "+f.w.ID.String() {
 		t.Fatalf("Open read superseded input bytes: %+v", report)
 	}
 	if got, err := f.svc.RequestPromotion(context.Background(), r); err != nil || got != want {

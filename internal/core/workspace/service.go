@@ -87,6 +87,7 @@ type Service struct {
 	intents                         map[uuid.UUID]ledger.FinalizationIntended
 	witnesses                       map[uuid.UUID]acceptedWitness
 	usedIntents                     map[uuid.UUID]bool
+	recoveryPending                 map[uuid.UUID]bool
 	// UUID-only historical facts enforce F2-06's never-reused identities.
 	usedCaptures, usedGenerations, usedLineages map[uuid.UUID]bool
 	// Manifest pins belong to live requests/latest observations; report pins survive until unpinned.
@@ -138,6 +139,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	s.intents = make(map[uuid.UUID]ledger.FinalizationIntended)
 	s.witnesses = make(map[uuid.UUID]acceptedWitness)
 	s.usedIntents = make(map[uuid.UUID]bool)
+	s.recoveryPending = make(map[uuid.UUID]bool)
 	s.usedCaptures = make(map[uuid.UUID]bool)
 	s.usedGenerations = make(map[uuid.UUID]bool)
 	s.usedLineages = make(map[uuid.UUID]bool)
@@ -176,6 +178,11 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 		}
 		if _, err := s.apply(ctx, drafts, commit.First, false); err != nil {
 			return nil, report, err
+		}
+	}
+	for id, train := range s.trains {
+		if len(train) != 0 {
+			s.recoveryPending[id] = true
 		}
 	}
 	for _, scratch := range s.scratches {
@@ -664,6 +671,9 @@ func sortedIDs[T any](m map[uuid.UUID]T) []uuid.UUID {
 
 func (s *Service) reconcile(ctx context.Context) Reconciliation {
 	var report Reconciliation
+	for id := range s.recoveryPending {
+		report.Pending = append(report.Pending, "promotion_recovery_pending "+id.String())
+	}
 	for id, attempt := range s.mergeBacks {
 		if attempt.pending() {
 			report.Pending = append(report.Pending, "merge_back_pending "+id.String())

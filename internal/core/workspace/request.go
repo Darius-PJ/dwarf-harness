@@ -35,6 +35,102 @@ type RequestState struct {
 	FailureOutcome string
 }
 
+// Cancellation identifies one admitted request. Actor states authority, not
+// identity; C3 authenticates the owner or the submitting context's agent.
+type Cancellation struct {
+	RequestID uuid.UUID
+	Actor     ledger.Actor
+	ContextID uuid.UUID
+}
+
+// CancellationResult reports cancelled, too_late or already_terminal with the
+// request's state. An admission in flight returns request_in_flight and ErrBusy.
+type CancellationResult struct {
+	Outcome string
+	State   RequestState
+}
+
+// cancellationState runs under mu, before and after acquiring lockTrain.
+func (s *Service) cancellationState(c Cancellation) (requestState, CancellationResult, error) {
+	var r requestState
+	var result CancellationResult
+	if err := s.usableLocked(); err != nil {
+		return r, result, err
+	}
+	if !validID(c.RequestID) || (c.Actor != ledger.ActorOwner && c.Actor != ledger.ActorAgent) ||
+		(c.Actor == ledger.ActorAgent && !validID(c.ContextID)) ||
+		(c.ContextID != (uuid.UUID{}) && !validID(c.ContextID)) {
+		return r, result, ErrInvalid
+	}
+	var exists bool
+	r, exists = s.requests[c.RequestID]
+	if !exists {
+		if s.inFlight[c.RequestID] {
+			result.Outcome = "request_in_flight"
+			return r, result, &BusyError{Reason: "request_in_flight"}
+		}
+		return r, result, ErrUnknownRequest
+	}
+	if c.Actor == ledger.ActorAgent && c.ContextID != r.admission.ContextID {
+		return requestState{}, result, ErrNotBound
+	}
+	result.State = r.state
+	switch {
+	case (r.intent != nil && r.ending == "") || r.ending == ledger.TypePromotionAccepted:
+		result.Outcome = "too_late"
+	case r.state.State == RequestCancelled:
+		result.Outcome = "cancelled"
+	case r.ending != "":
+		result.Outcome = "already_terminal"
+	}
+	return r, result, nil
+}
+
+// CancelPromotion ends a pre-intent request and its live local suffix. It never
+// cancels a foreign train survivor or reverses an intended canonical effect.
+func (s *Service) CancelPromotion(ctx context.Context, c Cancellation) (CancellationResult, error) {
+	if err := s.start(); err != nil {
+		return CancellationResult{}, err
+	}
+	defer s.ops.Done()
+	s.mu.Lock()
+	r, result, err := s.cancellationState(c)
+	s.mu.Unlock()
+	if err != nil || result.Outcome != "" {
+		return result, err
+	}
+	unlock, err := s.lockTrain(ctx, r.admission.WorkspaceID)
+	if err != nil {
+		return result, err
+	}
+	var released map[string]retainedRef
+	s.mu.Lock()
+	commonDir := s.workspaces[r.admission.WorkspaceID].CommonDir
+	s.mu.Unlock()
+	defer func() {
+		unlock()
+		for ref, retained := range released {
+			_, _, _ = s.git.repository(context.WithoutCancel(ctx), s.colony, commonDir, nil, []int{0}, "update-ref", "-d", "--end-of-options", ref, retained.object)
+		}
+	}()
+	s.mu.Lock()
+	r, result, err = s.cancellationState(c)
+	if err == nil && result.Outcome == "" {
+		var drafts []ledger.Draft
+		var ended []uuid.UUID
+		drafts, ended, err = s.endingDrafts(r, ledger.FailedCancelled, c.Actor, r.admission.ContextID, uuid.UUID{})
+		if err == nil {
+			released, err = s.finishFinalizationLocked(ctx, r.admission.WorkspaceID, drafts, ended)
+		}
+		result.State = s.requests[c.RequestID].state
+		if err == nil {
+			result.Outcome = "cancelled"
+		}
+	}
+	s.mu.Unlock()
+	return result, err
+}
+
 const (
 	RequestPending          = "pending"
 	RequestConflict         = "conflict"
@@ -135,6 +231,10 @@ func (s *Service) beginRequest(ctx context.Context, r Request) (requestPlan, *re
 	if previous, found, err := s.identity(r); found {
 		s.mu.Unlock()
 		return zero, nil, previous, err
+	}
+	if s.recoveryPending[r.WorkspaceID] {
+		s.mu.Unlock()
+		return zero, nil, state, &UnavailableError{Reason: "promotion_recovery_pending"}
 	}
 	id, ok := s.pairs[scratchPair{r.ContextID, r.WorkspaceID}]
 	if !ok {

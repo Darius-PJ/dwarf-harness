@@ -165,6 +165,9 @@ func (s *Service) finalizationCandidate(id, generationID uuid.UUID) (requestStat
 	if _, pending := s.intents[a.WorkspaceID]; pending {
 		return r, &UnavailableError{Reason: "finalization_pending"}
 	}
+	if s.recoveryPending[a.WorkspaceID] {
+		return r, &UnavailableError{Reason: "promotion_recovery_pending"}
+	}
 	if r.ending != "" {
 		return r, nil
 	}
@@ -302,7 +305,11 @@ func (s *Service) finalizeRequest(ctx context.Context, requestID, generationID u
 	s.finalizeStep("cas")
 	effect, effectErr := s.guardedMainUpdate(ctx, w, commit, g.DerivedCommit, g.DerivedTree)
 	if effectErr != nil || effect == mainUpdateThird {
-		return r.state, &UnavailableError{Reason: "finalization_pending", Detail: fmt.Sprint(effectErr)}
+		pending := &UnavailableError{Reason: "finalization_pending"}
+		if effectErr != nil {
+			pending.Detail = effectErr.Error()
+		}
+		return r.state, pending
 	}
 	if effect == mainUpdateRefused {
 		// Include any successor admitted during the CAS in the same ending.
@@ -366,6 +373,204 @@ func (s *Service) finishFinalizationLocked(ctx context.Context, workspaceID uuid
 		delete(before, ref)
 	}
 	return before, nil
+}
+
+// A completed Wait supplies the process state even for a killed/nonzero exit.
+// Pid comes from that state, never a separately asserted PID or a liveness poll.
+type waitedWriter struct{ State *os.ProcessState }
+
+// Exactly one proof form is supplied by the host that owned all known writers.
+// This is cooperative C2 ownership, not C10 fencing of unknown descendants.
+type writerQuiescence struct {
+	WorkspaceID    uuid.UUID
+	DrainedService *Service
+	PriorCore      *waitedWriter
+	PriorGit       []waitedWriter
+}
+
+func (s *Service) writersQuiescent(workspaceID uuid.UUID, writers *writerQuiescence) bool {
+	if writers == nil || writers.WorkspaceID != workspaceID {
+		return false
+	}
+	if prior := writers.DrainedService; prior != nil {
+		if prior == s || writers.PriorCore != nil || len(writers.PriorGit) != 0 ||
+			prior.store.Colony() != s.store.Colony() {
+			return false
+		}
+		select {
+		case <-prior.closeDone:
+			old, exists := prior.workspaces[workspaceID]
+			return exists && old.CommonDir == s.workspaces[workspaceID].CommonDir
+		default:
+			return false
+		}
+	}
+	if writers.PriorCore == nil || writers.PriorCore.State == nil || writers.PriorCore.State.Pid() <= 0 {
+		return false
+	}
+	for _, writer := range writers.PriorGit {
+		if writer.State == nil || writer.State.Pid() <= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+type promotionRecovery struct {
+	Interrupted, Accepted int
+	Pending               string
+	IntentID              uuid.UUID
+}
+
+// reconcilePromotions is bookkeeping, never execution restart. Open supplies
+// the pre-intent work set; an unresolved intent can be revisited after a missing
+// prerequisite is restored. A completed phase without an intent does nothing.
+func (s *Service) reconcilePromotions(ctx context.Context, workspaceID uuid.UUID, writers *writerQuiescence) (result promotionRecovery, err error) {
+	if err := s.start(); err != nil {
+		return result, err
+	}
+	defer s.ops.Done()
+	if !validID(workspaceID) {
+		return result, ErrInvalid
+	}
+	unlock, err := s.lockTrain(ctx, workspaceID)
+	if err != nil {
+		return result, err
+	}
+	s.mu.Lock()
+	w := s.workspaces[workspaceID]
+	phase := s.recoveryPending[workspaceID]
+	intent, hasIntent := s.intents[workspaceID]
+	s.mu.Unlock()
+	released := make(map[string]retainedRef)
+	defer func() {
+		unlock()
+		for ref, retained := range released {
+			_, _, _ = s.git.repository(context.WithoutCancel(ctx), s.colony, w.CommonDir, nil, []int{0}, "update-ref", "-d", "--end-of-options", ref, retained.object)
+		}
+	}()
+	if !phase && !hasIntent {
+		return result, nil
+	}
+	var pending error
+	if hasIntent {
+		result.IntentID = intent.IntentID
+		s.mu.Lock()
+		proven := s.writersQuiescent(workspaceID, writers)
+		s.mu.Unlock()
+		if !proven {
+			pending = &UnavailableError{Reason: "writer_unfenced"}
+		} else {
+			var refs map[string]retainedRef
+			var accepted bool
+			refs, accepted, pending = s.reconcileIntent(ctx, w, intent)
+			if pending == nil {
+				for ref, retained := range refs {
+					released[ref] = retained
+				}
+				if accepted {
+					result.Accepted++
+				} else {
+					result.Interrupted++
+				}
+				result.IntentID = uuid.UUID{}
+			}
+		}
+		if pending != nil {
+			result.Pending = "finalization_pending"
+			var unavailable *UnavailableError
+			if errors.As(pending, &unavailable) {
+				result.Pending = unavailable.Reason
+			}
+		}
+	}
+	if phase {
+		for {
+			s.mu.Lock()
+			if err := s.usableLocked(); err != nil {
+				s.mu.Unlock()
+				return result, err
+			}
+			var next requestState
+			for _, id := range s.trains[workspaceID] {
+				if hasIntent && id == intent.RequestID {
+					continue
+				}
+				next = s.requests[id]
+				break
+			}
+			if next.admission.RequestID == (uuid.UUID{}) {
+				delete(s.recoveryPending, workspaceID)
+				s.mu.Unlock()
+				break
+			}
+			drafts, ended, err := s.endingDrafts(next, ledger.FailedInterrupted, ledger.ActorCore, next.admission.ContextID, uuid.UUID{})
+			var refs map[string]retainedRef
+			if err == nil {
+				refs, err = s.finishFinalizationLocked(ctx, workspaceID, drafts, ended)
+			}
+			s.mu.Unlock()
+			if err != nil {
+				return result, err
+			}
+			for ref, retained := range refs {
+				released[ref] = retained
+			}
+			result.Interrupted++
+		}
+	}
+	return result, pending
+}
+
+func (s *Service) reconcileIntent(ctx context.Context, w workspaceState, intent ledger.FinalizationIntended) (map[string]retainedRef, bool, error) {
+	if err := s.integrationReady(ctx, w); err != nil {
+		return nil, false, err
+	}
+	if err := s.canonicalPreflight(ctx, w, intent.PredecessorCommit, intent.TargetCommit, intent.TargetTree); err != nil {
+		return nil, false, err
+	}
+	commit, tree, err := s.mainTip(ctx, w)
+	if err != nil {
+		return nil, false, err
+	}
+	s.mu.Lock()
+	r := s.requests[intent.RequestID]
+	s.mu.Unlock()
+	switch {
+	case commit == intent.PredecessorCommit && tree == intent.PredecessorTree:
+		s.mu.Lock()
+		drafts, ended, err := s.endingDrafts(r, ledger.FailedInterrupted, ledger.ActorCore, r.admission.ContextID, uuid.UUID{})
+		var refs map[string]retainedRef
+		if err == nil {
+			refs, err = s.finishFinalizationLocked(ctx, w.ID, drafts, ended)
+		}
+		s.mu.Unlock()
+		return refs, false, err
+	case commit == intent.TargetCommit && tree == intent.TargetTree:
+		s.finalizeStep("durability")
+		if err := s.hardenCanonicalStorage(ctx, w, intent.TargetCommit, intent.TargetTree); err != nil {
+			return nil, false, err
+		}
+		paths, err := s.scratchPaths(ctx, w, intent.PredecessorTree, intent.TargetTree)
+		if err != nil {
+			return nil, false, err
+		}
+		p := ledger.PromotionAccepted{IntentID: intent.IntentID, RequestID: intent.RequestID, GenerationID: intent.GenerationID, PredecessorWitnessSeq: intent.PredecessorWitnessSeq, PredecessorCommit: intent.PredecessorCommit, PredecessorTree: intent.PredecessorTree, AcceptedCommit: intent.TargetCommit, AcceptedTree: intent.TargetTree, ChangedPaths: paths}
+		payload, err := p.Encode()
+		if err != nil {
+			return nil, false, err
+		}
+		unpin, err := unpinDraft(r.admission.PinID, r.admission.ContextID)
+		if err != nil {
+			return nil, false, err
+		}
+		drafts := []ledger.Draft{{Type: ledger.TypePromotionAccepted, TypeVersion: 1, Actor: ledger.ActorCore, ContextID: r.admission.ContextID, Payload: payload}, unpin}
+		s.finalizeStep("acceptance")
+		refs, err := s.finishFinalization(ctx, w.ID, drafts, []uuid.UUID{intent.RequestID})
+		return refs, true, err
+	default:
+		return nil, false, &UnavailableError{Reason: "finalization_pending"}
+	}
 }
 
 // applyFinalizationRecord checks frozen (D123) record facts, never Git or bodies.

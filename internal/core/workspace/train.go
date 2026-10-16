@@ -37,6 +37,9 @@ func (s *Service) integrate(ctx context.Context, workspaceID uuid.UUID) error {
 				err = &UnavailableError{Reason: "finalization_pending"}
 			}
 		}
+		if err == nil && s.recoveryPending[workspaceID] {
+			err = &UnavailableError{Reason: "promotion_recovery_pending"}
+		}
 		s.mu.Unlock()
 		if err != nil {
 			return err

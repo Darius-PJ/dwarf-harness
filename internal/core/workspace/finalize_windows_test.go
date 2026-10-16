@@ -39,33 +39,38 @@ func holdCanonicalPath(t *testing.T, path string, directory bool) func() {
 
 func TestWindowsPackedRefDurability(t *testing.T) {
 	t.Parallel()
-	h := newFinalizationHistory(t, "sha1")
-	for _, row := range []string{"flush", "held-packed-ref"} {
-		t.Run(row, func(t *testing.T) {
+	for _, format := range []string{"sha1", "sha256"} {
+		t.Run(format, func(t *testing.T) {
 			t.Parallel()
-			f, w := finalizationFixture(t, h, true)
-			packed := readTestFile(t, filepath.Join(w.CommonDir, "packed-refs"))
-			before := canonicalFiles(t, w.CommonDir)
-			updates := countCanonicalUpdates(f.svc.git)
-			if row == "held-packed-ref" {
-				release := holdCanonicalPath(t, filepath.Join(w.CommonDir, "packed-refs"), false)
-				state, err := f.svc.guardedMainUpdate(context.Background(), w, h.old, h.target, h.tree)
-				release()
-				if err == nil || state == mainUpdateMoved || !reflect.DeepEqual(before, canonicalFiles(t, w.CommonDir)) {
-					t.Fatalf("held packed refs did not refuse safely: %v %v", state, err)
-				}
-				t.Logf("held packed-refs real error: %v", err)
-				return
-			}
-			state, err := f.svc.guardedMainUpdate(context.Background(), w, h.old, h.target, h.tree)
-			if err != nil || state != mainUpdateMoved {
-				t.Fatalf("packed update: %v %v", state, err)
-			}
-			if err := f.svc.hardenCanonicalStorage(context.Background(), w, h.target, h.tree); err != nil {
-				t.Fatal(err)
-			}
-			if *updates != 1 || !bytes.Equal(packed, readTestFile(t, filepath.Join(w.CommonDir, "packed-refs"))) || string(readTestFile(t, filepath.Join(w.CommonDir, "refs", "heads", "main"))) != h.target+"\n" {
-				t.Fatal("packed main did not become the exact durable loose target")
+			h := newFinalizationHistory(t, format)
+			for _, row := range []string{"flush", "held-packed-ref"} {
+				t.Run(row, func(t *testing.T) {
+					t.Parallel()
+					f, w := finalizationFixture(t, h, true)
+					packed := readTestFile(t, filepath.Join(w.CommonDir, "packed-refs"))
+					before := canonicalFiles(t, w.CommonDir)
+					updates := countCanonicalUpdates(f.svc.git)
+					if row == "held-packed-ref" {
+						release := holdCanonicalPath(t, filepath.Join(w.CommonDir, "packed-refs"), false)
+						state, err := f.svc.guardedMainUpdate(context.Background(), w, h.old, h.target, h.tree)
+						release()
+						if err == nil || state == mainUpdateMoved || !reflect.DeepEqual(before, canonicalFiles(t, w.CommonDir)) {
+							t.Fatalf("held packed refs did not refuse safely: %v %v", state, err)
+						}
+						t.Logf("held packed-refs real error: %v", err)
+						return
+					}
+					state, err := f.svc.guardedMainUpdate(context.Background(), w, h.old, h.target, h.tree)
+					if err != nil || state != mainUpdateMoved {
+						t.Fatalf("packed update: %v %v", state, err)
+					}
+					if err := f.svc.hardenCanonicalStorage(context.Background(), w, h.target, h.tree); err != nil {
+						t.Fatal(err)
+					}
+					if *updates != 1 || !bytes.Equal(packed, readTestFile(t, filepath.Join(w.CommonDir, "packed-refs"))) || string(readTestFile(t, filepath.Join(w.CommonDir, "refs", "heads", "main"))) != h.target+"\n" {
+						t.Fatal("packed main did not become the exact durable loose target")
+					}
+				})
 			}
 		})
 	}

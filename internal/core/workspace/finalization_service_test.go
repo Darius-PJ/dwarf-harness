@@ -262,6 +262,7 @@ func TestFinalizationStoreFailure(t *testing.T) {
 				assertCanonicalTip(t, f, g.DerivedCommit)
 				assertFinalizationHeld(t, f, r, g, updates)
 			}
+			prior := f.svc
 			if err := f.svc.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -278,6 +279,11 @@ func TestFinalizationStoreFailure(t *testing.T) {
 				*updates = 1 // the original service issued the sole CAS
 				assertFinalizationHeld(t, f, r, g, updates)
 			}
+			want := RequestInterrupted
+			if gate == ledger.TypePromotionAccepted {
+				want = RequestAccepted
+			}
+			assertRecoveryOnce(t, f, r, &writerQuiescence{WorkspaceID: f.w.ID, DrainedService: prior}, want)
 		})
 	}
 }

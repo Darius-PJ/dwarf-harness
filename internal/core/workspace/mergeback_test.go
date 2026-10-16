@@ -920,8 +920,9 @@ func TestMergeBackDurableNoticeAndProvenance(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(replayed, notices) || f.store.Durable() != before {
 		t.Fatalf("notice replay changed history: %+v %v", replayed, err)
 	}
+	assertRecoveryOnce(t, f, root, nil, RequestInterrupted)
 	proposed := rootRequest(task)
-	proposed.Head = next.RequestID
+	proposed.RestartFrom = next.RequestID
 	assertUnavailable(t, promotionError(ctx, f.svc, proposed), "no_validator")
 }
 

@@ -68,6 +68,10 @@ type captureWorkloadRow struct {
 	RetainedScratchBytes int64   `json:"retained_scratch_bytes"`
 	RetainedBodyBytes    int64   `json:"retained_body_bytes"`
 	Unresolved           int     `json:"unresolved"`
+	LedgerRecords        uint64  `json:"ledger_records"`
+	LedgerBytes          int64   `json:"ledger_bytes"`
+	LivePins             int     `json:"live_pins"`
+	RetainedRefs         int     `json:"retained_refs"`
 }
 
 func TestCaptureWorkload(t *testing.T) {
@@ -161,12 +165,37 @@ func TestCaptureWorkload(t *testing.T) {
 				row.ManifestBytes = len(result.Manifest)
 				row.RetainedScratchBytes = footprint(filepath.Join(f.colony, "scratch"))
 				row.RetainedBodyBytes = footprint(filepath.Join(f.colony, "bodies"))
+				row.LedgerRecords = store.Durable()
+				row.LedgerBytes = footprint(store.LogDir())
+				pins := make(map[uuid.UUID]bool)
+				for _, commit := range serviceCommits(t, store) {
+					for _, record := range commit.Records {
+						switch record.Type {
+						case ledger.TypeBodyPin:
+							pin, err := ledger.DecodeBodyPin(record.Payload)
+							if err != nil {
+								t.Fatal(err)
+							}
+							pins[pin.PinID] = true
+						case ledger.TypeBodyUnpin:
+							pin, err := ledger.DecodeBodyUnpin(record.Payload)
+							if err != nil {
+								t.Fatal(err)
+							}
+							delete(pins, pin.PinID)
+						}
+					}
+				}
+				row.LivePins = len(pins)
+				refs := gitCommand(t, f.env, f.root, nil, "for-each-ref", "--format=%(refname)", "refs/dwarf-harness/")
+				row.RetainedRefs = len(strings.Fields(string(refs)))
 				if workloadService != nil {
 					for _, attempt := range workloadService.mergeBacks {
 						if attempt.pending() {
 							row.Unresolved++
 						}
 					}
+					row.Unresolved += len(workloadService.intents)
 				}
 				for _, line := range strings.Split(string(gitCommand(t, f.env, f.root, nil, "count-objects", "-v")), "\n") {
 					key, value, ok := strings.Cut(line, ": ")
@@ -478,6 +507,82 @@ func TestCaptureWorkload(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+			}
+			// F2-08 has no baseline record or evidence placeholder. This measures
+			// mechanical work only; C4 must add real validation and contention.
+			rootRequestID := svc.requests[request.RequestID].admission.ParentRequestID
+			start = time.Now()
+			noChange, err := svc.noChange(context.Background(), rootRequestID)
+			duration = time.Since(start)
+			if err != nil || noChange.State != RequestNoChange {
+				t.Fatalf("workload no-change: %+v %v", noChange, err)
+			}
+			writeRow("no_change", duration, captureResult{Tree: baseline})
+			mustIntegrate(t, sf) // the no-change parent's unaccepted commit is stale
+			generation := currentGeneration(t, sf, request)
+			phaseStart := time.Now()
+			svc.deps.beforeFinalizeStep = func(step string) {
+				var phase string
+				switch step {
+				case "preflight":
+					phaseStart = time.Now()
+					return
+				case "intent":
+					phase = "finalization_baseline"
+				case "cas":
+					phase = "intent"
+				case "durability":
+					phase = "guarded_main"
+				case "acceptance":
+					phase = "durability"
+				case "release":
+					return
+				default:
+					t.Fatalf("unexpected finalization phase %s", step)
+				}
+				writeRow(phase, time.Since(phaseStart), captureResult{Tree: generation.DerivedTree})
+				phaseStart = time.Now()
+			}
+			state, err := svc.finalize(context.Background(), request.RequestID, generation.GenerationID)
+			duration = time.Since(phaseStart)
+			svc.deps.beforeFinalizeStep = nil
+			if err != nil || state.State != RequestAccepted {
+				t.Fatalf("workload acceptance: %+v %v", state, err)
+			}
+			writeRow("acceptance_release", duration, captureResult{Tree: generation.DerivedTree})
+			for _, phase := range []string{"recovery_old", "recovery_intended"} {
+				recoveryScratch := mustScratch(t, sf, uuid.NewV7())
+				writeTestFile(t, filepath.Join(recoveryScratch.Dir, phase+".txt"), []byte("recovery fixture\n"))
+				recoveryRequest := rootRequest(recoveryScratch)
+				mustAdmit(t, sf, recoveryRequest)
+				mustIntegrate(t, sf)
+				step := "cas"
+				want := RequestInterrupted
+				if phase == "recovery_intended" {
+					step, want = "durability", RequestAccepted
+				}
+				holdFinalizationIntent(t, sf, recoveryRequest, step)
+				prior := svc
+				if err := prior.Close(); err != nil {
+					t.Fatal(err)
+				}
+				svc, _, err = openService(context.Background(), store, f.colony, Config{Capacity: &profile}, serviceDeps{environ: func() []string { return f.env }})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer svc.Close()
+				sf.svc, workloadService = svc, svc
+				start = time.Now()
+				_, err = svc.reconcilePromotions(context.Background(), w.ID, &writerQuiescence{WorkspaceID: w.ID, DrainedService: prior})
+				duration = time.Since(start)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state, err := svc.RequestPromotion(context.Background(), recoveryRequest)
+				if err != nil || state.State != want {
+					t.Fatalf("%s: %+v %v", phase, state, err)
+				}
+				writeRow(phase, duration, captureResult{Tree: svc.scratches[recoveryScratch.ID].representedTree})
 			}
 		})
 	}
