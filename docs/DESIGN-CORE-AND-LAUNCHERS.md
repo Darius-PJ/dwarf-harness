@@ -686,7 +686,7 @@ Both SDKs are viable and expose per-request headers, raw JSON/responses/stream e
 | Agent/Corps structure | Design only | Relationship/board context growth, broker queues, Diplomat/Grand fan-out, Griot updates and per-context accounting |
 | Child cleanup | Design only | Surviving descendant count after normal and abnormal shutdown; target zero |
 | Colony log | C1's ledger and body store (A.10): cold and warm recovery, durable appends under steady, burst and saturating load, body publication, old command-ID lookups, explicit collection, peak memory and disk, measured on one Windows NTFS machine against an assumed workload at 12, 20 and 60 contexts. Candidate prototypes (A.8): with our own log, 0.52 ms per durable one-event commit and 29 ms to read 20,000 events back | Budgets for startup replay time and index memory; the measured triggers for a SQLite index and for snapshots (D34); owner-agreed thresholds |
-| Workspaces | C2's scratch creation and exact capture (A.11): creation, a fresh and a warm observe, a seal after ten edits and a closure's observe, at 1,000 and 10,000 files, one capture at a time, measured on one Windows NTFS machine. C2's checkpoints and integration (A.12): a root and a successor admission, and the integration of their two-request train and its rebuild after `main` moved, at the same sizes, one call at a time, with Git's loose-object counts, measured once on the same machine. C2's temporary scratches and merge-back (A.13): a task's and a temporary's observation, a temporary's creation, and a fast-forward and an explicit-base merge-back, at the same sizes, and a writer's lease at 10,000 files, one call at a time, with the retained scratch and body bytes, measured once on the same machine. Git operations on synthetic repositories (A.7) | The concurrent cost of captures, admissions, integrations, observations and merge-backs in a synchronized burst, with conflicts, full generation windows and several temporaries per task, C4's feasibility gate; a maintenance policy for loose objects, revisited at C4's capacity gate; observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
+| Workspaces | C2's scratch creation and exact capture (A.11): creation, a fresh and a warm observe, a seal after ten edits and a closure's observe, at 1,000 and 10,000 files, one capture at a time, measured on one Windows NTFS machine. C2's checkpoints and integration (A.12): a root and a successor admission, and the integration of their two-request train and its rebuild after `main` moved, at the same sizes, one call at a time, with Git's loose-object counts, measured once on the same machine. C2's temporary scratches and merge-back (A.13): a task's and a temporary's observation, a temporary's creation, and a fast-forward and an explicit-base merge-back, at the same sizes, and a writer's lease at 10,000 files, one call at a time, with the retained scratch and body bytes, measured once on the same machine. C2's finalization and recovery (A.14): a no-change ending, each step of one finalization, and the reconciliation of an interrupted and of a completed update after a restart, at the same sizes, one call at a time and without validation, with the log's records and bytes, live pins and retained refs, measured once on the same machine. Git operations on synthetic repositories (A.7) | The concurrent cost of captures, admissions, integrations, observations, merge-backs and finalizations in a synchronized burst, with conflicts, full generation windows and several temporaries per task, C4's feasibility gate; a maintenance policy for loose objects, revisited at C4's capacity gate; observation, temporary-scratch merge-back and spare-worktree reuse on real workspaces |
 | Promotion capacity | Illustrative model only (§3.5); no concurrent integrated benchmark | Real every-change accepted throughput/latency and burst drain; lane/queue bounds; speculative rework, ordered finalization and whole-process resource costs under the plan above |
 
 ## 9. Rollout (proposed)
@@ -1022,7 +1022,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 
 **Unchanged.** D94's prohibitions on emergency or timeout promotion, waived handoff (other than the owner's unrecoverable declaration) and GUI bypass; exactly one holder per office; D82 grants, D83 retirement history and D85 private-memory limits; D22/D63/D79 one-shot paid attempts, passive results and no bookkeeping model calls. Records, encodings and the calibration of the allotment, proposal cap and restart bursts remain producer work; no implementation is claimed.
 
-## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09, 2026-10-10, 2026-10-12, 2026-10-13 and 2026-10-15
+## Appendix A — Retained measurements, 2026-09-28, 2026-10-02, 2026-10-09, 2026-10-10, 2026-10-12, 2026-10-13, 2026-10-15 and 2026-10-16
 
 ### A.1 Setup and limits
 
@@ -1032,7 +1032,7 @@ This section specifies the ordinary procedure D94 deferred to operational docume
 - Adapter runs used a local fake provider with canned streaming responses. Figures are medians of five runs unless noted.
 - The machine ran about twice as slowly as during the earlier language study. Compare values within a table, not timing numbers across sessions.
 - The old combined prototype included terminal and external-browser paths. Only relevant terminal/adapter/router results are retained below; its full record is archived in `superceeded-Design.md`, in the archive folder `../dwarfharness/`, outside this repository. No native UI, concurrent launcher attachment or Corps workload was measured.
-- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02, A.10 from 2026-10-09 and 2026-10-10, A.11 from 2026-10-12, A.12 from 2026-10-13, and A.13 from 2026-10-15; each states its own setup.
+- This setup applies to A.2–A.6, measured on 2026-09-28. A.7–A.9 date from 2026-10-02, A.10 from 2026-10-09 and 2026-10-10, A.11 from 2026-10-12, A.12 from 2026-10-13, A.13 from 2026-10-15, and A.14 from 2026-10-16; each states its own setup.
 
 ### A.2 Standalone prototype binary sizes
 
@@ -1511,6 +1511,87 @@ Fields: the first table reports `phase`, `files`, `duration_ms` ÷ 1,000, `core_
 - Scratch and body bytes cover the colony's directories only, not the workspace repository's objects or the worktrees' administrative files. The loose figures are what `git count-objects -v` reported in one fresh repository per size; Core runs no maintenance (B25). Neither is a disk budget.
 - `observe_task` is the task's first observation; neither the file cache nor antivirus scanning was controlled or observed.
 - The harness records wall time and the byte and object figures only, with no CPU time or memory figure.
+
+### A.14 Finalization, cancellation and recovery (C2, ticket 08)
+
+**Setup:** 2026-10-16, on the owner's machine, the one A.11 describes, with no antivirus exclusion added by the build; go1.27.2, windows/amd64, without the race detector; Git 2.55.0.windows.3. The workload's repositories, colonies and scratches lay in temporary directories under `%TEMP%`, outside the repository, which the harness checks. The harness is `TestCaptureWorkload` in `internal/core/workspace/workload_test.go` at commit 7a6624b. It ran once, alone, with `DWARF_CAPTURE_WORKLOAD_OUT` naming a results file outside the repository, and wrote one JSON line per timed phase; each line also records the Git and Go versions and the platform. The raw results are [`ticket-08-capture-workload.jsonl`](../.scratch/dwarf-harness/c2-evidence/ticket-08-capture-workload.jsonl). Under the tables, "Fields" names the JSON fields each reports.
+
+**Workload, synthetic.** For each size, 1,000 and 10,000 files, the harness runs A.12's nine phases and A.13's six as those sections describe them, and, outside every timer, A.13's two writers at once. Ticket 08's phases follow on the same service, each timed from `time.Now` to `time.Since`, Git's child processes included. The five phases of one finalization are timed between the steps at which the service calls its test-only hook, `beforeFinalizeStep`, and together run from the preflight to the call's return:
+
+- `no_change`: one `noChange` of the root request that A.12's `admit_root` admitted. It carries no change, so its current generation, built over the `main` that `rebuild_two` advanced, has its predecessor's tree, and the call ends it with one commit holding `workspace.promotion_no_change` and the admission's unpin, with no intent and no update of `main`. Outside the timer, one integration then rebuilds the successor's generation over `main`, since the no-change parent's commit was never accepted;
+- `finalization_baseline`: in one `finalize` of the successor, which carries the ten edits its admission sealed, the preflight before the intent: the workspace's readiness, `main`'s commit and tree against the generation's predecessor, the tree comparison, the canonical checks (the `files` ref backend, a `main` that is not symbolic and is checked out nowhere, a target with the generation's tree and the old tip as its only parent), the changed path set and the encoded size of the acceptance. The phase's name notwithstanding, F2-08 has no baseline record (ticket 08's design ruling, P3);
+- `intent`: the durable commit of `workspace.finalization_intended`;
+- `guarded_main`: the same canonical checks again, one `update-ref --no-deref --end-of-options refs/heads/main <target> <old>`, and the read of `main` that decides its outcome;
+- `durability`: `hardenCanonicalStorage`: the flushes of every existing object fan-out directory, `objects/pack`, `objects`, `refs/heads`, `refs` and the common directory, child before parent, then a re-read of `main`'s commit and tree;
+- `acceptance_release`: one commit holding `workspace.promotion_accepted` and the admission's unpin; the release of the request's slot, the workspace's blocker and its train lock; and the deletion of each ref Core no longer retains, by `update-ref -d` against its recorded object;
+- `recovery_old` and `recovery_intended`: outside the timer, a new scratch with one new file is admitted as a root request and integrated, and its `finalize` is stopped by cancelling its context at the step before the update of `main` or at the step after it, before the flushes; the service is closed and a new one opened on the same store, whose Open lists the workspace `promotion_recovery_pending`. The timed call is one `reconcilePromotions`, given the closed service as proof that its writers have stopped. With `main` still at the old tip, it ends the request `interrupted`, resolving the intent, with the admission's unpin; with `main` at the target, it runs the same flushes and records the acceptance with its unpin, without a second update of `main`.
+
+**Model, an assumption.** The sources fix only promotion rates: 12 or 20 code-working pairs, each offering one change per 600 s, 72 and 120 an hour (D78, B15; `ROADMAP-CORE.md` C2). Finalization is one serialized sequence per workspace (D59, D77), so a workspace finalizes at most 3,600/F changes an hour, F being the whole sequence from the preflight to the release. The provisional target of 1.25 times steady demand, 150 an hour at 20 pairs, would need F ≤ 24 s if every pair shared one workspace, before validation or any other contention: a calculation, not a budget (ticket 08's design brief, §5, in `.scratch/dwarf-harness/c2-evidence/`). A finalization that moves `main` appends three records in two commits, and a no-change ending two in one. The harness measures one call at a time in one workspace, without validation: the mechanical cost of a single finalization, not of a burst or of accepted work.
+
+**Phases.** Two tables give every line of the results. The first holds ticket 08's eight phases, in the order the harness wrote them, at 1,000 files and then at 10,000. The second holds the fifteen earlier phases, A.12's nine and A.13's six with `lease` at 10,000 files only, at 1,000 files and then at 10,000, in the same order: one more single measurement of each on the same machine.
+
+| Phase | Files | Time (s) | Ledger records | Ledger bytes | Live pins | Retained refs | Unresolved | Loose objects | Loose (KiB) |
+|---|---|---|---|---|---|---|---|---|---|
+| `no_change` | 1,000 | 0.164 | 59 | 56,814 | 4 | 14 | 0 | 87 | 150 |
+| `finalization_baseline` | 1,000 | 0.449 | 60 | 57,769 | 4 | 14 | 0 | 88 | 150 |
+| `intent` | 1,000 | 0.000551 | 61 | 58,688 | 4 | 14 | 1 | 88 | 150 |
+| `guarded_main` | 1,000 | 0.331 | 61 | 58,688 | 4 | 14 | 1 | 88 | 150 |
+| `durability` | 1,000 | 0.0791 | 61 | 58,688 | 4 | 14 | 1 | 88 | 150 |
+| `acceptance_release` | 1,000 | 0.0819 | 63 | 60,251 | 3 | 12 | 0 | 88 | 150 |
+| `recovery_old` | 1,000 | 0.485 | 70 | 65,940 | 3 | 11 | 0 | 91 | 151 |
+| `recovery_intended` | 1,000 | 0.508 | 77 | 72,030 | 3 | 13 | 0 | 93 | 151 |
+| `no_change` | 10,000 | 0.163 | 59 | 56,816 | 4 | 14 | 0 | 87 | 1,453 |
+| `finalization_baseline` | 10,000 | 0.435 | 60 | 57,771 | 4 | 14 | 0 | 88 | 1,453 |
+| `intent` | 10,000 | 0.000566 | 61 | 58,690 | 4 | 14 | 1 | 88 | 1,453 |
+| `guarded_main` | 10,000 | 0.347 | 61 | 58,690 | 4 | 14 | 1 | 88 | 1,453 |
+| `durability` | 10,000 | 0.0829 | 61 | 58,690 | 4 | 14 | 1 | 88 | 1,453 |
+| `acceptance_release` | 10,000 | 0.0890 | 63 | 60,253 | 3 | 12 | 0 | 88 | 1,453 |
+| `recovery_old` | 10,000 | 0.432 | 70 | 65,942 | 3 | 11 | 0 | 91 | 1,453 |
+| `recovery_intended` | 10,000 | 0.536 | 77 | 72,032 | 3 | 13 | 0 | 93 | 1,454 |
+
+| Phase | Files | Time (s) | Raw bytes | Manifest bytes | Scratch bytes | Body bytes | Unresolved | Loose objects | Loose (KiB) |
+|---|---|---|---|---|---|---|---|---|---|
+| `creation` | 1,000 | 0.905 | 0 | 0 | 801,110 | 0 | 0 | 1 | 0 |
+| `fresh_observe` | 1,000 | 10.8 | 801,000 | 176,079 | 801,110 | 0 | 0 | 1 | 0 |
+| `warm_observe` | 1,000 | 0.765 | 801,000 | 176,079 | 801,110 | 0 | 0 | 1 | 0 |
+| `seal_10_edits` | 1,000 | 0.940 | 801,000 | 176,079 | 801,110 | 0 | 0 | 13 | 24 |
+| `closure_observe` | 1,000 | 0.737 | 801,000 | 176,079 | 801,110 | 0 | 0 | 13 | 24 |
+| `admit_root` | 1,000 | 4.05 | 801,000 | 176,079 | 801,110 | 176,712 | 0 | 13 | 24 |
+| `admit_successor` | 1,000 | 1.05 | 801,000 | 176,079 | 801,110 | 352,791 | 0 | 25 | 48 |
+| `integrate_two` | 1,000 | 0.670 | 0 | 0 | 801,110 | 352,791 | 0 | 27 | 49 |
+| `rebuild_two` | 1,000 | 0.773 | 0 | 0 | 801,110 | 352,791 | 0 | 30 | 49 |
+| `observe_task` | 1,000 | 1.29 | 801,000 | 176,079 | 801,110 | 352,791 | 0 | 31 | 50 |
+| `temporary_first_write` | 1,000 | 1.39 | 0 | 0 | 1,602,220 | 352,791 | 0 | 31 | 50 |
+| `observe_temporary` | 1,000 | 1.45 | 801,000 | 176,079 | 1,602,220 | 528,870 | 0 | 44 | 74 |
+| `merge_back_ff` | 1,000 | 3.97 | 801,000 | 176,079 | 801,110 | 528,870 | 0 | 44 | 74 |
+| `merge_back_explicit` | 1,000 | 4.24 | 801,000 | 176,079 | 801,110 | 881,028 | 0 | 73 | 148 |
+| `creation` | 10,000 | 6.30 | 0 | 0 | 8,010,112 | 0 | 0 | 1 | 0 |
+| `fresh_observe` | 10,000 | 97.5 | 8,010,000 | 1,760,079 | 8,010,112 | 0 | 0 | 1 | 0 |
+| `warm_observe` | 10,000 | 4.35 | 8,010,000 | 1,760,079 | 8,010,112 | 0 | 0 | 1 | 0 |
+| `seal_10_edits` | 10,000 | 4.51 | 8,010,000 | 1,760,079 | 8,010,112 | 0 | 0 | 13 | 241 |
+| `closure_observe` | 10,000 | 4.26 | 8,010,000 | 1,760,079 | 8,010,112 | 0 | 0 | 13 | 241 |
+| `admit_root` | 10,000 | 97.0 | 8,010,000 | 1,760,079 | 8,010,112 | 1,760,712 | 0 | 13 | 241 |
+| `admit_successor` | 10,000 | 4.60 | 8,010,000 | 1,760,079 | 8,010,112 | 3,520,791 | 0 | 25 | 483 |
+| `integrate_two` | 10,000 | 0.712 | 0 | 0 | 8,010,112 | 3,520,791 | 0 | 27 | 483 |
+| `rebuild_two` | 10,000 | 0.785 | 0 | 0 | 8,010,112 | 3,520,791 | 0 | 30 | 484 |
+| `lease` | 10,000 | 0 | 0 | 0 | 8,010,112 | 3,520,791 | 0 | 30 | 484 |
+| `observe_task` | 10,000 | 5.12 | 8,010,000 | 1,760,079 | 8,010,112 | 3,520,791 | 0 | 31 | 484 |
+| `temporary_first_write` | 10,000 | 6.79 | 0 | 0 | 16,020,224 | 3,520,791 | 0 | 31 | 484 |
+| `observe_temporary` | 10,000 | 5.22 | 8,010,000 | 1,760,079 | 16,020,224 | 5,280,870 | 0 | 44 | 726 |
+| `merge_back_ff` | 10,000 | 18.0 | 8,010,000 | 1,760,079 | 8,010,112 | 5,280,870 | 0 | 44 | 726 |
+| `merge_back_explicit` | 10,000 | 18.2 | 8,010,000 | 1,760,079 | 8,010,112 | 8,801,028 | 0 | 73 | 1,451 |
+
+Fields: the first table reports `phase`, `files`, `duration_ms` ÷ 1,000, `ledger_records`, `ledger_bytes`, `live_pins`, `retained_refs`, `unresolved`, `loose_objects` and `loose_kib`; the second, the fields of A.13's first table. Ticket 08's lines report 0 raw and manifest bytes, since none of its phases captures or publishes a manifest, and their scratch and body bytes are in the raw lines only. Every figure but the time is read just after the phase, outside its timer. Ledger records is the sequence of the last durable record in the colony's log, and ledger bytes the total size of the regular files in the log's directory; live pins counts the body pins the log records and has not unpinned; retained refs counts the refs under `refs/dwarf-harness/` in the workspace repository; unresolved counts the service's pending merge-back attempts and unresolved intents. The loose figures are as A.13 describes them, so each also counts what the earlier phases of the same size left loose. The harness fails unless the no-change ending and the finalization succeed, the old-tip reconciliation leaves its request `interrupted` and the other leaves its request accepted, as `RequestPromotion` then reports, and unless the earlier phases pass A.12's and A.13's checks. It did not fail.
+
+**Limits:**
+
+- One machine and one run, as in A.11: Windows 10 on NTFS, and each figure a single measurement of one call, not a median, on a synthetic repository of one directory of small files, not on a real workspace. No budget, threshold or pass mark is set, nothing passes or fails one, and no figure is a capacity claim (D78, §8.6).
+- Mechanical work only: nothing was validated, since C4's validator does not exist yet, and the harness calls `finalize`, `noChange` and `reconcilePromotions` as the package's tests do, not through the product, which still refuses (D52). One workspace and one request at a time; a cancellation, a blocked intent, a crashed process, several workspaces and contention were not timed. Accepted capacity under load remains C4's feasibility gate (`ROADMAP-CORE.md` C4).
+- The five finalization phases leave out the train lock's acquisition and the candidate checks before the preflight; `acceptance_release` includes the ref deletions made after the train lock is released.
+- `durability` flushes every existing object fan-out directory, so its time grows with their number [INFERENCE]; S1's evidence measured 188–213 ms per call in four runs on its test repository (ticket 08's evidence, `ticket-08-evidence.md`).
+- The reconciliations reopen the service in the same process, on the same store, with the closed service as proof; the proof a host restarted in a new process gives, completed waits on the earlier Core and its Git children, was not timed.
+- The ledger and loose figures cover the colony's log and the workspace repository only; Core runs no maintenance (B25). Neither is a disk budget.
+- The harness records wall time and the byte, record, pin, ref and object figures only, with no CPU time or memory figure.
 
 ## Appendix B — Sources and decision provenance
 

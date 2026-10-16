@@ -413,7 +413,7 @@ This is a Core-internal boundary specification, not a new cross-roadmap package.
 
 Capture/materialization/integration and disk costs must be recorded against the D78/B15 workload; this is an implementation gate, not an evidence result in this roadmap.
 
-**Status.** In progress (tickets 05, 06 and 07 resolved, B23–B26; tickets 08 and 09 remain): D52 boundary approved 2026-10-12 (D112); proof not claimed. Its F2 family must be frozen under D40 in parts, each part before the code that writes it (D113); F2-05, F2-06 and F2-07 are frozen (D115, D118, D119).
+**Status.** In progress (tickets 05–08 resolved, B23–B27; ticket 09 remains): D52 boundary approved 2026-10-12 (D112); proof not claimed. Its F2 family must be frozen under D40 in parts, each part before the code that writes it (D113); F2-05 to F2-09 are frozen (D115, D118, D119, D123, D124).
 
 ### C3. Agent runtime
 
