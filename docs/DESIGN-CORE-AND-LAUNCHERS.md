@@ -1592,6 +1592,7 @@ Fields: the first table reports `phase`, `files`, `duration_ms` ÷ 1,000, `ledge
 - The reconciliations reopen the service in the same process, on the same store, with the closed service as proof; the proof a host restarted in a new process gives, completed waits on the earlier Core and its Git children, was not timed.
 - The ledger and loose figures cover the colony's log and the workspace repository only; Core runs no maintenance (B25). Neither is a disk budget.
 - The harness records wall time and the byte, record, pin, ref and object figures only, with no CPU time or memory figure.
+- On 2026-10-16 the owner changed the development machine's settings for the build's tests (B28 item 5); A.11–A.14 ran before the change, and a measurement taken after it is not comparable with theirs [INFERENCE].
 
 ## Appendix B — Sources and decision provenance
 

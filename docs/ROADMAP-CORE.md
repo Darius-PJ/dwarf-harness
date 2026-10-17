@@ -413,7 +413,7 @@ This is a Core-internal boundary specification, not a new cross-roadmap package.
 
 Capture/materialization/integration and disk costs must be recorded against the D78/B15 workload; this is an implementation gate, not an evidence result in this roadmap.
 
-**Status.** In progress (tickets 05–08 resolved, B23–B27; ticket 09 remains): D52 boundary approved 2026-10-12 (D112); proof not claimed. Its F2 family must be frozen under D40 in parts, each part before the code that writes it (D113); F2-05 to F2-09 are frozen (D115, D118, D119, D123, D124).
+**Status.** Done (2026-10-17, tickets 05–09; B23–B28). Linux and macOS platform runs wait for C3's CI; accepted promotion waits for C4 (D52).
 
 ### C3. Agent runtime
 
@@ -968,7 +968,7 @@ Remaining prerequisites, explicit pre-alpha producer work and evidence are liste
 |---|---|
 | C0 | Linux and macOS native runs wait for C3's CI, and the vulnerability database is online-only (B17) |
 | C1 | The retention rules are recorded: explicit collection over reachability, active pins and age, with `ledger.bodies_collected` records of unavailable bodies (B21). Workload measurements on one Windows NTFS machine are in Core Appendix A.10; budgets and replay triggers remain the owner's to set. Linux and macOS platform flush/lock/rename proof remains for C3's CI (B18). Catalogue C7 presentation records only after its bounded persistence/retry mechanism is specified; no permanent cosmetic edit log |
-| C2 | Full-tree capture and D74–D78 boundary proof; every-change workload/capacity evidence and real interruption/recovery |
+| C2 | Single-call workload measurements on one Windows NTFS machine are in Core Appendix A.11–A.14; every-change capacity under steady and burst load is C4's feasibility gate (ticket 23), accepted promotion with real validation is C4's (D52) and containment C10's. Linux and macOS platform runs remain for C3's CI (B23–B28) |
 | C3 | C2 and remote/CI, credentials, adapter/runtime/replay, generic eligibility guards/task facts, the Core §13.11 service-loss state and context isolation. No backward R1/C8/C9/GUI dependency; workload/quiescence proof remains |
 | C4 | C3; real full runner, finite V6/V2 evidence and canaries, BD2 barrier, activation/recovery and D77 ordering remain unproven. Exercise the bounded `K=4`/`Q=4N` admissions separately from `P=4` validation lanes against B15's 12/20-pair bursts and the actual larger workload (D78) |
 | C5 | C4/U1 law; replayable owner verdict correction/quarantine/retirement; C6 separately proves Corps-authorized V3 and Orchestrator overturn |

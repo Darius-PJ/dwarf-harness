@@ -306,7 +306,7 @@ Formerly step 5.
 
 **Exit criterion.** Foundation: replay at every cursor reconstructs whole logical graph versions; incremental deltas equal deterministic full rebuilds; approved directions/edge classes hold; co-access never transports; unsupported/over-budget coverage remains unknown; analyzer helpers are bounded and cannot block Core. Accepted-promotion integration, only after C4 Done, connects actual durable predecessor-to-integrated-target acceptance and proves replay/update agreement without duplicate attribution. U3 is Done only when both stages pass; record foundation completion separately so U5 need not wait for promotion integration (D52).
 
-**Status.** Waiting (foundation: C2; promotion integration: C4).
+**Status.** Ready (foundation; promotion integration: C4).
 
 ### U4. Promotion-pipeline field kinds
 

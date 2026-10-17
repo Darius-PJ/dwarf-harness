@@ -167,7 +167,7 @@ Notes on the edges:
 |---|---|---|---|
 | C0 | Repository, toolchain, check command, decision log | Nothing; every owner input has arrived (D43–D46) | Done |
 | C1 | Action ledger and body store | C0 | Done |
-| C2 | Workspaces, observation, promotion, temporary scratch | C1; frozen `ledger-format`/`ledger-appender`; explicit D52 owner approval of integrated Core C2 boundary | In progress |
+| C2 | Workspaces, observation, promotion, temporary scratch | C1; frozen `ledger-format`/`ledger-appender`; explicit D52 owner approval of integrated Core C2 boundary | Done |
 | C3 | Agent runtime | C2; owner: private remote with CI (D42) | Waiting |
 | C4 | Validation runner and promotion gate; real-work gate | C3; U1.L and frozen `law-format` (D47); approved D52 boundary | Waiting |
 | C5 | Check registry and governance | C4 | Waiting |
@@ -186,7 +186,7 @@ Notes on the edges:
 | R5 | Optional modules | R4; qualified C10 profile before enabling external plugins/helpers | Waiting |
 | U1 | Law and engine capabilities | C1 contracts frozen; U1.L `law-format` before U1.E engine/replay | In progress |
 | U2 | Synthetic ledgers, simulation, adversarial suite | U1.E for field simulation; validation cases: C3/C4 (A1), C5/C6 (governance), C10 (A2) | Waiting |
-| U3 | Coupling graph service | Foundation: C2 and frozen `ledger-appender` (C1, D50); accepted-promotion integration: C4 (D52) | Waiting |
+| U3 | Coupling graph service | Foundation: C2 and frozen `ledger-appender` (C1, D50); accepted-promotion integration: C4 (D52) | Ready (foundation) |
 | U4 | Promotion-pipeline field kinds | C2, C4, C5, U1.E, U3 | Waiting |
 | U5 | Resource pressure | R1, U1.E, U3's completed graph foundation; C4 for the runner-queue node | Waiting |
 | U6 | Perception, disclosure, shadow rendering | U4, U5, R1 | Waiting |
