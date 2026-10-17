@@ -86,7 +86,10 @@ func steps(root string) []step {
 		{"staticcheck", goStep("0", "tool", "staticcheck", "./...")},
 		{"govulncheck", goStep("0", "tool", "govulncheck", "-db", "https://vuln.go.dev", "./...")},
 		{"import boundary", func(w io.Writer) error { return checkBoundary(w, root) }},
-		{"tests", goStep("0", "test", "-timeout", testTimeout, "./...")},
+		// Disable test caching: validating and storing results re-stats every logged path
+		// (863,700 for internal/core/workspace; a cache hit took 293 s on Windows).
+		// Every test runs instead (D131).
+		{"tests", goStep("0", "test", "-count=1", "-timeout", testTimeout, "./...")},
 		{"race", func(w io.Writer) error { return checkRace(w, root) }},
 		{"cross builds", func(w io.Writer) error { return checkCrossBuilds(w, root) }},
 	}

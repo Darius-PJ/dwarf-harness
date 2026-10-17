@@ -25,7 +25,7 @@ func checkRace(w io.Writer, root string) error {
 	if err != nil {
 		return err
 	}
-	return stream(w, goCommand(root, "1", "test", "-race", "-timeout", testTimeout, "./...").with("CC="+cc))
+	return stream(w, goCommand(root, "1", "test", "-race", "-count=1", "-timeout", testTimeout, "./...").with("CC="+cc))
 }
 
 // raceCompiler returns this platform's C compiler for race-detector tests
