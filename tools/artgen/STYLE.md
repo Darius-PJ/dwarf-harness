@@ -20,14 +20,20 @@ text.
 - Every view and every frame is its own pixel map. Never derive one from another by
   mirroring, rotating, scaling or shifting a shape in code.
 - One light, from the upper left, in every view. Top and left surfaces take the
-  lightest step of their ramp; bottom and right take the darkest.
+  light step of their ramp; bottom and right take the darkest. On the 64 px
+  views the highlight marks where a large form's top and left surfaces meet,
+  the part that faces the light most squarely.
 
 ## Palette
 - Use only palette.txt. Keep it to 40 entries or fewer. No partial transparency.
 - Every material is a ramp of three steps (two for role trim, Corps colour and
-  spark): shadow, base, light. Within a ramp, uppercase is the darkest step,
-  lowercase the next and a digit the lightest. Shadows lean cool (toward violet),
-  lights lean warm (toward yellow). No pure black or pure white.
+  spark): shadow, base, light. Skin, hair and clothing have a fourth, lightest
+  step, the highlight, for the large surfaces of the 64 px views; the 16 px
+  sprites keep three steps, and the generator rejects the highlight there.
+  Within a ramp, uppercase is the darkest step, lowercase the next and a digit
+  the light step; the highlights are ! (skin), @ (hair) and = (clothing).
+  Shadows lean cool (toward violet), lights lean warm (toward yellow). No pure
+  black or pure white.
 - Skin, hair and clothing use only their mask characters so users can recolor them.
   Fabric and leather on clothes, shoes, hats and packs use the clothing ramp; wood
   and metal bits stay fixed.
@@ -46,6 +52,14 @@ text.
   silhouette, so any combination of parts stays outlined.
 - At 16 px, interior lines may use # sparingly (eyes, belt). At 64 px, separate
   interior forms with the darker material's shadow shade, not #.
+- At 64 px, large forms of skin, hair and clothing shade in four steps from the
+  light: highlight, light, base, shadow. The highlight sits where a form's top
+  and left surfaces meet, inside its upper-left outline: on the left part of a
+  lit top row wider than two pixels, tapering to the outer column of its lit
+  strip on the upper rows. On the face it marks only the top of the nose. Each
+  highlight touches the light step; it never runs a whole edge or round the
+  outline, and never marks a small form such as fingers, cuffs, braids, the ear
+  or a lit strip one pixel wide.
 - Shade by form, not around the edges (no pillow shading). No dithering and no
   hand anti-aliasing. Avoid orphan pixels except deliberate glints (eyes, sparks).
 - Draw curves and diagonals with even steps (1-1, 2-1, 2-2); no jaggies.

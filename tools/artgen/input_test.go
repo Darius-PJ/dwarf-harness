@@ -306,12 +306,13 @@ func TestMalformedInputsFailWithLocation(t *testing.T) {
 		{"texture weight 256", func(t *testing.T, m fstest.MapFS) (string, int) {
 			return swap(t, m, palettePath, "texture %", "stone.base:2", "stone.base:256")
 		}},
-		{"ramp of four entries", func(t *testing.T, m fstest.MapFS) (string, int) {
-			return insert(t, m, palettePath, lineOf(t, m, palettePath, "entry 1 ")+1, "entry ! skin.extra skin aabbccff")
+		{"ramp of five entries", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return insert(t, m, palettePath, lineOf(t, m, palettePath, "entry ! ")+1, "entry & skin.extra skin aabbccff")
 		}},
 		{"ramp of one entry", func(t *testing.T, m fstest.MapFS) (string, int) {
 			swap(t, m, palettePath, "entry H ", " hair ", " - ")
 			swap(t, m, palettePath, "entry h ", " hair ", " - ")
+			swap(t, m, palettePath, "entry @ ", " hair ", " - ")
 			return palettePath, lineOf(t, m, palettePath, "entry 2 ")
 		}},
 		{"mask without entries", func(t *testing.T, m fstest.MapFS) (string, int) {
@@ -657,6 +658,9 @@ func TestMalformedInputsFailWithLocation(t *testing.T) {
 		// Kinds, views and characters (§3.6 of the round-2 brief).
 		{"Corps character in a part", func(t *testing.T, m fstest.MapFS) (string, int) {
 			return editRow(t, m, frontBody, func(r string) string { return "b" + r[1:] })
+		}},
+		{"highlight in a world part", func(t *testing.T, m fstest.MapFS) (string, int) {
+			return editRow(t, m, bodyMap, func(r string) string { return "!" + r[1:] })
 		}},
 		{"Corps character in a tile", func(t *testing.T, m fstest.MapFS) (string, int) {
 			return editRow(t, m, wallTopMap, func(r string) string { return "B" + r[1:] })

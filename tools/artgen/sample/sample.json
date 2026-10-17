@@ -3,7 +3,7 @@
   "pack": "dwarf-harness.sample",
   "licence": "LICENCE.txt",
   "provenance": "provenance.json",
-  "contentSha256": "70cdd2ce8d07ac0751529dc07a175fbd3fa117953b58421f526a264b573f94dc",
+  "contentSha256": "1297923a3527535b4a87d6a6ddefbe2db232a5b8117457e28ea2786d2c773267",
   "grids": [
     {
       "grid": "world",
@@ -297,17 +297,17 @@
     {
       "index": 27,
       "name": "fur.shadow",
-      "rgba": "4a3020ff"
+      "rgba": "7c5236ff"
     },
     {
       "index": 28,
       "name": "fur.base",
-      "rgba": "7a5232ff"
+      "rgba": "ac7c48ff"
     },
     {
       "index": 29,
       "name": "fur.light",
-      "rgba": "a87a4eff"
+      "rgba": "d4a868ff"
     },
     {
       "index": 30,
@@ -343,6 +343,21 @@
       "index": 36,
       "name": "corps.base",
       "rgba": "a8302cff"
+    },
+    {
+      "index": 37,
+      "name": "skin.highlight",
+      "rgba": "c48c5cff"
+    },
+    {
+      "index": 38,
+      "name": "hair.highlight",
+      "rgba": "e08c48ff"
+    },
+    {
+      "index": 39,
+      "name": "clothing.highlight",
+      "rgba": "98b4d8ff"
     }
   ],
   "occluder": 1,
@@ -352,7 +367,8 @@
       "indices": [
         4,
         5,
-        6
+        6,
+        37
       ]
     },
     {
@@ -360,7 +376,8 @@
       "indices": [
         7,
         8,
-        9
+        9,
+        38
       ]
     },
     {
@@ -368,7 +385,8 @@
       "indices": [
         10,
         11,
-        12
+        12,
+        39
       ]
     },
     {
@@ -393,7 +411,8 @@
       "rgb": [
         "a8664a",
         "dc9a70",
-        "f4c8a0"
+        "f4c8a0",
+        "fadcb0"
       ]
     },
     {
@@ -402,7 +421,8 @@
       "rgb": [
         "8a5232",
         "b87848",
-        "dca070"
+        "dca070",
+        "ecbc88"
       ]
     },
     {
@@ -411,7 +431,8 @@
       "rgb": [
         "4e2c1c",
         "74462c",
-        "9e6a44"
+        "9e6a44",
+        "c48c5c"
       ]
     },
     {
@@ -420,7 +441,8 @@
       "rgb": [
         "5a2618",
         "8e3e22",
-        "c0642e"
+        "c0642e",
+        "e08c48"
       ]
     },
     {
@@ -429,7 +451,8 @@
       "rgb": [
         "2a2430",
         "3e3846",
-        "58526a"
+        "58526a",
+        "767080"
       ]
     },
     {
@@ -438,7 +461,8 @@
       "rgb": [
         "6a6870",
         "9e9ca4",
-        "d0ced4"
+        "d0ced4",
+        "e4e2e0"
       ]
     },
     {
@@ -447,7 +471,8 @@
       "rgb": [
         "2c3c6a",
         "44609a",
-        "6c8cc4"
+        "6c8cc4",
+        "98b4d8"
       ]
     },
     {
@@ -456,7 +481,8 @@
       "rgb": [
         "4a3424",
         "6e5034",
-        "967048"
+        "967048",
+        "bc9864"
       ]
     },
     {
@@ -465,7 +491,8 @@
       "rgb": [
         "5e1e22",
         "8e3034",
-        "ba4e4a"
+        "ba4e4a",
+        "dc7462"
       ]
     },
     {
@@ -474,7 +501,8 @@
       "rgb": [
         "40404a",
         "64646e",
-        "8c8c96"
+        "8c8c96",
+        "b6b4b4"
       ]
     },
     {
@@ -607,7 +635,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/animal.dog.png",
-          "sha256": "db560e571863d1d32b949122338529a5f8821d68e269340dc6998504d21ec6ab",
+          "sha256": "1eb1924a207af7be3bab4bb6d9321afd46fccaa231009f1470d181d3f984ee7d",
           "canvas": [
             16,
             16
@@ -664,7 +692,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/animal.horse_wheelbarrow.png",
-          "sha256": "18afb7616f0c1963b8d9190834e26960b95ddfafc18a9e4ab20dd91bfb6443ec",
+          "sha256": "267cb7eca48a659d9353442ce0e3a308e1834e01769af24edbf8e2945b35e30a",
           "canvas": [
             32,
             16
@@ -716,7 +744,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/back_accessory.pack.png",
-          "sha256": "2b325808cb75d0a1a9e2a727f5725876a3c7b718480d03a3861b4dffea08afc0",
+          "sha256": "bbbe39f0502c478f37e763c5200a78f0f22862cef40e607c7081562a83d2a512",
           "canvas": [
             16,
             16
@@ -752,7 +780,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/back_accessory.pack.png",
-          "sha256": "2c1ef1fdae0babab12f91527109558741bdb022b3116b29cffcef9d6aee73651",
+          "sha256": "d42f6a0ba240bc2bea93bfd2436fec28e5f1a9b3ad9e5b4200ceb8f70b7c87bd",
           "canvas": [
             64,
             64
@@ -782,7 +810,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/back_accessory.pack.png",
-          "sha256": "786900240294d3e878d2fcb8fc25cf065271297de550093a7e9b1ea5aeab6b54",
+          "sha256": "bd049f4f025c000ca17a5ae5c8001d4c52aa58e7351b81e479c99cf631515695",
           "canvas": [
             64,
             64
@@ -865,7 +893,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/badge.diplomat.png",
-          "sha256": "53995f8350b478dae97bf72bee86a167ea700b291229970eb968cd6b8aa11282",
+          "sha256": "34e5361c1e55435b15368484987d0e38c21ea2cc5865308e56c2a010da199a9f",
           "canvas": [
             16,
             16
@@ -906,7 +934,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/badge.grand_diplomat.png",
-          "sha256": "d60693599c87d1311501c02f499e8e2474d102341ab7bb7eb0c9b2bcd91c4160",
+          "sha256": "3e8a2a16f710cc2b8d3256c18f9966ec99a0c967d850d79af84fe661954e3252",
           "canvas": [
             16,
             16
@@ -947,7 +975,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/badge.grand_griot.png",
-          "sha256": "7e5d46e21568f18f79ba312e72829b05bc73e0a1e31dd3e65b3b507bb4870705",
+          "sha256": "ba8b0f3c4325ed258f73f3e690567b757670abf168c677d2712ae91ce390442a",
           "canvas": [
             16,
             16
@@ -988,7 +1016,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/badge.grand_orchestrator.png",
-          "sha256": "b97865e42e664bdbad78a35378175a56aee15f6cbc09e4a6fa3fe21fbae96400",
+          "sha256": "163ef146b6dd60895bf7395818ef7604413de68dbddc0bb1b8afe28d1a50b170",
           "canvas": [
             16,
             16
@@ -1029,7 +1057,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/badge.griot.png",
-          "sha256": "d562e7b8f40cc923ff2e38ad2cbe42d07065f4e5d1c759fe627f95b8f370eade",
+          "sha256": "841d0f4921150524de875e531414c798f128ed09b05aed5b74dd710e7d8f2980",
           "canvas": [
             16,
             16
@@ -1070,7 +1098,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/badge.orchestrator.png",
-          "sha256": "7498cdc949a238d63c4e643726ef6a3b6a2ac851b4e35ee00eaf7728c9ea5323",
+          "sha256": "cc81358ec61af2eb76fd64ec0654c6b79b43bc1442e81c59d82da352d5a0e939",
           "canvas": [
             16,
             16
@@ -1111,7 +1139,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/badge.worker.png",
-          "sha256": "9f0a7b8048d00db1469c48bfd28452bba6f50a2892c759ba1070c383a153342b",
+          "sha256": "d0f60b54f98760aacf04b6a7b420dc6585097f292862a0a6697d830f649e1219",
           "canvas": [
             16,
             16
@@ -1151,7 +1179,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/banner.pennant.png",
-          "sha256": "d8b836a057c1ac0adfb57813ba77e54d69dd8014a0873097b6193561ae4a9d25",
+          "sha256": "d27997fa776eeab87b5dd80fa91991a839904dcd7cf453ead2868c064c9bf566",
           "canvas": [
             64,
             64
@@ -1181,7 +1209,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/banner.pennant.png",
-          "sha256": "012b03334a6b91fd62e3192bd3d0463c10cd515ea10052baf906ae3d5a3db493",
+          "sha256": "a757bcf675c92c8d8f08872624259ac434407b859ebb643c65875969b4b4b06a",
           "canvas": [
             64,
             64
@@ -1264,7 +1292,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/body.stout.png",
-          "sha256": "1e73108c3a2e3e5b7156a2eb00451d7d1af997f8d7d2fa6146d9d9e1f36ed2dd",
+          "sha256": "fb852bfd0a47fdbac0542da8e70a61c831765531e526e4b527cd8763a9db9341",
           "canvas": [
             16,
             16
@@ -1300,7 +1328,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/body.stout.png",
-          "sha256": "c318eeb73b0e473143214a125ae71c956ef564391d8887ef8112cd1eacb525d2",
+          "sha256": "3a50a76a651d7730256855e000df88506ad60412a7c6a9be6429bcac704ff2ca",
           "canvas": [
             64,
             64
@@ -1330,7 +1358,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/body.stout.png",
-          "sha256": "b3a9910cdda955bc2c70405a165cd875c8fdf6402cf418621840633e1c6e3263",
+          "sha256": "68a59c891768e4566d040158bbf4879fc6d330eeeac6fdd3c60c554e79152ebf",
           "canvas": [
             64,
             64
@@ -1412,7 +1440,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/emblem.crescent.png",
-          "sha256": "8c9983aa2e54c993b51ef1cb3c9acd64d726e51f658753f03e600f69925bfa0f",
+          "sha256": "067f3303a732556cecfdd894d6600df0623e782f120377d0fb2eb91563720849",
           "canvas": [
             64,
             64
@@ -1440,7 +1468,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/emblem.crescent.png",
-          "sha256": "1616f5a2bd18ba18266be1397ea91508839ceaee88ee3468d55588faac8de2d9",
+          "sha256": "61d5a9469bc6d279115468f4ba0f9307a4e6365d78a3430aa0ad421585f80d00",
           "canvas": [
             64,
             64
@@ -1520,7 +1548,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/emblem.mountain.png",
-          "sha256": "bffa85c9321d7ec0d12f7bf016a36c16460a414cac24daf613710f8befbc12b7",
+          "sha256": "0c831eff9b70db6fcc3c86aafc92136168766395f2929e75322d2b29cf74eb2c",
           "canvas": [
             64,
             64
@@ -1548,7 +1576,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/emblem.mountain.png",
-          "sha256": "bc04bafbf1c608fbf4d5e7c151b7e6629a83dd8f562b889ebdf68ed73b8ba0bb",
+          "sha256": "0a7d9263499f5a32d13a9d45a57e247f4cfd71202eaf617e891026af982f1d7b",
           "canvas": [
             64,
             64
@@ -1629,7 +1657,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/front_accessory.pick.png",
-          "sha256": "e6065c78d064661268c3e24a53c52da6312c61970a6d1ccc6702ffa98e207e4f",
+          "sha256": "e71fb4bf5d9c1c3b0bf1cbff513a152d497a424de994084cf2b25e5b9df8fa09",
           "canvas": [
             16,
             16
@@ -1665,7 +1693,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/front_accessory.pick.png",
-          "sha256": "a5bd98c630823828986203eb6ac9b13417125c35fa5835dc506d5ab92eea2e7b",
+          "sha256": "26a0f95c78c263a4bb591e8712f9927daa34620c8af68d5898d364ed4b41971d",
           "canvas": [
             64,
             64
@@ -1695,7 +1723,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/front_accessory.pick.png",
-          "sha256": "e9fea740a59e2cf89dd9e11f5c5c381c420cbcc5696f96573ad6ff50c468023d",
+          "sha256": "f737593f276c3d47b6ec5ba2193d1abf247894cda9a6790fd316ee9f06690338",
           "canvas": [
             64,
             64
@@ -1778,7 +1806,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/hair_beard.braided.png",
-          "sha256": "8c8b07b726692a14938600fe2a8a570b181d5c00f8b1c7048ea588120a47b64c",
+          "sha256": "002733c093618c9f1ba290c0c2cf4c44d089a18adbfcf545a340476653fd0b8d",
           "canvas": [
             16,
             16
@@ -1814,7 +1842,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/hair_beard.braided.png",
-          "sha256": "c7d1e982336f0dedc794bb8c129a26cedec981b2a1dcc2f8525ca1bec6027b3b",
+          "sha256": "dcc4297d1080afa440439e60a060d482adcff504a2d06d742a247159ae5707c8",
           "canvas": [
             64,
             64
@@ -1844,7 +1872,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/hair_beard.braided.png",
-          "sha256": "aaec5da5675e9ff9c93411eb082e86fc67e7c351a03e6f0f54d6df291afe9198",
+          "sha256": "01b82234f7852b54d97ccc1d92e91b55cd2cdc5cd308b19bbbe20849ccf6e66d",
           "canvas": [
             64,
             64
@@ -1927,7 +1955,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/hair_beard.topknot.png",
-          "sha256": "cfc50596049db4dc4b966588b2a8f7f1f03944d50def6084ff62660c5d95f702",
+          "sha256": "b81bec10947ebce9b96a91f29f08e1ede84003fecb1d01fcb2c00572957fa6d3",
           "canvas": [
             16,
             16
@@ -1963,7 +1991,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/hair_beard.topknot.png",
-          "sha256": "a9d742558c59261865897a3b360c1c310ca0394ce01bf2a0bb7c6cd8a3c18867",
+          "sha256": "9e0890da46785fcc0322f3ada542a180b95f3c48e8ff565565f486378f0c0a25",
           "canvas": [
             64,
             64
@@ -1993,7 +2021,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/hair_beard.topknot.png",
-          "sha256": "d6b67917554997df2b938265fac5561d1f6918d62a02c461a446574781afa155",
+          "sha256": "c9cdaa1fdf8fe47821b63dc5e111f6c5ae3a181f74be855dc2b167bc5378fcc1",
           "canvas": [
             64,
             64
@@ -2079,7 +2107,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/headwear.hat.png",
-          "sha256": "8a6c1b1e2e90470710ae9de3a8a65610b77a66e01dbbc170abf5832f8cb1375c",
+          "sha256": "77a99ecd285613dc2611de22f1c5ce550ec48654e64a27b734e802e5afa0b7a4",
           "canvas": [
             16,
             16
@@ -2115,7 +2143,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/headwear.hat.png",
-          "sha256": "6a89e705bac4deadc8bdd8cb73ad9182c949a1c3762b9efe8d5b3e8d93860dd1",
+          "sha256": "d09440d21e7208aed2399057d2d81fdbb63e4c9019b53d1ad0acd45f53bea8f1",
           "canvas": [
             64,
             64
@@ -2145,7 +2173,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/headwear.hat.png",
-          "sha256": "eb660e549e5271b6cd9925225f1433b4f1298c67d35a2f756be6d6e3baffc188",
+          "sha256": "909fc3435350f1522d736e8b61046e511e4a3d4f05f977cc23b411459cfd9519",
           "canvas": [
             64,
             64
@@ -2228,7 +2256,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/legwear.trousers.png",
-          "sha256": "3a324e5f920ce25ed2519cdcb067d2bf23574df9691de81bba83c7b5a164d443",
+          "sha256": "6d67e3e64c62068e099ccbee98f562bfb4ec193595bfd5b8b55438a73ad6eb63",
           "canvas": [
             16,
             16
@@ -2264,7 +2292,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/legwear.trousers.png",
-          "sha256": "d1b4d79d6a92c442a6263d77ab6c58729501f19313ab20275be71b2230b63b44",
+          "sha256": "c81f361307ac57cbf3f181eb8bae5ff4c3cf098ef896ef598007650ea2e315c7",
           "canvas": [
             64,
             64
@@ -2294,7 +2322,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/legwear.trousers.png",
-          "sha256": "49f5013fdd9673578d424a600b4b936e261b9b42dd73e43f56893fcd0fea1bd0",
+          "sha256": "e570d7091eb45b94ab43b6d9139cbb63aec0c6342e1fbdd0fbddca80d1a234ff",
           "canvas": [
             64,
             64
@@ -2376,7 +2404,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/overlay.trim.png",
-          "sha256": "5c80ec403b30caca152b48f5ea651a2b06bd3e75038c10341f8e7611776351a7",
+          "sha256": "0fc951cf889f489932c850e54deb2aa509a792bc7f5ad6e634c7e14b816b44d6",
           "canvas": [
             16,
             16
@@ -2419,7 +2447,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/shoes.boots.png",
-          "sha256": "a661367b7068017dbe3445b3f6b6d3820eba64df8b943312dc9f9ec7323413e1",
+          "sha256": "d840ac29e71e53d65dd3497581355cf5e79913bb06d3d0cec775b544599433f6",
           "canvas": [
             16,
             16
@@ -2455,7 +2483,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/shoes.boots.png",
-          "sha256": "ab5e021b21f1cb9694ecf7c6db635429f598b13be734709a90803836d42af7a5",
+          "sha256": "979e390ec48b958e9de28ff71a935590f6160b7aa7ac2a15d245a493c5338905",
           "canvas": [
             64,
             64
@@ -2485,7 +2513,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/shoes.boots.png",
-          "sha256": "a25e0e3afba47c9ae1574ac8341f86c6ea61d83052d4b8c75523014ba57a2226",
+          "sha256": "e046c1b2d930a6b57b232ccbe76cc2e7d59565d842c24792972c58b4865bc870",
           "canvas": [
             64,
             64
@@ -2568,7 +2596,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.door.png",
-          "sha256": "e6a400cff71e739df7f9e0f8d1f4b93256badbbb9bce333b8ef80ad05057ce59",
+          "sha256": "06f0a6ef73f79a94f839bac9467454deefcc0faf4f689e2a44d920a7a060c654",
           "canvas": [
             16,
             16
@@ -2614,7 +2642,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.floor_a.png",
-          "sha256": "dc98c1574f4aea973241a36cfb7b7cb93d54ea9d9913d872f76385ac5a052658",
+          "sha256": "782faac88f85ce3ddf3d397266d48399dd8c5c345e356c71cee3d6f13b07777f",
           "canvas": [
             16,
             16
@@ -2649,7 +2677,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.floor_b.png",
-          "sha256": "eb2d2f6c933e8ffd40be42b04a788764d6f0f59a044b120dc0bb2763732d8aaf",
+          "sha256": "53daff178b6a5ba8e32b557d27c034b55a2c441a020a00fb20ec41c90165cd8f",
           "canvas": [
             16,
             16
@@ -2684,7 +2712,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.rail_ew.png",
-          "sha256": "f2f879513d2a65dbfbfa80772bba050906566688049823d8d50be6c2b59c857f",
+          "sha256": "44f81d0d72bb7633936f685f7d1db9a12105d231a1914c9603b4fc39fcb189eb",
           "canvas": [
             16,
             16
@@ -2736,7 +2764,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.rock_a.png",
-          "sha256": "25558ea8e6449718f462987a95a3b790e2501e4f1ac4186a01160617654670b7",
+          "sha256": "07626e66d9984ae5d19ff03571eb12ff181a623b119b61210177de51199a4c75",
           "canvas": [
             16,
             16
@@ -2771,7 +2799,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.rock_b.png",
-          "sha256": "76fca9360ed56dc21376dcebd6c83c61dade080eb32c648129c85ec2b120b926",
+          "sha256": "8c67093fdd7fedf7a2d80273935eb1a58ffa7dcf94cbb065066f0beb8dfaa141",
           "canvas": [
             16,
             16
@@ -2806,7 +2834,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.stockpile.png",
-          "sha256": "1f895c847f20a310c529a4f934f0bfa344fff4f2291e66568a4ec91153d7895c",
+          "sha256": "fb85967c32a472d4f225671b3e22023cf83a07dd46c744bee95a10cca0acb32e",
           "canvas": [
             16,
             16
@@ -2852,7 +2880,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.wall_face.png",
-          "sha256": "3d4b54fbea01f9264d758fe20ea7aaad40548e7cbed669a612552736279be774",
+          "sha256": "516dfa1c80215f10a086d133ac081735743603cdc71aa0096ccbc5edeb399d44",
           "canvas": [
             16,
             16
@@ -2887,7 +2915,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.wall_top.png",
-          "sha256": "89fdb1294319d7fdc0ab2b7cd98402ff0df021f5385d70428902af7a7b63bf6c",
+          "sha256": "8f23a41d8e88b92598969488a408b8177804b136ab7660547d5f7ec1df7502e0",
           "canvas": [
             16,
             16
@@ -2922,7 +2950,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/tile.workbench.png",
-          "sha256": "07d77d1f6eb3cc58f760dd8c142b88a564ed6dc94c7a6242aad50bb022470fe0",
+          "sha256": "efcbb00f5d4b17a7ad2f6256434c8e3f60800590676526bcebcc97bdcd89716b",
           "canvas": [
             16,
             16
@@ -2974,7 +3002,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/tool.worker.png",
-          "sha256": "3e95daad3967f8d42a57c892ff1d9a0d6ed17c27c05a3c7c1c527b8971092220",
+          "sha256": "faf012a41ca587b2ccf2f6279a8ff2902e5aae6be52c7a2fb447a817b3fe89de",
           "canvas": [
             64,
             64
@@ -3021,7 +3049,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/torso_clothing.tunic.png",
-          "sha256": "d3dc9312654262d44906db301824329540f22e15693769288dcaf8809bec900b",
+          "sha256": "771eac2e7e6ab907a628c8d98557a261ead079de99db29def54267f79c5dc115",
           "canvas": [
             16,
             16
@@ -3057,7 +3085,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/torso_clothing.tunic.png",
-          "sha256": "c06ecaac2985c228e013f12d406e9e6376d90d1c93facd794b48eb78e31b622a",
+          "sha256": "88aab0a501006958f8cf5ad229c489fda3b518e963c6910e730870f3c8085cbb",
           "canvas": [
             64,
             64
@@ -3087,7 +3115,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/torso_clothing.tunic.png",
-          "sha256": "451659be7292244dcd1556dd7ceb43a1ea1c313267c5c17cca70af737a127e58",
+          "sha256": "632ac10ecd26f76e71aece2b594eb5466b243f8b140605afbd847aea0ccfe3f7",
           "canvas": [
             64,
             64
@@ -3170,7 +3198,7 @@
           "grid": "world",
           "view": "overworld",
           "path": "world/torso_clothing.vest.png",
-          "sha256": "94f465605960306b67a15276a3819a201f98fac88c02ae43dfb9c6948d459b86",
+          "sha256": "64ffc3314373267081069f8560ae548607e322f48a930ffabf5cd76a76ed38fb",
           "canvas": [
             16,
             16
@@ -3206,7 +3234,7 @@
           "grid": "rpg",
           "view": "front",
           "path": "rpg/front/torso_clothing.vest.png",
-          "sha256": "e40414448d50ba735be39ac2b58b4379ed7cbd9c74d7f65b3d21a430a2a95b5f",
+          "sha256": "b254291b517a2076a3b48b2ed3ce3420739daa525f517aa7515a1b2d4bce8067",
           "canvas": [
             64,
             64
@@ -3236,7 +3264,7 @@
           "grid": "rpg",
           "view": "three_quarter",
           "path": "rpg/three_quarter/torso_clothing.vest.png",
-          "sha256": "efbbb6aad07705312e3fab44297d8691a0184c2ad75304e0afb6279ca581f75a",
+          "sha256": "de99a37cf6dc1149b70104ff4e9f9401f3c399e89ddb98d8b86a8b6e8ba279b1",
           "canvas": [
             64,
             64

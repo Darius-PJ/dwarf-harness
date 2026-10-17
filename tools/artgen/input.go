@@ -266,6 +266,11 @@ type palette struct {
 	ramps    map[string][]int // mask to entry indices, shadow to light
 }
 
+// highlightStep is the ramp position of the highlight, a fourth and lightest
+// step that only the 64-pixel views draw (D120 item 4). A ramp has two to
+// highlightStep+1 entries.
+const highlightStep = 3
+
 // clear reports whether entry i is see-through (alpha 0).
 func (p *palette) clear(i uint8) bool { return p.entries[i].color.A == 0 }
 
@@ -386,11 +391,11 @@ func parsePalette(r *report, p string, lines []textLine) *palette {
 		ramp := pal.ramps[m]
 		switch {
 		case len(ramp) == 0:
-			r.add(p, 0, "mask %s has no entries; a ramp has 2 or 3", m)
+			r.add(p, 0, "mask %s has no entries; a ramp has 2 to %d", m, highlightStep+1)
 		case len(ramp) == 1:
-			r.add(p, pal.entries[ramp[0]].line, "mask %s has 1 entry; a ramp has 2 or 3", m)
-		case len(ramp) > 3:
-			r.add(p, pal.entries[ramp[3]].line, "mask %s has %d entries; a ramp has 2 or 3", m, len(ramp))
+			r.add(p, pal.entries[ramp[0]].line, "mask %s has 1 entry; a ramp has 2 to %d", m, highlightStep+1)
+		case len(ramp) > highlightStep+1:
+			r.add(p, pal.entries[ramp[highlightStep+1]].line, "mask %s has %d entries; a ramp has 2 to %d", m, len(ramp), highlightStep+1)
 		}
 	}
 	for _, t := range pal.textures {
@@ -854,6 +859,9 @@ func (m *pixmap) refuse(pal *palette, c byte) string {
 		if i == pal.occlude {
 			return "occlude only in parts"
 		}
+	}
+	if m.view == viewOverworld && e.mask != "" && slices.Index(pal.ramps[e.mask], i) == highlightStep {
+		return "the highlight, a ramp's fourth step, is for the 64-pixel views only"
 	}
 	return ""
 }

@@ -2,7 +2,8 @@
 // entry <char> <name> <mask> <rrggbbaa>   mask: - skin hair clothing role corps
 // texture <char> <entry>:<weight> ...     rock and floor tiles only
 // Within a ramp, uppercase is the darkest step, lowercase the next and a digit
-// the lightest. See ../STYLE.md.
+// the light step. Skin, hair and clothing add a fourth, lightest step, the
+// highlight (! @ =), which only the 64-pixel views use. See ../STYLE.md.
 entry . transparent - 00000000
 entry x occlude - ff00ff00
 entry # outline - 1c1626ff
@@ -30,9 +31,9 @@ entry 6 stone.light - 6a6474ff
 entry F floor.shadow - 4e4034ff
 entry f floor.base - 6c5a48ff
 entry 7 floor.light - 8c7860ff
-entry D fur.shadow - 4a3020ff
-entry d fur.base - 7a5232ff
-entry 8 fur.light - a87a4eff
+entry D fur.shadow - 7c5236ff
+entry d fur.base - ac7c48ff
+entry 8 fur.light - d4a868ff
 entry O coat.shadow - 4a4048ff
 entry o coat.base - 6e646cff
 entry 9 coat.light - 9a9096ff
@@ -40,5 +41,8 @@ entry Y spark.base - e0a020ff
 entry y spark.light - ffe070ff
 entry B corps.shadow corps 6a1a1eff
 entry b corps.base corps a8302cff
+entry ! skin.highlight skin c48c5cff
+entry @ hair.highlight hair e08c48ff
+entry = clothing.highlight clothing 98b4d8ff
 texture % stone.shadow:1 stone.base:2 stone.light:1
 texture ~ floor.shadow:1 floor.base:4 floor.light:1

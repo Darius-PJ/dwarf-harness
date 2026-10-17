@@ -38,9 +38,11 @@
 //     occlude, both with alpha 00; every other entry has alpha ff; entries
 //     named outline and light exist without a mask. The entries of a mask
 //     (skin, hair, clothing, role or corps), in index order, form its ramp
-//     from shadow to light. "texture <char> <entry>:<weight> ..." defines a
-//     character that resolves per pixel to one of its entries, chosen by a
-//     splitmix64 hash of the tile's seed and the pixel's position.
+//     from shadow to light: two to four steps, of which a fourth, the
+//     highlight, may appear only in the 64-pixel views.
+//     "texture <char> <entry>:<weight> ..." defines a character that
+//     resolves per pixel to one of its entries, chosen by a splitmix64 hash
+//     of the tile's seed and the pixel's position.
 //   - colors.txt: "<mask>.<name> <rrggbb> ..." color choices with one color per
 //     ramp entry, including role.<role> for each of Core's seven roles and at
 //     least one corps.<name>.
