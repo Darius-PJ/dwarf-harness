@@ -1067,9 +1067,46 @@ func TestOpenFailsClosedOnF2_07RuleBreak(t *testing.T) {
 		"closure_child_open", "closure_unpin_missing", "closure_unpin_before", "closure_unpin_repeated",
 	}
 	prefixes := snapshotReplayPrefixes(t, f, commits, []int{creationAt, observationAt, closureAt, closureAt + 1})
+	// Apply every mutation in both modes on one journalled projection. Keep
+	// real Opens for record routing, body-store and ordering obligations.
+	fixture := f.gitFixture
+	fixture.colony = t.TempDir()
+	projection := openFixtureService(t, fixture).svc
+	assertApply := func(t *testing.T, at int, drafts []ledger.Draft) {
+		t.Helper()
+		var undos []func()
+		defer func() {
+			for i := len(undos) - 1; i >= 0; i-- {
+				undos[i]()
+			}
+		}()
+		for _, commit := range commits[:at] {
+			var prefix []ledger.Draft
+			for _, record := range commit.Records {
+				prefix = append(prefix, record.Draft)
+			}
+			undo, err := projection.apply(ctx, prefix, commit.First, false)
+			if err != nil {
+				t.Fatalf("valid prefix: %v", err)
+			}
+			undos = append(undos, undo)
+		}
+		first := commits[at].First
+		for _, producing := range []bool{true, false} {
+			undo, err := projection.apply(ctx, drafts, first, producing)
+			if err == nil {
+				undo()
+				t.Errorf("rule break accepted producing=%t", producing)
+				continue
+			}
+			var inconsistent *InconsistentError
+			if !errors.As(err, &inconsistent) || inconsistent.Seq != first {
+				t.Errorf("want inconsistent at %d producing=%t: %v", first, producing, err)
+			}
+		}
+	}
 	for _, name := range rows {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
 			at := observationAt
 			if strings.HasPrefix(name, "parent_") {
 				at = creationAt
@@ -1183,6 +1220,15 @@ func TestOpenFailsClosedOnF2_07RuleBreak(t *testing.T) {
 				case "closure_unpin_repeated":
 					drafts = append(drafts, drafts[1])
 				}
+			}
+			assertApply(t, at, drafts)
+			switch name {
+			case "parent_unknown", "observation_refs", "observation_pin_refs", "observation_pin_not_immediate",
+				"observation_unpin_before", "observation_unpin_repeated", "closure_child_open", "closure_unpin_before", "closure_unpin_repeated":
+				// assertApply has undone this row before it can run in parallel.
+				t.Parallel()
+			default:
+				return
 			}
 			colony := t.TempDir()
 			if err := os.CopyFS(colony, os.DirFS(prefixes[at])); err != nil {
@@ -1444,6 +1490,7 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 		"prepared_refs", "prepared_pin_missing", "prepared_pin_wrong", "prepared_pin_refs", "prepared_reused", "prepared_parent_pending", "pending_observation", "pending_closure", "pending_admission",
 		"failure_without_prepared", "failure_plan", "failure_refs", "failure_unpin", "unknown_failure_readable",
 		"applied_plan", "applied_unpin_missing", "applied_unpin_wrong", "applied_unpin_before", "applied_refs", "applied_changed", "applied_id_reused",
+		"fast_forward_refs",
 		"conflict_refs", "conflict_pin_missing", "conflict_pin_wrong", "conflict_unpin_early",
 		"closure_without_applied", "closure_after_observation", "closure_same_commit",
 		"admission_observation_missing", "admission_observation_stale", "admission_merge_missing", "admission_outside_window", "admission_foreign", "admission_reversed",
@@ -1454,15 +1501,73 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 		cuts = append(cuts, at, at+1)
 	}
 	prefixes := snapshotReplayPrefixes(t, f, commits, cuts)
+	// Prefix journals are used only by serial apply checks. The representative
+	// Open rows own private stores and pause only after the journal is undone.
+	fixture := f.gitFixture
+	fixture.colony = t.TempDir()
+	projection := openFixtureService(t, fixture).svc
+	assertApply := func(t *testing.T, at int, drafts []ledger.Draft, producerOK, replayOK bool, failedOffset uint64) {
+		t.Helper()
+		var undos []func()
+		defer func() {
+			for i := len(undos) - 1; i >= 0; i-- {
+				undos[i]()
+			}
+		}()
+		for _, commit := range commits[:at] {
+			var prefix []ledger.Draft
+			for _, record := range commit.Records {
+				prefix = append(prefix, record.Draft)
+			}
+			undo, err := projection.apply(ctx, prefix, commit.First, false)
+			if err != nil {
+				t.Fatalf("valid prefix: %v", err)
+			}
+			undos = append(undos, undo)
+		}
+		first := commits[at].First
+		for _, producing := range []bool{true, false} {
+			undo, err := projection.apply(ctx, drafts, first, producing)
+			wantOK := producing && producerOK || !producing && replayOK
+			if err == nil {
+				undo()
+				if !wantOK {
+					t.Errorf("rule break accepted producing=%t", producing)
+				}
+				continue
+			}
+			if wantOK {
+				t.Errorf("contract-valid records refused producing=%t: %v", producing, err)
+				continue
+			}
+			var inconsistent *InconsistentError
+			if !errors.As(err, &inconsistent) || inconsistent.Seq != first+failedOffset {
+				t.Errorf("want inconsistent at %d producing=%t: %v", first+failedOffset, producing, err)
+			}
+		}
+	}
 	for _, name := range rows {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+			check := func(at int, drafts []ledger.Draft, valid bool, failedOffset uint64) {
+				t.Helper()
+				replayOK := valid || name == "unknown_failure_readable"
+				assertApply(t, at, drafts, valid, replayOK, failedOffset)
+				switch name {
+				case "prepared_refs", "prepared_pin_missing", "pending_observation", "pending_closure", "pending_admission",
+					"failure_plan", "failure_unpin", "unknown_failure_readable", "applied_refs", "applied_unpin_before",
+					"fast_forward_refs", "conflict_refs", "closure_after_observation", "closure_same_commit", "applied_source_fresh_attempt":
+					t.Parallel()
+					assertF207History(t, f, prefixes[at], drafts, valid, replayOK, failedOffset)
+				}
+			}
 			at := indices[ledger.MergeBackPrepared]
 			switch {
 			case strings.HasPrefix(name, "failure_") || name == "unknown_failure_readable":
 				at = indices[ledger.MergeBackWriteFailed]
 			case strings.HasPrefix(name, "applied_"):
 				at = indices[ledger.MergeBackMerged]
+			case name == "fast_forward_refs":
+				at = indices[ledger.MergeBackFastForward+"_first"]
 			case strings.HasPrefix(name, "conflict_"):
 				at = indices[ledger.MergeBackConflict]
 			case strings.HasPrefix(name, "closure_"):
@@ -1591,7 +1696,7 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 					observation, _ := ledger.DecodeScratchChanged(drafts[0].Payload)
 					observation.PreviousCommit, observation.PreviousTree = first.TargetCommit, first.TargetTree
 					drafts[0].Payload = encoded(t, observation)
-					assertF207History(t, f, prefixes[at], drafts, false, false)
+					check(at, drafts, false, 0)
 					return
 				case "pending_closure":
 					at++
@@ -1599,7 +1704,7 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 						Payload: encoded(t, ledger.ScratchClosed{ScratchID: secondSource.ID, ContextID: secondSource.ContextID, Reason: "abandoned"})}}
 					unpin, _ := unpinDraft(secondPin, secondSource.ContextID)
 					drafts = append(drafts, unpin)
-					assertF207History(t, f, prefixes[at], drafts, false, false)
+					check(at, drafts, false, 0)
 					return
 				case "pending_admission":
 					at++
@@ -1610,13 +1715,13 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 					admission, _ := ledger.DecodePromotionAdmitted(drafts[0].Payload)
 					admission.ScratchObservationID, admission.MergeBackIDs = taskObservation.ID, nil
 					drafts[0].Payload = encoded(t, admission)
-					assertF207History(t, f, prefixes[at], drafts, false, false)
+					check(at, drafts, false, 0)
 					return
 				case "failure_without_prepared":
 					at = indices[ledger.MergeBackPrepared]
 				case "failure_plan", "applied_plan":
 					p.TargetTree = strings.Repeat("c", 40)
-				case "failure_refs", "applied_refs":
+				case "failure_refs", "applied_refs", "fast_forward_refs":
 					drafts[0].BodyRefs = []ledger.Digest{f.w.InputsSHA256}
 				case "failure_unpin":
 					failedOffset = 1
@@ -1629,7 +1734,7 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 					drafts[1].Payload = encoded(t, ledger.BodyUnpin{PinID: taskPin})
 				case "applied_unpin_before":
 					drafts[0], drafts[1] = drafts[1], drafts[0]
-					assertF207History(t, f, prefixes[at], drafts, false, false)
+					check(at, drafts, false, 0)
 					return
 				case "applied_changed":
 					p.ChangedPaths = []string{}
@@ -1642,7 +1747,7 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 					at++
 					d, _ := unpinDraft(p.ReportPinID, p.ContextID)
 					drafts = []ledger.Draft{d}
-					assertF207History(t, f, prefixes[at], drafts, false, false)
+					check(at, drafts, false, 0)
 					return
 				case "applied_source_fresh_attempt":
 					at = indices[ledger.MergeBackFastForward+"_first"] + 1
@@ -1669,7 +1774,7 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 					drafts[0].Payload = encoded(t, p)
 				}
 			}
-			assertF207History(t, f, prefixes[at], drafts, valid, valid || name == "unknown_failure_readable", failedOffset)
+			check(at, drafts, valid, failedOffset)
 		})
 	}
 }

@@ -211,8 +211,10 @@ func TestWindowsOwnedGitExitBeforeRecovery(t *testing.T) {
 }
 
 func TestWindowsOwnedGitCrashBeforeRecovery(t *testing.T) {
+	t.Parallel()
 	// One real helper crash, with the canonical Git handle opened while its
 	// parent's exec.Cmd still owns a handle, even if Git has already exited.
+	// The PID and retained handle belong only to this fixture's child.
 	f := newServiceFixture(t)
 	var git *os.Process
 	point, proof := crashFinalization(t, f, "owned_git", func(pid int) {

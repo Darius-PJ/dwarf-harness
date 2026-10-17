@@ -538,11 +538,13 @@ func tearFinalCommit(t *testing.T, colony string) {
 }
 
 func TestFinalizationCrashMatrix(t *testing.T) {
-	// Real child-process handshakes are intentionally sequential within this
-	// matrix. Other independent matrices retain their normal parallelism.
+	t.Parallel()
+	// Each boundary owns its repository, colony and child handshake; only the
+	// unregistered Git history is shared by these parallel rows.
 	history := newGitFixture(t, "sha1")
 	for _, step := range []string{"intent", "torn_intent", "cas", "ambiguous_git_exit", "durability", "acceptance", "torn_acceptance", "release", "cancel_before", "cancel_torn", "cancel_after"} {
 		t.Run(step, func(t *testing.T) {
+			t.Parallel()
 			f := serviceFromHistory(t, history)
 			point, proof := crashFinalization(t, f, step, nil)
 			if strings.HasPrefix(step, "torn_") || step == "cancel_torn" {
