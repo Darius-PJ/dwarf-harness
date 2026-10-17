@@ -49,6 +49,80 @@ func revisionDrafts(t *testing.T, f *serviceFixture, revision int64, document le
 	}
 }
 
+func TestOpenRefusesNewerConsumedVersions(t *testing.T) {
+	t.Parallel()
+	// Keep this contract-derived set independent of the production consume map:
+	// deleting an entry must not silently delete its regression row.
+	types := []string{
+		ledger.TypeBodyPin, ledger.TypeBodyUnpin,
+		ledger.TypeWorkspaceRegistered, ledger.TypeCaptureInputsPinned,
+		ledger.TypeScratchCreated, ledger.TypeScratchClosed,
+		ledger.TypePromotionAdmitted, ledger.TypeGenerationDerived, ledger.TypePromotionFailed,
+		ledger.TypeScratchChanged, ledger.TypeScratchMergeBack,
+		ledger.TypeFinalizationIntended, ledger.TypePromotionAccepted, ledger.TypePromotionNoChange,
+		ledger.TypePolicyActivationRequested, ledger.TypePolicyActivationHoldChanged,
+		ledger.TypePolicyActivationEnded, ledger.TypePolicyActivated,
+	}
+	consume := workspaceConsumption()
+	if len(consume) != len(types) {
+		t.Errorf("consumed type coverage: got %d types, want %d", len(consume), len(types))
+	}
+	versions := []ledger.TypeVersion{{Type: ledger.TypeCommand, Version: 1}, {Type: ledger.TypeBodiesCollected, Version: 1}}
+	for _, kind := range types {
+		if _, ok := consume[kind]; !ok {
+			t.Errorf("missing consumption declaration for %s", kind)
+		}
+		versions = append(versions, ledger.TypeVersion{Type: kind, Version: 1})
+	}
+	for _, kind := range types {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			catalogue, err := ledger.NewCatalogue(append(slices.Clone(versions), ledger.TypeVersion{Type: kind, Version: 2})...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			colony := t.TempDir()
+			store, err := ledgerstore.Create(colony, catalogue)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			draft := ledger.Draft{Type: kind, TypeVersion: 2, Actor: ledger.ActorCore, Payload: []byte(`{}`)}
+			if kind == ledger.TypeBodyPin || kind == ledger.TypeBodyUnpin {
+				digest, _, err := store.PublishBody(context.Background(), strings.NewReader("future-version retention"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				pin := uuid.NewV7()
+				pinned := ledger.Draft{Type: ledger.TypeBodyPin, TypeVersion: 1, Actor: ledger.ActorCore, BodyRefs: []ledger.Digest{digest}, Payload: encoded(t, ledger.BodyPin{PinID: pin})}
+				if kind == ledger.TypeBodyPin {
+					draft.BodyRefs, draft.Payload = pinned.BodyRefs, pinned.Payload
+				} else {
+					if _, err := store.Append(context.Background(), []ledger.Draft{pinned}); err != nil {
+						t.Fatal(err)
+					}
+					draft.Payload = encoded(t, ledger.BodyUnpin{PinID: pin})
+				}
+			}
+			committed, err := store.Append(context.Background(), []ledger.Draft{draft})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, report, err := openService(context.Background(), store, colony, serviceConfig(), serviceDeps{})
+			if s != nil {
+				defer s.Close()
+			}
+			var unsupported *ledger.UnsupportedVersionError
+			if !errors.As(err, &unsupported) || unsupported.Seq != committed.First || unsupported.Type != kind || unsupported.Version != 2 || !slices.Equal(unsupported.Supported, []int{1}) {
+				t.Fatalf("newer consumed version: got %v, want %s v2 at %d supported [1]", err, kind, committed.First)
+			}
+			if s != nil || len(report.Pending) != 0 || len(report.Missing) != 0 || report.OrphansRemoved != 0 || report.RemovalsCompleted != 0 || store.Durable() != committed.Last {
+				t.Fatalf("unsupported version exposed a projection or reconciled: %+v", report)
+			}
+		})
+	}
+}
+
 func TestOpenFailsClosedOnRuleBreak(t *testing.T) {
 	t.Parallel()
 	rows := []string{
@@ -1501,8 +1575,8 @@ func TestOpenFailsClosedOnF2_07MergeBackRuleBreak(t *testing.T) {
 		cuts = append(cuts, at, at+1)
 	}
 	prefixes := snapshotReplayPrefixes(t, f, commits, cuts)
-	// Prefix journals are used only by serial apply checks. The representative
-	// Open rows own private stores and pause only after the journal is undone.
+	// The projection's undo journal serves the serial apply rows. Representative
+	// Open rows copy prefix snapshots into private stores and pause after undo.
 	fixture := f.gitFixture
 	fixture.colony = t.TempDir()
 	projection := openFixtureService(t, fixture).svc

@@ -740,6 +740,9 @@
 // ErrRevision with expected/current details; an unknown hash gives ErrInvalid.
 // Refusals consume no ID. Revision is the actual latest request/hold/ending
 // sequence, not a predicted sequencer value.
+// State is pending, replaced, cancelled, applied or a later version's ending
+// token. An unknown ending stays terminal without being called cancelled or
+// applied; CancelActivation returns already_terminal for it.
 //
 // Schedule is immediate or not_before. Timestamp text is strict RFC3339 with
 // explicit known offset, seconds and at most nine fractional digits, normalized
@@ -802,6 +805,33 @@
 // nothing. Owner controls, explicit resume/clock notification, guarded entries,
 // timer expiry and acknowledged affected intent endings feed a size-one wake
 // channel. Close cancels coordination, stops its timer and drains the goroutine.
+//
+// Activation crash coverage uses one acknowledged history and private stores
+// at the five append shapes: requested+pin, ended/replaced+requested+pin,
+// hold_changed, ended/cancelled and activated. Open preserves each acknowledged
+// boundary without execution. A torn request is absent; a torn replacement
+// retains the old request and revision; a torn hold or cancellation retains the
+// preceding hold; a torn activation retains due, not an applied manifest.
+// Explicit resume switches once at the trusted live time, including a later
+// effective time after a torn activation. An acknowledged activation stays
+// applied across repeated resume. Retained approval bodies are never unpinned.
+// Lost acknowledgements are separate from torn-tail recovery: uncertainty
+// poisons until reopen determines whether the complete commit survived.
+//
+// The native Windows activation row locks the next ledger append range with
+// LockFileEx. The failed request leaves the log bytes unchanged and poisons the
+// service. After release and reopen it is absent, and the same-ID retry succeeds
+// without rewriting the already-published bodies (file identity and mtime).
+// This is a native uncertain append, not a simulated definite refusal.
+//
+// Test-cost measurements on the development machine: owner-selected machine
+// configuration changes reduced the whole-package plain run from 775 to
+// 482 seconds before tests changed. O1-O4 then reduced it to 361 seconds plain
+// and 411 seconds under race, with one test above 60 seconds under race. Fixtures
+// privately copy lazy per-process Git seeds and unregistered histories; registered
+// histories still use --no-hardlinks clones. Finalization crash rows run in
+// parallel with private stores; F2-07's serial apply/undo matrices retain their
+// representative real-Open rows. These are test costs, not product capacity.
 //
 // # Removal boundary
 //

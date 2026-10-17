@@ -51,6 +51,7 @@ type ActivePolicy struct {
 }
 
 // ActivationState separates the request's lifetime from its durable hold.
+// State is pending, replaced, cancelled, applied or a later version's ending token.
 // Applied is present only for an applied request; Reason describes live blockage.
 type ActivationState struct {
 	RequestID, OwnerApprovalID     uuid.UUID

@@ -36,24 +36,22 @@ type gitFixtureSeed struct {
 }
 
 var (
-	gitFixtureSeedDir string
-	gitFixtureSeeds   = map[string]*gitFixtureSeed{
+	gitFixtureSeedDir     string
+	gitFixtureSeedDirOnce sync.Once
+	gitFixtureSeedDirErr  error
+	gitFixtureSeeds       = map[string]*gitFixtureSeed{
 		"sha1":   {},
 		"sha256": {},
 	}
 )
 
 func TestMain(m *testing.M) {
-	var err error
-	gitFixtureSeedDir, err = os.MkdirTemp("", "workspace-git-seeds-")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 	code := m.Run()
-	if err := os.RemoveAll(gitFixtureSeedDir); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		code = 1
+	if gitFixtureSeedDir != "" {
+		if err := os.RemoveAll(gitFixtureSeedDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			code = 1
+		}
 	}
 	os.Exit(code)
 }
@@ -117,6 +115,12 @@ func fixtureSeed(t testing.TB, format string) *gitFixtureSeed {
 	seed := gitFixtureSeeds[format]
 	if seed == nil {
 		t.Fatalf("unsupported fixture object format %q", format)
+	}
+	gitFixtureSeedDirOnce.Do(func() {
+		gitFixtureSeedDir, gitFixtureSeedDirErr = os.MkdirTemp("", "workspace-git-seeds-")
+	})
+	if gitFixtureSeedDirErr != nil {
+		t.Fatal(gitFixtureSeedDirErr)
 	}
 	seed.once.Do(func() {
 		root := filepath.Join(gitFixtureSeedDir, format, "repo")

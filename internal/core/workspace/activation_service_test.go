@@ -529,7 +529,8 @@ func TestActivationSingleDueWakeup(t *testing.T) {
 		f := newActivationFixture(t)
 		defer f.store.Close()
 		defer f.svc.Close()
-		f.svc.deps.activationNow = func() (time.Time, error) { return time.Now(), nil }
+		samples := 0
+		f.svc.deps.activationNow = func() (time.Time, error) { samples++; return time.Now(), nil }
 		start := time.Now()
 		r := f.request()
 		r.Schedule.NotBefore = start.Add(time.Hour).Format(time.RFC3339Nano)
@@ -545,9 +546,15 @@ func TestActivationSingleDueWakeup(t *testing.T) {
 		}
 		synctest.Wait()
 		before := f.store.Durable()
+		f.svc.mu.Lock()
+		samplesBefore := samples
+		f.svc.mu.Unlock()
 		<-time.NewTimer(time.Hour).C
 		synctest.Wait()
-		if f.store.Durable() != before {
+		f.svc.mu.Lock()
+		samplesAfter := samples
+		f.svc.mu.Unlock()
+		if f.store.Durable() != before || samplesAfter != samplesBefore {
 			t.Fatal("replacement left the old deadline armed")
 		}
 		<-time.NewTimer(time.Hour).C
@@ -584,20 +591,20 @@ func TestActivationSingleDueWakeup(t *testing.T) {
 		mustActivation(t, f.svc, r)
 		synctest.Wait()
 		f.svc.mu.Lock()
-		samples := 0
+		samples = 0
 		f.svc.deps.activationNow = func() (time.Time, error) { samples++; return start, nil }
 		f.svc.wakeActivationLocked()
 		f.svc.mu.Unlock()
 		synctest.Wait()
 		before = f.store.Durable()
 		f.svc.mu.Lock()
-		samplesBefore := samples
+		samplesBefore = samples
 		f.svc.mu.Unlock()
 		// Cross any incorrectly armed deadline without saturating fake nanotime.
 		<-time.NewTimer(time.Duration(math.MaxInt64 / 2)).C
 		synctest.Wait()
 		f.svc.mu.Lock()
-		samplesAfter := samples
+		samplesAfter = samples
 		f.svc.mu.Unlock()
 		if samplesAfter != samplesBefore {
 			t.Fatal("regressed clock armed a polling timer")

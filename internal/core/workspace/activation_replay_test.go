@@ -340,7 +340,6 @@ func TestActivationRecordRules(t *testing.T) {
 	add("request_genesis_hash", 7, payloadAt(0, "expected_active_record_hash", ledger.Digest{1}))
 	add("request_missing_active_hash", 11, payloadAt(0, "expected_active_record_hash", nil))
 	add("request_unknown_active_hash", 11, payloadAt(0, "expected_active_record_hash", ledger.Digest{1}))
-	add("request_admission_floor", 11, payloadAt(0, "admission_utc_ns", int64(1791000100000000000)))
 	add("hold_request_hash", 9, payloadAt(0, "activation_request_record_hash", ledger.Digest{1}))
 	add("hold_request_id", 9, payloadAt(0, "request_id", uuid.NewV7()))
 	add("hold_due_before_time", 9, payloadAt(0, "observed_utc_ns", int64(1791000099000000000)))
@@ -410,6 +409,19 @@ func TestActivationRecordRules(t *testing.T) {
 			if row.valid {
 				if err != nil || s.pendingActivation != (uuid.UUID{}) || s.activePolicy.EffectiveSequence != 10 {
 					t.Fatalf("unknown ending rejected or applied: %v", err)
+				}
+				p, err := ledger.DecodePolicyActivationEnded(drafts[0].Payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state := activationStatus(t, s, p.RequestID)
+				if state.State != p.Outcome || state.State == "cancelled" {
+					t.Fatalf("unknown ending lost its token: %+v", state)
+				}
+				before := store.Durable()
+				result, err := s.CancelActivation(context.Background(), ActivationCancellation{Actor: ledger.ActorOwner, ExpectedPendingID: p.RequestID, ExpectedPendingRevision: state.Revision})
+				if err != nil || result.Outcome != "already_terminal" || store.Durable() != before {
+					t.Fatalf("unknown ending was interpreted as cancellation: %+v %v", result, err)
 				}
 			} else if !errors.Is(err, ErrInconsistent) {
 				t.Fatalf("rule break replayed: %v", err)

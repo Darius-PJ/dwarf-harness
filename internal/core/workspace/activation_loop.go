@@ -55,14 +55,14 @@ func (s *Service) changeActivationHoldLocked(ctx context.Context, hold string, o
 }
 
 // observeActivationLocked installs only changed holds. Due is durable and final.
-func (s *Service) observeActivationLocked(ctx context.Context) (int64, bool, error) {
+func (s *Service) observeActivationLocked(ctx context.Context) (now int64, trusted, changed bool, err error) {
 	r, exists := s.activations[s.pendingActivation]
 	if !exists {
-		return 0, false, nil
+		return 0, false, false, nil
 	}
-	now, trusted := s.sampleActivationTimeLocked()
+	now, trusted = s.sampleActivationTimeLocked()
 	if r.state.Hold == ledger.HoldDue {
-		return now, trusted, nil
+		return now, trusted, false, nil
 	}
 	hold := r.state.Hold
 	switch {
@@ -75,10 +75,11 @@ func (s *Service) observeActivationLocked(ctx context.Context) (int64, bool, err
 	}
 	if hold != r.state.Hold {
 		if err := s.changeActivationHoldLocked(ctx, hold, now); err != nil {
-			return 0, false, err
+			return 0, false, false, err
 		}
+		changed = true
 	}
-	return now, trusted, nil
+	return now, trusted, changed, nil
 }
 
 // resumeActivationControls is independent of promotion reconciliation: activation
@@ -97,7 +98,7 @@ func (s *Service) resumeActivationControls(ctx context.Context) error {
 		return err
 	}
 	if r, exists := s.activations[s.pendingActivation]; exists && r.state.Hold != ledger.HoldDue {
-		if _, _, err := s.observeActivationLocked(ctx); err != nil {
+		if _, _, _, err := s.observeActivationLocked(ctx); err != nil {
 			return err
 		}
 	}
@@ -150,7 +151,7 @@ func (s *Service) advanceActivation(ctx context.Context) error {
 	}
 	current.state.Reason = ""
 	s.activations[r.request.RequestID] = current
-	now, trusted, err := s.observeActivationLocked(ctx)
+	now, trusted, _, err := s.observeActivationLocked(ctx)
 	if err != nil {
 		return err
 	}
@@ -241,10 +242,13 @@ func (s *Service) guardActivationIntentLocked(workspaceID uuid.UUID) (ledger.Dig
 			return ledger.Digest{}, &UnavailableError{Reason: "activation_recovery_pending"}
 		}
 		if r.state.Hold != ledger.HoldDue {
-			if _, _, err := s.observeActivationLocked(context.Background()); err != nil {
+			_, _, changed, err := s.observeActivationLocked(context.Background())
+			if err != nil {
 				return ledger.Digest{}, err
 			}
-			s.wakeActivationLocked()
+			if changed {
+				s.wakeActivationLocked()
+			}
 			r = s.activations[s.pendingActivation]
 		}
 		switch r.state.Hold {

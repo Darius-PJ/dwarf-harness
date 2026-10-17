@@ -91,9 +91,6 @@ func (s *Service) applyActivationRecord(drafts []ledger.Draft, at int, seq uint6
 				return bad("activation affected workspace is unregistered")
 			}
 		}
-		if p.AdmissionUTCNS < s.activationFloor {
-			return bad("activation admission below clock floor")
-		}
 		oldPending, oldFloor := s.pendingActivation, s.activationFloor
 		s.activations[p.RequestID] = activationState{request: p, refs: slices.Clone(d.BodyRefs), state: ActivationState{RequestID: p.RequestID, OwnerApprovalID: p.OwnerApprovalID, Revision: seq, State: "pending", AdmissionUTCNS: p.AdmissionUTCNS, NotBeforeUTCNS: p.NotBeforeUTCNS}}
 		s.pendingActivation = p.RequestID
@@ -184,10 +181,6 @@ func (s *Service) applyActivationRecord(drafts []ledger.Draft, at int, seq uint6
 		}
 		next := old
 		next.state.State, next.state.Hold, next.state.Reason = p.Outcome, "", ""
-		// Future outcome tokens are terminal, never interpreted as application.
-		if p.Outcome != ledger.ActivationCancelled && p.Outcome != ledger.ActivationReplaced {
-			next.state.State = "cancelled"
-		}
 		next.state.Revision, next.state.ReplacementRequestID = seq, p.ReplacementRequestID
 		s.activations[p.RequestID], s.pendingActivation = next, uuid.UUID{}
 		*journal = append(*journal, func() { s.activations[p.RequestID], s.pendingActivation = old, p.RequestID })
