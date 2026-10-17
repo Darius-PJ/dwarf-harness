@@ -54,10 +54,7 @@ func TestCreateWorktreeAtExplicitCommit(t *testing.T) {
 func fixtureScratch(t *testing.T) (gitFixture, Proposal, scratchWorktree) {
 	t.Helper()
 	f := newGitFixture(t, "sha1")
-	p, err := f.git.inspect(context.Background(), f.root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := f.fixtureProposal(t)
 	p.Normalization.AutoCRLF = "true"
 	s, err := f.git.createWorktree(context.Background(), f.colony, p, filepath.Join(f.colony, "workspaces", "inputs", "1"), filepath.Join(f.colony, "scratch", "01234567"), "scratch-test", fixtureMain(t, f))
 	if err != nil {

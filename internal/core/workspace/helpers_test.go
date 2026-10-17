@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -25,11 +26,44 @@ type gitFixture struct {
 	root, colony string
 	env          []string
 	git          *gitRunner
+	seed         *gitFixtureSeed
+}
+
+type gitFixtureSeed struct {
+	once     sync.Once
+	root     string
+	proposal Proposal
+}
+
+var (
+	gitFixtureSeedDir string
+	gitFixtureSeeds   = map[string]*gitFixtureSeed{
+		"sha1":   {},
+		"sha256": {},
+	}
+)
+
+func TestMain(m *testing.M) {
+	var err error
+	gitFixtureSeedDir, err = os.MkdirTemp("", "workspace-git-seeds-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	if err := os.RemoveAll(gitFixtureSeedDir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code = 1
+	}
+	os.Exit(code)
 }
 
 func testEnv(t testing.TB) []string {
 	t.Helper()
-	home := t.TempDir()
+	return testEnvAt(t.TempDir())
+}
+
+func testEnvAt(home string) []string {
 	var env []string
 	for _, s := range os.Environ() {
 		key, _, _ := strings.Cut(s, "=")
@@ -78,15 +112,63 @@ func readTestFile(t testing.TB, path string) []byte {
 	return b
 }
 
+func fixtureSeed(t testing.TB, format string) *gitFixtureSeed {
+	t.Helper()
+	seed := gitFixtureSeeds[format]
+	if seed == nil {
+		t.Fatalf("unsupported fixture object format %q", format)
+	}
+	seed.once.Do(func() {
+		root := filepath.Join(gitFixtureSeedDir, format, "repo")
+		home := filepath.Join(gitFixtureSeedDir, format, "home")
+		for _, dir := range []string{root, home} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		env := testEnvAt(home)
+		gitCommand(t, env, root, nil, "init", "--object-format="+format, "-b", "main")
+		gitCommand(t, env, root, nil, "config", "core.autocrlf", "false")
+		writeTestFile(t, filepath.Join(root, "base.txt"), []byte("one\ntwo\n"))
+		gitCommand(t, env, root, nil, "add", "--", "base.txt")
+		gitCommand(t, env, root, nil, "commit", "-m", "base")
+		gitCommand(t, env, root, nil, "checkout", "--detach")
+		git := newGitRunner(func() []string { return env })
+		proposal, err := git.inspect(context.Background(), root)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// A private copy must preserve every inspected input, not just its objects.
+		copyRoot, copyEnv := t.TempDir(), testEnv(t)
+		if err := os.CopyFS(copyRoot, os.DirFS(root)); err != nil {
+			t.Fatal(err)
+		}
+		copyGit := newGitRunner(func() []string { return copyEnv })
+		got, err := copyGit.inspect(context.Background(), copyRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := proposal
+		want.CommonDir = filepath.ToSlash(filepath.Join(copyRoot, ".git"))
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("copied Git seed changed proposal: got %#v want %#v", got, want)
+		}
+		seed.root, seed.proposal = root, proposal
+	})
+	if seed.root == "" {
+		t.Fatal("Git fixture seed construction failed")
+	}
+	return seed
+}
+
 func newGitFixture(t testing.TB, format string) gitFixture {
 	t.Helper()
-	f := gitFixture{root: t.TempDir(), colony: t.TempDir(), env: testEnv(t)}
-	gitCommand(t, f.env, f.root, nil, "init", "--object-format="+format, "-b", "main")
-	gitCommand(t, f.env, f.root, nil, "config", "core.autocrlf", "false")
-	writeTestFile(t, filepath.Join(f.root, "base.txt"), []byte("one\ntwo\n"))
-	gitCommand(t, f.env, f.root, nil, "add", "--", "base.txt")
-	gitCommand(t, f.env, f.root, nil, "commit", "-m", "base")
-	gitCommand(t, f.env, f.root, nil, "checkout", "--detach")
+	seed := fixtureSeed(t, format)
+	f := gitFixture{root: t.TempDir(), colony: t.TempDir(), env: testEnv(t), seed: seed}
+	if err := os.CopyFS(f.root, os.DirFS(seed.root)); err != nil {
+		t.Fatal(err)
+	}
 	if err := prepareGitLayout(f.colony); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +177,53 @@ func newGitFixture(t testing.TB, format string) gitFixture {
 		t.Fatal(f.git.unavailable)
 	}
 	return f
+}
+
+func (f gitFixture) fixtureProposal(t testing.TB) Proposal {
+	t.Helper()
+	if f.seed != nil {
+		p := f.seed.proposal
+		p.CommonDir = filepath.ToSlash(filepath.Join(f.root, ".git"))
+		home := environmentValue(f.env, "HOME")
+		unchanged := true
+		// Git's template may contain info/exclude. Preserve it, and only reuse
+		// the seed's inspection when the fixture still has exactly its inputs.
+		for _, file := range []struct {
+			path string
+			want HostFile
+		}{
+			{filepath.Join(p.CommonDir, "info", "exclude"), p.LocalExcludes},
+			{filepath.Join(p.CommonDir, "info", "attributes"), p.LocalAttributes},
+			{filepath.Join(home, "git", "ignore"), p.GlobalExcludes},
+			{filepath.Join(home, "git", "attributes"), p.GlobalAttributes},
+		} {
+			info, err := os.Stat(file.path)
+			if os.IsNotExist(err) && !file.want.Present {
+				continue
+			}
+			if err != nil || !file.want.Present || info.Size() != int64(len(file.want.Bytes)) {
+				unchanged = false
+				break
+			}
+			b, err := os.ReadFile(file.path)
+			if err != nil || !bytes.Equal(b, file.want.Bytes) {
+				unchanged = false
+				break
+			}
+		}
+		if unchanged {
+			// Callers edit reviewable inputs; never let them mutate the seed.
+			for _, file := range []*HostFile{&p.LocalExcludes, &p.GlobalExcludes, &p.LocalAttributes, &p.GlobalAttributes, &p.SystemAttributes} {
+				file.Bytes = bytes.Clone(file.Bytes)
+			}
+			return p
+		}
+	}
+	p, err := f.git.inspect(context.Background(), f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 type captureSideEffects struct {
@@ -174,10 +303,7 @@ func openFixtureService(t *testing.T, fixture gitFixture) *serviceFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.p, err = f.svc.git.inspect(context.Background(), f.root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	f.p = f.fixtureProposal(t)
 	return f
 }
 
@@ -306,11 +432,31 @@ func mustObserve(t *testing.T, writer *Writer) Observation {
 	return observation
 }
 
+// Registered repositories carry colony markers and linked-worktree paths.
+// Only an unregistered history can be copied without importing that ownership.
+func copyGitHistory(t testing.TB, history gitFixture, env []string, root string) *gitFixtureSeed {
+	t.Helper()
+	for _, name := range []string{"worktrees", filepath.Join("refs", "dwarf-harness")} {
+		_, err := os.Stat(filepath.Join(history.root, ".git", name))
+		if err == nil {
+			gitCommand(t, env, history.root, nil, "clone", "--no-hardlinks", "--no-checkout", "-b", "main", history.root, root)
+			gitCommand(t, env, root, nil, "checkout", "--detach")
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	if err := os.CopyFS(root, os.DirFS(history.root)); err != nil {
+		t.Fatal(err)
+	}
+	return history.seed
+}
+
 func serviceFromHistory(t *testing.T, history gitFixture) *serviceFixture {
 	t.Helper()
 	fixture := gitFixture{root: filepath.Join(t.TempDir(), "repo"), colony: t.TempDir(), env: history.env}
-	gitCommand(t, fixture.env, history.root, nil, "clone", "--no-hardlinks", "--no-checkout", "-b", "main", history.root, fixture.root)
-	gitCommand(t, fixture.env, fixture.root, nil, "checkout", "--detach")
+	fixture.seed = copyGitHistory(t, history, fixture.env, fixture.root)
 	fixture.git = newGitRunner(func() []string { return fixture.env })
 	f := openFixtureService(t, fixture)
 	var err error

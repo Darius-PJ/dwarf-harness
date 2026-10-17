@@ -783,8 +783,7 @@ func TestActivationIntentBindsActualManifest(t *testing.T) {
 func activationWorkspaceFromHistory(t *testing.T, f *serviceFixture, history gitFixture) *serviceFixture {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "repo")
-	gitCommand(t, f.env, history.root, nil, "clone", "--no-hardlinks", "--no-checkout", "-b", "main", history.root, root)
-	gitCommand(t, f.env, root, nil, "checkout", "--detach")
+	copyGitHistory(t, history, f.env, root)
 	proposal, err := f.svc.git.inspect(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
