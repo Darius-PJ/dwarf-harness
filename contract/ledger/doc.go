@@ -158,7 +158,8 @@
 // A Catalogue lists the record type versions a writer may append. Defined
 // returns those this contract version defines: the four F0 record types,
 // the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
-// F2-08 types and the four F2-09 types below, twenty in all, each at version 1.
+// F2-08 types, the four F2-09 types and the four F-U3-61 types below,
+// twenty-four in all, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -168,11 +169,15 @@
 // also by addition to format version 1.
 // F2-09 is ticket 09's part of F2, frozen (D124),
 // also by addition to format version 1.
+// F-U3-61 is ticket 61's part, U3's first producer family, proposed for the
+// project manager's freeze under D125 after the build advisor's approval,
+// also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
 // family may use it, and Defined never contains it.
 // The namespace "workspace." is reserved for C2's record families.
+// The namespace "graph." is reserved for U3's record families.
 //
 // # F0 record types
 //
@@ -1326,4 +1331,216 @@
 // than scheduled, a global change over it, and an intent binding the
 // manifest then current. W1 uses sha1; tests cover 64-digit Git IDs in the
 // extended intent separately.
+//
+// # F-U3-61 record types
+//
+// These four version-1 types are ticket 61's part, U3's first producer
+// family, proposed for the project manager's freeze under D125 after the
+// build advisor's approval, by addition to format version 1. U3 owns their
+// payloads and the graph. namespace. Only internal/undercurrent/graph may
+// append them through appender.Appender, enforced by review and tools/check's
+// appender rule. The service checks record rules when appending and at Open;
+// these codecs enforce payload rules only. No producer exists until ticket
+// 61's S3. Nothing here is accepted promotion, an engine source or U5 readiness.
+//
+// Every payload and nested-object key below is required. UUIDs are canonical
+// lowercase UUIDv7s; digests are non-zero 64-digit lowercase SHA-256 strings.
+// Integers use nat: plain decimal 0 through MaxInt64, with no signs (-0
+// included), fractions, exponents, quoted numbers, null or overflow. Repeated
+// keys at any depth are invalid; unknown keys at every depth are ignored.
+// Required arrays encode [] for nil, never null.
+//
+// Node kinds, adapters, edge types, geometries, reasons and scopes are open
+// tokens, ^[a-z][a-z0-9_]*$, at most 64 bytes; later values join by addition
+// in their own freeze records. Namespaces use the same open grammar. This
+// part emits artifact and module nodes and static_dependency coupling edges
+// only. Version-1 writer values are namespace workspace; adapters opaque,
+// python, typescript and sql, with checks, declarations, resources and usage
+// representing workspace-wide unknowns; scope canonical; analysis reasons
+// incremental, load, structural_100, analyzer_epoch and digest_mismatch;
+// coverage reasons unsupported_syntax, unresolved_reference,
+// adapter_unavailable, dependency_unapproved, upstream_unfrozen,
+// source_unavailable, work_exhausted, state_cap, temporary_cap, helper_limit,
+// stale_source and recovery_unknown. phase and state are closed. Profiles
+// use the existing [a-z][a-z0-9-]*/[1-9][0-9]* grammar, at most 64 bytes:
+// engine-limits/1 and graph-helper-limits/1 are the version-1 writer values
+// (engine-limits/1 spells DESIGN-UNDERCURRENT §13.7's engine-limits/v1 profile).
+//
+// Common value shapes emit their keys in the following order:
+//
+//	value          keys
+//	RecordRef      seq, hash
+//	GraphSource    workspace_id, registered, subject, tree
+//	NodeKey        namespace, origin_id, kind, local_key
+//	GraphNode      key, version_sha256, adapter, configuration_sha256
+//	EdgeEvidence   artifact, artifact_sha256, adapter, configuration_sha256, reference
+//	GraphEdge      edge_id, from, to, type, geometry, weight_ppm, evidence
+//	CoverageEntry  scope, adapter, state, reasons
+//	GraphCursor    artifact_index, output_index
+//
+// A RecordRef has seq 1 through MaxInt64 and the envelope's hash. A GraphSource
+// has a workspace UUIDv7, registered.seq < subject.seq and a 40- or 64-digit
+// lowercase Git tree ID. NodeKey origin_id is UUIDv7; local_key is non-empty
+// valid UTF-8 of at most 4,096 bytes. Its kind-specific tuple is a service rule.
+// GraphNode carries a valid key, two non-zero digests and an adapter token.
+// EdgeEvidence carries a valid artifact key, two non-zero digests, an adapter
+// token and a non-empty valid UTF-8 reference of at most 4,096 bytes.
+// GraphEdge requires distinct from/to keys, open type and geometry tokens,
+// weight_ppm 1 through 1,000,000, and edge_id equal to EdgeID(from,to,type):
+// SHA-256 of the compact JSON array [from,to,type], with keys encoded in the
+// NodeKey order above and type as a JSON string. Reversing endpoints or changing
+// type changes identity; replacing evidence does not.
+//
+// Coverage scope is non-empty valid UTF-8 of at most 8,192 bytes; its canonical
+// NodeKey JSON string or workspace:<uuid>:canonical form is a service rule.
+// Adapter is an open token. State is complete or unknown; complete iff reasons
+// is []. Reasons are open tokens strictly ascending by bytes. NodeKey arrays
+// sort by their compact JSON bytes, nodes by their key's bytes, edges and
+// remove_edges by the 32 edge-ID bytes, and coverage by (scope,adapter) bytes.
+// Every order is strict and therefore duplicate-free. Both cursor indices are
+// non-negative. EmptyGraphDigest hashes the exact bytes
+// {"scopes":[],"nodes":[],"edges":[],"coverage":[]};
+// EmptyChunksDigest hashes zero bytes.
+//
+// graph.analysis_started v1 (GraphAnalysisStarted) starts one attempt.
+//
+//	key                    type         rule
+//	analysis_id            UUIDv7       attempt identity
+//	analysis_key           digest       deduplication identity
+//	source                 GraphSource accepted immutable source
+//	input_frontier         RecordRef    colony's latest preceding acceptance
+//	scope                  token        v1 writes canonical
+//	base_version           integer      0 through MaxInt64
+//	base_digest            digest       current effective graph digest
+//	analyzer_epoch         integer      1 through MaxInt64
+//	configuration_sha256   digest       analyzer configuration identity
+//	limits_profile         identifier   v1 writes engine-limits/1
+//	helper_profile         identifier   v1 writes graph-helper-limits/1
+//	reason                 token        why this attempt starts
+//
+// Decoder rules: source.subject.seq <= input_frontier.seq; base_version is
+// zero iff base_digest equals EmptyGraphDigest. Service rules: analysis_key
+// hashes the compact tuple [source,input_frontier,scope,base_version,base_digest,
+// analyzer_epoch,configuration_sha256,limits_profile,helper_profile]; reason is
+// excluded. registered names workspace.registered for workspace_id; subject
+// names workspace.promotion_accepted whose request_id was admitted in that
+// workspace by an earlier workspace.promotion_admitted and whose accepted_tree
+// equals tree. input_frontier is the latest workspace.promotion_accepted in
+// the colony before this record. A rebuild's source is that frontier record's
+// own subject. The base is the current effective version and digest, initially
+// 0 and EmptyGraphDigest. Only one attempt is active per colony; a repeated key
+// returns its existing result before any work.
+//
+// graph.analysis_progress v1 (GraphAnalysisProgress) reserves or checkpoints
+// work, or closes an attempt without a version.
+//
+//	key              type            rule
+//	analysis_id      UUIDv7          attempt identity
+//	analysis_key     digest          deduplication identity
+//	revision         integer         1 through MaxInt64
+//	phase            string          reserved, checkpoint, unknown or superseded
+//	reserved_total   integer         0 through MaxInt64
+//	verified_cursor  GraphCursor     durably verified position
+//	coverage         CoverageEntry[] required, possibly []
+//
+// Decoder rules: unknown and superseded require non-empty coverage with every
+// entry unknown. reserved and checkpoint may carry []. Service rules: revision
+// is the previous progress revision plus one for this analysis_id; reserved
+// raises reserved_total by 1..min(10,000,remaining) before any helper, Git or
+// rebuild work. Nothing is refunded. The engine-limits/1 cap of 2,000,000 is
+// reached at most once per key and is terminal: unknown with work_exhausted.
+// checkpoint advances verified_cursor only over durably committed chunks.
+// unknown and superseded close the attempt. The sticky exhaustion key is
+// (source,scope,analyzer_epoch,configuration_sha256,limits_profile,helper_profile),
+// persisted by the terminal unknown record and checked before any started.
+//
+// graph.delta_chunk v1 (GraphDeltaChunk) holds invisible net mutations.
+//
+//	key           type            rule
+//	analysis_id   UUIDv7          attempt identity
+//	analysis_key  digest          deduplication identity
+//	chunk_index   integer         0 through MaxInt64
+//	remove_edges  digest[]        required, possibly []
+//	remove_nodes  NodeKey[]       required, possibly []
+//	put_nodes     GraphNode[]     required, possibly []
+//	put_edges     GraphEdge[]     required, possibly []
+//	coverage      CoverageEntry[] required, possibly []
+//
+// Decoder rules: the common element and order rules apply; no key is both
+// removed and put, and no edge ID is both removed and put. Producer rules:
+// payloads are at most 512 KiB, split greedily at whole elements in the key
+// order above, never splitting an element or string. Chunks are sequential,
+// immutable and invisible until an eligible final record. State forms in
+// remove-edges, remove-nodes, put-nodes, put-edges, coverage order across chunk
+// boundaries. Dangling endpoints and incident edges are history errors, never
+// cascaded. Only net mutations are carried: unchanged values are not re-put.
+//
+// graph.version_committed v1 (GraphVersionCommitted) finishes one analysis.
+//
+//	key                       type     rule
+//	analysis_id               UUIDv7   attempt identity
+//	analysis_key              digest   deduplication identity
+//	base_version              integer  0 through MaxInt64
+//	base_digest               digest   starting graph
+//	chunk_count               integer  0 through MaxInt64
+//	chunks_sha256             digest   concatenated chunk payload bytes
+//	graph_digest              digest   canonical resulting graph state
+//	structural_since_rebuild  integer  0 through MaxInt64
+//
+// Decoder rules: base_version is zero iff base_digest equals EmptyGraphDigest;
+// chunk_count is zero iff chunks_sha256 equals EmptyChunksDigest iff graph_digest
+// equals base_digest. Service rules: chunks_sha256 hashes concatenated compact
+// GraphDeltaChunk payload bytes in index order. graph_digest hashes canonical
+// state {"scopes":[...],"nodes":[...],"edges":[...],"coverage":[...]}; scopes
+// are strictly ascending by workspace UUID bytes, each containing
+// {source,scope,analyzer_epoch,configuration_sha256} in that order, with nodes,
+// edges and coverage ordered as above. Nothing operational enters that hash:
+// no task IDs, timings, counters or chunk splits. With positive chunk_count,
+// the effective graph version is this record's own envelope sequence. With
+// zero chunk_count it stays base_version: a confirmation records the rebuild
+// and resets the counter without advancing the version.
+//
+// Replay derives structural_since_rebuild from the prefix: distinct
+// workspace.promotion_accepted records since the last eligible rebuild, every
+// one with non-empty changed_paths under F2-08's rule. A mismatch is ErrHistory.
+// A final record is instead superseded without effect if its base version or
+// digest is no longer current, its source.subject is not its workspace's
+// latest acceptance, or the colony's latest acceptance preceding this record
+// is not input_frontier; eligibility is checked before the claimed counter.
+//
+// Record rules for every graph type: actor core; agent_id,
+// execution_session_id, context_id and turn_id absent; operation_id equals
+// analysis_id; measurement_path graph.analysis; body_refs absent. Commit
+// shapes are one started; one reserved; one or more delta_chunk records
+// followed by their checkpoint; one version_committed; or one unknown or
+// superseded. The service enforces these at production and Open, not Check,
+// Reader, EncodeCommit or these codecs. Replay reads only record envelopes
+// and payloads: no child, Git, parser, timer, body read or append. Actual
+// sequence and hash come from the committed envelope read back after
+// acknowledgement, never Durable()+1 or a payload.
+//
+// This part's consumed upstream types are workspace.registered,
+// workspace.promotion_admitted and workspace.promotion_accepted v1. The service
+// verifies an acceptance's envelope hash, admitted workspace and tree, not
+// its F2 lineage. Together with the four graph types this is seven consumed
+// types. U3 replay consumes every key; U1.E/ticket 60 consumes effective
+// versions, topology and coverage when its gate permits; U5 and U4 follow
+// under their later gates; the owner may inspect. Every key is replay-essential.
+// Exact paths, object and content digests, references, workspace IDs and
+// analysis identities are host-private, never federation exports. No source
+// text, secret or body reference appears. A graph record is never delivery,
+// validation evidence, permission or proof of coverage beyond its complete
+// entries.
+//
+// The F-U3-61 golden at testdata/u3/61/log/00000000000000000001.jsonl has
+// forty-one commits and sixty-two records. analysis_started appears at 11,
+// 23, 32, 37, 44, 53 and 56; analysis_progress reserved at 12, 15, 24, 33,
+// 38, 45, 54 and 57, checkpoint at 14, 19, 26, 35 and 51, unknown at 55,
+// superseded at 62; delta_chunk at 13, 18, 25, 34 and 50;
+// version_committed at 20, 27, 36, 39 and 52. It pins a two-chunk load with
+// an unrelated commit between chunks, an incremental version for a second
+// workspace with 64-digit Git IDs, a same-key content replacement, a zero-net
+// rebuild retaining the version, a stale final record after another
+// workspace's racing acceptance, an attempt ending unknown, and an attempt
+// superseded by its own workspace's newer acceptance.
 package ledger

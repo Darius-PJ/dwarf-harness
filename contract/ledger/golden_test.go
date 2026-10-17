@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -40,6 +41,10 @@ const (
 	// activationDir holds ticket 09's part of F2, frozen (D124),
 	// in one segment.
 	activationDir = "testdata/f2/09/log"
+	// graphDir holds F-U3-61, ticket 61's part and U3's first producer family,
+	// proposed for the project manager's freeze under D125 after the build
+	// advisor's approval, in one segment.
+	graphDir = "testdata/u3/61/log"
 )
 
 // fid returns a fixed fixture UUIDv7 ending in suffix.
@@ -55,6 +60,7 @@ var (
 	scratchChangeColony = fid("05")
 	finalizationColony  = fid("40")
 	activationColony    = fid("32")
+	graphColony         = fid("06")
 )
 
 // The bodies and the submission that the catalogue log references.
@@ -834,6 +840,184 @@ func activationInputs() []goldenCommit {
 	}
 }
 
+// graphInputs pins the graph payload history, not a graph service or the
+// canonical-state computation that ticket 61's S3 supplies.
+func graphInputs() []goldenCommit {
+	ids := func(s string) []uuid.UUID {
+		var out []uuid.UUID
+		for _, suffix := range strings.Fields(s) {
+			out = append(out, fid(suffix))
+		}
+		return out
+	}
+	workspaces := ids("07 08")
+	contexts, scratches, lineages := ids("09 0a"), ids("0b 0c"), ids("0d 0e")
+	inputPins := ids("0f 17")
+	analyses := ids("18 19 1a 1b 1c 1d 1e")
+	requests, captures := ids("1f 20 24 25 26 27"), ids("28 29 2a 2b 2c 2d")
+	pins, intents, generations := ids("2e 2f 30 3e 3f 4e"), ids("4f 50 5e 5f 60 66"), ids("67 68 69 6a 6b 6c")
+	commitIDs := ids("6d 6e 6f 75 76 77 78 79 7a 7b 7c 7d 7e 7f 80 90 a0 b0 ba bb bc bd be bf c0 c2 c3 c4 c6 c7 c8 c9 ca cb cc cd ce cf d0 da db")
+	words := []string{"one", "two", "three", "four", "five", "six", "seven"}
+	inputs := []Digest{graphFixtureDigest("graph capture inputs one\n"), graphFixtureDigest("graph capture inputs two\n")}
+	cfg := graphFixtureDigest("graph configuration one\n")
+	empty, g1, g2, g3, g5 := EmptyGraphDigest, graphFixtureDigest("graph state one\n"), graphFixtureDigest("graph state two\n"), graphFixtureDigest("graph state three\n"), graphFixtureDigest("graph state five\n")
+	key := func(a int) Digest { return graphFixtureDigest("graph analysis key " + words[a] + "\n") }
+	tree := func(w, revision int) string { return strings.Repeat(fmt.Sprintf("%x", revision+1), []int{40, 64}[w]) }
+	commit := func(w, revision int) string { return strings.Repeat(fmt.Sprintf("%x", revision+9), []int{40, 64}[w]) }
+	var out []goldenCommit
+	add := func(drafts ...Draft) {
+		out = append(out, goldenCommit{header: CommitHeader{ColonyID: graphColony, CommitID: commitIDs[len(out)], EventTimeNS: 1791000500000000000 + int64(len(out))*1000000000}, drafts: drafts})
+	}
+	lazy := func(build func(*goldenLog) []Draft) {
+		add()
+		out[len(out)-1].build = build
+	}
+	graphDraft := func(a int, typ string, p payload) Draft {
+		return Draft{Type: typ, TypeVersion: 1, Actor: ActorCore, OperationID: analyses[a], MeasurementPath: "graph.analysis", Payload: mustEncode(p)}
+	}
+	register := func(w int) {
+		add(
+			Draft{Type: TypeWorkspaceRegistered, TypeVersion: 1, Actor: ActorOwner, Payload: mustEncode(WorkspaceRegistered{WorkspaceID: workspaces[w], CommonDir: []string{"C:/fixture/repo-h/.git", "/fixture/repo-i/.git"}[w], ObjectFormat: []string{"sha1", "sha256"}[w]})},
+			Draft{Type: TypeCaptureInputsPinned, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{inputs[w]}, Payload: mustEncode(CaptureInputsPinned{WorkspaceID: workspaces[w], Revision: 1, CaptureInputsSHA256: inputs[w], PinID: inputPins[w]})},
+			Draft{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorOwner, BodyRefs: []Digest{inputs[w]}, Payload: mustEncode(BodyPin{PinID: inputPins[w]})},
+		)
+	}
+	admit := func(r int) {
+		w, revision := r%2, r/2
+		manifest := graphFixtureDigest("graph manifest " + words[r] + "\n")
+		p := PromotionAdmitted{RequestID: requests[r], WorkspaceID: workspaces[w], ScratchID: scratches[w], ContextID: contexts[w], LineageID: lineages[w], Checkpoint: int64(revision + 1),
+			ScratchBase: commit(w, 0), BaselineTree: tree(w, revision), DeltaBaseTree: tree(w, revision), CaptureID: captures[r], SealedTree: tree(w, revision+1),
+			ManifestSHA256: manifest, InputsRevision: 1, CaptureInputsSHA256: inputs[w], PinID: pins[r]}
+		if r >= 2 {
+			p.ParentRequestID = requests[r-2]
+		}
+		add(
+			Draft{Type: TypePromotionAdmitted, TypeVersion: 1, Actor: ActorAgent, ContextID: contexts[w], BodyRefs: sortedDigests(inputs[w], manifest), Payload: mustEncode(p)},
+			Draft{Type: TypeBodyPin, TypeVersion: 1, Actor: ActorAgent, ContextID: contexts[w], BodyRefs: sortedDigests(inputs[w], manifest), Payload: mustEncode(BodyPin{PinID: pins[r]})},
+		)
+	}
+	accept := func(r int, witness int64, paths ...string) {
+		w, revision := r%2, r/2
+		add(
+			Draft{Type: TypePromotionAccepted, TypeVersion: 1, Actor: ActorCore, ContextID: contexts[w], Payload: mustEncode(PromotionAccepted{IntentID: intents[r], RequestID: requests[r], GenerationID: generations[r], PredecessorWitnessSeq: witness, PredecessorCommit: commit(w, revision), PredecessorTree: tree(w, revision), AcceptedCommit: commit(w, revision+1), AcceptedTree: tree(w, revision+1), ChangedPaths: paths})},
+			Draft{Type: TypeBodyUnpin, TypeVersion: 1, Actor: ActorCore, ContextID: contexts[w], Payload: mustEncode(BodyUnpin{PinID: pins[r]})},
+		)
+	}
+	start := func(a, w, revision int, subject, frontier uint64, base int64, digest Digest, reason string) {
+		lazy(func(g *goldenLog) []Draft {
+			ref := func(seq uint64) RecordRef { return RecordRef{int64(seq), g.hash(seq)} }
+			p := GraphAnalysisStarted{AnalysisID: analyses[a], AnalysisKey: key(a), Source: GraphSource{workspaces[w], ref([]uint64{1, 4}[w]), ref(subject), tree(w, revision)}, InputFrontier: ref(frontier), Scope: GraphScopeCanonical, BaseVersion: base, BaseDigest: digest, AnalyzerEpoch: 1, ConfigurationSHA256: cfg, LimitsProfile: LimitsProfileV1, HelperProfile: HelperProfileV1, Reason: reason}
+			return []Draft{graphDraft(a, TypeGraphAnalysisStarted, p)}
+		})
+	}
+	progress := func(a int, revision int64, phase string, total, artifact, output int64, coverage []CoverageEntry) Draft {
+		return graphDraft(a, TypeGraphAnalysisProgress, GraphAnalysisProgress{AnalysisID: analyses[a], AnalysisKey: key(a), Revision: revision, Phase: phase, ReservedTotal: total, VerifiedCursor: GraphCursor{artifact, output}, Coverage: coverage})
+	}
+	reserve := func(a int) { add(progress(a, 1, GraphPhaseReserved, 10000, 0, 0, nil)) }
+	scope := func(w int) string { return "workspace:" + workspaces[w].String() + ":canonical" }
+	coverage := func(w int) []CoverageEntry {
+		var entries []CoverageEntry
+		for _, adapter := range []string{"checks", "declarations", "go", "opaque", "python", "resources", "sql", "typescript", "usage"} {
+			c := CoverageEntry{Scope: scope(w), Adapter: adapter, State: CoverageComplete, Reasons: []string{}}
+			switch adapter {
+			case "checks", "declarations", "resources", "usage":
+				c.State, c.Reasons = CoverageUnknown, []string{ReasonUpstreamUnfrozen}
+			case "go":
+				c.State, c.Reasons = CoverageUnknown, []string{ReasonDependencyUnapproved}
+			case "typescript":
+				c.State, c.Reasons = CoverageUnknown, []string{ReasonAdapterUnavailable}
+			}
+			entries = append(entries, c)
+		}
+		return entries
+	}
+	node := func(w int, kind, local, body, adapter string) GraphNode {
+		return GraphNode{graphFixtureKey(workspaces[w], kind, local), graphFixtureDigest(body), adapter, cfg}
+	}
+	a := node(0, NodeKindArtifact, `[1,"pkg/a.py"]`, "import pkg.b\n", AdapterPython)
+	b := node(0, NodeKindArtifact, `[9,"pkg/b.py"]`, "value = 1\n", AdapterPython)
+	query := node(0, NodeKindArtifact, `[9,"query.sql"]`, "SELECT * FROM users;\n", AdapterSQL)
+	schema := node(0, NodeKindArtifact, `[1,"schema.sql"]`, "CREATE TABLE users (id INT);\n", AdapterSQL)
+	ma := node(0, NodeKindModule, `["python","workspace","pkg.a"]`, "import pkg.b\n", AdapterPython)
+	mb := node(0, NodeKindModule, `["python","workspace","pkg.b"]`, "value = 1\n", AdapterPython)
+	users := node(0, NodeKindModule, `["sql","workspace","[\"\",\"users\"]"]`, "CREATE TABLE users (id INT);\n", AdapterSQL)
+	index := node(1, NodeKindArtifact, `[21,"index.ts"]`, "import './util';\n", AdapterOpaque)
+	util := node(1, NodeKindArtifact, `[21,"util.ts"]`, "export const value = 1;\n", AdapterOpaque)
+	edgePython, edgeSQL := graphFixtureEdge(ma.Key, b.Key, AdapterPython, "pkg.a"), graphFixtureEdge(users.Key, query.Key, AdapterSQL, "users")
+	edgePython.Evidence.ArtifactSHA256, edgePython.Evidence.ConfigurationSHA256 = b.VersionSHA256, cfg
+	edgeSQL.Evidence.ArtifactSHA256, edgeSQL.Evidence.ConfigurationSHA256 = query.VersionSHA256, cfg
+	chunk := func(a int, index int64, nodes []GraphNode, edges []GraphEdge, coverage []CoverageEntry) Draft {
+		slices.SortFunc(nodes, func(a, b GraphNode) int { return strings.Compare(a.Key.compact(), b.Key.compact()) })
+		slices.SortFunc(edges, func(a, b GraphEdge) int { return bytes.Compare(a.EdgeID[:], b.EdgeID[:]) })
+		return graphDraft(a, TypeGraphDeltaChunk, GraphDeltaChunk{AnalysisID: analyses[a], AnalysisKey: key(a), ChunkIndex: index, PutNodes: nodes, PutEdges: edges, Coverage: coverage})
+	}
+	finish := func(a int, base int64, baseDigest, graphDigest Digest, structural int64, chunks ...uint64) {
+		lazy(func(g *goldenLog) []Draft {
+			h := sha256.New()
+			for _, seq := range chunks {
+				_, _ = h.Write(graphPayload(g, seq))
+			}
+			p := GraphVersionCommitted{AnalysisID: analyses[a], AnalysisKey: key(a), BaseVersion: base, BaseDigest: baseDigest, ChunkCount: int64(len(chunks)), ChunksSHA256: Digest(h.Sum(nil)), GraphDigest: graphDigest, StructuralSinceRebuild: structural}
+			return []Draft{graphDraft(a, TypeGraphVersionCommitted, p)}
+		})
+	}
+	register(0)
+	register(1)
+	admit(0)
+	accept(0, 0, "pkg/a.py", "pkg/b.py", "query.sql", "schema.sql")
+	start(0, 0, 1, 9, 9, 0, empty, GraphReasonLoad)
+	reserve(0)
+	add(chunk(0, 0, []GraphNode{a, b, query, schema, ma, mb, users}, nil, nil), progress(0, 2, GraphPhaseCheckpoint, 10000, 4, 0, nil))
+	add(progress(0, 3, GraphPhaseReserved, 20000, 4, 0, nil))
+	admit(1)
+	add(chunk(0, 1, nil, []GraphEdge{edgePython, edgeSQL}, coverage(0)), progress(0, 4, GraphPhaseCheckpoint, 20000, 4, 2, nil))
+	finish(0, 0, empty, g1, 0, 13, 18)
+	accept(1, 0, "index.ts", "util.ts")
+	start(1, 1, 1, 21, 21, 20, g1, GraphReasonIncremental)
+	reserve(1)
+	add(chunk(1, 0, []GraphNode{index, util}, nil, coverage(1)), progress(1, 2, GraphPhaseCheckpoint, 10000, 2, 0, nil))
+	finish(1, 20, g1, g2, 1, 25)
+	admit(2)
+	accept(2, 9, "pkg/a.py")
+	start(2, 0, 2, 30, 30, 27, g2, GraphReasonIncremental)
+	reserve(2)
+	a.VersionSHA256, ma.VersionSHA256 = graphFixtureDigest("import pkg.b\nvalue = 2\n"), graphFixtureDigest("import pkg.b\nvalue = 2\n")
+	add(chunk(2, 0, []GraphNode{a, ma}, nil, nil), progress(2, 2, GraphPhaseCheckpoint, 10000, 1, 0, nil))
+	finish(2, 27, g2, g3, 2, 34)
+	start(3, 0, 2, 30, 30, 36, g3, GraphReasonLoad)
+	reserve(3)
+	finish(3, 36, g3, g3, 0)
+	admit(3)
+	accept(3, 21, "util.ts")
+	start(4, 1, 2, 42, 42, 36, g3, GraphReasonIncremental)
+	reserve(4)
+	admit(4)
+	accept(4, 30, "pkg/b.py")
+	util.VersionSHA256 = graphFixtureDigest("export const value = 2;\n")
+	add(chunk(4, 0, []GraphNode{util}, nil, nil), progress(4, 2, GraphPhaseCheckpoint, 10000, 1, 0, nil))
+	finish(4, 36, g3, g5, 1, 50)
+	start(5, 0, 3, 48, 48, 36, g3, GraphReasonIncremental)
+	reserve(5)
+	add(progress(5, 2, GraphPhaseUnknown, 10000, 0, 0, []CoverageEntry{{scope(0), AdapterPython, CoverageUnknown, []string{ReasonHelperLimit}}}))
+	start(6, 1, 2, 42, 48, 36, g3, GraphReasonIncremental)
+	reserve(6)
+	admit(5)
+	accept(5, 42, "index.ts")
+	add(progress(6, 2, GraphPhaseSuperseded, 10000, 0, 0, []CoverageEntry{{scope(1), AdapterOpaque, CoverageUnknown, []string{ReasonStaleSource}}}))
+	return out
+}
+
+func graphPayload(g *goldenLog, seq uint64) json.RawMessage {
+	var envelope struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	line := g.record(seq).line
+	if err := json.Unmarshal(line[65:], &envelope); err != nil {
+		panic(err)
+	}
+	return envelope.Payload
+}
+
 // goldenRecord locates one record of a golden log.
 type goldenRecord struct {
 	seq  uint64
@@ -949,6 +1133,14 @@ var activationTypes = Consumption{
 	TypePromotionAdmitted: {1}, TypeGenerationDerived: {1}, TypeBodyPin: {1}, TypeBodyUnpin: {1},
 }
 
+var graphTypes = Consumption{
+	TypeGraphAnalysisStarted: {1}, TypeGraphAnalysisProgress: {1},
+	TypeGraphDeltaChunk: {1}, TypeGraphVersionCommitted: {1},
+	TypeWorkspaceRegistered: {1}, TypeCaptureInputsPinned: {1},
+	TypePromotionAdmitted: {1}, TypePromotionAccepted: {1},
+	TypeBodyPin: {1}, TypeBodyUnpin: {1},
+}
+
 var (
 	golden = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(goldenDir, goldenColony, allFixtures, goldenInputs())
@@ -970,6 +1162,9 @@ var (
 	})
 	activationLog = sync.OnceValues(func() (*goldenLog, error) {
 		return buildLog(activationDir, activationColony, activationTypes, activationInputs())
+	})
+	graphLog = sync.OnceValues(func() (*goldenLog, error) {
+		return buildLog(graphDir, graphColony, graphTypes, graphInputs())
 	})
 )
 
@@ -1006,6 +1201,11 @@ func mustFinalization(t testing.TB) *goldenLog {
 func mustActivation(t testing.TB) *goldenLog {
 	t.Helper()
 	return mustBuild(t, activationLog)
+}
+
+func mustGraph(t testing.TB) *goldenLog {
+	t.Helper()
+	return mustBuild(t, graphLog)
 }
 
 func mustBuild(t testing.TB, build func() (*goldenLog, error)) *goldenLog {
@@ -1495,6 +1695,114 @@ func TestF2_09Compatibility(t *testing.T) {
 	}
 }
 
+// TestGoldenU3_61 pins F-U3-61, ticket 61's part and U3's first producer
+// family, proposed for the project manager's freeze under D125 after the
+// build advisor's approval, including actual earlier hashes and chunk bytes.
+func TestGoldenU3_61(t *testing.T) {
+	t.Parallel()
+	g := mustGraph(t)
+	if *update {
+		if err := os.MkdirAll(g.dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, data := range g.files {
+			if err := os.WriteFile(filepath.Join(g.dir, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stored := snapshot(t, g.dir)
+	if got := slices.Sorted(maps.Keys(stored)); !slices.Equal(got, g.names) {
+		t.Fatalf("files=%v want %v", got, g.names)
+	}
+	for _, name := range g.names {
+		if !bytes.Equal(stored[name], g.files[name]) {
+			t.Errorf("%s differs from F-U3-61 encoding", name)
+		}
+	}
+	commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: graphTypes})
+	if err != nil || len(commits) != 41 || cursor != 62 {
+		t.Fatalf("read %d commits, cursor %d: %v; want 41,62", len(commits), cursor, err)
+	}
+	var chunks []byte
+	refs := map[uint64][3]int64{11: {1, 9, 9}, 23: {4, 21, 21}, 32: {1, 30, 30}, 37: {1, 30, 30}, 44: {4, 42, 42}, 53: {1, 48, 48}, 56: {4, 42, 48}}
+	for i, c := range commits {
+		if len(c.Records) != len(g.inputs[i].drafts) {
+			t.Fatalf("commit %d record count differs", i)
+		}
+		for j, r := range c.Records {
+			var p payload
+			var err error
+			switch r.Type {
+			case TypeBodyPin, TypeBodyUnpin:
+				p, err = decodeF0(r.Type, r.Payload)
+			case TypeWorkspaceRegistered, TypeCaptureInputsPinned:
+				p, err = decodeF2_05(r.Type, r.Payload)
+			case TypePromotionAdmitted:
+				p, err = decodeF2_06(r.Type, r.Payload)
+			case TypePromotionAccepted:
+				p, err = decodeF2_08(r.Type, r.Payload)
+			default:
+				p, err = decodeU3_61(r.Type, r.Payload)
+			}
+			if err != nil {
+				t.Fatalf("seq %d: %v", r.Seq, err)
+			}
+			if encoded, err := p.Encode(); err != nil || !bytes.Equal(encoded, r.Payload) || !bytes.Equal(encoded, g.inputs[i].drafts[j].Payload) {
+				t.Errorf("seq %d re-encoding differs: %v", r.Seq, err)
+			}
+			switch p := p.(type) {
+			case GraphAnalysisStarted:
+				for k, ref := range []RecordRef{p.Source.Registered, p.Source.Subject, p.InputFrontier} {
+					seq := refs[r.Seq][k]
+					if ref.Seq != seq || ref.Hash != g.hash(uint64(seq)) {
+						t.Errorf("seq %d reference %+v want seq %d hash %s", r.Seq, ref, seq, g.hash(uint64(seq)))
+					}
+				}
+			case GraphDeltaChunk:
+				if r.Seq == 13 || r.Seq == 18 {
+					chunks = append(chunks, r.Payload...)
+				}
+				for _, edge := range p.PutEdges {
+					if edge.EdgeID != EdgeID(edge.From, edge.To, edge.Type) {
+						t.Errorf("seq %d has wrong edge identity", r.Seq)
+					}
+				}
+			case GraphVersionCommitted:
+				if r.Seq == 20 && p.ChunksSHA256 != Digest(sha256.Sum256(chunks)) {
+					t.Error("first version does not hash both stored chunk payloads")
+				}
+				if r.Seq == 39 && (p.ChunkCount != 0 || p.ChunksSHA256 != EmptyChunksDigest || p.GraphDigest != p.BaseDigest) {
+					t.Error("zero-net confirmation changed")
+				}
+			}
+		}
+	}
+	res, err := Check(g.dir, g.colony)
+	want := CheckResult{Last: g.end(), Segment: g.final(), Size: int64(len(g.files[g.final()]))}
+	if err != nil || res != want || res.Last.Seq != 62 {
+		t.Errorf("Check=%+v,%v want %+v with seq 62", res, err, want)
+	}
+	t.Logf("golden SHA-256=%x commits=%d records=%d EmptyGraphDigest=%s EmptyChunksDigest=%s", sha256.Sum256(stored[g.final()]), len(commits), cursor, EmptyGraphDigest, EmptyChunksDigest)
+}
+
+func TestU3_61Compatibility(t *testing.T) {
+	t.Parallel()
+	g := mustGraph(t)
+	commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: finalizationTypes})
+	wantSeqs := []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 17, 21, 22, 28, 29, 30, 31, 40, 41, 42, 43, 46, 47, 48, 49, 58, 59, 60, 61}
+	wantLasts := []uint64{3, 6, 8, 10, 17, 22, 29, 31, 41, 43, 47, 49, 59, 61}
+	if err != nil || cursor != 62 || !slices.Equal(seqs(commits), wantSeqs) || !slices.Equal(lasts(commits), wantLasts) {
+		t.Fatalf("older consumer: seqs %v lasts %v cursor %d error %v", seqs(commits), lasts(commits), cursor, err)
+	}
+	for i, c := range commits {
+		got, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, After: c.Last, Through: ToEnd, Consume: finalizationTypes})
+		if err != nil || cursor != 62 || !slices.Equal(seqs(got), seqs(commits[i+1:])) {
+			t.Errorf("After %d: seqs %v cursor %d error %v", c.Last, seqs(got), cursor, err)
+		}
+	}
+}
+
 func TestGoldenDecodes(t *testing.T) {
 	for _, tc := range []struct {
 		g *goldenLog
@@ -1516,6 +1824,7 @@ func TestGoldenDecodes(t *testing.T) {
 		{mustScratchChange(t), nil},
 		{mustFinalization(t), nil},
 		{mustActivation(t), nil},
+		{mustGraph(t), nil},
 	} {
 		g := tc.g
 		commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})

@@ -69,7 +69,7 @@ func FuzzCheckTruncation(f *testing.F) {
 		dir  string
 	}
 	var targets []target
-	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f), mustWorkspace(f), mustPromotion(f), mustScratchChange(f), mustFinalization(f), mustActivation(f)} {
+	for _, g := range []*goldenLog{mustGolden(f), mustCatalogue(f), mustWorkspace(f), mustPromotion(f), mustScratchChange(f), mustFinalization(f), mustActivation(f), mustGraph(f)} {
 		dir := f.TempDir()
 		for _, name := range g.names {
 			targets = append(targets, target{g: g, name: name, dir: dir})
@@ -403,6 +403,38 @@ func FuzzDecodeF2_09(f *testing.F) {
 		again, err := decodeF2_09(typ, js)
 		if err != nil || !reflect.DeepEqual(again, p) {
 			t.Fatalf("Decode re-encoded %s = %+v, %v; want %+v", js, again, err, p)
+		}
+		if encoded, err := again.Encode(); err != nil || !bytes.Equal(encoded, js) {
+			t.Fatalf("re-encoding = %s, %v; want %s", encoded, err, js)
+		}
+	})
+}
+
+// FuzzDecodeU3_61 exercises F-U3-61, ticket 61's part and U3's first producer
+// family, proposed for the project manager's freeze under D125 after the
+// build advisor's approval, including nested values and additive open tokens.
+func FuzzDecodeU3_61(f *testing.F) {
+	fixtures := u3_61Payloads()
+	for i, tc := range fixtures {
+		f.Add(uint8(i), []byte(mustEncode(tc.p)))
+		f.Add(uint8(i), []byte(`{}`))
+	}
+	f.Fuzz(func(t *testing.T, kind uint8, data []byte) {
+		typ := fixtures[int(kind)%len(fixtures)].typ
+		p, err := decodeU3_61(typ, data)
+		if err != nil {
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Decode error = %v, want ErrInvalid", err)
+			}
+			return
+		}
+		js, err := p.Encode()
+		if err != nil {
+			t.Fatalf("Encode decoded %+v: %v", p, err)
+		}
+		again, err := decodeU3_61(typ, js)
+		if err != nil || !reflect.DeepEqual(again, p) {
+			t.Fatalf("Decode re-encoded = %+v, %v; want %+v", again, err, p)
 		}
 		if encoded, err := again.Encode(); err != nil || !bytes.Equal(encoded, js) {
 			t.Fatalf("re-encoding = %s, %v; want %s", encoded, err, js)
