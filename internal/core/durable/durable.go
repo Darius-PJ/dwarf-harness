@@ -1,6 +1,6 @@
 // Package durable is Core's narrow adapter to the operating system's file
-// locking and directory durability (B3). It is the only package that
-// imports golang.org/x/sys.
+// locking and directory durability (B3). Other recorded Core OS adapters may
+// also import golang.org/x/sys; this package owns only durability and locking.
 //
 // LockFile takes an exclusive, nonblocking lock that the operating system
 // releases when its holder closes it or dies. SyncDir flushes a directory's
