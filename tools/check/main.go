@@ -5,7 +5,8 @@
 //
 // It runs the enabled steps in order, even after a failure, prints each step's
 // commands and its PASS, FAIL or SKIP verdict, and exits non-zero if any step
-// failed. Every child go command sets GOTOOLCHAIN=local and an explicit
+// failed. Verdicts and the summary include elapsed seconds for executed steps
+// and the total. Every child go command sets GOTOOLCHAIN=local and an explicit
 // CGO_ENABLED itself instead of inheriting them (D28, D45).
 package main
 
@@ -22,6 +23,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -91,25 +93,30 @@ func steps(root string) []step {
 }
 
 // runAll runs the enabled steps, whatever the earlier verdicts, and returns 1
-// if any step failed and 0 otherwise. Only step 7 can be skipped (D129).
+// if any step failed and 0 otherwise. Only the race step can be skipped (D129).
 func runAll(w io.Writer, steps []step, race bool) int {
+	start := time.Now()
 	verdicts := make([]string, len(steps))
+	durations := make([]time.Duration, len(steps))
 	skipped := 0
 	for i, s := range steps {
 		fmt.Fprintf(w, "\n== Step %d: %s\n", i, s.title)
-		if i == 7 && !race {
+		if s.title == "race" && !race {
 			verdicts[i] = "SKIP"
 			skipped++
 			fmt.Fprintf(w, "SKIP step %d (%s): -race=false (D129)\n", i, s.title)
 			continue
 		}
-		if err := s.run(w); err != nil {
+		stepStart := time.Now()
+		err := s.run(w)
+		durations[i] = time.Since(stepStart)
+		if err != nil {
 			verdicts[i] = "FAIL"
-			fmt.Fprintf(w, "FAIL step %d (%s): %v\n", i, s.title, err)
+			fmt.Fprintf(w, "FAIL step %d (%s) in %.1fs: %v\n", i, s.title, durations[i].Seconds(), err)
 			continue
 		}
 		verdicts[i] = "PASS"
-		fmt.Fprintf(w, "PASS step %d (%s)\n", i, s.title)
+		fmt.Fprintf(w, "PASS step %d (%s) in %.1fs\n", i, s.title, durations[i].Seconds())
 	}
 
 	fmt.Fprintf(w, "\n== Summary\n")
@@ -118,16 +125,21 @@ func runAll(w io.Writer, steps []step, race bool) int {
 		if verdicts[i] == "FAIL" {
 			n++
 		}
-		fmt.Fprintf(w, "%s  %d %s\n", verdicts[i], i, s.title)
+		if verdicts[i] == "SKIP" {
+			fmt.Fprintf(w, "%s  %d %s\n", verdicts[i], i, s.title)
+			continue
+		}
+		fmt.Fprintf(w, "%s  %d %s in %.1fs\n", verdicts[i], i, s.title, durations[i].Seconds())
 	}
+	total := time.Since(start)
 	if n > 0 {
-		fmt.Fprintf(w, "check FAILED: %d of %d steps failed\n", n, len(steps))
+		fmt.Fprintf(w, "check FAILED: %d of %d steps failed in %.1fs\n", n, len(steps), total.Seconds())
 		return 1
 	}
 	if skipped > 0 {
-		fmt.Fprintf(w, "check PASSED: %d of %d steps passed, race skipped (D129)\n", len(steps)-skipped, len(steps))
+		fmt.Fprintf(w, "check PASSED: %d of %d steps passed, race skipped (D129) in %.1fs\n", len(steps)-skipped, len(steps), total.Seconds())
 	} else {
-		fmt.Fprintf(w, "check PASSED: all %d steps passed\n", len(steps))
+		fmt.Fprintf(w, "check PASSED: all %d steps passed in %.1fs\n", len(steps), total.Seconds())
 	}
 	return 0
 }

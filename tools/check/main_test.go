@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -124,13 +125,22 @@ func TestRunAll(t *testing.T) {
 			if want := []int{0, 1, 2, 3}; !slices.Equal(ran, want) {
 				t.Errorf("steps run %v, want %v", ran, want)
 			}
+			log := out.String()
 			for i := range len(steps) {
 				verdict := "PASS"
+				detail := ""
 				if slices.Contains(tt.failing, i) {
 					verdict = "FAIL"
+					detail = ": planted failure"
 				}
-				if want := fmt.Sprintf("%s step %d ", verdict, i); !strings.Contains(out.String(), want) {
-					t.Errorf("output lacks %q:\n%s", want, out.String())
+				pattern := fmt.Sprintf(`(?m)^%s step %d \(s\) in ([0-9]+\.[0-9]s)%s$`, verdict, i, detail)
+				match := regexp.MustCompile(pattern).FindStringSubmatch(log)
+				if match == nil {
+					t.Errorf("output lacks timed verdict matching %q:\n%s", pattern, log)
+					continue
+				}
+				if want := fmt.Sprintf("\n%s  %d s in %s\n", verdict, i, match[1]); !strings.Contains(log, want) {
+					t.Errorf("summary lacks verdict's duration %q:\n%s", want, log)
 				}
 			}
 		})
@@ -141,6 +151,7 @@ func TestRaceFlag(t *testing.T) {
 	tests := []struct {
 		name     string
 		args     []string
+		moveRace bool
 		failLast bool
 		wantRan  []int
 		wantCode int
@@ -149,13 +160,20 @@ func TestRaceFlag(t *testing.T) {
 		{
 			name:     "default runs all nine steps",
 			wantRan:  []int{0, 1, 2, 3, 4, 5, 6, 7, 8},
-			wantLast: "check PASSED: all 9 steps passed\n",
+			wantLast: "check PASSED: all 9 steps passed",
 		},
 		{
 			name:     "race disabled",
 			args:     []string{"-race=false"},
 			wantRan:  []int{0, 1, 2, 3, 4, 5, 6, 8},
-			wantLast: "check PASSED: 8 of 9 steps passed, race skipped (D129)\n",
+			wantLast: "check PASSED: 8 of 9 steps passed, race skipped (D129)",
+		},
+		{
+			name:     "race disabled after reordering",
+			args:     []string{"-race=false"},
+			moveRace: true,
+			wantRan:  []int{1, 2, 3, 4, 5, 6, 7, 8},
+			wantLast: "check PASSED: 8 of 9 steps passed, race skipped (D129)",
 		},
 		{
 			name:     "failure after skipped race",
@@ -163,7 +181,7 @@ func TestRaceFlag(t *testing.T) {
 			failLast: true,
 			wantRan:  []int{0, 1, 2, 3, 4, 5, 6, 8},
 			wantCode: 1,
-			wantLast: "check FAILED: 1 of 9 steps failed\n",
+			wantLast: "check FAILED: 1 of 9 steps failed",
 		},
 	}
 	for _, tt := range tests {
@@ -175,9 +193,14 @@ func TestRaceFlag(t *testing.T) {
 				t.Fatalf("parseArgs: %v\n%s", err, out.String())
 			}
 			checks := steps("")
+			raceIndex := 7
+			if tt.moveRace {
+				checks[0], checks[7] = checks[7], checks[0]
+				raceIndex = 0
+			}
 			var ran []int
-			// Exercise the real step order without launching any checks,
-			// especially the full repository's race tests.
+			// Exercise the steps without launching any checks, especially
+			// the full repository's race tests.
 			for i := range checks {
 				checks[i].run = func(io.Writer) error {
 					ran = append(ran, i)
@@ -194,27 +217,43 @@ func TestRaceFlag(t *testing.T) {
 				t.Errorf("steps run %v, want %v", ran, tt.wantRan)
 			}
 			log := out.String()
-			if !strings.HasSuffix(log, tt.wantLast) {
-				t.Errorf("output does not end with %q:\n%s", tt.wantLast, log)
+			lastPattern := `(?m)^` + regexp.QuoteMeta(tt.wantLast) + ` in [0-9]+\.[0-9]s\n\z`
+			if !regexp.MustCompile(lastPattern).MatchString(log) {
+				t.Errorf("output lacks timed final line matching %q:\n%s", lastPattern, log)
 			}
-			wantRace := []string{"PASS step 7 (race)", "PASS  7 race"}
-			if tt.args != nil {
-				wantRace = []string{"SKIP step 7 (race): -race=false (D129)", "SKIP  7 race"}
-				if strings.Contains(log, "PASS step 7") || strings.Contains(log, "PASS  7") {
-					t.Errorf("skipped race reported as passed:\n%s", log)
+			wantRace := []string{
+				fmt.Sprintf("PASS step %d (race)", raceIndex),
+				fmt.Sprintf("PASS  %d race", raceIndex),
+			}
+			if !race {
+				wantRace = []string{
+					fmt.Sprintf("SKIP step %d (race): -race=false (D129)", raceIndex),
+					fmt.Sprintf("SKIP  %d race", raceIndex),
+				}
+				for _, verdict := range []string{"PASS", "FAIL"} {
+					if strings.Contains(log, fmt.Sprintf("%s step %d ", verdict, raceIndex)) ||
+						strings.Contains(log, fmt.Sprintf("%s  %d ", verdict, raceIndex)) {
+						t.Errorf("skipped race reported as %s:\n%s", verdict, log)
+					}
 				}
 			}
 			for _, want := range wantRace {
-				if !strings.Contains(log, "\n"+want+"\n") {
-					t.Errorf("output lacks line %q:\n%s", want, log)
+				pattern := `(?m)^` + regexp.QuoteMeta(want)
+				if race {
+					pattern += ` in [0-9]+\.[0-9]s`
+				}
+				pattern += `$`
+				if !regexp.MustCompile(pattern).MatchString(log) {
+					t.Errorf("output lacks line matching %q:\n%s", pattern, log)
 				}
 			}
 			verdict := "PASS"
 			if tt.failLast {
 				verdict = "FAIL"
 			}
-			if want := "\n" + verdict + "  8 cross builds\n"; !strings.Contains(log, want) {
-				t.Errorf("summary lacks %q:\n%s", want, log)
+			pattern := fmt.Sprintf(`(?m)^%s  8 cross builds in [0-9]+\.[0-9]s$`, verdict)
+			if !regexp.MustCompile(pattern).MatchString(log) {
+				t.Errorf("summary lacks timed line matching %q:\n%s", pattern, log)
 			}
 		})
 	}
