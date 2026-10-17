@@ -12,8 +12,7 @@ import (
 )
 
 // The F-U3-61 record types, each at version 1: ticket 61's part, U3's first
-// producer family, proposed for the project manager's freeze under D125
-// after the build advisor's approval. These codecs enforce payload rules only.
+// producer family, frozen (D130). These codecs enforce payload rules only.
 const (
 	TypeGraphAnalysisStarted  = "graph.analysis_started"
 	TypeGraphAnalysisProgress = "graph.analysis_progress"
@@ -21,8 +20,7 @@ const (
 	TypeGraphVersionCommitted = "graph.version_committed"
 )
 
-// F-U3-61's closed phase and coverage tokens, proposed for the project
-// manager's freeze under D125 after the build advisor's approval.
+// F-U3-61's closed phase and coverage tokens, frozen (D130).
 const (
 	GraphPhaseReserved   = "reserved"
 	GraphPhaseCheckpoint = "checkpoint"
@@ -32,9 +30,8 @@ const (
 	CoverageUnknown      = "unknown"
 )
 
-// F-U3-61's version-1 writer values under open token grammars, proposed for
-// the project manager's freeze under D125 after the build advisor's approval.
-// Readers also accept other well-formed tokens.
+// F-U3-61's version-1 writer values under open token grammars, frozen
+// (D130). Readers also accept other well-formed tokens.
 const (
 	GraphReasonIncremental     = "incremental"
 	GraphReasonLoad            = "load"
@@ -68,9 +65,8 @@ const (
 	ReasonRecoveryUnknown      = "recovery_unknown"
 )
 
-// F-U3-61's version-1 profile identifiers, proposed for the project manager's
-// freeze under D125 after the build advisor's approval. Later identifiers
-// use the existing versioned-identifier grammar.
+// F-U3-61's version-1 profile identifiers, frozen (D130). Later
+// identifiers use the existing versioned-identifier grammar.
 const (
 	LimitsProfileV1 = "engine-limits/1"
 	HelperProfileV1 = "graph-helper-limits/1"

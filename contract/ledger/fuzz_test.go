@@ -411,8 +411,7 @@ func FuzzDecodeF2_09(f *testing.F) {
 }
 
 // FuzzDecodeU3_61 exercises F-U3-61, ticket 61's part and U3's first producer
-// family, proposed for the project manager's freeze under D125 after the
-// build advisor's approval, including nested values and additive open tokens.
+// family, frozen (D130), including nested values and additive open tokens.
 func FuzzDecodeU3_61(f *testing.F) {
 	fixtures := u3_61Payloads()
 	for i, tc := range fixtures {

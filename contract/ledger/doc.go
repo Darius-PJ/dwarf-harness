@@ -169,8 +169,7 @@
 // also by addition to format version 1.
 // F2-09 is ticket 09's part of F2, frozen (D124),
 // also by addition to format version 1.
-// F-U3-61 is ticket 61's part, U3's first producer family, proposed for the
-// project manager's freeze under D125 after the build advisor's approval,
+// F-U3-61 is ticket 61's part, U3's first producer family, frozen (D130),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -1335,8 +1334,7 @@
 // # F-U3-61 record types
 //
 // These four version-1 types are ticket 61's part, U3's first producer
-// family, proposed for the project manager's freeze under D125 after the
-// build advisor's approval, by addition to format version 1. U3 owns their
+// family, frozen by addition to format version 1 (D130). U3 owns their
 // payloads and the graph. namespace. Only internal/undercurrent/graph may
 // append them through appender.Appender, enforced by review and tools/check's
 // appender rule. The service checks record rules when appending and at Open;
@@ -1355,9 +1353,11 @@
 // in their own freeze records. Namespaces use the same open grammar. This
 // part emits artifact and module nodes and static_dependency coupling edges
 // only. Version-1 writer values are namespace workspace; adapters opaque,
-// python, typescript and sql, with checks, declarations, resources and usage
-// representing workspace-wide unknowns; scope canonical; analysis reasons
-// incremental, load, structural_100, analyzer_epoch and digest_mismatch;
+// python, typescript and sql, with go unknown for the reason
+// dependency_unapproved until its dependency is approved (D29), and checks,
+// declarations, resources and usage representing workspace-wide unknowns;
+// scope canonical; analysis reasons incremental, load, structural_100,
+// analyzer_epoch and digest_mismatch;
 // coverage reasons unsupported_syntax, unresolved_reference,
 // adapter_unavailable, dependency_unapproved, upstream_unfrozen,
 // source_unavailable, work_exhausted, state_cap, temporary_cap, helper_limit,
@@ -1388,7 +1388,8 @@
 // GraphEdge requires distinct from/to keys, open type and geometry tokens,
 // weight_ppm 1 through 1,000,000, and edge_id equal to EdgeID(from,to,type):
 // SHA-256 of the compact JSON array [from,to,type], with keys encoded in the
-// NodeKey order above and type as a JSON string. Reversing endpoints or changing
+// NodeKey order above and type as a JSON string, every string escaped as this
+// package's encoder (encoding/json) escapes it. Reversing endpoints or changing
 // type changes identity; replacing evidence does not.
 //
 // Coverage scope is non-empty valid UTF-8 of at most 8,192 bytes; its canonical

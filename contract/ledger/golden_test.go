@@ -42,8 +42,7 @@ const (
 	// in one segment.
 	activationDir = "testdata/f2/09/log"
 	// graphDir holds F-U3-61, ticket 61's part and U3's first producer family,
-	// proposed for the project manager's freeze under D125 after the build
-	// advisor's approval, in one segment.
+	// frozen (D130), in one segment.
 	graphDir = "testdata/u3/61/log"
 )
 
@@ -1696,8 +1695,7 @@ func TestF2_09Compatibility(t *testing.T) {
 }
 
 // TestGoldenU3_61 pins F-U3-61, ticket 61's part and U3's first producer
-// family, proposed for the project manager's freeze under D125 after the
-// build advisor's approval, including actual earlier hashes and chunk bytes.
+// family, frozen (D130), including actual earlier hashes and chunk bytes.
 func TestGoldenU3_61(t *testing.T) {
 	t.Parallel()
 	g := mustGraph(t)

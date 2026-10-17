@@ -17,8 +17,7 @@ import (
 )
 
 // These fixtures exercise F-U3-61, ticket 61's part and U3's first producer
-// family, proposed for the project manager's freeze under D125 after the
-// build advisor's approval, through public payload codecs.
+// family, frozen (D130), through public payload codecs.
 func decodeU3_61(typ string, js json.RawMessage) (payload, error) {
 	switch typ {
 	case TypeGraphAnalysisStarted:

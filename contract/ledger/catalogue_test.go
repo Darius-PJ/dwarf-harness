@@ -37,9 +37,8 @@ func TestNewCatalogue(t *testing.T) {
 	// Defined contains F0, F2-05 and ticket 06's part of F2, frozen
 	// (D118), and ticket 07's part, frozen (D119), plus ticket 08's part,
 	// frozen (D123), and ticket 09's part, frozen (D124), plus F-U3-61,
-	// ticket 61's part and U3's first producer family, proposed for the project
-	// manager's freeze under D125 after the build advisor's approval, but never
-	// fixture records or an undefined version.
+	// ticket 61's part and U3's first producer family, frozen (D130),
+	// but never fixture records or an undefined version.
 	def := Defined()
 	for _, typ := range []string{TypeCommand, TypeBodyPin, TypeBodyUnpin, TypeBodiesCollected, TypeWorkspaceRegistered, TypeCaptureInputsPinned, TypeScratchCreated, TypeScratchClosed, TypePromotionAdmitted, TypeGenerationDerived, TypePromotionFailed, TypeScratchChanged, TypeScratchMergeBack, TypeFinalizationIntended, TypePromotionAccepted, TypePromotionNoChange, TypePolicyActivationRequested, TypePolicyActivationHoldChanged, TypePolicyActivationEnded, TypePolicyActivated, TypeGraphAnalysisStarted, TypeGraphAnalysisProgress, TypeGraphDeltaChunk, TypeGraphVersionCommitted} {
 		if !def.Contains(TypeVersion{typ, 1}) || def.Contains(TypeVersion{typ, 2}) {
