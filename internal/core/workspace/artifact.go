@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -20,8 +19,18 @@ import (
 
 // ArtifactRequest reads an immutable tree of a registered workspace. MaxBytes
 // bounds returned blob bytes (at most 8 MiB); WorkAllowance is 1..10,000.
-// Every scanned entry and every 256 stream bytes (rounded up) costs work,
-// including entries at or before AfterPath on repeated scans.
+// A replayed prefix costs one nominal unit per 256 skipped rows, rounded up,
+// rather than charging its bytes again on every page. Each new row costs one
+// entry unit plus ceil((row bytes + NUL)/256). Before admitting a regular blob,
+// its maximum header/body cost (1 + ceil((size + LF)/256)) is charged as well;
+// this conservative charge is not refunded if the object subsequently vanishes.
+// Listing stops at the first byte/work boundary and is cancelled and waited.
+// With at most 50,000 entries, prefix cost is at most 196 units and each admitted
+// entry at most 4,355 (64 KiB row including NUL, 1 MiB blob). Thus 10,000-unit
+// pages always advance when MaxBytes fits the next supported blob. Oversized
+// blobs are unknown entries, not page barriers. A row exceeding the residual
+// 64 KiB scanner cap is a page-level helper_limit; such paths are outside this
+// reader's bounded profile, not silently complete or assigned a new identity.
 type ArtifactRequest struct {
 	WorkspaceID             uuid.UUID
 	Tree, AfterPath         string
@@ -100,49 +109,80 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 		b.WorkUsed += n
 		return nil
 	}
-	var entries []Artifact
+	type listedArtifact struct {
+		Artifact
+		size uint64
+	}
+	var entries []listedArtifact
+	var admittedBytes, skipped uint64
 	err = s.artifactStream(ctx, cwd, env, w.CommonDir, nil, func(in io.Reader) error {
 		scan := bufio.NewScanner(in)
 		scan.Split(artifactNUL)
-		scan.Buffer(make([]byte, 4096), 8192)
+		scan.Buffer(make([]byte, 4096), 64<<10)
+		previous := ""
 		for scan.Scan() {
 			row := scan.Text()
+			header, path, ok := strings.Cut(row, "\t")
+			parts := strings.Fields(header)
+			if !ok || len(parts) != 4 || !artifactPath(path) || !validOID(parts[2], len(r.Tree)) || path <= previous {
+				return fmt.Errorf("invalid immutable tree entry")
+			}
+			previous = path
+			if path <= r.AfterPath {
+				if skipped%256 == 0 {
+					if err := charge(1); err != nil {
+						return err
+					}
+				}
+				skipped++
+				continue
+			}
 			if err := charge(1 + (uint64(len(row))+1+255)/256); err != nil {
 				return err
 			}
-			header, path, ok := strings.Cut(row, "\t")
-			parts := strings.Split(header, " ")
-			if !ok || len(parts) != 3 || !artifactPath(path) || !validOID(parts[2], len(r.Tree)) {
-				return fmt.Errorf("invalid immutable tree entry")
-			}
-			if path <= r.AfterPath {
-				continue
-			}
-			e := Artifact{Path: path, Mode: parts[0], GitOID: parts[2]}
+			e := listedArtifact{Artifact: Artifact{Path: path, Mode: parts[0], GitOID: parts[2]}}
 			if parts[1] != "blob" || e.Mode != "100644" && e.Mode != "100755" {
 				e.Reason = ledger.ReasonUnsupportedSyntax
+			} else if parts[3] == "BAD" {
+				e.Reason = ledger.ReasonSourceUnavailable
+			} else {
+				size, err := strconv.ParseUint(parts[3], 10, 64)
+				if err != nil {
+					return fmt.Errorf("invalid immutable tree size: %w", err)
+				}
+				e.size = size
+				if size > 1<<20 {
+					e.Reason = ledger.ReasonHelperLimit
+				} else {
+					if size > r.MaxBytes-admittedBytes {
+						b.Reason = ledger.ReasonTemporaryCap
+						return errArtifactLimit
+					}
+					if err := charge(1 + (size+1+255)/256); err != nil {
+						return err
+					}
+					admittedBytes += size
+				}
 			}
 			entries = append(entries, e)
 		}
 		if errors.Is(scan.Err(), bufio.ErrTooLong) {
-			if err := charge(1 + 8192/256); err != nil {
+			if err := charge(1 + (64<<10)/256); err != nil {
 				return err
 			}
 			b.Reason = ledger.ReasonHelperLimit
 			return errArtifactLimit
 		}
 		return scan.Err()
-	}, "ls-tree", "-rz", "--full-tree", r.Tree)
-	if err != nil {
-		if errors.Is(err, errArtifactLimit) {
-			if b.Reason == "" {
-				b.Reason = ledger.ReasonWorkExhausted
-			}
-			return b, nil
+	}, "ls-tree", "-rzl", "--full-tree", r.Tree)
+	listingComplete := err == nil
+	if errors.Is(err, errArtifactLimit) {
+		if b.Reason == "" {
+			b.Reason = ledger.ReasonWorkExhausted
 		}
+	} else if err != nil {
 		return b, err
 	}
-	slices.SortFunc(entries, func(a, b Artifact) int { return strings.Compare(a.Path, b.Path) })
 	var input strings.Builder
 	for _, e := range entries {
 		if e.Reason == "" {
@@ -150,16 +190,12 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 			input.WriteByte('\n')
 		}
 	}
-	var used uint64
 	consume := func(in io.Reader) error {
 		reader := bufio.NewReaderSize(in, 4096)
 		for _, e := range entries {
 			if e.Reason == "" {
 				header, err := reader.ReadSlice('\n')
 				if err != nil {
-					return err
-				}
-				if err := charge((uint64(len(header)) + 255) / 256); err != nil {
 					return err
 				}
 				parts := strings.Fields(string(header))
@@ -173,16 +209,8 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 					if err != nil {
 						return err
 					}
-					if size > 1<<20 {
-						b.Reason = ledger.ReasonHelperLimit
-						return errArtifactLimit
-					}
-					if size > r.MaxBytes-used {
-						b.Reason = ledger.ReasonTemporaryCap
-						return errArtifactLimit
-					}
-					if err := charge((size + 1 + 255) / 256); err != nil {
-						return err
+					if size != e.size {
+						return fmt.Errorf("immutable blob size changed")
 					}
 					e.Bytes = make([]byte, int(size))
 					if _, err := io.ReadFull(reader, e.Bytes); err != nil {
@@ -196,10 +224,9 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 						return fmt.Errorf("invalid immutable blob terminator")
 					}
 					e.SHA256 = ledger.Digest(sha256.Sum256(e.Bytes))
-					used += size
 				}
 			}
-			b.Entries = append(b.Entries, e)
+			b.Entries = append(b.Entries, e.Artifact)
 			b.NextPath = e.Path
 		}
 		_, err := reader.ReadByte()
@@ -213,16 +240,10 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 	} else {
 		err = consume(bytes.NewReader(nil))
 	}
-	if errors.Is(err, errArtifactLimit) {
-		if b.Reason == "" {
-			b.Reason = ledger.ReasonWorkExhausted
-		}
-		return b, nil
-	}
 	if err != nil {
 		return b, err
 	}
-	b.Complete = true
+	b.Complete = listingComplete
 	return b, nil
 }
 

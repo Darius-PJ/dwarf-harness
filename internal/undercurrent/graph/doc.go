@@ -40,9 +40,10 @@
 // and ledger.HelperProfileV1 (graph-helper-limits/1), not the framing name.
 //
 // The first-party helper profile is 30 seconds wall time, 2 seconds WaitDelay,
-// 8 MiB framed JSON and decoded corpus, 1 MiB per source blob, 64 KiB stderr,
-// and at most 10000 work/output items. Overflow cancels and waits; failed
-// invocations discard partial causal output. Scripts are embedded, copied as
+// 8 MiB framed JSON and decoded corpus, 1 MiB per source blob, 64 KiB retained
+// stderr, and at most 10000 work/output items. Framed stdout overflow cancels and
+// waits; stderr is truncated without cancelling. Failed invocations discard
+// partial causal output. Scripts are embedded, copied as
 // files to an owned neutral temporary cwd and passed by path, never command-line
 // source. The separate corpus root and entire cwd are removed only after Wait.
 // If an OS wait cannot establish direct-child exit, the Analyzer stays fenced

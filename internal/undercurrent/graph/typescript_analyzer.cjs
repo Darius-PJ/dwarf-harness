@@ -23,6 +23,8 @@ function run(req, inputBytes) {
   const unknown = reason => [{scope: "workspace:" + workspace + ":canonical", adapter, state: "unknown", reasons: [reason]}];
   const files = new Map();
   const dirs = new Set([root]);
+  const paths = new Set();
+  const sourceUnavailable = new Error("corpus path collision");
   const options = {module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, allowJs: true, noEmit: true};
   const sourcePath = name => name.startsWith(root + "/") && !name.includes("\\") && path.normalize(name) === name;
   const host = {
@@ -63,10 +65,17 @@ function run(req, inputBytes) {
       const bytes = Buffer.from(item.bytes_base64, "base64"); total += bytes.length;
       if (bytes.length > req.limits.blob_bytes || total > req.limits.corpus_bytes) throw new RangeError("corpus");
       if (crypto.createHash("sha256").update(bytes).digest("hex") !== item.sha256) throw new SyntaxError("digest");
+      if (paths.has(name) || dirs.has(name)) throw sourceUnavailable;
+      paths.add(name);
+      for (let dir = path.dirname(name); dir.startsWith(root); dir = path.dirname(dir)) {
+        charge();
+        if (paths.has(dir)) throw sourceUnavailable;
+        dirs.add(dir);
+        if (dir === root) break;
+      }
       if (!/\.(ts|tsx|js|jsx|mts|cts|mjs|cjs|json)$/.test(name)) continue;
       const text = new TextDecoder("utf-8", {fatal: true}).decode(bytes);
       files.set(name, {item, text});
-      for (let dir = path.dirname(name); dir.startsWith(root); dir = path.dirname(dir)) { dirs.add(dir); if (dir === root) break; }
     }
     for (const name of files.keys()) {
       if (path.basename(name) === "tsconfig.json" || path.basename(name) === "jsconfig.json") loadConfig(name);
@@ -120,8 +129,9 @@ function run(req, inputBytes) {
     }
     charge(nodes.size + edges.size + coverage.length);
   } catch (error) {
-    nodes = new Map(); edges = new Map(); coverage = unknown(error instanceof RangeError ? "helper_limit" : "unsupported_syntax");
-    if (error instanceof RangeError) work = req.allowance;
+    nodes = new Map(); edges = new Map();
+    coverage = unknown(error === sourceUnavailable ? "source_unavailable" : error instanceof RangeError ? "helper_limit" : "unsupported_syntax");
+    work = error instanceof RangeError ? req.allowance : Math.min(req.allowance, work + coverage.length);
   }
   const out = {protocol: req.protocol, analysis_key: req.analysis_key, adapter, configuration_sha256: config, next_cursor: {artifact_index: req.corpus.length, output_index: 0}, work_used: work, nodes: [...nodes.values()].sort((a, b) => compare(canonical(a.key), canonical(b.key))), edges: [...edges.values()].sort((a, b) => compare(a.edge_id, b.edge_id)), coverage: coverage.sort((a, b) => compare(a.scope, b.scope) || compare(a.adapter, b.adapter)), cost: {wall_ns: Number(process.hrtime.bigint() - start), input_bytes: inputBytes, output_bytes: 0}};
   for (;;) {

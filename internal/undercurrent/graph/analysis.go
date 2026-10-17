@@ -148,7 +148,7 @@ func AnalyzeOpaque(ctx context.Context, r AnalysisRequest) (AnalysisResult, erro
 		switch strings.ToLower(path.Ext(a.Path)) {
 		case ".go":
 			adapter, reason = "go", ledger.ReasonDependencyUnapproved
-		case ".py", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".sql", ".json":
+		case ".py", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".sql":
 			continue
 		}
 		out.Coverage = append(out.Coverage, covered(a.Key, adapter, reason))

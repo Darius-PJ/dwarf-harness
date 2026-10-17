@@ -361,7 +361,9 @@ func (w *helperOutput) Write(p []byte) (int, error) {
 	if len(p) > left {
 		w.overflow = true
 		_, _ = w.data.Write(p[:left])
-		w.cancel()
+		if w.cancel != nil {
+			w.cancel()
+		}
 		return n, nil
 	}
 	_, _ = w.data.Write(p)
@@ -372,7 +374,7 @@ func runHelperProcess(ctx context.Context, cancel context.CancelFunc, executable
 	_ = binary.Write(&frame, binary.BigEndian, uint32(len(input)))
 	_, _ = frame.Write(input)
 	out := helperOutput{limit: maxFrame, cancel: cancel}
-	stderr := helperOutput{limit: 64 << 10, cancel: cancel, observe: stderrObserver}
+	stderr := helperOutput{limit: 64 << 10, observe: stderrObserver}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = dir
 	cmd.Env = env
@@ -386,7 +388,7 @@ func runHelperProcess(ctx context.Context, cancel context.CancelFunc, executable
 	if cmd.Process != nil && cmd.ProcessState == nil {
 		return nil, cost, errHelperUnjoined
 	}
-	if out.overflow || stderr.overflow {
+	if out.overflow {
 		return nil, cost, errors.New("helper stream overflow")
 	}
 	if err != nil {

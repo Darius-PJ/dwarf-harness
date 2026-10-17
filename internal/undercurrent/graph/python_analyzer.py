@@ -56,10 +56,10 @@ def run(req):
             # rules), not normalize two Git identities into one native file.
             for part in parts:
                 if os.name == "nt" and (":" in part or part.endswith((".", " ")) or part.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *["COM" + str(n) for n in range(10)], *["LPT" + str(n) for n in range(10)]}):
-                    raise ValueError()
+                    raise OSError("path cannot be materialized on this host")
             normalized = os.path.normcase(str(target))
             if normalized in seen:
-                raise ValueError()
+                raise OSError("host file alias")
             seen.add(normalized)
             data = base64.b64decode(item["bytes_base64"], validate=True)
             total += len(data)
@@ -75,7 +75,7 @@ def run(req):
                 identity = (stat.st_dev, stat.st_ino)
                 spelling = "/".join(parts[:count])
                 if identity in directory_identities and directory_identities[identity] != spelling:
-                    raise ValueError()
+                    raise OSError("host directory alias")
                 directory_identities[identity] = spelling
             with target.open("xb") as stream:
                 stream.write(data)
@@ -221,8 +221,12 @@ def run(req):
     except OverflowError:
         nodes, edges, coverage = {}, {}, unknown("helper_limit")
         work = allowance
-    except (ValueError, OSError, ImportError, AttributeError):
+    except OSError:
+        nodes, edges, coverage = {}, {}, unknown("source_unavailable")
+        work = min(allowance, work + len(coverage))
+    except (ValueError, ImportError, AttributeError):
         nodes, edges, coverage = {}, {}, unknown("unsupported_syntax")
+        work = min(allowance, work + len(coverage))
     out = {"protocol": req["protocol"], "analysis_key": req["analysis_key"], "adapter": adapter, "configuration_sha256": config, "next_cursor": {"artifact_index": len(req["corpus"]), "output_index": 0}, "work_used": work, "nodes": sorted(nodes.values(), key=lambda n: canonical(n["key"]).encode("utf-8")), "edges": sorted(edges.values(), key=lambda e: e["edge_id"]), "coverage": sorted(coverage, key=lambda c: (c["scope"].encode("utf-8"), c["adapter"])), "cost": {"wall_ns": time.monotonic_ns() - start, "input_bytes": 0, "output_bytes": 0}}
     while True:
         required = work + (len(canonical(out).encode("utf-8")) + 4 + 255) // 256

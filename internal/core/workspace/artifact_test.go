@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -70,8 +71,8 @@ func TestReadArtifactsImmutableOrderModesAndCaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rest.Complete || len(rest.Entries) != 5 || rest.Entries[0].Path != "a-z" || rest.WorkUsed <= 5 {
-		t.Fatalf("resume did not scan/charge prefix %+v", rest)
+	if !rest.Complete || len(rest.Entries) != 5 || rest.Entries[0].Path != "a-z" {
+		t.Fatalf("incorrect resumed entries %+v", rest)
 	}
 	request.AfterPath = ""
 	request.WorkAllowance = 1
@@ -108,14 +109,22 @@ func TestReadArtifactsMissingOversizeAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Complete || out.Reason != ledger.ReasonHelperLimit || len(out.Entries) != 0 {
-		t.Fatalf("oversized object read %+v", out)
+	if !out.Complete || out.Reason != "" || out.NextPath != "large.py" || len(out.Entries) != 1 || out.Entries[0].Reason != ledger.ReasonHelperLimit || out.Entries[0].Bytes != nil || out.Entries[0].SHA256 != (ledger.Digest{}) {
+		t.Fatalf("oversized object did not advance as unknown %+v", out)
 	}
-	request.Tree = artifactTree(t, f, "100644 blob "+missing+"\t"+strings.Repeat("p", 9000)+"\x00")
+	small := artifactBlob(t, f, []byte("after"))
+	request.Tree = artifactTree(t, f, "100644 blob "+large+"\tlarge.py\x00"+"100644 blob "+small+"\tz.py\x00")
+	request.MaxBytes = 4
 	out, err = f.svc.ReadArtifacts(context.Background(), request)
-	if err != nil || out.Complete || out.Reason != ledger.ReasonHelperLimit || out.WorkUsed < 33 {
-		t.Fatalf("oversized tree entry was not charged unknown %+v %v", out, err)
+	if err != nil || out.Complete || out.Reason != ledger.ReasonTemporaryCap || out.NextPath != "large.py" || len(out.Entries) != 1 || out.Entries[0].Reason != ledger.ReasonHelperLimit {
+		t.Fatalf("oversized entry blocked the cursor %+v %v", out, err)
 	}
+	request.AfterPath, request.MaxBytes = out.NextPath, 5
+	out, err = f.svc.ReadArtifacts(context.Background(), request)
+	if err != nil || !out.Complete || out.NextPath != "z.py" || len(out.Entries) != 1 || string(out.Entries[0].Bytes) != "after" || out.Entries[0].SHA256 != ledger.Digest(sha256.Sum256([]byte("after"))) {
+		t.Fatalf("entry after oversized object unreadable %+v %v", out, err)
+	}
+	request.AfterPath = ""
 	request.Tree = missing
 	if out, err := f.svc.ReadArtifacts(context.Background(), request); err == nil || out.Complete {
 		t.Fatalf("missing tree completed %+v %v", out, err)
@@ -133,5 +142,55 @@ func TestReadArtifactsMissingOversizeAndCancellation(t *testing.T) {
 	out, err = f.svc.ReadArtifacts(context.Background(), request)
 	if err != nil || !out.Complete {
 		t.Fatalf("replacement could not run after wait %+v %v", out, err)
+	}
+}
+
+func TestReadArtifactsLargeTreePages(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	blob := artifactBlob(t, f, []byte("x"))
+	var rows strings.Builder
+	for i := range 6000 {
+		fmt.Fprintf(&rows, "100644 blob %s\t%05d.txt\x00", blob, i)
+	}
+	request := ArtifactRequest{WorkspaceID: f.w.ID, Tree: artifactTree(t, f, rows.String()), MaxBytes: 8 << 20, WorkAllowance: 10000}
+	count, pages := 0, 0
+	for {
+		out, err := f.svc.ReadArtifacts(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Entries) == 0 || out.NextPath <= request.AfterPath || out.WorkUsed == 0 || out.WorkUsed > request.WorkAllowance {
+			t.Fatalf("page made no bounded progress: entries=%d cursor=%q work=%d reason=%q", len(out.Entries), out.NextPath, out.WorkUsed, out.Reason)
+		}
+		for _, entry := range out.Entries {
+			if entry.Path != fmt.Sprintf("%05d.txt", count) || string(entry.Bytes) != "x" || entry.Reason != "" {
+				t.Fatalf("entry %d duplicated, skipped or unreadable: %+v", count, entry)
+			}
+			count++
+		}
+		pages++
+		if out.Complete {
+			break
+		}
+		if out.Reason != ledger.ReasonWorkExhausted {
+			t.Fatalf("unexpected page boundary %q", out.Reason)
+		}
+		request.AfterPath = out.NextPath
+	}
+	if count != 6000 || pages < 2 {
+		t.Fatalf("tree did not complete across pages: entries=%d pages=%d", count, pages)
+	}
+}
+
+func TestReadArtifactsLongPath(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	blob := artifactBlob(t, f, []byte("long"))
+	path := strings.Repeat("p", 9000)
+	tree := artifactTree(t, f, "100644 blob "+blob+"\t"+path+"\x00")
+	out, err := f.svc.ReadArtifacts(context.Background(), ArtifactRequest{WorkspaceID: f.w.ID, Tree: tree, MaxBytes: 8 << 20, WorkAllowance: 10000})
+	if err != nil || !out.Complete || out.NextPath != path || len(out.Entries) != 1 || out.Entries[0].Path != path || string(out.Entries[0].Bytes) != "long" {
+		t.Fatalf("long frozen path unreadable: entries=%d complete=%v reason=%q err=%v", len(out.Entries), out.Complete, out.Reason, err)
 	}
 }

@@ -110,6 +110,12 @@ func graphTestChild() {
 		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), maxFrame+6))
 		return
 	}
+	if mode == "stderr" || mode == "stderr-error" {
+		_, _ = os.Stderr.Write(bytes.Repeat([]byte("Z"), (64<<10)+4096))
+		if mode == "stderr-error" {
+			os.Exit(1)
+		}
+	}
 	if mode == "cancel" {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -448,7 +454,7 @@ func TestTypeScriptAnalysisUsesOnlyConfiguredParser(t *testing.T) {
 
 func TestMissingAdaptersAndUnapprovedGoStayUnknown(t *testing.T) {
 	t.Parallel()
-	r := analysisFixture(map[string]string{"a.go": "package a\nimport \"net/http\"", "readme.md": "[dependency](a.go)"})
+	r := analysisFixture(map[string]string{"a.go": "package a\nimport \"net/http\"", "readme.md": "[dependency](a.go)", "data.json": `{"imports":["a.go"]}`})
 	r.ConfigurationSHA256 = ConfigurationDigest(Tools{})
 	for _, adapter := range []string{ledger.AdapterPython, ledger.AdapterTypeScript} {
 		out, err := NewAnalyzer(Tools{}).Analyze(context.Background(), adapter, r)
@@ -464,7 +470,7 @@ func TestMissingAdaptersAndUnapprovedGoStayUnknown(t *testing.T) {
 		t.Fatal("Go or hyperlinks guessed causal edges")
 	}
 	assertCoverage(t, r, out, "go", map[string]string{"a.go": ledger.ReasonDependencyUnapproved})
-	assertCoverage(t, r, out, ledger.AdapterOpaque, map[string]string{"readme.md": ledger.ReasonUnsupportedSyntax})
+	assertCoverage(t, r, out, ledger.AdapterOpaque, map[string]string{"readme.md": ledger.ReasonUnsupportedSyntax, "data.json": ledger.ReasonUnsupportedSyntax})
 }
 
 func TestHelperBoundsFailClosed(t *testing.T) {
@@ -540,5 +546,80 @@ func TestVerifiedVersionMismatchStaysUnavailable(t *testing.T) {
 	out, err := NewAnalyzer(tools).Analyze(context.Background(), ledger.AdapterPython, r)
 	if err != nil || len(out.Nodes) != 0 || len(out.Edges) != 0 || out.Coverage[0].Reasons[0] != ledger.ReasonAdapterUnavailable {
 		t.Fatalf("mismatched version %+v %v", out, err)
+	}
+}
+
+func TestHelperStderrTruncation(t *testing.T) {
+	t.Parallel()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := testHelperRequest()
+	input, _ := json.Marshal(req)
+	for _, mode := range []string{"stderr", "stderr-error"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			raw, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, nil)
+			if ctx.Err() != nil {
+				t.Fatalf("retention overflow cancelled child: %v", ctx.Err())
+			}
+			if mode == "stderr" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := decodeHelperResponse(raw, req); err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || strings.Count(err.Error(), "Z") != 64<<10 {
+				t.Fatalf("child failure did not retain exactly the bounded stderr prefix: %v", err)
+			}
+		})
+	}
+}
+
+func TestPythonUnavailableCorpus(t *testing.T) {
+	t.Parallel()
+	tools := Tools{Python: installedTool(t, "DWARF_GRAPH_PYTHON", "3.13.15")}
+	cases := map[string]map[string]string{
+		"filesystem-error": {"pkg": "not a directory", "pkg/main.py": "value = 1"},
+	}
+	if os.PathSeparator == '\\' {
+		cases["file-case-collision"] = map[string]string{"A.py": "a = 1", "a.py": "a = 2"}
+		cases["directory-case-collision"] = map[string]string{"Pkg/a.py": "a = 1", "pkg/b.py": "b = 2"}
+	}
+	for name, files := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := analysisFixture(files)
+			r.ConfigurationSHA256 = ConfigurationDigest(tools)
+			out, err := NewAnalyzer(tools).Analyze(context.Background(), ledger.AdapterPython, r)
+			if err != nil || len(out.Nodes) != 0 || len(out.Edges) != 0 || len(out.Coverage) != 1 {
+				t.Fatalf("unavailable corpus leaked partial facts: %+v %v", out, err)
+			}
+			entry := out.Coverage[0]
+			if entry.Scope != workspaceScope(r.Source.WorkspaceID) || entry.State != ledger.CoverageUnknown || len(entry.Reasons) != 1 || entry.Reasons[0] != ledger.ReasonSourceUnavailable {
+				t.Fatalf("filesystem unavailability misclassified: %+v", entry)
+			}
+		})
+	}
+}
+
+func TestTypeScriptUnavailableCorpus(t *testing.T) {
+	t.Parallel()
+	tools := Tools{
+		Node:             installedTool(t, "DWARF_GRAPH_NODE", "v24.18.0"),
+		TypeScriptParser: installedTool(t, "DWARF_GRAPH_TYPESCRIPT", "6.0.3"),
+	}
+	r := analysisFixture(map[string]string{"pkg": "not a directory", "pkg/main.ts": "export const value = 1;"})
+	r.ConfigurationSHA256 = ConfigurationDigest(tools)
+	out, err := NewAnalyzer(tools).Analyze(context.Background(), ledger.AdapterTypeScript, r)
+	if err != nil || len(out.Nodes) != 0 || len(out.Edges) != 0 || len(out.Coverage) != 1 {
+		t.Fatalf("unavailable corpus leaked partial facts: %+v %v", out, err)
+	}
+	entry := out.Coverage[0]
+	if entry.Scope != workspaceScope(r.Source.WorkspaceID) || entry.State != ledger.CoverageUnknown || len(entry.Reasons) != 1 || entry.Reasons[0] != ledger.ReasonSourceUnavailable {
+		t.Fatalf("virtual path collision misclassified: %+v", entry)
 	}
 }
