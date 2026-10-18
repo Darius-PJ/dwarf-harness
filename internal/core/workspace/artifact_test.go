@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"uuid"
@@ -192,5 +193,139 @@ func TestReadArtifactsLongPath(t *testing.T) {
 	out, err := f.svc.ReadArtifacts(context.Background(), ArtifactRequest{WorkspaceID: f.w.ID, Tree: tree, MaxBytes: 8 << 20, WorkAllowance: 10000})
 	if err != nil || !out.Complete || out.NextPath != path || len(out.Entries) != 1 || out.Entries[0].Path != path || string(out.Entries[0].Bytes) != "long" {
 		t.Fatalf("long frozen path unreadable: entries=%d complete=%v reason=%q err=%v", len(out.Entries), out.Complete, out.Reason, err)
+	}
+}
+
+func TestReadArtifactsListOnlyAndPathFilter(t *testing.T) {
+	t.Parallel()
+	f := newServiceFixture(t)
+	blob := artifactBlob(t, f, []byte("immutable"))
+	link := artifactBlob(t, f, []byte("directory"))
+	child := artifactTree(t, f, "100755 blob "+blob+"\tchild.py\x00")
+	names := []string{":leading", "[literal]", "a..b", "a:b", "at@{", "caret^", "question?", "star*", "starX", "tilde~"}
+	var rows strings.Builder
+	for _, name := range names {
+		fmt.Fprintf(&rows, "100644 blob %s\t%s\x00", blob, name)
+	}
+	fmt.Fprintf(&rows, "040000 tree %s\t-\x00"+"040000 tree %s\tdirectory\x00"+"120000 blob %s\tlink\x00", child, child, link)
+	request := ArtifactRequest{WorkspaceID: f.w.ID, Tree: artifactTree(t, f, rows.String()), MaxBytes: 1, WorkAllowance: 10000, ListOnly: true}
+	starts := 0
+	f.svc.git.afterStart = func(*exec.Cmd) { starts++ }
+	listed, err := f.svc.ReadArtifacts(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := append(slices.Clone(names), "-/child.py", "directory/child.py", "link")
+	slices.Sort(all)
+	var got []string
+	for _, entry := range listed.Entries {
+		got = append(got, entry.Path)
+		if entry.Bytes != nil || entry.SHA256 != (ledger.Digest{}) {
+			t.Fatalf("list-only read materialized %q", entry.Path)
+		}
+	}
+	if !slices.Equal(got, all) || !listed.Complete || starts != 1 {
+		t.Fatalf("list-only paths=%v complete=%v children=%d", got, listed.Complete, starts)
+	}
+	// None of these names is a glob, revision operator, directory prefix or
+	// filesystem lookup. In particular, star* must not admit starX.
+	exact := append(slices.Clone(names[:8]), names[9], "-/child.py")
+	slices.Sort(exact)
+	request.Paths = append(slices.Clone(exact), "absent", "directory", "link", "link/child.py", "zz-missing")
+	slices.Sort(request.Paths)
+	request.WorkAllowance = 4
+	starts = 0
+	got = nil
+	for page := 0; ; page++ {
+		out, err := f.svc.ReadArtifacts(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.NextPath <= request.AfterPath || out.WorkUsed == 0 || out.WorkUsed > request.WorkAllowance {
+			t.Fatalf("filtered page did not charge and advance: %+v", out)
+		}
+		for _, entry := range out.Entries {
+			got = append(got, entry.Path)
+			if entry.Bytes != nil || entry.SHA256 != (ledger.Digest{}) {
+				t.Fatalf("filtered listing materialized %q", entry.Path)
+			}
+			if entry.Path == "link" && entry.Reason != ledger.ReasonUnsupportedSyntax {
+				t.Fatalf("symlink was admitted: %+v", entry)
+			}
+		}
+		if out.Complete {
+			if starts != page+1 || out.NextPath != "zz-missing" {
+				t.Fatalf("completion lost missing answers or launched a blob reader: %+v children=%d pages=%d", out, starts, page+1)
+			}
+			break
+		}
+		if page > len(request.Paths) || out.Reason != ledger.ReasonWorkExhausted {
+			t.Fatalf("filtered page did not stop at its budget: %+v", out)
+		}
+		request.AfterPath = out.NextPath
+	}
+	want := append(slices.Clone(exact), "link")
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("filtered names=%v want %v", got, want)
+	}
+	request.AfterPath, request.ListOnly, request.MaxBytes, request.WorkAllowance = "", false, 8<<20, 10000
+	starts = 0
+	out, err := f.svc.ReadArtifacts(context.Background(), request)
+	if err != nil || !out.Complete || out.NextPath != "zz-missing" || starts != 2 {
+		t.Fatalf("filtered blob page=%+v children=%d err=%v", out, starts, err)
+	}
+	for _, entry := range out.Entries {
+		if entry.Path == "link" {
+			if entry.Reason != ledger.ReasonUnsupportedSyntax || entry.Bytes != nil {
+				t.Fatalf("followed symlink: %+v", entry)
+			}
+		} else if string(entry.Bytes) != "immutable" || entry.SHA256 != ledger.Digest(sha256.Sum256([]byte("immutable"))) {
+			t.Fatalf("wrong exact-path bytes: %+v", entry)
+		}
+	}
+	request.AfterPath = out.NextPath
+	starts = 0
+	out, err = f.svc.ReadArtifacts(context.Background(), request)
+	if err != nil || !out.Complete || len(out.Entries) != 0 || starts != 0 {
+		t.Fatalf("answered prefix was reread: %+v children=%d err=%v", out, starts, err)
+	}
+	// A gitlink's target need not be stored locally. Its special batch-check
+	// answer still proves path presence, including after deletion/recreation.
+	present := strings.TrimSpace(string(gitCommand(t, f.env, f.root, nil, "rev-parse", "HEAD")))
+	absent := strings.Repeat("f", len(present))
+	request.AfterPath, request.Paths = "", []string{"submodule"}
+	for _, oid := range []string{present, "", absent, "", present} {
+		treeRows := ""
+		if oid != "" {
+			treeRows = "160000 commit " + oid + "\tsubmodule\x00"
+		}
+		request.Tree = artifactTree(t, f, treeRows)
+		for _, listOnly := range []bool{true, false} {
+			request.ListOnly = listOnly
+			out, err := f.svc.ReadArtifacts(context.Background(), request)
+			if err != nil || !out.Complete || out.NextPath != "submodule" || out.WorkUsed == 0 {
+				t.Fatalf("gitlink presence page=%+v err=%v", out, err)
+			}
+			if oid == "" {
+				if len(out.Entries) != 0 {
+					t.Fatalf("deleted gitlink survived: %+v", out)
+				}
+				continue
+			}
+			if len(out.Entries) != 1 {
+				t.Fatalf("present gitlink disappeared: %+v", out)
+			}
+			entry := out.Entries[0]
+			if entry.Mode != "160000" || entry.GitOID != oid || entry.Reason != ledger.ReasonUnsupportedSyntax || entry.Bytes != nil || entry.SHA256 != (ledger.Digest{}) {
+				t.Fatalf("gitlink lost its unknown identity: %+v", entry)
+			}
+		}
+	}
+	for _, invalid := range [][]string{{"b", "a"}, {"a", "a"}, {"../a"}, {"a\\b"}, {"a\x00b"}, make([]string, 10001)} {
+		request.AfterPath, request.Paths = "", invalid
+		if _, err := f.svc.ReadArtifacts(context.Background(), request); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid exact paths accepted: %q: %v", invalid[:1], err)
+		}
 	}
 }

@@ -116,7 +116,7 @@ func graphTestChild() {
 			os.Exit(1)
 		}
 	}
-	if mode == "cancel" {
+	if mode == "cancel" || mode == "pause" {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "listen:", err)
@@ -124,8 +124,22 @@ func graphTestChild() {
 		}
 		defer listener.Close()
 		_, _ = fmt.Fprint(os.Stderr, "ready")
-		_, _ = listener.Accept()
-		return
+		if mode == "pause" && os.Getenv("DWARF_GRAPH_TEST_READY") != "" {
+			connection, err := net.Dial("tcp", os.Getenv("DWARF_GRAPH_TEST_READY"))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "ready:", err)
+				os.Exit(2)
+			}
+			_, _ = fmt.Fprintln(connection, listener.Addr().String())
+			_ = connection.Close()
+		}
+		connection, _ := listener.Accept()
+		if connection != nil {
+			_ = connection.Close()
+		}
+		if mode == "cancel" {
+			return
+		}
 	}
 	out := helperResponse{Protocol: helperProtocol, AnalysisKey: req.AnalysisKey, Adapter: req.Adapter, ConfigurationSHA256: req.ConfigurationSHA256, AnalysisResult: AnalysisResult{NextCursor: ledger.GraphCursor{ArtifactIndex: int64(len(req.Corpus))}, WorkUsed: 100, Nodes: []ledger.GraphNode{}, Edges: []ledger.GraphEdge{}, Coverage: []ledger.CoverageEntry{}, Cost: Cost{InputBytes: int64(len(b)), OutputBytes: 0}}}
 	raw, _ := json.Marshal(out)
@@ -168,7 +182,7 @@ func TestHelperProtocolCancellationOverflowAndLostHandshake(t *testing.T) {
 					cancel()
 				}
 			}
-			raw, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, observe)
+			raw, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, observe, nil)
 			if mode == "valid" {
 				if err != nil {
 					t.Fatal(err)
@@ -197,7 +211,7 @@ func TestHelperProtocolCancellationOverflowAndLostHandshake(t *testing.T) {
 			// child can execute immediately without sharing a live predecessor.
 			next, nextCancel := context.WithCancel(context.Background())
 			defer nextCancel()
-			raw, _, err = runHelperProcess(next, nextCancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD=valid"), input, nil)
+			raw, _, err = runHelperProcess(next, nextCancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD=valid"), input, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -562,7 +576,7 @@ func TestHelperStderrTruncation(t *testing.T) {
 			dir := t.TempDir()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			raw, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, nil)
+			raw, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, nil, nil)
 			if ctx.Err() != nil {
 				t.Fatalf("retention overflow cancelled child: %v", ctx.Err())
 			}

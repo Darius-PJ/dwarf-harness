@@ -31,10 +31,18 @@ import (
 // blobs are unknown entries, not page barriers. A row exceeding the residual
 // 64 KiB scanner cap is a page-level helper_limit; such paths are outside this
 // reader's bounded profile, not silently complete or assigned a new identity.
+// ListOnly charges listing work but reads no blob bytes. Paths, when nonempty,
+// contains at most 10,000 strictly sorted exact paths; filtered reads answer
+// these through cat-file --batch-check, follow no link and match no prefix.
+// GIT_LITERAL_PATHSPECS is not needed: names travel as NUL-terminated tree:path
+// queries on stdin, not as pathspecs. Missing and directory answers cost a row
+// and advance NextPath, but return no entry.
 type ArtifactRequest struct {
 	WorkspaceID             uuid.UUID
 	Tree, AfterPath         string
 	MaxBytes, WorkAllowance uint64
+	ListOnly                bool
+	Paths                   []string
 }
 
 // Artifact is a regular immutable blob, or an explicit unknown entry. Unknown
@@ -79,6 +87,14 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 	if !validID(r.WorkspaceID) || !validOID(r.Tree, len(r.Tree)) || r.AfterPath != "" && !artifactPath(r.AfterPath) || r.MaxBytes == 0 || r.MaxBytes > 8<<20 || r.WorkAllowance == 0 || r.WorkAllowance > 10000 {
 		return b, ErrInvalid
 	}
+	if len(r.Paths) > 10000 {
+		return b, ErrInvalid
+	}
+	for i, path := range r.Paths {
+		if !artifactPath(path) || i > 0 && path <= r.Paths[i-1] {
+			return b, ErrInvalid
+		}
+	}
 	if err := s.start(); err != nil {
 		return b, err
 	}
@@ -115,16 +131,116 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 	}
 	var entries []listedArtifact
 	var admittedBytes, skipped uint64
-	err = s.artifactStream(ctx, cwd, env, w.CommonDir, nil, func(in io.Reader) error {
+	admit := func(path string, parts []string, rowBytes int) error {
+		if len(parts) != 4 || !validOID(parts[2], len(r.Tree)) {
+			return fmt.Errorf("invalid immutable tree entry")
+		}
+		switch parts[0] {
+		case "100644", "100755", "120000":
+			if parts[1] != "blob" {
+				return fmt.Errorf("invalid immutable tree entry")
+			}
+		case "160000":
+			if parts[1] != "commit" {
+				return fmt.Errorf("invalid immutable tree entry")
+			}
+		case "040000":
+			if parts[1] != "tree" {
+				return fmt.Errorf("invalid immutable tree entry")
+			}
+		default:
+			return fmt.Errorf("invalid immutable tree entry")
+		}
+		if err := charge(1 + (uint64(rowBytes)+1+255)/256); err != nil {
+			return err
+		}
+		e := listedArtifact{Artifact: Artifact{Path: path, Mode: parts[0], GitOID: parts[2]}}
+		if parts[1] != "blob" || e.Mode != "100644" && e.Mode != "100755" {
+			e.Reason = ledger.ReasonUnsupportedSyntax
+		} else if parts[3] == "BAD" {
+			e.Reason = ledger.ReasonSourceUnavailable
+		} else {
+			size, err := strconv.ParseUint(parts[3], 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid immutable tree size: %w", err)
+			}
+			e.size = size
+			if size > 1<<20 {
+				e.Reason = ledger.ReasonHelperLimit
+			} else if !r.ListOnly {
+				if size > r.MaxBytes-admittedBytes {
+					b.Reason = ledger.ReasonTemporaryCap
+					return errArtifactLimit
+				}
+				if err := charge(1 + (size+1+255)/256); err != nil {
+					return err
+				}
+				admittedBytes += size
+			}
+		}
+		if len(r.Paths) == 0 || parts[1] == "blob" || parts[0] == "160000" {
+			entries = append(entries, e)
+		}
+		return nil
+	}
+	args := []string{"ls-tree", "-rzl", "--full-tree", r.Tree}
+	var queries strings.Builder
+	var paths []string
+	if len(r.Paths) != 0 {
+		for _, path := range r.Paths {
+			if path > r.AfterPath {
+				paths = append(paths, path)
+				queries.WriteString(r.Tree + ":" + path)
+				queries.WriteByte(0)
+			}
+		}
+		if len(paths) == 0 {
+			b.Complete = true
+			return b, nil
+		}
+		args = []string{"cat-file", "--batch-check=%(objectmode) %(objectname) %(objecttype) %(objectsize)", "-Z"}
+	}
+	answered := r.AfterPath
+	err = s.artifactStream(ctx, cwd, env, w.CommonDir, strings.NewReader(queries.String()), func(in io.Reader) error {
 		scan := bufio.NewScanner(in)
 		scan.Split(artifactNUL)
 		scan.Buffer(make([]byte, 4096), 64<<10)
-		previous := ""
+		previous, index := "", 0
 		for scan.Scan() {
 			row := scan.Text()
+			if len(r.Paths) != 0 {
+				if index >= len(paths) {
+					return fmt.Errorf("invalid immutable tree entry")
+				}
+				path := paths[index]
+				if row == r.Tree+":"+path+" missing" {
+					if err := charge(1 + (uint64(len(row))+1+255)/256); err != nil {
+						return err
+					}
+				} else {
+					parts := strings.Fields(row)
+					if len(parts) == 2 && parts[1] == "submodule" {
+						parts = []string{"160000", "commit", parts[0], "-"}
+					} else {
+						if len(parts) != 4 {
+							return fmt.Errorf("invalid immutable tree entry")
+						}
+						parts[1], parts[2] = parts[2], parts[1]
+						if _, err := strconv.ParseUint(parts[3], 10, 64); err != nil {
+							return fmt.Errorf("invalid immutable tree entry")
+						}
+					}
+					if err := admit(path, parts, len(row)); err != nil {
+						return err
+					}
+				}
+				answered = path
+				index++
+				continue
+			}
 			header, path, ok := strings.Cut(row, "\t")
 			parts := strings.Fields(header)
-			if !ok || len(parts) != 4 || !artifactPath(path) || !validOID(parts[2], len(r.Tree)) || path <= previous {
+			if !ok || !artifactPath(path) || path <= previous {
 				return fmt.Errorf("invalid immutable tree entry")
 			}
 			previous = path
@@ -137,34 +253,10 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 				skipped++
 				continue
 			}
-			if err := charge(1 + (uint64(len(row))+1+255)/256); err != nil {
+			if err := admit(path, parts, len(row)); err != nil {
 				return err
 			}
-			e := listedArtifact{Artifact: Artifact{Path: path, Mode: parts[0], GitOID: parts[2]}}
-			if parts[1] != "blob" || e.Mode != "100644" && e.Mode != "100755" {
-				e.Reason = ledger.ReasonUnsupportedSyntax
-			} else if parts[3] == "BAD" {
-				e.Reason = ledger.ReasonSourceUnavailable
-			} else {
-				size, err := strconv.ParseUint(parts[3], 10, 64)
-				if err != nil {
-					return fmt.Errorf("invalid immutable tree size: %w", err)
-				}
-				e.size = size
-				if size > 1<<20 {
-					e.Reason = ledger.ReasonHelperLimit
-				} else {
-					if size > r.MaxBytes-admittedBytes {
-						b.Reason = ledger.ReasonTemporaryCap
-						return errArtifactLimit
-					}
-					if err := charge(1 + (size+1+255)/256); err != nil {
-						return err
-					}
-					admittedBytes += size
-				}
-			}
-			entries = append(entries, e)
+			answered = path
 		}
 		if errors.Is(scan.Err(), bufio.ErrTooLong) {
 			if err := charge(1 + (64<<10)/256); err != nil {
@@ -173,8 +265,11 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 			b.Reason = ledger.ReasonHelperLimit
 			return errArtifactLimit
 		}
+		if scan.Err() == nil && len(r.Paths) != 0 && index != len(paths) {
+			return fmt.Errorf("invalid immutable tree entry")
+		}
 		return scan.Err()
-	}, "ls-tree", "-rzl", "--full-tree", r.Tree)
+	}, args...)
 	listingComplete := err == nil
 	if errors.Is(err, errArtifactLimit) {
 		if b.Reason == "" {
@@ -185,7 +280,7 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 	}
 	var input strings.Builder
 	for _, e := range entries {
-		if e.Reason == "" {
+		if e.Reason == "" && !r.ListOnly {
 			input.WriteString(e.GitOID)
 			input.WriteByte('\n')
 		}
@@ -193,7 +288,7 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 	consume := func(in io.Reader) error {
 		reader := bufio.NewReaderSize(in, 4096)
 		for _, e := range entries {
-			if e.Reason == "" {
+			if e.Reason == "" && !r.ListOnly {
 				header, err := reader.ReadSlice('\n')
 				if err != nil {
 					return err
@@ -227,7 +322,6 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 				}
 			}
 			b.Entries = append(b.Entries, e.Artifact)
-			b.NextPath = e.Path
 		}
 		_, err := reader.ReadByte()
 		if err != io.EOF {
@@ -243,6 +337,7 @@ func (s *Service) ReadArtifacts(ctx context.Context, r ArtifactRequest) (Artifac
 	if err != nil {
 		return b, err
 	}
+	b.NextPath = answered
 	b.Complete = listingComplete
 	return b, nil
 }

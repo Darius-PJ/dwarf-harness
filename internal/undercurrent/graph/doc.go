@@ -1,9 +1,8 @@
-// Package graph implements the record-free artifact/module portion of U3.
-// It reuses F-U3-61's frozen ledger values and owns no records, appender, service,
-// replay, accepted-source listener or Core dependency. Callers derive artifact
-// birth sequences from frozen history, obtain immutable regular blobs through
-// Core's workspace reader, reserve work before invocation and publish later.
-// These helpers are not a substitute for the durable worker of ticket 61 S3.
+// Package graph implements U3's artifact/module analysis, strict replay and
+// explicitly driven durable worker. It reuses F-U3-61's frozen ledger values and
+// depends on contracts, never Core. Callers supply the real appender and an
+// immutable artifact reader; graphfoundation is the Core wiring boundary.
+// The standalone analyzers remain record-free and cannot grant durable work.
 //
 // Artifact identity is [birth_seq,path], never content. Module identity is
 // [language,"workspace",native_name]; its version hashes native-confirmed
@@ -60,11 +59,70 @@
 // Every helper launch checks the verified file identity again. Configuration
 // identity includes the fixed script digests, Python root, SQL grammar and
 // TypeScript options, and tools in node/python/typescript order (no SQL tool).
-// The caller owns cumulative limits and conservative retained-state charges
-// (512 bytes per node/key/scope/coverage, 256 per edge/evidence/adjacency plus
-// actual storage); no S1 call grants or refunds durable allowance.
+// Service owns cumulative limits and conservative retained-state charges:
+// 512 bytes per node/key/scope/coverage entry, 256 per edge/evidence/adjacency
+// entry, plus owned storage and encoded copies. Standalone calls grant no credit.
 // The parent framed decoder also reserves 64 MiB conservatively for encoded
 // and decoded copies and per-token allocations before constructing output.
+//
+// Service consumes only v1 workspace.registered, workspace.promotion_admitted,
+// workspace.promotion_accepted, graph.analysis_started, graph.analysis_progress,
+// graph.delta_chunk and graph.version_committed. One bounded AllTypes reader
+// decodes only those payloads; unrelated records contribute only sequence and
+// hash. Through and ChainHash always name the last fully applied commit.
+// Open replays that prefix without a child, Git, parser, timer, body read or
+// append. A nonzero Options.Through fixes a historical, read-only view.
+//
+// Replay enforces graph envelopes and commit shapes, recomputes the analysis
+// key, binds exact registered/subject/frontier records and checks the base.
+// It derives the structural counter, checks revisions and reservations, forms
+// consecutive chunks without remove/put overlap or dangling evidence, and
+// verifies both the payload-stream digest and State.Canonical graph digest.
+// Only an eligible final publishes: its base, workspace subject and colony-wide
+// acceptance frontier must still be current. Otherwise it closes as superseded
+// without changing the image or counter. The effective version is the final's
+// actual sequence, not a predicted durable position. The F-U3-61 golden fixes
+// encodings, not a service history, and Open refuses it.
+//
+// Step starts an attempt and returns, or reserves one 10000-unit quantum and
+// runs one bounded unit, with at most two commits in that call. The 2000000-unit
+// total is durable and never refunded. Births come from a paged predecessor-tree
+// and changed-path walk, never the incremental image. Opaque calls use contiguous
+// windows pre-sized at 2+ceil(bytes/256) per artifact. Each other adapter sees its
+// complete bounded corpus once; complete or scope-unknown, it is then finished.
+// Tool-file verification is separate, resumable, charged work before invocation.
+//
+// The private candidate is capped at 64 MiB conservatively. Diff removes edges,
+// removes nodes, puts nodes, puts edges and replaces workspace coverage in key
+// order. Whole-element chunks are at most 512 KiB, with their checkpoint in the
+// same commit; no chunk publishes topology. Current state is bounded to 50000
+// nodes, 200000 edges and 512 MiB including indexes and retained history.
+// Candidate overflow ends unknown without publishing. If valid replay instead
+// reaches the retained-state cap, it stops at the last complete commit, exposes
+// unknown/state_cap with zero version/digest and no image, and Step/Resume append
+// nothing; every Page returns ErrRevision. Profile recovery is outside S3.
+//
+// Every acknowledged append hydrates the complete prefix through Committed.Last,
+// including racing Core records, before publication. Uncertain or poisoned
+// outcomes fence the service until a new Open discovers durable reality.
+// Open attempts are recovery_pending: only Resume of the exact ID can continue.
+// It restarts interrupted invocations, charges them again, and byte-compares
+// regenerated chunks with the durable prefix; disagreement is recovery_unknown.
+// VerifiedCursor is recovery bookkeeping, not a helper input cursor.
+// Exhaustion is sticky for source, scope, epoch, configuration and both profiles;
+// a fresh UUID, reopen or unrelated workspace frontier grants no new allowance.
+//
+// Observe and Page use one immutable image while work is busy. Page requests
+// bind version, digest, checked cursor and chain hash; stale headers get
+// ErrRevision. No image mutex is held across I/O, a callback or child execution.
+// ErrHistory refuses malformed durable input without publishing it, ordinary
+// source/adapter failures produce explicit unknown coverage, and ErrRecovery
+// fences uncertain persistence. Close cancels and joins work but owns no store.
+// Every subsequent call, including Close, returns ErrClosed.
+//
+// S3 selects incremental work only. Rebuild selection, cadence and the
+// rebuild/incremental comparison belong to ticket 61 S4. This is not
+// accepted-promotion integration (ticket 63), U5 readiness or ticket 61's close.
 //
 // Native tests use absolute DWARF_GRAPH_PYTHON, DWARF_GRAPH_NODE and
 // DWARF_GRAPH_TYPESCRIPT paths. The last names lib/typescript.js itself, not a
@@ -73,6 +131,6 @@
 // framing, overflow, lost-handshake and cancellation tests always run using the
 // test executable as a real child. Smoke-profile versions are Python 3.13.15,
 // Node v24.18.0 and TypeScript 6.0.3. Tests never install tools or run fuzz loops;
-// FuzzSQLSubset and FuzzGraphHelperResponse supply bounded seed corpora for the
-// PM's exact-commit fuzz gate.
+// FuzzSQLSubset, FuzzGraphHelperResponse and FuzzGraphReplayPrefix supply bounded
+// seed corpora for the PM's exact-commit fuzz gate.
 package graph

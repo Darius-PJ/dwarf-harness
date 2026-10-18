@@ -157,17 +157,44 @@ func (v *ToolVerification) Step(ctx context.Context, budget int64) (p Verificati
 // The parser path is lib/typescript.js itself, never a module directory to resolve.
 type Tools struct{ Python, Node, TypeScriptParser *VerifiedTool }
 
+// ToolConfig records unverified host identities without reading their files.
+// Services reserve work before converting these identities into verified tools.
+type ToolConfig struct{ Python, Node, TypeScriptParser *Tool }
+
+func (c ToolConfig) ConfigurationDigest() ledger.Digest { return configurationDigest(c) }
+
+type serviceDeps struct {
+	environment     func(string) []string
+	afterChildStart func()
+	beforeAppend    func([]ledger.Draft)
+	retainedCap     *uint64
+	nodeCap         int64
+}
+
 // ConfigurationDigest binds fixed script bytes, host tool identities and the
 // finite resolver options. It does not read target configuration or tool files.
 func ConfigurationDigest(tools Tools) ledger.Digest {
+	var config ToolConfig
+	for _, pair := range []struct {
+		verified *VerifiedTool
+		target   **Tool
+	}{{tools.Python, &config.Python}, {tools.Node, &config.Node}, {tools.TypeScriptParser, &config.TypeScriptParser}} {
+		if pair.verified != nil {
+			*pair.target = &pair.verified.tool
+		}
+	}
+	return configurationDigest(config)
+}
+
+func configurationDigest(tools ToolConfig) ledger.Digest {
 	entries := make([][4]any, 0, 3)
 	for _, v := range []struct {
 		role string
-		tool *VerifiedTool
+		tool *Tool
 	}{{"node", tools.Node}, {"python", tools.Python}, {"typescript", tools.TypeScriptParser}} {
 		row := [4]any{v.role, nil, nil, nil}
 		if v.tool != nil {
-			t := v.tool.tool
+			t := v.tool
 			row = [4]any{v.role, t.Path, t.SHA256, t.Version}
 		}
 		entries = append(entries, row)
@@ -223,14 +250,18 @@ type helperResponse struct {
 // Analyzer admits one direct child at a time; concurrent calls fail as busy.
 // Context cancellation kills and waits before the owned directory is removed.
 type Analyzer struct {
-	tools  Tools
-	mu     sync.Mutex
-	fenced bool
+	tools         Tools
+	configuration ledger.Digest
+	deps          serviceDeps
+	mu            sync.Mutex
+	fenced        bool
 }
 
 var ErrBusy = errors.New("graph analyzer busy")
 
-func NewAnalyzer(tools Tools) *Analyzer { return &Analyzer{tools: tools} }
+func NewAnalyzer(tools Tools) *Analyzer {
+	return &Analyzer{tools: tools, configuration: ConfigurationDigest(tools)}
+}
 
 // Analyze runs the fixed Python or TypeScript helper against a complete bounded
 // corpus. It never launches target code, a shell, an installer or a fallback.
@@ -244,7 +275,7 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 		}
 		return AnalysisResult{}, err
 	}
-	if r.ConfigurationSHA256 != ConfigurationDigest(a.tools) {
+	if r.ConfigurationSHA256 != a.configuration {
 		return AnalysisResult{}, ErrInvalid
 	}
 	if !a.mu.TryLock() {
@@ -311,7 +342,11 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 	}
 	child, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	raw, cost, err := runHelperProcess(child, cancel, tool.tool.Path, args, dir, helperEnvironment(dir), input, nil)
+	environment := helperEnvironment
+	if a.deps.environment != nil {
+		environment = a.deps.environment
+	}
+	raw, cost, err := runHelperProcess(child, cancel, tool.tool.Path, args, dir, environment(dir), input, nil, a.deps.afterChildStart)
 	if err != nil {
 		if errors.Is(err, errHelperUnjoined) {
 			a.fenced = true
@@ -369,7 +404,7 @@ func (w *helperOutput) Write(p []byte) (int, error) {
 	_, _ = w.data.Write(p)
 	return n, nil
 }
-func runHelperProcess(ctx context.Context, cancel context.CancelFunc, executable string, args []string, dir string, env []string, input []byte, stderrObserver func([]byte)) ([]byte, Cost, error) {
+func runHelperProcess(ctx context.Context, cancel context.CancelFunc, executable string, args []string, dir string, env []string, input []byte, stderrObserver func([]byte), afterStart func()) ([]byte, Cost, error) {
 	var frame bytes.Buffer
 	_ = binary.Write(&frame, binary.BigEndian, uint32(len(input)))
 	_, _ = frame.Write(input)
@@ -383,7 +418,13 @@ func runHelperProcess(ctx context.Context, cancel context.CancelFunc, executable
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 2 * time.Second
 	start := time.Now()
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		if afterStart != nil {
+			afterStart()
+		}
+		err = cmd.Wait()
+	}
 	cost := Cost{WallNS: time.Since(start).Nanoseconds(), InputBytes: int64(len(input) + 4), OutputBytes: int64(out.data.Len())}
 	if cmd.Process != nil && cmd.ProcessState == nil {
 		return nil, cost, errHelperUnjoined
