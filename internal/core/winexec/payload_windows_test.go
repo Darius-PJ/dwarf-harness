@@ -36,6 +36,8 @@ func TestWinexecPayload(t *testing.T) {
 		t.Fatal("missing payload operation")
 	}
 	switch args[0] {
+	case "resource":
+		payloadResourceEvidence(t)
 	case "exchange":
 		if len(args) != 3 {
 			t.Fatal("missing protected targets")
@@ -91,6 +93,28 @@ func TestWinexecPayload(t *testing.T) {
 		var code syscall.Errno
 		native := errors.As(err, &code)
 		fmt.Fprintf(os.Stdout, "network-denied native=%t code=%d error=%v\n", native, uint32(code), err)
+	case "process-count":
+		payloadProcessCount(t)
+	case "held-tree":
+		payloadHeldTree(t)
+	case "held-tree-child":
+		payloadHeldCommand(t, false, true)
+	case "descendant-root":
+		payloadDescendantRoot(t, args[1:])
+	case "descendant-child":
+		payloadDescendantChild(t, args[1:])
+	case "descendant-grandchild":
+		payloadDescendantGrandchild(t, args[1:])
+	case "links":
+		payloadLinks(t)
+	case "protected":
+		payloadProtectedTargets(t, args[1:])
+	case "inherited-handles":
+		payloadInheritedHandles(t)
+	case "peer":
+		payloadPeer(t, args[1:])
+	case "memory":
+		payloadMemory(t)
 	case "cpu":
 		fmt.Fprintln(os.Stdout, "cpu-ready")
 		var n uint64
@@ -101,7 +125,7 @@ func TestWinexecPayload(t *testing.T) {
 			}
 		}
 	case "descendant-held", "descendant-quiet":
-		payloadHeldCommand(t, args[0] == "descendant-quiet")
+		payloadHeldCommand(t, args[0] == "descendant-quiet", false)
 	case "descendant", "descendant-natural":
 		operation := "held"
 		if args[0] == "descendant-natural" {
@@ -120,14 +144,7 @@ func TestWinexecPayload(t *testing.T) {
 		}
 		windows.ExitProcess(0)
 	case "held":
-		event, err := windows.CreateEvent(nil, 1, 0, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fmt.Fprintln(os.Stdout, "held-ready")
-		if _, err := windows.WaitForSingleObject(event, windows.INFINITE); err != nil {
-			t.Fatal(err)
-		}
+		payloadHold(t)
 	case "held-file":
 		tick := time.NewTicker(10 * time.Millisecond)
 		defer tick.Stop()
@@ -171,7 +188,7 @@ func TestWinexecPayload(t *testing.T) {
 // This descendant needs no Go behavior. A private stdin pipe with its write
 // end inherited keeps cmd blocked after the root exits, without another race
 // runtime's fixed-address reservations. Both builds use this same native tree.
-func payloadHeldCommand(t *testing.T, quiet bool) {
+func payloadHeldCommand(t *testing.T, quiet, keepAlive bool) {
 	t.Helper()
 	system, err := windows.GetSystemDirectory()
 	if err != nil {
@@ -211,13 +228,28 @@ func payloadHeldCommand(t *testing.T, quiet bool) {
 	if err := json.NewEncoder(os.Stdout).Encode(struct{ PID int }{cmd.Process.Pid}); err != nil {
 		t.Fatal(err)
 	}
-	if !quiet {
+	if !quiet && !keepAlive {
 		fmt.Fprintln(os.Stdout, "held-ready")
 	}
 	if err := cmd.Process.Release(); err != nil {
 		t.Fatal(err)
 	}
+	if keepAlive {
+		payloadHold(t)
+	}
 	windows.ExitProcess(0)
+}
+
+func payloadHold(t *testing.T) {
+	t.Helper()
+	event, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(event)
+	fmt.Fprintln(os.Stdout, "held-ready")
+	state, err := windows.WaitForSingleObject(event, windows.INFINITE)
+	t.Fatalf("held native process unexpectedly woke: wait=%d error=%v", state, err)
 }
 
 func payloadFileRoundTrip(t *testing.T, path string, nonce []byte) {

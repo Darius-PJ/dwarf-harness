@@ -58,3 +58,75 @@ func TestRootMarkerBindsNativeOwner(t *testing.T) {
 		t.Fatalf("trailing marker accepted: %v", err)
 	}
 }
+
+func FuzzFenceDecode(f *testing.F) {
+	const root = "018f0000-0000-7000-8000-000000000001"
+	const run = "018f0000-0000-7000-8000-000000000002"
+	base := `{"format":1,"root_id":"` + root + `","run_id":"` + run + `","profile_name":"dwarf-harness-` + run + `","profile_created":false,"state":"unconfirmed"}`
+	closed := strings.Replace(base, `"state":"unconfirmed"`, `"state":"closed","closed_proof":"not_created"`, 1)
+	bound := strings.Replace(base, `"profile_created":false`, `"profile_created":true,"profile_path":"C:\\Users\\owner\\AppData\\Local\\Packages\\dwarf-harness-`+run+`\\AC","profile_volume":"01234567","profile_file_id":"0123456789abcdef"`, 1)
+	for _, seed := range []string{
+		base, closed, bound,
+		strings.Replace(bound, `"state":"unconfirmed"`, `"state":"closed","closed_proof":"job_empty"`, 1),
+		strings.Replace(closed, `"not_created"`, `"root_exit"`, 1),
+		strings.Replace(closed, `"not_created"`, `"job_empty"`, 1),
+		strings.Replace(base, `"format":1`, `"format":1,"format":1`, 1),
+		strings.Replace(base, `"profile_created":false`, `"profile_created":null`, 1),
+		strings.Replace(base, root, run, 1),
+		base + `{}`, base[:len(base)-1],
+		base + strings.Repeat(" ", markerLimit-len(base)),
+		base + strings.Repeat(" ", markerLimit+1-len(base)),
+		"", string([]byte{0xff, 0xfe}),
+	} {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		t.Parallel()
+		got, err := decodeFence(data, root, run)
+		if err != nil {
+			if !errors.Is(err, ErrQuarantined) {
+				t.Fatalf("invalid fence did not quarantine: %v", err)
+			}
+			return
+		}
+		if len(data) > markerLimit || got.Format != 1 || got.RootID != root || got.RunID != run || got.ProfileName != "dwarf-harness-"+run {
+			t.Fatalf("accepted unbounded or foreign authority: %+v", got)
+		}
+		switch got.State {
+		case "unconfirmed":
+			if got.Proof != "" {
+				t.Fatalf("uncertainty acquired closure proof: %+v", got)
+			}
+		case "closed":
+			if got.Proof != "not_created" && got.Proof != "job_empty" || got.Proof == "job_empty" && !got.ProfileCreated {
+				t.Fatalf("unsupported closure proof: %+v", got)
+			}
+		default:
+			t.Fatalf("unknown authority state: %+v", got)
+		}
+		encoded, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := decodeFence(encoded, root, run)
+		if err != nil || again != got {
+			t.Fatalf("authority changed on canonical encoding: %+v %v", again, err)
+		}
+		// A valid proof cannot authorize a different owner/run, a second JSON
+		// value, or contradictory duplicate state even after canonicalization.
+		for _, ids := range [][2]string{{run, run}, {root, root}} {
+			if _, err := decodeFence(encoded, ids[0], ids[1]); !errors.Is(err, ErrQuarantined) {
+				t.Fatalf("foreign context accepted: %v", err)
+			}
+		}
+		for _, ambiguous := range []string{
+			string(encoded) + `{}`,
+			string(encoded[:len(encoded)-1]) + `,"state":"closed"}`,
+			string(encoded[:len(encoded)-1]) + `,"unknown_authority":true}`,
+		} {
+			if _, err := decodeFence([]byte(ambiguous), root, run); !errors.Is(err, ErrQuarantined) {
+				t.Fatalf("ambiguous authority accepted: %v", err)
+			}
+		}
+	})
+}

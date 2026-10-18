@@ -71,9 +71,11 @@ func TestUnconfirmedFenceNeverReused(t *testing.T) {
 		t.Fatalf("reopen changed uncertain proof: %q %v", after, err)
 	}
 }
-func TestClosedCleanupRequiresExplicitReopen(t *testing.T) {
+func TestClosedCleanupDoesNotFollowReparseOrReuseEarly(t *testing.T) {
 	t.Parallel()
 	e := testExecutor(t)
+	external := t.TempDir()
+	canary := testProtectedFile(t, external, "keep", "external-owner-during-pending-cleanup")
 	var held windows.Handle
 	var marker string
 	var observationErr error
@@ -87,6 +89,9 @@ func TestClosedCleanupRequiresExplicitReopen(t *testing.T) {
 			held, err = windows.CreateFile(path, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, 0, 0)
 		}
 		observationErr = err
+		if observationErr == nil {
+			observationErr = testMakeJunction(filepath.Join(r.dir, "work", "external-junction"), external)
+		}
 	}
 	r, err := e.Run(context.Background(), testRequest(t, "output", "1"))
 	if held != 0 {
@@ -126,6 +131,9 @@ func TestClosedCleanupRequiresExplicitReopen(t *testing.T) {
 	assertReusable(t, next, nextErr)
 	if next.RunID == r.RunID || next.ProfileSID == r.ProfileSID {
 		t.Fatal("replayed or adopted former run")
+	}
+	if data, err := os.ReadFile(canary); err != nil || string(data) != "external-owner-during-pending-cleanup" {
+		t.Fatalf("closed cleanup traversed the private reparse target: %q %v", data, err)
 	}
 }
 func TestRootOwnershipAndLock(t *testing.T) {

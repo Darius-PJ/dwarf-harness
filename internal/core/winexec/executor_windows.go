@@ -367,26 +367,31 @@ func (r *nativeRun) check(native error) bool {
 	}
 	var cause Outcome
 	var failure error
-	select {
-	case <-r.stop:
-		cause = Shutdown
-		failure = ErrClosed
-	default:
-	}
-	if err := r.ctx.Err(); err != nil {
-		if cause == NotStarted {
-			cause = Canceled
-			if errors.Is(err, context.DeadlineExceeded) {
+	// Natural tree exit begins an independent StopGrace interval. Late caller
+	// cancellation, shutdown or execution deadlines cannot rewrite that exit;
+	// output overflow and native finalization failures still count below.
+	if r.stopAt.IsZero() {
+		select {
+		case <-r.stop:
+			cause = Shutdown
+			failure = ErrClosed
+		default:
+		}
+		if err := r.ctx.Err(); err != nil {
+			if cause == NotStarted {
+				cause = Canceled
+				if errors.Is(err, context.DeadlineExceeded) {
+					cause = TimedOut
+				}
+			}
+			failure = errors.Join(failure, err)
+		}
+		if !time.Now().Before(r.wallEnd) {
+			if cause == NotStarted {
 				cause = TimedOut
 			}
+			failure = errors.Join(failure, context.DeadlineExceeded)
 		}
-		failure = errors.Join(failure, err)
-	}
-	if !time.Now().Before(r.wallEnd) {
-		if cause == NotStarted {
-			cause = TimedOut
-		}
-		failure = errors.Join(failure, context.DeadlineExceeded)
 	}
 	if r.pipes != nil {
 		_, _, overflow := r.pipes.snapshot()
@@ -487,7 +492,7 @@ func (r *nativeRun) setup() error {
 	if err != nil {
 		return err
 	}
-	r.pipes, err = newPipes(r.executor.owner, sid.String(), r.fence.RunID, r.request.Limits.OutputBytes)
+	r.pipes, err = newPipes(r.executor.owner, r.fence.RunID, r.request.Limits.OutputBytes)
 	if err != nil {
 		if errors.Is(err, ErrQuarantined) {
 			r.uncertain = true
@@ -502,6 +507,7 @@ func (r *nativeRun) setup() error {
 		return err
 	}
 	r.created = true
+	r.observe("suspended_created")
 	if err := r.pipes.closeChildren(); err != nil {
 		return err
 	}
@@ -639,7 +645,7 @@ func (r *nativeRun) finish() {
 		if r.pipes != nil {
 			event = r.pipes.event
 		}
-		if stopping {
+		if stopping || !r.stopAt.IsZero() {
 			select {
 			case <-tick.C:
 			case <-event:
@@ -765,6 +771,12 @@ func (r *nativeRun) finish() {
 	r.receipt.Stop = time.Since(r.stopAt)
 }
 func (e *Executor) cleanup(ctx context.Context, f runFence) error {
+	var active *nativeRun
+	if e.observe != nil {
+		e.mu.Lock()
+		active = e.active
+		e.mu.Unlock()
+	}
 	dir := filepath.Join(e.root, "runs", f.RunID)
 	if err := ctx.Err(); err != nil {
 		return errors.Join(ErrCleanupPending, err)
@@ -822,11 +834,17 @@ func (e *Executor) cleanup(ctx context.Context, f runFence) error {
 		_ = windows.CloseHandle(binding.Handle)
 		return errors.Join(ErrCleanupPending, err)
 	}
+	if active != nil {
+		active.observe("fence_removed")
+	}
 	if err := windows.CloseHandle(binding.Handle); err != nil {
 		return errors.Join(ErrQuarantined, err)
 	}
 	if err := unlink(ctx, dir); err != nil {
 		return errors.Join(ErrQuarantined, err)
+	}
+	if active != nil {
+		active.observe("run_removed")
 	}
 	if err := durable.SyncDir(filepath.Dir(dir)); err != nil {
 		return errors.Join(ErrCleanupPending, err)

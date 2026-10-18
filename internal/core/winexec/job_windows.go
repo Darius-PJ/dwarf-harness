@@ -12,11 +12,19 @@ import (
 )
 
 func setJob(job windows.Handle, class uint32, p unsafe.Pointer, n uintptr) error {
+	// The x/sys wrapper takes uintptr, so KeepAlive alone cannot prevent a
+	// stack move before its syscall. Pinning also forces the buffer to the heap.
+	var pin runtime.Pinner
+	pin.Pin(p)
+	defer pin.Unpin()
 	_, err := windows.SetInformationJobObject(job, class, uintptr(p), uint32(n))
 	runtime.KeepAlive(p)
 	return nativeError("SetInformationJobObject", err)
 }
 func queryJob(job windows.Handle, class int32, p unsafe.Pointer, n uintptr) error {
+	var pin runtime.Pinner
+	pin.Pin(p)
+	defer pin.Unpin()
 	err := windows.QueryInformationJobObject(job, class, uintptr(p), uint32(n), nil)
 	runtime.KeepAlive(p)
 	return nativeError("QueryInformationJobObject", err)
@@ -55,7 +63,11 @@ func verifyJob(job windows.Handle, l Limits) error {
 	}
 	want := jobLimits(l)
 	if info.BasicLimitInformation.LimitFlags != want.BasicLimitInformation.LimitFlags || info.BasicLimitInformation.ActiveProcessLimit != l.Processes || info.BasicLimitInformation.PerJobUserTimeLimit != want.BasicLimitInformation.PerJobUserTimeLimit || info.JobMemoryLimit != want.JobMemoryLimit {
-		return fmt.Errorf("%w: Job controls mismatch", ErrUnsupported)
+		return fmt.Errorf("%w: Job controls mismatch (actual/expected flags=%#x/%#x processes=%d/%d user100ns=%d/%d memoryBytes=%d/%d)",
+			ErrUnsupported, info.BasicLimitInformation.LimitFlags, want.BasicLimitInformation.LimitFlags,
+			info.BasicLimitInformation.ActiveProcessLimit, l.Processes,
+			info.BasicLimitInformation.PerJobUserTimeLimit, want.BasicLimitInformation.PerJobUserTimeLimit,
+			info.JobMemoryLimit, want.JobMemoryLimit)
 	}
 	var rate jobCPURate
 	if err := queryJob(job, windows.JobObjectCpuRateControlInformation, unsafe.Pointer(&rate), unsafe.Sizeof(rate)); err != nil {

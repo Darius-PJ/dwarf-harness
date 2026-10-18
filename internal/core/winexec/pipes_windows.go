@@ -29,12 +29,12 @@ type pipeGroup struct {
 	parent, child [3]windows.Handle
 }
 
-func newPipes(owner, sid, id string, limit uint64) (*pipeGroup, error) {
+func newPipes(owner, id string, limit uint64) (*pipeGroup, error) {
 	p := &pipeGroup{limit: limit, event: make(chan struct{}, 1), stop: make(chan struct{})}
 	fail := func(err error) (*pipeGroup, error) {
 		return nil, errors.Join(err, p.closeUnstarted())
 	}
-	sd, err := securityDescriptor(owner, sid, "FA")
+	sd, err := securityDescriptor(owner, "", "")
 	if err != nil {
 		return nil, err
 	}

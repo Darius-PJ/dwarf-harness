@@ -16,10 +16,15 @@
 // Authorized input is copied into a sealed readable/executable tree. Work and
 // the identity-bound native profile are private writable low-integrity trees.
 // There is no scratch/profile hard disk quota and neither tree is exported.
-// Job memory is native commitment, not physical RAM; the time limit is aggregate
-// user-mode CPU, separately from the hard CPU-rate cap and monotonic wall budget.
-// StopGrace separately bounds proof, I/O completion and cleanup; approximately
-// five seconds accommodates observed transient scanner references on this host.
+// Duplicate and ASCII-case-colliding input paths are rejected before admission;
+// native exclusive creation remains authoritative for other Windows aliases.
+// Job memory limits native commitment, not physical RAM. Usage memory peaks are
+// the reported native counters, not a claim of physical RAM or commitment.
+// The time limit is aggregate user-mode CPU, separately from the hard CPU-rate
+// cap and monotonic wall budget. Once stopping starts, StopGrace independently
+// bounds proof, I/O completion and cleanup, including after a natural root exit;
+// later cancellation or the wall deadline cannot consume that grace again.
+// Approximately five seconds accommodates observed transient scanner references.
 // A kernel API itself is not preempted by these between-operation deadlines.
 //
 // the child's environment reveals the host's LocalAppData path, hence the user name; it is required by AppContainer launch and is not a grant beyond the owned profile folder.

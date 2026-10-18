@@ -89,6 +89,55 @@ func TestPermittedInputAndBoundedOutput(t *testing.T) {
 	}
 	t.Logf("label-only writable work/profile, profile=%s; native closure, accounting, immutable bounded exchange and fresh reuse", profile)
 }
+func TestNaturalExitKeepsStopGrace(t *testing.T) {
+	t.Parallel()
+	for _, late := range []string{"wall", "cancel", "close"} {
+		t.Run(late, func(t *testing.T) {
+			t.Parallel()
+			e := testExecutor(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			request := testRequest(t, "output", "1")
+			if late == "wall" {
+				request.Limits.Wall = 2 * time.Second
+			}
+			observed := false
+			var closeResult chan error
+			e.observe = func(phase string, r *nativeRun) {
+				if phase != "tree_exited" {
+					return
+				}
+				observed = true
+				switch late {
+				case "wall":
+					timer := time.NewTimer(time.Until(r.wallEnd))
+					defer timer.Stop()
+					<-timer.C
+				case "cancel":
+					cancel()
+				case "close":
+					closeResult = make(chan error, 1)
+					go func() { closeResult <- e.Close() }()
+					<-r.stop
+				}
+			}
+			r, err := e.Run(ctx, request)
+			if closeResult != nil {
+				if closeErr := <-closeResult; closeErr != nil {
+					t.Fatal(closeErr)
+				}
+			}
+			if !observed {
+				t.Fatal("natural tree-exit boundary was not observed")
+			}
+			assertReusable(t, r, err)
+			if string(r.Stdout) != "o" || string(r.Stderr) != "e" {
+				t.Fatalf("natural output was not sealed: stdout=%q stderr=%q", r.Stdout, r.Stderr)
+			}
+		})
+	}
+}
+
 func TestNativeUserCPULimit(t *testing.T) {
 	t.Parallel()
 	e := testExecutor(t)

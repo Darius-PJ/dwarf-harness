@@ -72,16 +72,20 @@ func createProfile(name string) (*windows.SID, error) {
 	if err != nil {
 		return nil, err
 	}
-	var sid *windows.SID
-	err = callHRESULT(createProfileProc, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(p)), 0, 0, uintptr(unsafe.Pointer(&sid)))
+	sid := new(*windows.SID)
+	var pin runtime.Pinner
+	pin.Pin(sid)
+	defer pin.Unpin()
+	err = callHRESULT(createProfileProc, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(p)), 0, 0, uintptr(unsafe.Pointer(sid)))
 	runtime.KeepAlive(p)
+	runtime.KeepAlive(sid)
 	if err != nil {
 		return nil, err
 	}
-	if sid == nil {
+	if *sid == nil {
 		return nil, fmt.Errorf("%w: missing created SID", ErrQuarantined)
 	}
-	return sid, nil
+	return *sid, nil
 }
 func deleteProfile(name string) error {
 	p, err := windows.UTF16PtrFromString(name)
@@ -97,19 +101,23 @@ func profileFolder(sid *windows.SID) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var result *uint16
-	err = callHRESULT(profileFolderProc, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&result)))
+	result := new(*uint16)
+	var pin runtime.Pinner
+	pin.Pin(result)
+	defer pin.Unpin()
+	err = callHRESULT(profileFolderProc, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(result)))
 	runtime.KeepAlive(p)
-	if result != nil {
-		defer windows.CoTaskMemFree(unsafe.Pointer(result))
+	runtime.KeepAlive(result)
+	if *result != nil {
+		defer windows.CoTaskMemFree(unsafe.Pointer(*result))
 	}
 	if err != nil {
 		return "", err
 	}
-	if result == nil {
+	if *result == nil {
 		return "", ErrUnsupported
 	}
-	return windows.UTF16PtrToString(result), nil
+	return windows.UTF16PtrToString(*result), nil
 }
 func processInJob(process, job windows.Handle) error {
 	if err := inJobProc.Find(); err != nil {

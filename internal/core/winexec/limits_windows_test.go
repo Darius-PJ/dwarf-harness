@@ -2,12 +2,16 @@ package winexec
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestOutputBudgetIsSharedAndBounded(t *testing.T) {
@@ -73,7 +77,13 @@ func TestRejectedAdmissionCreatesNothing(t *testing.T) {
 		"alternate-stream": func(r *Request) { r.Files = append(r.Files, InputFile{Path: "file:stream"}) },
 		"backslash":        func(r *Request) { r.Files = append(r.Files, InputFile{Path: `dir\file`}) },
 		"trailing-dot":     func(r *Request) { r.Files = append(r.Files, InputFile{Path: "dir./file"}) },
-		"command-line":     func(r *Request) { r.Args = append(r.Args, strings.Repeat("界", 32768)) },
+		"duplicate-file": func(r *Request) {
+			r.Files = append(r.Files, InputFile{Path: "note", Data: []byte("first")}, InputFile{Path: "note", Data: []byte("second")})
+		},
+		"case-collision": func(r *Request) {
+			r.Files = append(r.Files, InputFile{Path: "Dir/note", Data: []byte("first")}, InputFile{Path: "dir/NOTE", Data: []byte("second")})
+		},
+		"command-line": func(r *Request) { r.Args = append(r.Args, strings.Repeat("界", 32768)) },
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -106,4 +116,30 @@ func TestExpiredAndCanceledAdmissionHasNoEffects(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("admission created run resources: %v %v", entries, err)
 	}
+}
+
+func TestNativeMemoryLimit(t *testing.T) {
+	t.Parallel()
+	e := testExecutor(t)
+	request := testRequest(t, "memory")
+	request.Limits.JobCommitBytes = 256 << 20
+	r, err := e.Run(context.Background(), request)
+	assertReusable(t, r, err)
+	const ready = "memory-ready\n"
+	if !strings.HasPrefix(string(r.Stdout), ready) {
+		t.Fatalf("payload did not complete the positive allocation before the quota probe: %q", r.Stdout)
+	}
+	var probe memoryProbe
+	if err := json.Unmarshal(r.Stdout[len(ready):], &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.SmallBytes != 1<<20 || probe.LargeBytes != 512<<20 || probe.LargeBytes <= request.Limits.JobCommitBytes {
+		t.Fatalf("invalid finite allocation probe: %+v", probe)
+	}
+	switch syscall.Errno(probe.NativeCode) {
+	case windows.ERROR_NOT_ENOUGH_MEMORY, windows.ERROR_OUTOFMEMORY, windows.ERROR_COMMITMENT_LIMIT, windows.ERROR_NOT_ENOUGH_QUOTA:
+	default:
+		t.Fatalf("allocation was not denied by a native resource limit: %+v", probe)
+	}
+	t.Logf("measurement: positive committed allocation=%d bytes, denied allocation=%d bytes, native=%d, Job commit quota=%d bytes, native PeakJobMemoryUsed=%d bytes", probe.SmallBytes, probe.LargeBytes, probe.NativeCode, request.Limits.JobCommitBytes, r.Usage.PeakJobMemoryBytes)
 }

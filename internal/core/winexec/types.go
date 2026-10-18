@@ -127,10 +127,21 @@ func validateRequest(r Request) (uint64, error) {
 		}
 	}
 	programs := 0
+	paths := make(map[string]struct{})
 	for _, f := range r.Files {
 		if !validInputPath(f.Path) || !charge(uint64(len(f.Path))+1) || !charge(uint64(len(f.Data))) {
 			return 0, ErrInvalid
 		}
+		key := strings.Map(func(c rune) rune {
+			if c >= 'A' && c <= 'Z' {
+				return c + ('a' - 'A')
+			}
+			return c
+		}, f.Path)
+		if _, exists := paths[key]; exists {
+			return 0, fmt.Errorf("%w: duplicate input path", ErrInvalid)
+		}
+		paths[key] = struct{}{}
 		if f.Path == r.Program {
 			programs++
 		}
