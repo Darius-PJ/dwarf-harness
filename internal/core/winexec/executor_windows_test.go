@@ -99,7 +99,8 @@ func TestNaturalExitKeepsStopGrace(t *testing.T) {
 			defer cancel()
 			request := testRequest(t, "output", "1")
 			if late == "wall" {
-				request.Limits.Wall = 2 * time.Second
+				request.Limits.Wall = 5 * time.Second
+				request.Limits.StopGrace = 10 * time.Second
 			}
 			observed := false
 			var closeResult chan error

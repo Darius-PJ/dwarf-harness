@@ -151,7 +151,7 @@ func TestAppContainerJobAndSuspendOrder(t *testing.T) {
 			observationErr = fmt.Errorf("membership %d: %w", member, err)
 		}
 		var limits windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-		if err := windows.QueryInformationJobObject(r.job, 9, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)), nil); err != nil {
+		if err := queryJob(r.job, 9, unsafe.Pointer(&limits), unsafe.Sizeof(limits)); err != nil {
 			observationErr = err
 			return
 		}
@@ -160,11 +160,11 @@ func TestAppContainerJobAndSuspendOrder(t *testing.T) {
 			observationErr = fmt.Errorf("native limits: %+v", limits)
 		}
 		var rate jobCPURate
-		if err := windows.QueryInformationJobObject(r.job, 15, uintptr(unsafe.Pointer(&rate)), uint32(unsafe.Sizeof(rate)), nil); err != nil || rate.Flags != 5 || rate.Rate != 10000 {
+		if err := queryJob(r.job, 15, unsafe.Pointer(&rate), unsafe.Sizeof(rate)); err != nil || rate.Flags != 5 || rate.Rate != 10000 {
 			observationErr = fmt.Errorf("CPU rate %+v: %w", rate, err)
 		}
 		var action uint32
-		if err := windows.QueryInformationJobObject(r.job, 6, uintptr(unsafe.Pointer(&action)), 4, nil); err != nil || action != 0 {
+		if err := queryJob(r.job, 6, unsafe.Pointer(&action), unsafe.Sizeof(action)); err != nil || action != 0 {
 			observationErr = fmt.Errorf("time action %d: %w", action, err)
 		}
 		if !r.receipt.ResumedUTC.IsZero() {
