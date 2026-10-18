@@ -57,3 +57,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-18 — Ticket 45, one of this ticket's blockers, is resolved: C10's Windows executor, `internal/core/winexec`, is on `main` ([B30](../../../docs/DECISIONS.md#b30-c10-the-windows-containment-executor-ticket-45)). Tickets 18 and 19 remain open. The executor's request, receipt and quarantine fence are Core-internal code, not contracts. If this ticket is the first to need a durable executor fact, it specifies that fact in C4's attempt and evidence family under `CONTRACTS.md`'s rules (the [gate ruling](../c10-evidence/ticket-45-design-ruling.md), P2). Ticket 45 claims no capacity, no V6 result and no A2 label. The Limits of B30 state the boundary this qualification inherits.

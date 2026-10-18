@@ -927,7 +927,7 @@ These are unrun acceptance obligations. The exact attenuation and readiness/cuto
 
 **Delivers.** Implement and measure the selected A2 boundary, not an architecture label: Windows per-run AppContainer plus non-breakaway Job Object; Linux namespaces/Landlock/`no_new_privs`/capability drop plus positive process-tree closure; Apple-silicon native-macOS tools in the D87 single disposable VM slot; separately budgeted Linux guest where required, including Intel Mac. A2 includes A1 plus proven filesystem/process restriction under the stated threat model.
 
-**Waits for.** C2 canonical workspace/ref boundary and C3's Core-owned child/execution interface; implementation can begin only with owner-frozen relevant C1/B11 contracts.
+**Waits for.** C2's canonical workspace/ref boundary to start the executors, which build only against frozen C1 contracts within B11's OS-adapter boundary; C3's Core-owned child/execution interface for the step's integration and A2 qualification, not for the executors' start (B30).
 
 **Stop point.** Do not use an A2 label or expose agent affordance before positive access-control, escape-denial and descendant/VM-stop evidence across the declared platforms. C10 does not claim protection from a compromised OS/kernel or unrestricted administrator/owner.
 
@@ -958,7 +958,7 @@ These are unrun acceptance obligations. The exact attenuation and readiness/cuto
 
 **Exit criterion.** With real hostile-process drills on supported Windows, Linux and Apple-silicon macOS paths, demonstrate positive controls and denials against canonical refs, common metadata, ledger, private peer files, credentials, owner IPC and unauthorized network. On cancellation, timeout, crash or Core/helper loss prove every descendant/VM is stopped or keep its resources quarantined; no ambiguous run may publish, reuse a slot or restart automatically. Record actual costs and platform limits before any A2 claim.
 
-**Status.** Waiting.
+**Status.** In progress (ticket 45, Windows executor, 2026-10-18; C3 integration and A2 qualification wait for C3 and ticket 46; Linux and macOS executors are tickets 47 and 49).
 
 ## 3. Remaining prerequisites and evidence
 
@@ -976,6 +976,6 @@ Remaining prerequisites, explicit pre-alpha producer work and evidence are liste
 | C7 | Base C3/C1/frozen launcher protocol and real IPC/reconnect/two-view proof; staged actual C3/C6/C8/C9/helper extensions. Specify bounded presentation snapshots/checkpoints, atomic recovery and finite retry expiry; shared interview/pin/progress, no duplicate spending; qualify terminal reuse or external fallback; stage the §13.11 outage projections and commands |
 | C8 | C6 + C3 runtime + actual C9 backend pinned alignment, not whole C9/GUI; frozen lifecycle/Purpose/Creed/publication/handoff families. Specify/test attenuation, readiness/atomic cutover, the §13.11 outage operation, stand-in and office handover, post-success retirement and approval/version/privacy replay |
 | C9 | C4/C5/C6 and owner-frozen workflow/recipe/skill/pinned-run families; actual first-action backend capability then feeds C8 and GUI-E parity. C7/Fyne/backend GUI parity is still required for whole C9 |
-| C10 | C2/C3 and OS/helper interfaces; positive hostile-process, VM/descendant closure and no-reuse proofs; measured D78 cost with Defender enabled |
+| C10 | C2 to start its executors and C3 for their integration and A2 qualification (B30); OS/helper interfaces; positive hostile-process, VM/descendant closure and no-reuse proofs; measured D78 cost with Defender enabled |
 
 Question IDs beginning with Q are in `DESIGN-UNDERCURRENT.md` §17, and IDs beginning with V in `RESEARCH-ADMISSIBLE-VALIDATION.md` §8. Routing's remaining prerequisites are in `DESIGN-ROUTING-LAYER.md` §15; former Core §10 mechanism lists are superseded by Core §13.

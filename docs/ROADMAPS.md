@@ -177,7 +177,7 @@ Notes on the edges:
 | C9 | Recipes, workflows and skills; whole-step includes GUI gate | C4, C5, C6; C7 + Fyne + C9 backend capability for GUI parity | Waiting |
 | GUI | Native GUI launcher and C9 parity | C7; selected Fyne v2.8.1; C9 backend capability | Waiting |
 | GUI-F | Fortress/RPG creation, inspection and resumable cosmetic building | GUI-A/B; actual C3/C6/C8/C9-backend capabilities; corresponding owner-frozen C7 additions; native acceptance gates | Waiting |
-| C10 | Isolation boundary and assurance A2 | C2 | Waiting |
+| C10 | Isolation boundary and assurance A2 | C2 | In progress (ticket 45, Windows executor, 2026-10-18; C3 integration and A2 qualification wait for C3 and ticket 46; Linux and macOS executors are tickets 47 and 49) |
 | R0 | Shadow mode | C3 | Waiting |
 | R1 | Safe per-turn settings, provider awareness, R11 events | R0; C1's frozen `ledger-format`, `ledger-reader` and `ledger-appender` (D40, D50) | Waiting |
 | R2 | Effort ladder | R1 | Waiting |
