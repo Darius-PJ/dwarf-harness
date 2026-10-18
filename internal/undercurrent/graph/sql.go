@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path"
 	"strings"
 	"unicode/utf8"
 
@@ -50,7 +49,7 @@ func AnalyzeSQL(ctx context.Context, r AnalysisRequest) (AnalysisResult, error) 
 	reasons := make(map[int]string)
 	decls := make(map[string][]int)
 	for i, a := range r.Corpus {
-		if strings.ToLower(path.Ext(a.Path)) != ".sql" {
+		if sourceAdapter(a.Path) != ledger.AdapterSQL {
 			continue
 		}
 		err := charge(1 + int64((len(a.Bytes)+255)/256))

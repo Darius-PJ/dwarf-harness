@@ -45,8 +45,7 @@ func startedScope(started ledger.GraphAnalysisStarted) Scope {
 }
 
 type registration struct {
-	ref    ledger.RecordRef
-	format string
+	ref ledger.RecordRef
 }
 type acceptance struct {
 	ref               ledger.RecordRef
@@ -244,7 +243,7 @@ func (r *replayState) view(configuration ledger.Digest, epoch int64) *serviceIma
 		}
 	}
 	status.Reasons = slices.Sorted(maps.Keys(reasons))
-	if len(status.Reasons) != 0 || len(status.Pending) != 0 {
+	if len(status.Pending) != 0 {
 		status.State = "unknown"
 	}
 	if _, ok := r.next(configuration, epoch); ok {
@@ -254,6 +253,9 @@ func (r *replayState) view(configuration ledger.Digest, epoch int64) *serviceIma
 	if r.attempt != nil {
 		last = r.attempt.attemptSummary
 		status.State = "pending"
+	}
+	if last.serviceReason != "" {
+		status.State = "unknown"
 	}
 	if last.serviceReason != "" && !slices.Contains(status.Reasons, last.serviceReason) {
 		status.Reasons = append(status.Reasons, last.serviceReason)
@@ -306,7 +308,7 @@ func (r *replayState) reduce(commit ledger.Commit) error {
 					return errRetainedCap
 				}
 				r.metadataMemory += 512
-				r.registrations[p.WorkspaceID] = registration{ref: recordRef(record), format: p.ObjectFormat}
+				r.registrations[p.WorkspaceID] = registration{ref: recordRef(record)}
 			case ledger.TypePromotionAdmitted:
 				p, err := ledger.DecodePromotionAdmitted(record.Payload)
 				if err != nil {

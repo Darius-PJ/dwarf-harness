@@ -218,6 +218,104 @@ func driveGraph(t testing.TB, service *Service) Status {
 	return Status{}
 }
 
+func TestGraphStatusSeparatesReadyFromDeclaredGaps(t *testing.T) {
+	t.Parallel()
+	f := newGraphFixture(t)
+	workspace := graphFixtureID(1)
+	f.register(workspace)
+	tree := f.tree("covered", map[string]string{"readme.md": "opaque"})
+	f.accept(workspace, f.tree("empty", nil), tree, "readme.md")
+	service := f.open(serviceDeps{})
+	pending, err := service.Observe(context.Background())
+	if err != nil || pending.State != "pending" || !slices.Equal(pending.Pending, []uuid.UUID{workspace}) {
+		t.Fatalf("runnable source: %+v, %v", pending, err)
+	}
+	ready := driveGraph(t, service)
+	reasons := []string{ledger.ReasonDependencyUnapproved, ledger.ReasonUnsupportedSyntax, ledger.ReasonUpstreamUnfrozen}
+	if ready.State != "ready" || ready.Version == 0 || len(ready.Pending) != 0 || !slices.Equal(ready.Reasons, reasons) {
+		t.Fatalf("declared gaps prevented readiness: %+v", ready)
+	}
+	reopened := f.open(serviceDeps{})
+	observed, err := reopened.Observe(context.Background())
+	if err != nil || observed.State != "ready" || observed.Digest != ready.Digest || !slices.Equal(observed.Reasons, ready.Reasons) {
+		t.Fatalf("replayed readiness: %+v, %v", observed, err)
+	}
+	// A failed source remains pending, but its terminal key cannot be run again.
+	f.accept(workspace, tree, strings.Repeat("e", 40), "readme.md")
+	blocked := driveGraph(t, service)
+	if blocked.State != "unknown" || !slices.Equal(blocked.Pending, []uuid.UUID{workspace}) || blocked.Version != ready.Version || !slices.Equal(blocked.Reasons, ready.Reasons) {
+		t.Fatalf("terminal pending source: %+v", blocked)
+	}
+	before := f.writer.Durable()
+	observed, err = service.Step(context.Background())
+	if err != nil || observed.State != "unknown" || f.writer.Durable() != before {
+		t.Fatalf("terminal source was retried: %+v, %v", observed, err)
+	}
+}
+
+func TestGraphFailedOutputRestartsChargedWork(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{ledger.TypeGraphDeltaChunk, ledger.TypeGraphVersionCommitted, ledger.GraphPhaseUnknown} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			f := newGraphFixture(t)
+			workspace := graphFixtureID(1)
+			f.register(workspace)
+			body := "-- no dependencies"
+			f.accept(workspace, f.tree("empty", nil), f.tree("source", map[string]string{"a.sql": body}), "a.sql")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cancelled, unavailable, reads := false, kind == ledger.GraphPhaseUnknown, 0
+			opts := f.options()
+			opts.ReadArtifacts = func(ctx context.Context, request ArtifactRequest) (ArtifactBatch, error) {
+				reads++
+				if unavailable && !request.ListOnly {
+					return ArtifactBatch{Reason: ledger.ReasonSourceUnavailable}, nil
+				}
+				return f.read(ctx, request)
+			}
+			service, err := openService(opts, serviceDeps{beforeAppend: func(drafts []ledger.Draft) {
+				matches := drafts[0].Type == kind
+				if kind == ledger.GraphPhaseUnknown && drafts[0].Type == ledger.TypeGraphAnalysisProgress {
+					progress, err := ledger.DecodeGraphAnalysisProgress(drafts[0].Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					matches = progress.Phase == ledger.GraphPhaseUnknown
+				}
+				if !cancelled && matches {
+					cancelled, unavailable = true, false
+					cancel()
+				}
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = service.Close() })
+			var failed Status
+			for steps := 0; steps < 205; steps++ {
+				failed, err = service.Step(ctx)
+				if err != nil {
+					break
+				}
+			}
+			if !cancelled || !errors.Is(err, context.Canceled) || failed.Version != 0 || failed.Charged == 0 {
+				t.Fatalf("output append did not fail without publication: %+v, %v", failed, err)
+			}
+			before, beforeReads := f.writer.Durable(), reads
+			restarted, err := service.Step(context.Background())
+			if err != nil || restarted.Attempt != failed.Attempt || restarted.Charged != failed.Charged+quantum || reads <= beforeReads || f.writer.Durable() != before+1 {
+				t.Fatalf("retry did not reserve and recompute: %+v, %v, reads %d -> %d, durable %d -> %d", restarted, err, beforeReads, reads, before, f.writer.Durable())
+			}
+			final := driveGraph(t, service)
+			page, err := service.Page(graphPageRequest(final, "nodes"))
+			if err != nil || final.State != "ready" || final.Attempt != failed.Attempt || final.Charged <= restarted.Charged || len(page.Nodes) != 1 || page.Nodes[0].VersionSHA256 != ledger.Digest(sha256.Sum256([]byte(body))) {
+				t.Fatalf("recomputed output was not published intact: %+v, %v, nodes=%+v", final, err, page.Nodes)
+			}
+		})
+	}
+}
+
 func TestGraphHistoryAtEveryCursor(t *testing.T) {
 	t.Parallel()
 	fixture := newGraphFixture(t)

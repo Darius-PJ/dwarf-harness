@@ -507,9 +507,7 @@ func decodeHelperResponse(frame []byte, req helperRequest) (AnalysisResult, erro
 	}
 	if !coveredScopes[workspaceScope(req.Source.WorkspaceID)] {
 		for _, artifact := range req.Corpus {
-			ext := strings.ToLower(filepath.Ext(artifact.Path))
-			relevant := req.Adapter == ledger.AdapterPython && ext == ".py" || req.Adapter == ledger.AdapterTypeScript && strings.Contains("|.ts|.tsx|.js|.jsx|.mts|.cts|.mjs|.cjs|", "|"+ext+"|")
-			if relevant && !coveredScopes[keyScope(artifact.Key)] {
+			if sourceAdapter(artifact.Path) == req.Adapter && !coveredScopes[keyScope(artifact.Key)] {
 				return AnalysisResult{}, ErrInvalid
 			}
 		}

@@ -430,6 +430,11 @@ func (s *Service) append(ctx context.Context, drafts []ledger.Draft) error {
 			s.fenced = true
 			return fmt.Errorf("%w: %w", ErrRecovery, err)
 		}
+		if s.work != nil {
+			// A refused output may already have advanced private cursors and
+			// hashes. Reconstruct like Resume; never reuse uncommitted output.
+			s.work = s.newWork(s.replay.attempt.started)
+		}
 		return err
 	}
 	// A cancelled caller cannot turn an acknowledged append into an unhydrated

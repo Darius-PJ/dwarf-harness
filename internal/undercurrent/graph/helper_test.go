@@ -468,7 +468,7 @@ func TestTypeScriptAnalysisUsesOnlyConfiguredParser(t *testing.T) {
 
 func TestMissingAdaptersAndUnapprovedGoStayUnknown(t *testing.T) {
 	t.Parallel()
-	r := analysisFixture(map[string]string{"a.go": "package a\nimport \"net/http\"", "readme.md": "[dependency](a.go)", "data.json": `{"imports":["a.go"]}`})
+	r := analysisFixture(map[string]string{"a.go": "package a\nimport \"net/http\"", "readme.md": "[dependency](a.go)", "data.json": `{"imports":["a.go"]}`, "upper.PY": "import hidden", "upper.JS": `import "hidden"`, "upper.SQL": "SELECT * FROM hidden;"})
 	r.ConfigurationSHA256 = ConfigurationDigest(Tools{})
 	for _, adapter := range []string{ledger.AdapterPython, ledger.AdapterTypeScript} {
 		out, err := NewAnalyzer(Tools{}).Analyze(context.Background(), adapter, r)
@@ -484,7 +484,11 @@ func TestMissingAdaptersAndUnapprovedGoStayUnknown(t *testing.T) {
 		t.Fatal("Go or hyperlinks guessed causal edges")
 	}
 	assertCoverage(t, r, out, "go", map[string]string{"a.go": ledger.ReasonDependencyUnapproved})
-	assertCoverage(t, r, out, ledger.AdapterOpaque, map[string]string{"readme.md": ledger.ReasonUnsupportedSyntax, "data.json": ledger.ReasonUnsupportedSyntax})
+	assertCoverage(t, r, out, ledger.AdapterOpaque, map[string]string{"readme.md": ledger.ReasonUnsupportedSyntax, "data.json": ledger.ReasonUnsupportedSyntax, "upper.PY": ledger.ReasonUnsupportedSyntax, "upper.JS": ledger.ReasonUnsupportedSyntax, "upper.SQL": ledger.ReasonUnsupportedSyntax})
+	sql, err := AnalyzeSQL(context.Background(), r)
+	if err != nil || len(sql.Nodes) != 0 || len(sql.Edges) != 0 || len(sql.Coverage) != 0 {
+		t.Fatalf("uppercase SQL was selected as source: %+v, %v", sql, err)
+	}
 }
 
 func TestHelperBoundsFailClosed(t *testing.T) {

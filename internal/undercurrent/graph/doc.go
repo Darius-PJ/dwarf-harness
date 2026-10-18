@@ -91,6 +91,7 @@
 // windows pre-sized at 2+ceil(bytes/256) per artifact. Each other adapter sees its
 // complete bounded corpus once; complete or scope-unknown, it is then finished.
 // Tool-file verification is separate, resumable, charged work before invocation.
+// An empty adapter corpus skips both verification and invocation.
 //
 // The private candidate is capped at 64 MiB conservatively. Diff removes edges,
 // removes nodes, puts nodes, puts edges and replaces workspace coverage in key
@@ -105,12 +106,20 @@
 // Every acknowledged append hydrates the complete prefix through Committed.Last,
 // including racing Core records, before publication. Uncertain or poisoned
 // outcomes fence the service until a new Open discovers durable reality.
+// A refused, closed or context-failed append discards private work, not its
+// durable reservation. The next Step reconstructs from the durable prefix as
+// Resume does; every recomputed unit gets a fresh reservation and charge.
 // Open attempts are recovery_pending: only Resume of the exact ID can continue.
 // It restarts interrupted invocations, charges them again, and byte-compares
 // regenerated chunks with the durable prefix; disagreement is recovery_unknown.
 // VerifiedCursor is recovery bookkeeping, not a helper input cursor.
 // Exhaustion is sticky for source, scope, epoch, configuration and both profiles;
 // a fresh UUID, reopen or unrelated workspace frontier grants no new allowance.
+//
+// With an available image, ready means no open attempt, no runnable candidate,
+// and no pending workspace. Declared coverage gaps stay in Reasons, not State.
+// Unknown means pending work has no runnable candidate, or the service has a
+// state_cap or recovery_unknown condition.
 //
 // Observe and Page use one immutable image while work is busy. Page requests
 // bind version, digest, checked cursor and chain hash; stale headers get

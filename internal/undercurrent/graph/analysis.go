@@ -8,7 +8,6 @@ import (
 	"errors"
 	"path"
 	"slices"
-	"strings"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/law"
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -20,6 +19,23 @@ const (
 	maxBlob        = 1 << 20
 	maxItems       = 10000
 )
+
+// sourceAdapter matches the helpers' case-sensitive source suffixes. JSON is
+// TypeScript metadata, not a source whose coverage the helper must supply.
+func sourceAdapter(name string) string {
+	switch path.Ext(name) {
+	case ".py":
+		return ledger.AdapterPython
+	case ".sql":
+		return ledger.AdapterSQL
+	case ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs":
+		return ledger.AdapterTypeScript
+	case ".go":
+		return "go"
+	default:
+		return ledger.AdapterOpaque
+	}
+}
 
 // CorpusArtifact carries only immutable regular blob bytes and a parent-derived
 // generation key. Helpers may not invent artifact identities.
@@ -144,11 +160,11 @@ func AnalyzeOpaque(ctx context.Context, r AnalysisRequest) (AnalysisResult, erro
 		}
 		out.WorkUsed += units
 		out.Nodes = append(out.Nodes, ledger.GraphNode{Key: a.Key, VersionSHA256: a.SHA256, Adapter: ledger.AdapterOpaque, ConfigurationSHA256: r.ConfigurationSHA256})
-		adapter, reason := ledger.AdapterOpaque, ledger.ReasonUnsupportedSyntax
-		switch strings.ToLower(path.Ext(a.Path)) {
-		case ".go":
-			adapter, reason = "go", ledger.ReasonDependencyUnapproved
-		case ".py", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".sql":
+		adapter, reason := sourceAdapter(a.Path), ledger.ReasonUnsupportedSyntax
+		switch adapter {
+		case "go":
+			reason = ledger.ReasonDependencyUnapproved
+		case ledger.AdapterPython, ledger.AdapterSQL, ledger.AdapterTypeScript:
 			continue
 		}
 		out.Coverage = append(out.Coverage, covered(a.Key, adapter, reason))

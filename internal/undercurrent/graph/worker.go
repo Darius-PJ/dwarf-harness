@@ -9,7 +9,6 @@ import (
 	"hash"
 	"path"
 	"slices"
-	"strings"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -53,7 +52,6 @@ type workState struct {
 	chunksHash                   hash.Hash
 	canonical                    *canonicalWork
 	digest                       ledger.Digest
-	pending                      *workOutput
 }
 
 func (s *Service) newWork(started ledger.GraphAnalysisStarted) *workState {
@@ -144,14 +142,10 @@ func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
 	if !s.replay.eligible(s.replay.attempt.started) {
 		return s.endAttempt(ctx, ledger.GraphPhaseSuperseded, ledger.ReasonStaleSource)
 	}
-	if s.work.pending == nil {
-		output, err := s.work.unit(ctx, s, allowance)
-		if err != nil {
-			return err
-		}
-		s.work.pending = output
+	output, err := s.work.unit(ctx, s, allowance)
+	if err != nil {
+		return err
 	}
-	output := s.work.pending
 	if output == nil {
 		return nil
 	}
@@ -188,7 +182,6 @@ func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
 	if err := s.append(ctx, drafts); err != nil {
 		return err
 	}
-	s.work.pending = nil
 	return nil
 }
 
@@ -321,6 +314,10 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 	case 3, 4, 5:
 		language := w.phase - 3
 		adapter := []string{ledger.AdapterPython, ledger.AdapterSQL, ledger.AdapterTypeScript}[language]
+		if len(w.languages[language]) == 0 {
+			w.phase++
+			return nil, nil
+		}
 		if language != 1 && len(w.languages[language]) <= maxItems && w.languageBytes[language] <= maxFrame {
 			consumed, err := service.verifyAdapter(ctx, adapter, allowance)
 			if err != nil {
@@ -432,13 +429,15 @@ func (w *workState) readCorpus(ctx context.Context, service *Service, allowance 
 		artifact := CorpusArtifact{Path: entry.Path, Key: key, SHA256: entry.SHA256, Bytes: body}
 		w.corpus = append(w.corpus, artifact)
 		language := -1
-		if strings.HasSuffix(entry.Path, ".py") {
+		switch sourceAdapter(entry.Path) {
+		case ledger.AdapterPython:
 			language = 0
-		}
-		if strings.ToLower(path.Ext(entry.Path)) == ".sql" {
+		case ledger.AdapterSQL:
 			language = 1
+		case ledger.AdapterTypeScript:
+			language = 2
 		}
-		if slices.Contains([]string{".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".json"}, path.Ext(entry.Path)) {
+		if path.Ext(entry.Path) == ".json" {
 			language = 2
 		}
 		if language >= 0 {
