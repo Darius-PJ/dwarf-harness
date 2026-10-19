@@ -186,7 +186,7 @@ Notes on the edges:
 | R5 | Optional modules | R4; qualified C10 profile before enabling external plugins/helpers | Waiting |
 | U1 | Law and engine capabilities | C1 contracts frozen; U1.L `law-format` before U1.E engine/replay | In progress |
 | U2 | Synthetic ledgers, simulation, adversarial suite | U1.E for field simulation; validation cases: C3/C4 (A1), C5/C6 (governance), C10 (A2) | Waiting |
-| U3 | Coupling graph service | Foundation: C2 and frozen `ledger-appender` (C1, D50); accepted-promotion integration: C4 (D52) | Ready (foundation) |
+| U3 | Coupling graph service | Foundation: C2 and frozen `ledger-appender` (C1, D50); accepted-promotion integration: C4 (D52) | In progress (foundation partial: ticket 61 S1–S4 landed, F-U3-61 frozen D130; 61's remaining criteria and ticket 62 wait for producer freezes: tickets 11, 15, 17; promotion integration: C4) |
 | U4 | Promotion-pipeline field kinds | C2, C4, C5, U1.E, U3 | Waiting |
 | U5 | Resource pressure | R1, U1.E, U3's completed graph foundation; C4 for the runner-queue node | Waiting |
 | U6 | Perception, disclosure, shadow rendering | U4, U5, R1 | Waiting |

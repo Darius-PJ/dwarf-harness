@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: U3 graph foundation, causal capability
-Blocked by: 07, 09
+Blocked by: 07, 09, 11, 15, 17
 
 ## What to build
 
@@ -67,3 +67,13 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-18 — The graph foundation is built in part. Slices S1–S4 are on `main`: S2 with F-U3-61 frozen as D130, S1 (96918cd, 88ca88f), S3 (0ccb983, ef329fa) and S4 (39d2404). The service reads frozen C2 history and analyzes Python, TypeScript and a bounded SQL subset in bounded helpers. It publishes complete versions through the Core-owned appender, replays them from records alone, and rebuilds after a reopen, every 100 structural acceptances, on an analyzer change or on a projection mismatch.
+
+The rest of this ticket waits:
+- Pinned-check, declaration, resource and work-domain nodes, their edges and positive resource→consumer usage wait for producer freezes in tickets 17, 11 and 15.
+- Resource and work-domain registration has no producer ticket yet. Its assignment is due at ticket 11's design brief, as a B entry.
+- Go coverage stays unknown until the owner answers OG-GO.
+- A rebuild stages at most about 18,000 edges within its 64 MiB allowance, so above that size a colony cannot complete one. A later slice of this ticket audits that allowance before ticket 63 relies on rebuilds.
+
+Co-access is ticket 62, and live accepted promotion is ticket 63 (C4).
