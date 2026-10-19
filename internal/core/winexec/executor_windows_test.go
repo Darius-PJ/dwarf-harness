@@ -99,8 +99,9 @@ func TestNaturalExitKeepsStopGrace(t *testing.T) {
 			defer cancel()
 			request := testRequest(t, "output", "1")
 			if late == "wall" {
-				request.Limits.Wall = 5 * time.Second
-				request.Limits.StopGrace = 10 * time.Second
+				// Cover native setup, then retain drain time after the real wall.
+				request.Limits.Wall = 10 * time.Second
+				request.Limits.StopGrace = 15 * time.Second
 			}
 			observed := false
 			var closeResult chan error
@@ -109,6 +110,7 @@ func TestNaturalExitKeepsStopGrace(t *testing.T) {
 					return
 				}
 				observed = true
+				t.Logf("NATURAL_EXIT measurement late=%s elapsed=%s wallRemaining=%s created=%s resumed=%s cause=%d exit=%#x stopAt=%s", late, time.Since(r.admitted), time.Until(r.wallEnd), r.receipt.CreatedUTC, r.receipt.ResumedUTC, r.cause, r.receipt.ExitCode, r.stopAt)
 				switch late {
 				case "wall":
 					timer := time.NewTimer(time.Until(r.wallEnd))
@@ -123,6 +125,7 @@ func TestNaturalExitKeepsStopGrace(t *testing.T) {
 				}
 			}
 			r, err := e.Run(ctx, request)
+			t.Logf("NATURAL_RESULT measurement late=%s receipt=%+v error=%v", late, r, err)
 			if closeResult != nil {
 				if closeErr := <-closeResult; closeErr != nil {
 					t.Fatal(closeErr)

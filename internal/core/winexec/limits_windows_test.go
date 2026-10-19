@@ -50,24 +50,90 @@ func TestWallDeadlineStopsWholeTree(t *testing.T) {
 	observed := false
 	var liveErr error
 	e.observe = func(phase string, r *nativeRun) {
+		switch phase {
+		case "unconfirmed", "profile_bound", "suspended_created", "resumed", "root_exited", "tree_exited":
+			var accounting jobBasicAccounting
+			var accountErr, pidErr error
+			var pids []uint32
+			if r.job != 0 {
+				accounting, accountErr = jobAccounting(r.job)
+				pids, pidErr = testJobPIDs(r.job)
+			}
+			var stdout, stderr []byte
+			if r.pipes != nil {
+				stdout, stderr = r.pipes.output()
+			}
+			t.Logf("WALL_PHASE measurement phase=%s elapsed=%s wallRemaining=%s cause=%d stopAt=%s rootPID=%d created=%s resumed=%s rootExited=%t exitKnown=%t exitCode=%#x Job=%+v accountingError=%v PIDs=%v pidError=%v stdout=%q stderr=%q", phase, time.Since(r.admitted), time.Until(r.wallEnd), r.cause, r.stopAt, r.pi.ProcessId, r.receipt.CreatedUTC, r.receipt.ResumedUTC, r.receipt.RootExited, r.receipt.ExitCodeKnown, r.receipt.ExitCode, accounting, accountErr, pids, pidErr, stdout, stderr)
+		}
 		if phase == "root_exited" {
 			observed = true
 			liveErr = liveHeldDescendant(r)
+			t.Logf("WALL_ROOT measurement wallFiredBeforeRootExited=%t", r.cause == TimedOut)
+			testLogHeldPID(t, phase, r)
+		}
+		if phase == "tree_exited" {
+			testLogHeldPID(t, phase, r)
 		}
 	}
 	request := testRequest(t, "descendant-held")
-	request.Limits.Wall = 4 * time.Second
+	// The admission wall includes native setup under concurrent package load.
+	request.Limits.Wall = 10 * time.Second
 	// The child tree never reads stdin; cancellation must retire this pending
 	// overlapped write as well as both concurrently drained output operations.
 	request.Stdin = make([]byte, 128*1024)
 	r, err := e.Run(context.Background(), request)
+	t.Logf("WALL_RESULT measurement receipt=%+v error=%v stdout=%q stderr=%q", r, err, r.Stdout, r.Stderr)
 	if !observed || liveErr != nil {
-		t.Fatalf("held native tree was not observed: observed=%t error=%v", observed, liveErr)
+		t.Fatalf("held native tree was not observed: observed=%t error=%v receipt=%+v runError=%v stdout=%q stderr=%q", observed, liveErr, r, err, r.Stdout, r.Stderr)
 	}
 	if !errors.Is(err, context.DeadlineExceeded) || r.Outcome != TimedOut || r.State != Closed || !r.RootExited || !r.TreeExited || !r.ResourcesReusable || r.OutputState != Unpublishable || !r.UsageKnown || !strings.Contains(string(r.Stdout), "held-ready\n") {
 		t.Fatalf("wall stopped tree: %+v %v", r, err)
 	}
 }
+
+func testLogHeldPID(t *testing.T, phase string, r *nativeRun) {
+	t.Helper()
+	var stdout []byte
+	if r.pipes != nil {
+		stdout, _ = r.pipes.output()
+	}
+	var pid uint32
+	for line := range strings.SplitSeq(string(stdout), "\n") {
+		var report struct{ PID uint32 }
+		if json.Unmarshal([]byte(line), &report) == nil && report.PID != 0 {
+			pid = report.PID
+			break
+		}
+	}
+	if pid == 0 {
+		t.Logf("WALL_CHILD measurement phase=%s printedPID=unavailable stdout=%q", phase, stdout)
+		return
+	}
+	process, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		t.Logf("WALL_CHILD measurement phase=%s printedPID=%d aliveKnown=%t alive=false membership=unknown openError=%v", phase, pid, errors.Is(err, windows.ERROR_INVALID_PARAMETER), err)
+		return
+	}
+	state, waitErr := windows.WaitForSingleObject(process, 0)
+	var code uint32
+	exitErr := windows.GetExitCodeProcess(process, &code)
+	memberErr := processInJob(process, r.job)
+	parent, parentErr := testNativeParent(pid)
+	var creation, exit, kernel, user windows.Filetime
+	timesErr := windows.GetProcessTimes(process, &creation, &exit, &kernel, &user)
+	var createdUTC, exitedUTC time.Time
+	if timesErr == nil {
+		createdUTC = time.Unix(0, creation.Nanoseconds()).UTC()
+		if exit != (windows.Filetime{}) {
+			exitedUTC = time.Unix(0, exit.Nanoseconds()).UTC()
+		}
+	}
+	// Never retain this observer handle across the callback: it can affect
+	// native Job accounting after a process exits.
+	closeErr := windows.CloseHandle(process)
+	t.Logf("WALL_CHILD measurement phase=%s printedPID=%d parent=%d expectedParent=%d parentError=%v aliveKnown=%t alive=%t wait=%d waitError=%v exit=%#x exitError=%v membershipVerified=%t membershipError=%v created=%s exited=%s timesError=%v closeError=%v", phase, pid, parent, r.pi.ProcessId, parentErr, waitErr == nil, state == uint32(windows.WAIT_TIMEOUT), state, waitErr, code, exitErr, memberErr == nil, memberErr, createdUTC, exitedUTC, timesErr, closeErr)
+}
+
 func TestRejectedAdmissionCreatesNothing(t *testing.T) {
 	t.Parallel()
 	e := testExecutor(t)
