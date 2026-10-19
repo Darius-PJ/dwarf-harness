@@ -21,8 +21,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const resourceDefenderStatement = "The development machine's antivirus settings are not recorded here (B28); no scratch or `runs` folder exclusion is selected."
-
 var resourceMemoryInfo = windows.NewLazySystemDLL("kernel32.dll").NewProc("K32GetProcessMemoryInfo")
 
 // PROCESS_MEMORY_COUNTERS, following ledgerstore/peakmem_windows_test.go.
@@ -376,8 +374,6 @@ func TestDefenderResourceEvidence(t *testing.T) {
 			errorText = runErr.Error()
 		}
 		evidence := map[string]any{
-			"defender":               resourceDefenderStatement,
-			"defenderBriefStatement": "The development machine's antivirus settings are not recorded here; no scratch/runs folder exclusion is selected.",
 			"assumption": map[string]any{
 				"workload":            "one copied current test executable plus one real held cmd descendant; finite input/output; one small private scratch file; no provider/model work in this workload",
 				"callsPerObservedRun": 1, "scenario": mode,

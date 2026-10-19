@@ -1,0 +1,231 @@
+name: Check
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  CGO_ENABLED: '0'
+  GOFLAGS: ''
+  GOROOT: ''
+  DWARF_GRAPH_PYTHON: ''
+  DWARF_GRAPH_NODE: ''
+  DWARF_GRAPH_TYPESCRIPT: ''
+
+jobs:
+  check:
+    name: Check / ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+            runner: windows-2022
+            goos: windows
+            goarch: amd64
+            archive: go1.27.2.windows-amd64.zip
+            sha256: 1314008898bd40df77af4b014f777f08873dbdfbcd3d92308728ee03304fe04f
+            bytes: 79008081
+          - name: linux-amd64
+            runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            archive: go1.27.2.linux-amd64.tar.gz
+            sha256: ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+            bytes: 70590635
+          - name: macos-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            archive: go1.27.2.darwin-arm64.tar.gz
+            sha256: 76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5
+            bytes: 68195916
+    env:
+      CHECKED_SHA: ${{ github.sha }}
+      EXPECTED_GOOS: ${{ matrix.goos }}
+      EXPECTED_GOARCH: ${{ matrix.goarch }}
+      GO_ARCHIVE: ${{ matrix.archive }}
+      GO_SHA256: ${{ matrix.sha256 }}
+      GO_ARCHIVE_BYTES: ${{ matrix.bytes }}
+    steps:
+      - name: Check out the event commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Install verified Go (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $stage = Join-Path $env:RUNNER_TEMP 'dwarf-ci-go'
+          $archive = Join-Path $stage 'go.zip'
+          New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null
+          Invoke-WebRequest -Uri "https://go.dev/dl/$env:GO_ARCHIVE" -OutFile $archive
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item -LiteralPath $archive).Length
+          Write-Output "$env:GO_ARCHIVE SHA256=$hash bytes=$bytes"
+          if ($hash -cne $env:GO_SHA256 -or $bytes -ne [long]$env:GO_ARCHIVE_BYTES) {
+            throw 'Go archive does not match its pinned SHA-256 and size'
+          }
+          & "$env:SystemRoot\System32\tar.exe" -xf $archive -C $stage
+          if ($LASTEXITCODE -ne 0) { throw "Go extraction exited $LASTEXITCODE" }
+          $root = Join-Path $stage 'go'
+          (Join-Path $root 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & (Join-Path $root 'bin/go.exe') version
+          if ($LASTEXITCODE -ne 0) { throw "Go version exited $LASTEXITCODE" }
+
+      - name: Install verified Go (Linux and macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/dwarf-ci-go"
+          mkdir "$stage"
+          curl --fail --location --silent --show-error --output "$stage/go.tar.gz" "https://go.dev/dl/$GO_ARCHIVE"
+          bytes=$(wc -c < "$stage/go.tar.gz")
+          printf '%s bytes=%s\n' "$GO_ARCHIVE" "$bytes"
+          test "$bytes" -eq "$GO_ARCHIVE_BYTES"
+          if [[ "$EXPECTED_GOOS" == linux ]]; then
+            printf '%s  %s\n' "$GO_SHA256" "$stage/go.tar.gz" | sha256sum --check -
+          else
+            printf '%s  %s\n' "$GO_SHA256" "$stage/go.tar.gz" | shasum -a 256 --check -
+          fi
+          tar -xzf "$stage/go.tar.gz" -C "$stage"
+          printf '%s\n' "$stage/go/bin" >> "$GITHUB_PATH"
+          "$stage/go/bin/go" version
+
+      - name: Inventory and Git floor (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Write-Output "github.sha=$env:CHECKED_SHA RUNNER_OS=$env:RUNNER_OS RUNNER_ARCH=$env:RUNNER_ARCH ImageOS=$env:ImageOS ImageVersion=$env:ImageVersion"
+          $goVersion = go version
+          if ($LASTEXITCODE -ne 0) { throw "Go version exited $LASTEXITCODE" }
+          Write-Output $goVersion
+          if ($goVersion -cne "go version go1.27.2 $env:EXPECTED_GOOS/$env:EXPECTED_GOARCH") {
+            throw 'Unexpected Go version or native target'
+          }
+          $goEnv = @(go env GOOS GOARCH GOTOOLCHAIN GOROOT)
+          if ($LASTEXITCODE -ne 0) { throw "Go env exited $LASTEXITCODE" }
+          $goEnv | Write-Output
+          $root = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP 'dwarf-ci-go/go'))
+          if ($goEnv.Count -ne 4 -or $goEnv[0] -cne $env:EXPECTED_GOOS -or $goEnv[1] -cne $env:EXPECTED_GOARCH -or $goEnv[2] -cne 'local' -or $goEnv[3] -cne $root) {
+            throw 'Go environment does not match the verified native toolchain root'
+          }
+          $gitVersion = git --version
+          if ($LASTEXITCODE -ne 0) { throw "Git version exited $LASTEXITCODE" }
+          Write-Output $gitVersion
+          if ($gitVersion -notmatch '^git version ([0-9]+)\.([0-9]+)\.([0-9]+)(?:[. ].*)?$') {
+            throw 'Unrecognized Git version'
+          }
+          if ([version]"$($Matches[1]).$($Matches[2]).$($Matches[3])" -lt [version]'2.45.0') {
+            throw 'Git 2.45 or newer is required'
+          }
+          Write-Output "DWARF_GRAPH_PYTHON='$env:DWARF_GRAPH_PYTHON' DWARF_GRAPH_NODE='$env:DWARF_GRAPH_NODE' DWARF_GRAPH_TYPESCRIPT='$env:DWARF_GRAPH_TYPESCRIPT'"
+          Write-Output 'Native graph-helper coverage omitted: Python 3.13.15, Node v24.18.0, TypeScript parser 6.0.3 (controls empty).'
+          try {
+            Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture | Format-List
+          } catch {
+            Write-Output "Windows OS inventory not observed: $_"
+          }
+          try {
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+            Write-Output "Administrator=$($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+          } catch {
+            Write-Output "Windows administrator role not observed: $_"
+          }
+          try {
+            Get-MpComputerStatus | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled | Format-List
+          } catch {
+            Write-Output "Defender status not observed: $_"
+          }
+          try {
+            Get-MpPreference | Select-Object ExclusionProcess, ExclusionPath, ExclusionExtension | Format-List
+          } catch {
+            Write-Output "Defender exclusions not observed: $_"
+          }
+
+      - name: Inventory and Git floor (Linux and macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'github.sha=%s RUNNER_OS=%s RUNNER_ARCH=%s ImageOS=%s ImageVersion=%s\n' "$CHECKED_SHA" "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:-}" "${ImageVersion:-}"
+          go_version=$(go version)
+          printf '%s\n' "$go_version"
+          [[ "$go_version" == "go version go1.27.2 $EXPECTED_GOOS/$EXPECTED_GOARCH" ]]
+          go env GOOS GOARCH GOTOOLCHAIN GOROOT
+          [[ "$(go env GOOS)" == "$EXPECTED_GOOS" ]]
+          [[ "$(go env GOARCH)" == "$EXPECTED_GOARCH" ]]
+          [[ "$(go env GOTOOLCHAIN)" == local ]]
+          [[ "$(go env GOROOT)" == "$RUNNER_TEMP/dwarf-ci-go/go" ]]
+          git_version=$(git --version)
+          printf '%s\n' "$git_version"
+          if [[ ! "$git_version" =~ ^git\ version\ ([0-9]+)\.([0-9]+)\.([0-9]+)([.\ ].*)?$ ]]; then
+            printf '%s\n' 'Unrecognized Git version' >&2
+            exit 1
+          fi
+          major=${BASH_REMATCH[1]}
+          minor=${BASH_REMATCH[2]}
+          if (( major < 2 || (major == 2 && minor < 45) )); then
+            printf '%s\n' 'Git 2.45 or newer is required' >&2
+            exit 1
+          fi
+          printf "DWARF_GRAPH_PYTHON='%s' DWARF_GRAPH_NODE='%s' DWARF_GRAPH_TYPESCRIPT='%s'\n" "$DWARF_GRAPH_PYTHON" "$DWARF_GRAPH_NODE" "$DWARF_GRAPH_TYPESCRIPT"
+          printf '%s\n' 'Native graph-helper coverage omitted: Python 3.13.15, Node v24.18.0, TypeScript parser 6.0.3 (controls empty).'
+          if [[ "$EXPECTED_GOOS" == linux ]]; then
+            /usr/bin/gcc --version
+          else
+            compiler=$(xcrun --find clang)
+            printf 'Race compiler: %s\n' "$compiler"
+            "$compiler" --version
+          fi
+
+      - name: Install verified Windows race compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $stage = Join-Path $env:RUNNER_TEMP 'dwarf-ci-llvm'
+          $archive = Join-Path $stage 'llvm-mingw.zip'
+          New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null
+          Invoke-WebRequest -Uri 'https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-x86_64.zip' -OutFile $archive
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item -LiteralPath $archive).Length
+          Write-Output "llvm-mingw-20260922-ucrt-x86_64.zip SHA256=$hash bytes=$bytes"
+          if ($hash -cne 'e3ad77d117a4bea19a7a3b333341824d79a5a371004a10e25b8504e7b3047666' -or $bytes -ne 190725905) {
+            throw 'LLVM archive does not match its pinned SHA-256 and size'
+          }
+          & "$env:SystemRoot\System32\tar.exe" -xf $archive -C $stage
+          if ($LASTEXITCODE -ne 0) { throw "LLVM extraction exited $LASTEXITCODE" }
+          $compiler = [IO.Path]::GetFullPath((Join-Path $stage 'llvm-mingw-20260922-ucrt-x86_64/bin/clang.exe'))
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw "Pinned compiler missing: $compiler"
+          }
+          "DWARF_CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $compiler --version
+          if ($LASTEXITCODE -ne 0) { throw "Clang version exited $LASTEXITCODE" }
+
+      - name: Run the full check
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./tools/check
