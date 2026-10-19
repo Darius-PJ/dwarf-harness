@@ -63,6 +63,9 @@ type workState struct {
 	requested                    map[string]bool
 	failures                     map[string]string
 	corpusMemory, catalogMemory  uint64
+	hasGo                        bool
+	goUnavailable                []string
+	goBytes                      uint64
 }
 
 func (s *Service) newWork(started ledger.GraphAnalysisStarted) *workState {
@@ -91,6 +94,9 @@ func (s *Service) newWork(started ledger.GraphAnalysisStarted) *workState {
 }
 
 func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
+	if analysisFence.Load() {
+		return ErrRecovery
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -157,6 +163,10 @@ func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
 		return s.endAttempt(ctx, ledger.GraphPhaseSuperseded, ledger.ReasonStaleSource)
 	}
 	output, err := s.work.unit(ctx, s, allowance)
+	if analysisFence.Load() {
+		s.work, s.recovery = nil, true
+		return ErrRecovery
+	}
 	if err != nil {
 		return err
 	}
@@ -290,6 +300,9 @@ func (w *workState) addResult(result AnalysisResult, allowance int64) string {
 }
 
 func (w *workState) unit(ctx context.Context, service *Service, allowance int64) (*workOutput, error) {
+	if analysisFence.Load() {
+		return nil, ErrRecovery
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -394,6 +407,9 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 		} else {
 			result, err = service.analyzer.Analyze(ctx, adapter, request)
 		}
+		if analysisFence.Load() {
+			return nil, ErrRecovery
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -401,10 +417,33 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 		w.cursor += int64(len(request.Corpus))
 		w.phase++
 	case 6:
-		coverage := reasonCoverage(w.source().WorkspaceID, ledger.ReasonDependencyUnapproved)
-		coverage[0].Adapter = "go"
-		if !w.addCoverage(coverage) {
-			reason = ledger.ReasonTemporaryCap
+		if w.hasGo {
+			request := w.request(w.corpus, allowance)
+			var result AnalysisResult
+			switch {
+			case len(w.corpus) > maxItems || w.goBytes > maxFrame:
+				result = unknown(request, "go", ledger.ReasonHelperLimit, 1)
+			case len(w.goUnavailable) != 0:
+				result = unknown(request, "go", w.goUnavailable[0], 1)
+				result.Coverage[0].Reasons = slices.Clone(w.goUnavailable)
+			default:
+				consumed, err := service.verifyAdapter(ctx, "go", allowance)
+				if err != nil {
+					return nil, err
+				}
+				if consumed {
+					return nil, nil
+				}
+				result, err = service.analyzer.Analyze(ctx, "go", request)
+				if analysisFence.Load() {
+					return nil, ErrRecovery
+				}
+				if err != nil {
+					return nil, err
+				}
+			}
+			reason = w.addResult(result, allowance)
+			w.cursor += int64(len(w.corpus))
 		}
 		if reason == "" && w.scopeIndex+1 < len(w.orderedScopes) {
 			w.scopeIndex++
@@ -478,6 +517,19 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 }
 
 func (w *workState) formCorpus(allowance int64) string {
+	if w.catalogAt == 0 {
+		w.hasGo, w.goUnavailable, w.goBytes = false, nil, 0
+		// Scope metadata belongs to corpus construction, leaving a helper's
+		// whole quantum available to its explicit invocation allowance.
+		allowance -= 4
+		upstream := make([]ledger.CoverageEntry, 0, 4)
+		for _, adapter := range []string{ledger.AdapterChecks, ledger.AdapterDeclarations, ledger.AdapterResources, ledger.AdapterUsage} {
+			upstream = append(upstream, ledger.CoverageEntry{Scope: workspaceScope(w.source().WorkspaceID), Adapter: adapter, State: ledger.CoverageUnknown, Reasons: []string{ledger.ReasonUpstreamUnfrozen}})
+		}
+		if !w.addCoverage(upstream) {
+			return ledger.ReasonTemporaryCap
+		}
+	}
 	for w.catalogAt < len(w.catalog) {
 		entry := w.catalog[w.catalogAt]
 		cost := int64(2 + (len(entry.Path)+255)/256)
@@ -494,6 +546,7 @@ func (w *workState) formCorpus(allowance int64) string {
 			return ledger.ReasonHelperLimit
 		}
 		object, exists := w.objects[entry.GitOID]
+		w.hasGo = w.hasGo || sourceAdapter(entry.Path) == "go"
 		reason := entry.Reason
 		if reason == "" && !exists {
 			reason = w.failures[entry.GitOID]
@@ -502,6 +555,10 @@ func (w *workState) formCorpus(allowance int64) string {
 			}
 		}
 		if reason != "" {
+			if goResolutionInput(entry.Path) && !slices.Contains(w.goUnavailable, reason) {
+				w.goUnavailable = append(w.goUnavailable, reason)
+				slices.Sort(w.goUnavailable)
+			}
 			if !w.addCoverage([]ledger.CoverageEntry{covered(key, ledger.AdapterOpaque, reason)}) {
 				return ledger.ReasonTemporaryCap
 			}
@@ -513,6 +570,7 @@ func (w *workState) formCorpus(allowance int64) string {
 			w.corpusMemory += memory
 			artifact := CorpusArtifact{Path: entry.Path, Key: key, SHA256: object.digest, Bytes: object.body}
 			w.corpus = append(w.corpus, artifact)
+			w.goBytes += uint64(len(object.body))
 			language := -1
 			switch sourceAdapter(entry.Path) {
 			case ledger.AdapterPython:
@@ -545,6 +603,14 @@ func (s *Service) verifyAdapter(ctx context.Context, adapter string, allowance i
 		indices = []int{1, 2}
 	}
 	configured := []*Tool{s.opts.Tools.Python, s.opts.Tools.Node, s.opts.Tools.TypeScriptParser}
+	if adapter == "go" {
+		indices = []int{3, 4}
+		if s.opts.Tools.Go != nil {
+			configured = append(configured, &s.opts.Tools.Go.Helper, &s.opts.Tools.Go.Toolchain)
+		} else {
+			configured = append(configured, nil, nil)
+		}
+	}
 	for _, index := range indices {
 		slot := &s.tools[index]
 		if configured[index] == nil || slot.failed {
@@ -586,6 +652,9 @@ func (s *Service) verifyAdapter(ctx context.Context, adapter string, allowance i
 		return true, nil
 	}
 	s.analyzer.tools = Tools{Python: s.tools[0].verified, Node: s.tools[1].verified, TypeScriptParser: s.tools[2].verified}
+	if c := s.opts.Tools.Go; c != nil {
+		s.analyzer.tools.Go = &GoTools{Helper: s.tools[3].verified, Toolchain: s.tools[4].verified, GOROOT: c.GOROOT, GOOS: c.GOOS, GOARCH: c.GOARCH}
+	}
 	return false, nil
 }
 

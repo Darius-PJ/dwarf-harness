@@ -289,6 +289,49 @@ func TestImportBoundary(t *testing.T) {
 	}
 }
 
+func TestBoundaryGoAnalyzerException(t *testing.T) {
+	t.Parallel()
+	const helper = "helpers/go-analyzer"
+	const packages = "golang.org/x/tools/go/packages"
+	for _, tt := range []struct {
+		name    string
+		pkg     string
+		imports []string
+		cgo     []string
+		want    []violation
+	}{
+		{"exact helper", helper, []string{"io", packages}, nil, nil},
+		{"other x tools package", helper, []string{"golang.org/x/tools/go/ast/astutil"}, nil,
+			[]violation{forbidden(helper, "golang.org/x/tools/go/ast/astutil")}},
+		{"graph import", helper, []string{m("internal/undercurrent/graph")}, nil,
+			[]violation{forbidden(helper, m("internal/undercurrent/graph"))}},
+		{"contract import", helper, []string{m("contract/ledger")}, nil,
+			[]violation{forbidden(helper, m("contract/ledger"))}},
+		{"core import", helper, []string{m("internal/core/workspace")}, nil,
+			[]violation{forbidden(helper, m("internal/core/workspace"))}},
+		{"graph cannot resolve natively", "internal/undercurrent/graph", []string{packages}, nil,
+			[]violation{forbidden("internal/undercurrent/graph", packages)}},
+		{"helper subpackage", helper + "/internal", []string{packages}, nil,
+			[]violation{{kind: unknownTree, pkg: m(helper + "/internal")}}},
+		{"sibling helper", "helpers/other", []string{packages}, nil,
+			[]violation{{kind: unknownTree, pkg: m("helpers/other")}}},
+		{"cgo remains forbidden", helper, []string{"C", packages}, []string{"native.go"},
+			[]violation{{kind: cgoFile, pkg: m(helper), subject: "native.go"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, checked := checkImports([]listedPackage{
+				{ImportPath: "io", Standard: true},
+				{ImportPath: packages},
+				{ImportPath: m(tt.pkg), Name: "main", Module: &struct{ Main bool }{true}, Imports: tt.imports, CgoFiles: tt.cgo},
+			})
+			if checked != 1 || !slices.Equal(got, tt.want) {
+				t.Fatalf("checked %d packages, violations %v; want %v", checked, got, tt.want)
+			}
+		})
+	}
+}
+
 func describe(vs map[violation][]string) string {
 	if len(vs) == 0 {
 		return "  (none)"

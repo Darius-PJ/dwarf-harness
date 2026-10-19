@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 	"uuid"
@@ -156,11 +157,17 @@ func (v *ToolVerification) Step(ctx context.Context, budget int64) (p Verificati
 
 // Tools contains only verified host tools; nil explicitly means unavailable.
 // The parser path is lib/typescript.js itself, never a module directory to resolve.
-type Tools struct{ Python, Node, TypeScriptParser *VerifiedTool }
+type Tools struct {
+	Python, Node, TypeScriptParser *VerifiedTool
+	Go                             *GoTools
+}
 
 // ToolConfig records unverified host identities without reading their files.
 // Services reserve work before converting these identities into verified tools.
-type ToolConfig struct{ Python, Node, TypeScriptParser *Tool }
+type ToolConfig struct {
+	Python, Node, TypeScriptParser *Tool
+	Go                             *GoToolConfig
+}
 
 func (c ToolConfig) ConfigurationDigest() ledger.Digest { return configurationDigest(c) }
 
@@ -178,7 +185,7 @@ type serviceDeps struct {
 // ConfigurationDigest binds fixed script bytes, host tool identities and the
 // finite resolver options. It does not read target configuration or tool files.
 func ConfigurationDigest(tools Tools) ledger.Digest {
-	var config ToolConfig
+	config := ToolConfig{Go: tools.Go.config()}
 	for _, pair := range []struct {
 		verified *VerifiedTool
 		target   **Tool
@@ -191,11 +198,15 @@ func ConfigurationDigest(tools Tools) ledger.Digest {
 }
 
 func configurationDigest(tools ToolConfig) ledger.Digest {
-	entries := make([][4]any, 0, 3)
+	entries := make([][4]any, 0, 5)
+	var goHelper, goToolchain *Tool
+	if tools.Go != nil {
+		goHelper, goToolchain = &tools.Go.Helper, &tools.Go.Toolchain
+	}
 	for _, v := range []struct {
 		role string
 		tool *Tool
-	}{{"node", tools.Node}, {"python", tools.Python}, {"typescript", tools.TypeScriptParser}} {
+	}{{"go_helper", goHelper}, {"go_toolchain", goToolchain}, {"node", tools.Node}, {"python", tools.Python}, {"typescript", tools.TypeScriptParser}} {
 		row := [4]any{v.role, nil, nil, nil}
 		if v.tool != nil {
 			t := v.tool
@@ -215,8 +226,9 @@ func configurationDigest(tools ToolConfig) ledger.Digest {
 			AllowJS    bool   `json:"allowJs"`
 			NoEmit     bool   `json:"noEmit"`
 		} `json:"typescript_options"`
-		SQL string `json:"sql_grammar"`
-	}{Profile: ledger.HelperProfileV1, Tools: entries, Python: ledger.Digest(sha256.Sum256(pythonScript)), TypeScript: ledger.Digest(sha256.Sum256(typescriptScript)), Root: ".", SQL: "sql-subset/v1"}
+		SQL string     `json:"sql_grammar"`
+		Go  *goOptions `json:"go_options"`
+	}{Profile: ledger.HelperProfileV1, Tools: entries, Python: ledger.Digest(sha256.Sum256(pythonScript)), TypeScript: ledger.Digest(sha256.Sum256(typescriptScript)), Root: ".", SQL: "sql-subset/v1", Go: goConfiguration(tools.Go)}
 	value.Options.Module = "NodeNext"
 	value.Options.Resolution = "NodeNext"
 	value.Options.AllowJS = true
@@ -242,6 +254,7 @@ type helperRequest struct {
 	Cursor              ledger.GraphCursor `json:"cursor"`
 	Allowance           int64              `json:"allowance"`
 	Limits              helperLimits       `json:"limits"`
+	Go                  *goHelperRequest   `json:"go,omitempty"`
 }
 type helperResponse struct {
 	Protocol            string        `json:"protocol"`
@@ -264,13 +277,20 @@ type Analyzer struct {
 var ErrBusy = errors.New("graph analyzer busy")
 
 func NewAnalyzer(tools Tools) *Analyzer {
+	if tools.Go != nil {
+		goTools := *tools.Go
+		tools.Go = &goTools
+	}
 	return &Analyzer{tools: tools, configuration: ConfigurationDigest(tools)}
 }
 
-// Analyze runs the fixed Python or TypeScript helper against a complete bounded
-// corpus. It never launches target code, a shell, an installer or a fallback.
+// Analyze runs one fixed native helper against a complete bounded corpus.
+// Target code, shells, installers and resolver fallbacks are never launched.
 func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisRequest) (result AnalysisResult, err error) {
-	if adapter != ledger.AdapterPython && adapter != ledger.AdapterTypeScript {
+	if analysisFence.Load() {
+		return AnalysisResult{}, ErrRecovery
+	}
+	if adapter != ledger.AdapterPython && adapter != ledger.AdapterTypeScript && adapter != "go" {
 		return AnalysisResult{}, ErrInvalid
 	}
 	if err := validateRequest(r); err != nil {
@@ -293,14 +313,21 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 	var script []byte
 	var name string
 	var args []string
-	if adapter == ledger.AdapterPython {
+	switch adapter {
+	case ledger.AdapterPython:
 		tool, script, name = a.tools.Python, pythonScript, "python_analyzer.py"
 		args = []string{"-I", "-S", "-B"}
-	} else {
+	case ledger.AdapterTypeScript:
 		tool, script, name = a.tools.Node, typescriptScript, "typescript_analyzer.cjs"
 		if !a.tools.TypeScriptParser.unchanged() {
 			return unknown(r, adapter, ledger.ReasonAdapterUnavailable, 0), nil
 		}
+	case "go":
+		if !a.tools.Go.unchanged() {
+			return unknown(r, adapter, ledger.ReasonAdapterUnavailable, 0), nil
+		}
+		tool = a.tools.Go.Helper
+		args = []string{"--graph-helper", goHelperVersion}
 	}
 	if !tool.unchanged() {
 		return unknown(r, adapter, ledger.ReasonAdapterUnavailable, 0), nil
@@ -321,15 +348,20 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 	if err := os.Mkdir(root, 0700); err != nil {
 		return AnalysisResult{}, err
 	}
-	scriptPath := filepath.Join(dir, name)
-	if err := os.WriteFile(scriptPath, script, 0600); err != nil {
-		return AnalysisResult{}, err
-	}
-	args = append(args, scriptPath, tool.tool.Version)
-	if adapter == ledger.AdapterTypeScript {
-		args = append(args, a.tools.TypeScriptParser.tool.Path, a.tools.TypeScriptParser.tool.Version)
+	if adapter != "go" {
+		scriptPath := filepath.Join(dir, name)
+		if err := os.WriteFile(scriptPath, script, 0600); err != nil {
+			return AnalysisResult{}, err
+		}
+		args = append(args, scriptPath, tool.tool.Version)
+		if adapter == ledger.AdapterTypeScript {
+			args = append(args, a.tools.TypeScriptParser.tool.Path, a.tools.TypeScriptParser.tool.Version)
+		}
 	}
 	req := helperRequest{Protocol: helperProtocol, AnalysisKey: r.AnalysisKey, Adapter: adapter, ConfigurationSHA256: r.ConfigurationSHA256, Source: r.Source, MaterializationRoot: root, Corpus: r.Corpus, Allowance: r.Allowance, Limits: helperLimits{maxFrame, maxFrame, maxBlob, maxItems}}
+	if adapter == "go" {
+		req.Go = a.tools.Go.request()
+	}
 	req.Corpus = append([]CorpusArtifact{}, r.Corpus...)
 	for i := range req.Corpus {
 		if req.Corpus[i].Bytes == nil {
@@ -341,16 +373,61 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 		return AnalysisResult{}, err
 	}
 	minimum := int64(1 + (len(input)+4+255)/256 + len(req.Corpus))
+	if adapter == "go" {
+		minimum += goPreparationWork(req.Corpus) + 128 + int64(len(req.Corpus))*32
+		for _, file := range req.Corpus {
+			minimum += 3 * int64((len(file.Bytes)+255)/256)
+		}
+	}
 	if len(input) > maxFrame-4 || minimum > r.Allowance {
 		return unknown(r, adapter, ledger.ReasonHelperLimit, r.Allowance), nil
 	}
+	environment := helperEnvironment(dir)
+	if adapter == "go" {
+		if err := prepareGoCorpus(ctx, dir, req.Corpus); err != nil {
+			if ctx.Err() != nil {
+				return AnalysisResult{}, ctx.Err()
+			}
+			return unknown(r, adapter, ledger.ReasonSourceUnavailable, minimum), nil
+		}
+		environment = goEnvironment(*a.tools.Go.config(), dir)
+		if !a.tools.Go.unchanged() {
+			return unknown(r, adapter, ledger.ReasonAdapterUnavailable, minimum), nil
+		}
+	}
+	if a.deps.environment != nil {
+		environment = a.deps.environment(dir)
+	}
 	child, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	environment := helperEnvironment
-	if a.deps.environment != nil {
-		environment = a.deps.environment
+	raw, cost, outcome, err := runHelperProcess(child, cancel, tool.tool.Path, args, dir, environment, input, nil, a.deps.afterChildStart)
+	if adapter == "go" {
+		refused := false
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 2 && outcome.WaitConfirmed && !outcome.ForcedStop {
+			refused = true
+		}
+		var out AnalysisResult
+		if err == nil && outcome.WaitConfirmed && !outcome.ForcedStop {
+			out, err = decodeHelperResponse(raw, req)
+		}
+		if outcome.Started && !refused && (err != nil || !outcome.WaitConfirmed || outcome.ForcedStop) {
+			a.fenced = true
+			fenceAnalysis()
+			return unknown(r, adapter, ledger.ReasonAdapterUnavailable, r.Allowance), nil
+		}
+		if analysisFence.Load() {
+			return AnalysisResult{}, ErrRecovery
+		}
+		if err != nil || refused || !a.tools.Go.unchanged() {
+			return unknown(r, adapter, ledger.ReasonAdapterUnavailable, r.Allowance), nil
+		}
+		out.Cost = cost
+		return out, nil
 	}
-	raw, cost, err := runHelperProcess(child, cancel, tool.tool.Path, args, dir, environment(dir), input, nil, a.deps.afterChildStart)
+	if analysisFence.Load() {
+		return AnalysisResult{}, ErrRecovery
+	}
 	if err != nil {
 		if errors.Is(err, errHelperUnjoined) {
 			a.fenced = true
@@ -408,7 +485,12 @@ func (w *helperOutput) Write(p []byte) (int, error) {
 	_, _ = w.data.Write(p)
 	return n, nil
 }
-func runHelperProcess(ctx context.Context, cancel context.CancelFunc, executable string, args []string, dir string, env []string, input []byte, stderrObserver func([]byte), afterStart func()) ([]byte, Cost, error) {
+
+type helperOutcome struct {
+	Started, ForcedStop, WaitConfirmed bool
+}
+
+func runHelperProcess(ctx context.Context, cancel context.CancelFunc, executable string, args []string, dir string, env []string, input []byte, stderrObserver func([]byte), afterStart func()) ([]byte, Cost, helperOutcome, error) {
 	var frame bytes.Buffer
 	_ = binary.Write(&frame, binary.BigEndian, uint32(len(input)))
 	_, _ = frame.Write(input)
@@ -421,25 +503,38 @@ func runHelperProcess(ctx context.Context, cancel context.CancelFunc, executable
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 2 * time.Second
+	var forced atomic.Bool
+	cmd.Cancel = func() error {
+		forced.Store(true)
+		return cmd.Process.Kill()
+	}
 	start := time.Now()
+	helperLaunch.Lock()
+	if analysisFence.Load() {
+		helperLaunch.Unlock()
+		return nil, Cost{}, helperOutcome{}, ErrRecovery
+	}
 	err := cmd.Start()
-	if err == nil {
+	outcome := helperOutcome{Started: err == nil}
+	helperLaunch.Unlock()
+	if outcome.Started {
 		if afterStart != nil {
 			afterStart()
 		}
 		err = cmd.Wait()
 	}
+	outcome.ForcedStop, outcome.WaitConfirmed = forced.Load(), cmd.ProcessState != nil
 	cost := Cost{WallNS: time.Since(start).Nanoseconds(), InputBytes: int64(len(input) + 4), OutputBytes: int64(out.data.Len())}
 	if cmd.Process != nil && cmd.ProcessState == nil {
-		return nil, cost, errHelperUnjoined
+		return nil, cost, outcome, errHelperUnjoined
 	}
 	if out.overflow {
-		return nil, cost, errors.New("helper stream overflow")
+		return nil, cost, outcome, errors.New("helper stream overflow")
 	}
 	if err != nil {
-		return nil, cost, fmt.Errorf("graph helper: %w: %s", err, stderr.data.String())
+		return nil, cost, outcome, fmt.Errorf("graph helper: %w: %s", err, stderr.data.String())
 	}
-	return out.data.Bytes(), cost, nil
+	return out.data.Bytes(), cost, outcome, nil
 }
 
 // Strict private framing is deliberately stricter than additive ledger records.
@@ -477,7 +572,9 @@ func decodeHelperResponse(frame []byte, req helperRequest) (AnalysisResult, erro
 	for _, a := range req.Corpus {
 		artifacts[a.Key] = a
 		keys[a.Key] = true
-		scopes[keyScope(a.Key)] = true
+		if req.Adapter != "go" || sourceAdapter(a.Path) == "go" {
+			scopes[keyScope(a.Key)] = true
+		}
 	}
 	for i, n := range value.Nodes {
 		if !nodeValid(n) || n.Key.Kind != ledger.NodeKindModule || n.Key.OriginID != req.Source.WorkspaceID || n.Adapter != req.Adapter || n.ConfigurationSHA256 != req.ConfigurationSHA256 || keys[n.Key] || i > 0 && bytes.Compare(keyBytes(value.Nodes[i-1].Key), keyBytes(n.Key)) >= 0 {
@@ -498,15 +595,30 @@ func decodeHelperResponse(frame []byte, req helperRequest) (AnalysisResult, erro
 		if !edgeValid(e) || !keys[e.From] || !keys[e.To] || !ok || e.Evidence.ArtifactSHA256 != proof.SHA256 || e.Evidence.ConfigurationSHA256 != req.ConfigurationSHA256 || e.Evidence.Adapter != req.Adapter || e.To != proof.Key || e.From.Kind != ledger.NodeKindModule || e.Type != "static_dependency" || e.Geometry != ledger.GeometryCoupling || e.WeightPPM != 1000000 || i > 0 && bytes.Compare(value.Edges[i-1].EdgeID[:], e.EdgeID[:]) >= 0 {
 			return AnalysisResult{}, ErrInvalid
 		}
+		if req.Adapter == "go" && sourceAdapter(proof.Path) != "go" {
+			return AnalysisResult{}, ErrInvalid
+		}
 	}
 	coveredScopes := make(map[string]bool)
+	completeScopes := make(map[string]bool)
 	for i, c := range value.Coverage {
 		if !coverageValid(c) || !scopes[c.Scope] || c.Adapter != req.Adapter || i > 0 && coverageOrder(value.Coverage[i-1], c) >= 0 {
 			return AnalysisResult{}, ErrInvalid
 		}
 		coveredScopes[c.Scope] = true
+		completeScopes[c.Scope] = c.State == ledger.CoverageComplete
+		if req.Adapter == "go" && c.Scope == workspaceScope(req.Source.WorkspaceID) && len(value.Coverage) != 1 {
+			return AnalysisResult{}, ErrInvalid
+		}
 		if c.Scope == workspaceScope(req.Source.WorkspaceID) && (c.State != ledger.CoverageUnknown || len(value.Nodes) != 0 || len(value.Edges) != 0) {
 			return AnalysisResult{}, ErrInvalid
+		}
+	}
+	if req.Adapter == "go" {
+		for _, edge := range value.Edges {
+			if !completeScopes[keyScope(edge.Evidence.Artifact)] {
+				return AnalysisResult{}, ErrInvalid
+			}
 		}
 	}
 	if !coveredScopes[workspaceScope(req.Source.WorkspaceID)] {
@@ -606,14 +718,15 @@ func decodeHelperJSONBudget(raw []byte, destination any, remaining int64) error 
 	return assignHelperValue(value, reflect.ValueOf(destination).Elem())
 }
 
-func helperFields(v reflect.Value, fields map[string]reflect.Value) {
+func helperFields(v reflect.Value, fields map[string]reflect.Value, optional map[string]bool) {
 	for i := range v.NumField() {
 		field := v.Type().Field(i)
 		if field.Anonymous {
-			helperFields(v.Field(i), fields)
+			helperFields(v.Field(i), fields, optional)
 			continue
 		}
-		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		name, options, _ := strings.Cut(field.Tag.Get("json"), ",")
+		optional[name] = options == "omitempty"
 		if name == "" {
 			name = field.Name
 		}
@@ -644,15 +757,24 @@ func assignHelperValue(source any, target reflect.Value) error {
 			return ErrInvalid
 		}
 		fields := map[string]reflect.Value{}
-		helperFields(target, fields)
-		if len(fields) != len(members) {
-			return ErrInvalid
+		optional := map[string]bool{}
+		helperFields(target, fields, optional)
+		for name := range members {
+			if _, exists := fields[name]; !exists {
+				return ErrInvalid
+			}
 		}
 		for name, field := range fields {
+			if _, present := members[name]; !present && optional[name] {
+				continue
+			}
 			if err := assignHelperValue(members[name], field); err != nil {
 				return err
 			}
 		}
+	case reflect.Pointer:
+		target.Set(reflect.New(target.Type().Elem()))
+		return assignHelperValue(source, target.Elem())
 	case reflect.Slice:
 		if target.Type() == reflect.TypeFor[[]byte]() {
 			raw, err := json.Marshal(source)

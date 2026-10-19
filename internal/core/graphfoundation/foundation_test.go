@@ -818,3 +818,147 @@ func TestOldRebuildCannotReplaceNewAcceptance(t *testing.T) {
 		})
 	}
 }
+
+func TestGoGraphVersionRebuildAndReplay(t *testing.T) {
+	t.Parallel()
+	goConfig := foundationGoConfig(t)
+	f := newFoundationFixture(t)
+	options := f.options()
+	options.Tools.Go = &goConfig
+	service := f.open(options)
+	id := f.registered.ID
+	files := map[string]fixtureBlob{
+		"go.mod":          {body: "module example.test/history\n\ngo 1.27\n"},
+		"main.go":         {body: "package history\nimport _ \"example.test/history/dep\"\nfunc init() { panic(\"target executed\") }\n"},
+		"standard.go":     {body: "package history\nimport _ \"unsafe\"\n"},
+		"ignored_test.go": {body: "package history\nimport _ \"example.invalid/test-only\"\n"},
+		"dep/dep.go":      {body: "package dep\nconst Value = 1\n"},
+	}
+	predecessor := f.empty
+	var status graph.Status
+	var state graph.State
+	var firstBirth, dependencyBirth int64
+	module, err := graph.ModuleKey(id, "go", "workspace", "example.test/history/dep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply := func(wantEdges int, paths ...string) appender.Committed {
+		t.Helper()
+		tree := f.tree(files)
+		accepted := f.accept(id, predecessor, tree, paths...)
+		predecessor = tree
+		if firstBirth == 0 {
+			firstBirth, dependencyBirth = int64(accepted.First), int64(accepted.First)
+		}
+		oldVersion := status.Version
+		status = foundationDrive(t, service)
+		if status.State != "ready" || status.Version == oldVersion {
+			t.Fatalf("accepted Go state did not publish: %+v", status)
+		}
+		state = foundationState(t, service, status)
+		if len(state.Edges) != wantEdges {
+			t.Fatalf("Go topology: %+v; want %d edges; coverage=%+v", state.Edges, wantEdges, state.Coverage)
+		}
+		if wantEdges == 1 {
+			consumer, _ := graph.ArtifactKey(id, firstBirth, "main.go")
+			edge := state.Edges[0]
+			wantID := ledger.EdgeID(module, consumer, "static_dependency")
+			if edge.EdgeID != wantID || edge.From != module || edge.To != consumer || edge.Evidence.Artifact != consumer || edge.Evidence.ArtifactSHA256 != ledger.Digest(sha256.Sum256([]byte(files["main.go"].body))) || edge.Evidence.Reference != "example.test/history/dep" {
+				t.Fatalf("Go edge changed identity, direction or proof: %+v", edge)
+			}
+			version, err := graph.ModuleVersion("example.test/history/dep", []graph.ModuleMember{{Path: "dep/dep.go", SHA256: ledger.Digest(sha256.Sum256([]byte(files["dep/dep.go"].body)))}})
+			if err != nil || !slices.ContainsFunc(state.Nodes, func(node ledger.GraphNode) bool { return node.Key == module && node.VersionSHA256 == version }) {
+				t.Fatalf("native members did not determine module version: %s, %v", version, err)
+			}
+		}
+		return accepted
+	}
+	apply(1, "go.mod", "main.go", "standard.go", "ignored_test.go", "dep/dep.go")
+	firstDependency, _ := graph.ArtifactKey(id, dependencyBirth, "dep/dep.go")
+	firstEdge := state.Edges[0].EdgeID
+	files["dep/dep.go"] = fixtureBlob{body: "package dep\nconst Value = 2\n"}
+	apply(1, "dep/dep.go")
+	if state.Edges[0].EdgeID != firstEdge || !slices.ContainsFunc(state.Nodes, func(node ledger.GraphNode) bool { return node.Key == firstDependency }) {
+		t.Fatal("editing a Go dependency changed stable identities")
+	}
+	delete(files, "dep/dep.go")
+	apply(0, "dep/dep.go")
+	if slices.ContainsFunc(state.Nodes, func(node ledger.GraphNode) bool { return node.Key == firstDependency || node.Key == module }) {
+		t.Fatal("removed dependency retained a node")
+	}
+	files["dep/dep.go"] = fixtureBlob{body: "package dep\nconst Value = 2\n"}
+	recreated := apply(1, "dep/dep.go")
+	reborn, _ := graph.ArtifactKey(id, int64(recreated.First), "dep/dep.go")
+	if reborn == firstDependency || !slices.ContainsFunc(state.Nodes, func(node ledger.GraphNode) bool { return node.Key == reborn }) || state.Edges[0].EdgeID != firstEdge {
+		t.Fatal("recreation failed to change artifact birth while preserving module/edge identity")
+	}
+	files["main.go"] = fixtureBlob{body: "package history\nimport _ \"unsafe\"\n"}
+	apply(0, "main.go")
+	files["main.go"] = fixtureBlob{body: "package history\nimport _ \"example.test/history/dep\"\n"}
+	apply(1, "main.go")
+	expected := foundationIncrementalOracle(t, f, f.store.Durable(), options.Tools, 1)
+	foundationAssertSameState(t, expected, state)
+
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	service = f.open(options)
+	mark := f.store.Durable()
+	if _, err := service.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if started := foundationStartedAfter(t, f, mark); started.Reason != ledger.GraphReasonLoad {
+		t.Fatalf("reopen did not select load: %+v", started)
+	}
+	confirmed := foundationDrive(t, service)
+	if confirmed.Version != status.Version || confirmed.Digest != status.Digest || confirmed.State != "ready" {
+		t.Fatalf("load changed the incremental image: %+v", confirmed)
+	}
+
+	// Relocating the identical prebuilt helper is a new configured identity;
+	// no analyzed target or helper build runs inside this test.
+	copyPath := filepath.Join(t.TempDir(), filepath.Base(goConfig.Helper.Path))
+	body, err := os.ReadFile(goConfig.Helper.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(copyPath, body, 0700); err != nil {
+		t.Fatal(err)
+	}
+	changed := goConfig
+	changed.Helper.Path = copyPath
+	options.Tools.Go = &changed
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	mark = f.store.Durable()
+	service = f.open(options)
+	if _, err := service.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	started := foundationStartedAfter(t, f, mark)
+	if started.Reason != ledger.GraphReasonAnalyzerEpoch || started.AnalyzerEpoch != 2 {
+		t.Fatalf("Go identity change did not select one epoch rebuild: %+v", started)
+	}
+	rebuilt := foundationDrive(t, service)
+	expected = foundationIncrementalOracle(t, f, mark, options.Tools, 2)
+	foundationAssertSameState(t, expected, foundationState(t, service, rebuilt))
+	mark = f.store.Durable()
+	if _, err := service.Step(t.Context()); err != nil || f.store.Durable() != mark {
+		t.Fatalf("epoch rebuild remained due: %v", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	toolFree := f.options()
+	toolFree.ReadArtifacts = func(context.Context, graph.ArtifactRequest) (graph.ArtifactBatch, error) {
+		t.Fatal("tool-free replay read Git")
+		return graph.ArtifactBatch{}, graph.ErrRecovery
+	}
+	replayed := f.open(toolFree)
+	observed, err := replayed.Observe(t.Context())
+	if err != nil || observed.Version != rebuilt.Version || observed.Digest != rebuilt.Digest || f.store.Durable() != mark {
+		t.Fatalf("tool-free reopen changed the published image: %+v, %v", observed, err)
+	}
+	foundationAssertSameState(t, expected, foundationState(t, replayed, observed))
+}

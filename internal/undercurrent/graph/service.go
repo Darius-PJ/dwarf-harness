@@ -108,7 +108,7 @@ type Service struct {
 	recovery, fenced               bool
 	overLimit                      bool
 	work                           *workState
-	tools                          [3]toolSlot
+	tools                          [5]toolSlot
 	analyzer                       *Analyzer
 	generations                    map[uuid.UUID]generationState
 	generationMemory               uint64
@@ -128,6 +128,25 @@ func openService(options Options, deps serviceDeps) (*Service, error) {
 				return nil, ErrInvalid
 			}
 			*target = &tool
+		}
+	}
+	if options.Tools.Go != nil {
+		goConfig := *options.Tools.Go
+		if !validGoConfig(goConfig) {
+			return nil, ErrInvalid
+		}
+		options.Tools.Go = &goConfig
+	}
+	if reader := options.ReadArtifacts; reader != nil {
+		options.ReadArtifacts = func(ctx context.Context, request ArtifactRequest) (ArtifactBatch, error) {
+			if analysisFence.Load() {
+				return ArtifactBatch{}, ErrRecovery
+			}
+			batch, err := reader(ctx, request)
+			if analysisFence.Load() {
+				return ArtifactBatch{}, ErrRecovery
+			}
+			return batch, err
 		}
 	}
 	s := &Service{opts: options, deps: deps, replay: newReplayState(), configuration: options.Tools.ConfigurationDigest(), generations: make(map[uuid.UUID]generationState), loadDue: true}
@@ -181,7 +200,7 @@ func (s *Service) publish() {
 	if s.epoch != 0 && s.deps.projectionIdentity != nil {
 		image.status.Version, image.status.Digest = s.deps.projectionIdentity(image.status.Version, image.status.Digest)
 	}
-	if s.recovery || s.fenced {
+	if s.recovery || s.fenced || analysisFence.Load() {
 		image.status.State = "recovery_pending"
 	}
 	if s.overLimit {
@@ -231,6 +250,10 @@ func (s *Service) run(ctx context.Context, resume *uuid.UUID) (Status, error) {
 	if err != nil {
 		return image.status, err
 	}
+	if analysisFence.Load() {
+		image.status.State = "recovery_pending"
+		return image.status, ErrRecovery
+	}
 	if !image.available {
 		return image.status, nil
 	}
@@ -251,7 +274,7 @@ func (s *Service) run(ctx context.Context, resume *uuid.UUID) (Status, error) {
 	s.busy, s.cancel = true, cancel
 	s.mu.Unlock()
 	defer cancel()
-	if s.fenced {
+	if s.fenced || analysisFence.Load() {
 		err = ErrRecovery
 	} else if err = s.hydrate(workContext, nil, appender.Committed{}); err == nil && !s.overLimit {
 		err = s.drive(workContext, resume)
@@ -440,6 +463,9 @@ func (s *Service) hydrate(ctx context.Context, own []ledger.Draft, acknowledged 
 func (s *Service) append(ctx context.Context, drafts []ledger.Draft) error {
 	if s.deps.beforeAppend != nil {
 		s.deps.beforeAppend(drafts)
+	}
+	if analysisFence.Load() {
+		return ErrRecovery
 	}
 	committed, err := s.opts.Appender.Append(ctx, drafts)
 	if err != nil {

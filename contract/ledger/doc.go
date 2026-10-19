@@ -1353,8 +1353,7 @@
 // in their own freeze records. Namespaces use the same open grammar. This
 // part emits artifact and module nodes and static_dependency coupling edges
 // only. Version-1 writer values are namespace workspace; adapters opaque,
-// python, typescript and sql, with go unknown for the reason
-// dependency_unapproved until its dependency is approved (D29), and checks,
+// python, typescript, sql and go (approved by D132 under D29), with checks,
 // declarations, resources and usage representing workspace-wide unknowns;
 // scope canonical; analysis reasons incremental, load, structural_100,
 // analyzer_epoch and digest_mismatch;

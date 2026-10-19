@@ -42,8 +42,7 @@ type row struct {
 // importTable is D45's import table with D50's appender rule, encoded as
 // recorded in B17. A pattern ending in "/..." matches its base and every path
 // below it; any other pattern matches one path. Every exception or toolkit
-// added to a row cites the decision that records it (D29, D45). None are
-// recorded yet.
+// added to a row cites the decision that records it (D29, D45).
 var importTable = []row{
 	{tree: "contract/..."},
 	{tree: "internal/undercurrent/...", trees: []string{"contract/..."}},
@@ -56,6 +55,8 @@ var importTable = []row{
 	{tree: "cmd/dwarf-harness", trees: []string{"internal/core/...", "contract/..."}},
 	// The tool dependencies pinned by go.mod tool lines (D42).
 	{tree: "tools/...", external: []string{"golang.org/x/...", "honnef.co/go/tools/...", "golang.org/x/vuln/..."}},
+	// D132 admits only this program and this direct external import.
+	{tree: "helpers/go-analyzer", external: []string{"golang.org/x/tools/go/packages"}},
 	{tree: "gui/...", trees: []string{"contract/..."}},
 }
 

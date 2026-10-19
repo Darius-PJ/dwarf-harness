@@ -20,12 +20,13 @@ const (
 
 // checkRace is step 7: the tests again with the race detector, which needs
 // cgo and the C compiler named explicitly through CC.
-func checkRace(w io.Writer, root string) error {
+func checkRace(w io.Writer, root string, nativeEnv []string) error {
 	cc, err := raceCompiler(w)
 	if err != nil {
 		return err
 	}
-	return stream(w, goCommand(root, "1", "test", "-race", "-count=1", "-timeout", testTimeout, "./...").with("CC="+cc))
+	return stream(w, goCommand(root, "1", "test", "-race", "-count=1", "-timeout", testTimeout, "./...").
+		with("CC="+cc).with(nativeEnv...))
 }
 
 // raceCompiler returns this platform's C compiler for race-detector tests

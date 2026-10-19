@@ -192,7 +192,12 @@ func TestRaceFlag(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseArgs: %v\n%s", err, out.String())
 			}
-			checks := steps("")
+			checks, cleanup := steps("")
+			t.Cleanup(func() {
+				if err := cleanup(); err != nil {
+					t.Error(err)
+				}
+			})
 			raceIndex := 7
 			if tt.moveRace {
 				checks[0], checks[7] = checks[7], checks[0]

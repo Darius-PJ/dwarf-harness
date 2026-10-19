@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -98,9 +99,14 @@ func (f *foundationFixture) git(input []byte, args ...string) string {
 func (f *foundationFixture) tree(files map[string]fixtureBlob) string {
 	f.t.Helper()
 	var rows []string
+	directories := make(map[string]map[string]fixtureBlob)
 	for path, entry := range files {
-		if strings.Contains(path, "/") {
-			f.t.Fatalf("flat fixture tree received %q", path)
+		if directory, child, nested := strings.Cut(path, "/"); nested {
+			if directories[directory] == nil {
+				directories[directory] = make(map[string]fixtureBlob)
+			}
+			directories[directory][child] = entry
+			continue
 		}
 		if entry.mode == "" {
 			entry.mode = "100644"
@@ -117,6 +123,12 @@ func (f *foundationFixture) tree(files map[string]fixtureBlob) string {
 			kind = "commit"
 		}
 		rows = append(rows, fmt.Sprintf("%s %s %s\t%s\x00", entry.mode, kind, entry.oid, path))
+	}
+	for directory, children := range directories {
+		if _, collision := files[directory]; collision {
+			f.t.Fatalf("fixture file/directory collision: %s", directory)
+		}
+		rows = append(rows, fmt.Sprintf("040000 tree %s\t%s\x00", f.tree(children), directory))
 	}
 	slices.Sort(rows)
 	return f.git([]byte(strings.Join(rows, "")), "mktree", "-z", "--missing")
@@ -335,10 +347,21 @@ func foundationImmutableCorpus(t *testing.T, f *foundationFixture, id uuid.UUID,
 func foundationVerifiedTools(t *testing.T, config graph.ToolConfig) graph.Tools {
 	t.Helper()
 	var tools graph.Tools
-	for _, pair := range []struct {
+	pairs := []struct {
 		tool *graph.Tool
 		out  **graph.VerifiedTool
-	}{{config.Python, &tools.Python}, {config.Node, &tools.Node}, {config.TypeScriptParser, &tools.TypeScriptParser}} {
+	}{{config.Python, &tools.Python}, {config.Node, &tools.Node}, {config.TypeScriptParser, &tools.TypeScriptParser}}
+	if config.Go != nil {
+		tools.Go = &graph.GoTools{GOROOT: config.Go.GOROOT, GOOS: config.Go.GOOS, GOARCH: config.Go.GOARCH}
+		pairs = append(pairs, struct {
+			tool *graph.Tool
+			out  **graph.VerifiedTool
+		}{&config.Go.Helper, &tools.Go.Helper}, struct {
+			tool *graph.Tool
+			out  **graph.VerifiedTool
+		}{&config.Go.Toolchain, &tools.Go.Toolchain})
+	}
+	for _, pair := range pairs {
 		if pair.tool == nil {
 			continue
 		}
@@ -425,6 +448,7 @@ func foundationIncrementalOracle(t *testing.T, f *foundationFixture, through uin
 			present := make(map[string]bool)
 			request := graph.AnalysisRequest{AnalysisKey: foundationRecordRef(t, record).Hash, Source: ledger.GraphSource{WorkspaceID: id, Registered: registered[id], Subject: foundationRecordRef(t, record), Tree: p.AcceptedTree}, ConfigurationSHA256: configuration, Allowance: 10000}
 			var python, sql, typescript []graph.CorpusArtifact
+			hasGo := false
 			for _, entry := range entries {
 				if entry.Reason != "" {
 					t.Fatalf("oracle fixture has an unsupported immutable entry: %+v", entry)
@@ -440,6 +464,8 @@ func foundationIncrementalOracle(t *testing.T, f *foundationFixture, through uin
 				artifact := graph.CorpusArtifact{Path: entry.Path, Key: key, SHA256: entry.SHA256, Bytes: entry.Bytes}
 				request.Corpus = append(request.Corpus, artifact)
 				switch filepath.Ext(entry.Path) {
+				case ".go":
+					hasGo = true
 				case ".py":
 					python = append(python, artifact)
 				case ".sql":
@@ -463,6 +489,9 @@ func foundationIncrementalOracle(t *testing.T, f *foundationFixture, through uin
 				state.Coverage = append(state.Coverage, result.Coverage...)
 			}
 			add(graph.AnalyzeOpaque(context.Background(), request))
+			if hasGo {
+				add(analyzer.Analyze(context.Background(), "go", request))
+			}
 			for _, adapter := range []struct {
 				name   string
 				corpus []graph.CorpusArtifact
@@ -477,7 +506,9 @@ func foundationIncrementalOracle(t *testing.T, f *foundationFixture, through uin
 					add(analyzer.Analyze(context.Background(), adapter.name, request))
 				}
 			}
-			state.Coverage = append(state.Coverage, ledger.CoverageEntry{Scope: "workspace:" + id.String() + ":canonical", Adapter: "go", State: ledger.CoverageUnknown, Reasons: []string{ledger.ReasonDependencyUnapproved}})
+			for _, adapter := range []string{"checks", "declarations", "resources", "usage"} {
+				state.Coverage = append(state.Coverage, ledger.CoverageEntry{Scope: "workspace:" + id.String() + ":canonical", Adapter: adapter, State: ledger.CoverageUnknown, Reasons: []string{ledger.ReasonUpstreamUnfrozen}})
+			}
 			states[id] = state
 		}
 	}
@@ -617,4 +648,54 @@ func foundationFinalAfter(t *testing.T, f *foundationFixture, after uint64) (led
 		t.Fatal(err)
 	}
 	return record, final
+}
+
+func foundationGoConfig(t *testing.T) graph.GoToolConfig {
+	t.Helper()
+	helper, tool, root := os.Getenv("DWARF_GRAPH_GO_HELPER"), os.Getenv("DWARF_GRAPH_GO"), os.Getenv("DWARF_GRAPH_GOROOT")
+	if helper == "" && tool == "" && root == "" {
+		t.Skip("native Go profile not exercised: all three DWARF_GRAPH_GO variables are unset")
+	}
+	if !filepath.IsAbs(helper) || !filepath.IsAbs(tool) || !filepath.IsAbs(root) {
+		t.Fatal("partial or non-absolute native Go profile")
+	}
+	identity := func(path, version string) graph.Tool {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return graph.Tool{Path: path, Version: version, SHA256: ledger.Digest(sha256.Sum256(body))}
+	}
+	return graph.GoToolConfig{Helper: identity(helper, "go-analyzer/v1"), Toolchain: identity(tool, "go1.27.2"), GOROOT: root, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
+}
+
+// foundationDerivedGoFiles copies only immutable HEAD blobs. The generated
+// module/probe make a bounded metadata fixture, not a claim that the repository
+// itself, or these deliberately incomplete packages, compiles.
+func foundationDerivedGoFiles(t *testing.T) map[string]string {
+	t.Helper()
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) []byte {
+		command := exec.CommandContext(t.Context(), "git", args...)
+		command.Dir = root
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("immutable derived fixture %v: %v", args, err)
+		}
+		return output
+	}
+	commit := strings.TrimSpace(string(git("rev-parse", "HEAD")))
+	files := map[string]string{
+		"go.mod":        "module github.com/Darius-PJ/dwarf-harness\n\ngo 1.27\n\ntoolchain go1.27.2\n",
+		"probe/main.go": "package main\nimport _ \"github.com/Darius-PJ/dwarf-harness/internal/undercurrent/graph\"\nfunc init() { panic(\"analyzed target executed\") }\nfunc main() {}\n",
+	}
+	for _, path := range []string{"internal/undercurrent/graph/model.go", "contract/ledger/digest.go", "internal/undercurrent/graph/helper_test.go"} {
+		body := git("show", commit+":"+path)
+		files[path] = string(body)
+		t.Logf("derived source commit=%s path=%s sha256=%x bytes=%d", commit, path, sha256.Sum256(body), len(body))
+	}
+	return files
 }

@@ -231,7 +231,7 @@ func TestGraphStatusSeparatesReadyFromDeclaredGaps(t *testing.T) {
 		t.Fatalf("runnable source: %+v, %v", pending, err)
 	}
 	ready := driveGraph(t, service)
-	reasons := []string{ledger.ReasonDependencyUnapproved, ledger.ReasonUnsupportedSyntax, ledger.ReasonUpstreamUnfrozen}
+	reasons := []string{ledger.ReasonUnsupportedSyntax, ledger.ReasonUpstreamUnfrozen}
 	if ready.State != "ready" || ready.Version == 0 || len(ready.Pending) != 0 || !slices.Equal(ready.Reasons, reasons) {
 		t.Fatalf("declared gaps prevented readiness: %+v", ready)
 	}

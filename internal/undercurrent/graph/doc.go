@@ -13,16 +13,16 @@
 // Empty state hashes to ledger.EmptyGraphDigest. Content and evidence changes
 // do not alter an otherwise unchanged key or ledger.EdgeID.
 //
-// AnalyzeOpaque proves immutable presence, not dependency completeness. Go
-// remains adapter "go", dependency_unapproved, pending OG-GO; checks,
-// declarations, resources and usage remain upstream_unfrozen. AnalyzeSQL is a
-// bounded in-process recognizer for CREATE TABLE and SELECT ... FROM, not a
+// AnalyzeOpaque proves immutable presence, not dependency completeness. D132's
+// Go adapter is a separately verified native resolver; checks, declarations,
+// resources and usage remain upstream_unfrozen workspace entries.
+// AnalyzeSQL is a bounded in-process recognizer for CREATE TABLE and SELECT ... FROM, not a
 // database parser or executor. Joins, aliases, nesting, dynamic SQL and unclosed
 // quotes/comments are unsupported_syntax; absent or ambiguous tables are
 // unresolved_reference. Unquoted identifiers fold ASCII case; quoted ones keep
 // their unescaped bytes. Partial parses never produce partial causal success.
 //
-// Analyzer owns at most one Python/Node child. Python uses -I -S -B, ast and
+// Analyzer owns at most one Python, Node or Go-helper child. Python uses -I -S -B, ast and
 // PathFinder without importing target packages, including their initializers.
 // TypeScript uses only the verified absolute lib/typescript.js, compiler AST
 // and native resolution over corpus-only virtual files. Literal JSON config
@@ -32,7 +32,7 @@
 //
 // The private graph-helper/v1 protocol is one uint32 big-endian length plus
 // strict UTF-8 JSON in each direction. Unlike additive ledger records, every
-// member is required and unknown, null, duplicate, unbound, unsorted, repeated,
+// member is required except the request's Go-only extension, and unknown, null, duplicate, unbound, unsorted, repeated,
 // trailing, non-integer or out-of-corpus output is refused. Frozen field caps
 // apply: keys/references 4096 bytes, scopes 8192, open tokens 64, weight_ppm
 // 1..1000000. Profile identities are ledger.LimitsProfileV1 (engine-limits/1)
@@ -57,11 +57,37 @@
 // verified; replacement/metadata change fails the verifier. A verifier is
 // process-local: after restart reverify and retain all prior durable charges.
 // Every helper launch checks the verified file identity again. Configuration
-// identity includes the fixed script digests, Python root, SQL grammar and
-// TypeScript options, and tools in node/python/typescript order (no SQL tool).
+// identity includes the fixed scripts, Python root, SQL grammar, TypeScript and
+// Go options, and tool rows in go_helper/go_toolchain/node/python/typescript
+// order (no SQL tool). Go options are null when absent; even that configuration
+// changes the pre-D132 digest and requires one analyzer_epoch rebuild.
 // Service owns cumulative limits and conservative retained-state charges:
 // 512 bytes per node/key/scope/coverage entry, 256 per edge/evidence/adjacency
 // entry, plus owned storage and encoded copies. Standalone calls grant no credit.
+//
+// Go requires a complete GoToolConfig: both pinned files, GOROOT and target.
+// Open validates values only; neither it nor replay looks up a tool or runs it.
+// Reserved resumable verification precedes a fixed --graph-helper go-analyzer/v1
+// launch. The helper uses one public go/packages metadata load, never syntax or
+// type loading, and parser.ImportsOnly only associates literals with native
+// imports. It executes no target initializer, generator, test or binary.
+// Complete regular-file corpus materialization preserves native module context.
+// Missing .go, go.mod, go.sum, go.work or vendor inputs refuse the whole Go
+// scope before launch. Successful loading covers every case-sensitive .go;
+// unselected files remain unknown. Scope failures publish only a workspace Go
+// entry, with no per-file expansion. Consumers prefer a file entry, otherwise
+// the workspace entry; absence is never complete. No .go means no invocation.
+// Go has a private environment, caches and exact telemetry mode "off"; it never
+// borrows ambient PATH, drivers or caches. The helper documents the qualified
+// native profile and the limitations of its measured descendant proof.
+// A Go exit is joined only after an unforced wait and a valid bound frame, or
+// exit 2's pre-native refusal. Every other started outcome retains its directory
+// and atomically fences every graph service and external analyzer in this host
+// until restart. Step/Resume then return recovery_pending/ErrRecovery without
+// reserving or reading Git. An in-flight unit is discarded. A shared launch
+// guard prevents another launch after the fence; pure SQL/opaque calls and
+// Observe, Page, replay and Core appends remain available. Python/Node retain
+// their existing local wait fence in addition to that host-wide check.
 // The parent framed decoder also reserves 64 MiB conservatively for encoded
 // and decoded copies and per-token allocations before constructing output.
 //

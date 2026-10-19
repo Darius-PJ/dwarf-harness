@@ -139,9 +139,9 @@ func sortResult(r *AnalysisResult) {
 	slices.SortFunc(r.Coverage, coverageOrder)
 }
 
-// AnalyzeOpaque records content presence only. Unrecognized files and Go have
-// explicit unknown dependency coverage; checks/declarations/resources/usage wait
-// for their producer freezes. It does not invoke any tool or infer hyperlinks.
+// AnalyzeOpaque records content presence and unknown coverage for unrecognized
+// files only. Language and upstream-producer coverage belongs to those adapters.
+// It invokes no tool and infers no hyperlinks.
 func AnalyzeOpaque(ctx context.Context, r AnalysisRequest) (AnalysisResult, error) {
 	if err := validateRequest(r); err != nil {
 		if errors.Is(err, errCorpusLimit) {
@@ -162,15 +162,10 @@ func AnalyzeOpaque(ctx context.Context, r AnalysisRequest) (AnalysisResult, erro
 		out.Nodes = append(out.Nodes, ledger.GraphNode{Key: a.Key, VersionSHA256: a.SHA256, Adapter: ledger.AdapterOpaque, ConfigurationSHA256: r.ConfigurationSHA256})
 		adapter, reason := sourceAdapter(a.Path), ledger.ReasonUnsupportedSyntax
 		switch adapter {
-		case "go":
-			reason = ledger.ReasonDependencyUnapproved
-		case ledger.AdapterPython, ledger.AdapterSQL, ledger.AdapterTypeScript:
+		case "go", ledger.AdapterPython, ledger.AdapterSQL, ledger.AdapterTypeScript:
 			continue
 		}
 		out.Coverage = append(out.Coverage, covered(a.Key, adapter, reason))
-	}
-	for _, adapter := range []string{ledger.AdapterChecks, ledger.AdapterDeclarations, ledger.AdapterResources, ledger.AdapterUsage} {
-		out.Coverage = append(out.Coverage, ledger.CoverageEntry{Scope: workspaceScope(r.Source.WorkspaceID), Adapter: adapter, State: ledger.CoverageUnknown, Reasons: []string{ledger.ReasonUpstreamUnfrozen}})
 	}
 	out.NextCursor.ArtifactIndex = int64(len(r.Corpus))
 	sortResult(&out)

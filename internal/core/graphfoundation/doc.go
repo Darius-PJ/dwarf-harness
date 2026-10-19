@@ -11,4 +11,14 @@
 // Paused work leaves Core appends and graph reads available. These are foundation
 // proofs, not live accepted-promotion integration (ticket 63), A2 hard containment,
 // C4 throughput, U5 readiness or ticket 61's close.
+//
+// D132 adds the separately built Go resolver to the same independent oracle.
+// Its native qualification uses a test-only Windows Job observer, not Core's
+// restricted executor: suspended creation, assignment, resume, waited exit and
+// accounting prove the exact pinned tuple's descendant behavior. Kill-on-close
+// is the sole Job limit. Successful metadata commands must have TotalProcesses
+// one, ActiveProcesses zero and no live PIDs; an exited-child control proves
+// total accounting catches descendants that no longer exist. The helper itself
+// may spawn its documented native commands, and its Job must be empty at exit.
+// This is empirical profile qualification, not an OS CPU/RSS guarantee.
 package graphfoundation

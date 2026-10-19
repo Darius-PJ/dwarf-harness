@@ -42,7 +42,13 @@ func run(w io.Writer, args []string) int {
 		return 1
 	}
 	fmt.Fprintf(w, "module root: %s\n", root)
-	return runAll(w, steps(root), race)
+	checks, cleanup := steps(root)
+	code := runAll(w, checks, race)
+	if err := cleanup(); err != nil {
+		fmt.Fprintf(w, "FAIL: removing the check-owned Go helper: %v\n", err)
+		return 1
+	}
+	return code
 }
 
 func parseArgs(w io.Writer, args []string) (bool, error) {
@@ -75,7 +81,11 @@ type step struct {
 	run   func(w io.Writer) error
 }
 
-func steps(root string) []step {
+func steps(root string) ([]step, func() error) {
+	var helperDir string
+	var nativeEnv []string
+	var provisionErr error
+	provisioned := false
 	goStep := func(cgo string, args ...string) func(io.Writer) error {
 		return func(w io.Writer) error { return stream(w, goCommand(root, cgo, args...)) }
 	}
@@ -89,10 +99,68 @@ func steps(root string) []step {
 		// Disable test caching: validating and storing results re-stats every logged path
 		// (863,700 for internal/core/workspace; a cache hit took 293 s on Windows).
 		// Every test runs instead (D131).
-		{"tests", goStep("0", "test", "-count=1", "-timeout", testTimeout, "./...")},
-		{"race", func(w io.Writer) error { return checkRace(w, root) }},
+		{"tests", func(w io.Writer) error {
+			if !provisioned {
+				provisioned = true
+				helperDir, nativeEnv, provisionErr = buildGoAnalyzer(w, root)
+			}
+			if provisionErr != nil {
+				return provisionErr
+			}
+			return stream(w, goCommand(root, "0", "test", "-count=1", "-timeout", testTimeout, "./...").with(nativeEnv...))
+		}},
+		{"race", func(w io.Writer) error {
+			if !provisioned || provisionErr != nil {
+				return fmt.Errorf("native Go analyzer prerequisite from the tests step is unavailable: %v", provisionErr)
+			}
+			return checkRace(w, root, nativeEnv)
+		}},
 		{"cross builds", func(w io.Writer) error { return checkCrossBuilds(w, root) }},
+	}, func() error {
+		if helperDir == "" {
+			return nil
+		}
+		return os.RemoveAll(helperDir)
 	}
+}
+
+// buildGoAnalyzer provisions one host binary for both test passes (D132).
+// The caller retains even a failed build's directory until every step joins.
+func buildGoAnalyzer(w io.Writer, root string) (dir string, env []string, err error) {
+	goPath, err := exec.LookPath("go")
+	if err != nil {
+		return "", nil, err
+	}
+	goPath, err = filepath.Abs(goPath)
+	if err != nil {
+		return "", nil, err
+	}
+	query := goCommand(root, "0", "env", "GOROOT")
+	query.name = goPath
+	out, err := capture(w, query)
+	if err != nil {
+		return "", nil, err
+	}
+	goroot := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(goroot) {
+		return "", nil, errors.New("the pinned go command returned a non-absolute GOROOT")
+	}
+	dir, err = os.MkdirTemp("", "dwarf-check-go-analyzer-")
+	if err != nil {
+		return "", nil, err
+	}
+	helper := filepath.Join(dir, "go-analyzer"+exeSuffix())
+	build := goCommand(root, "0", "build", "-trimpath", "-o", helper, "./helpers/go-analyzer").
+		with("GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH)
+	build.name = goPath
+	if err = stream(w, build); err != nil {
+		return dir, nil, err
+	}
+	return dir, []string{
+		"DWARF_GRAPH_GO_HELPER=" + helper,
+		"DWARF_GRAPH_GO=" + goPath,
+		"DWARF_GRAPH_GOROOT=" + goroot,
+	}, nil
 }
 
 // runAll runs the enabled steps, whatever the earlier verdicts, and returns 1

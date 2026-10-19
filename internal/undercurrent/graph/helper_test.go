@@ -76,6 +76,18 @@ func TestToolVerificationResumesAndRefusesReplacement(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "./...") {
+		// A planted native-tool/driver executable must never be selected by the
+		// fixed Go profile. This marker is outside every analyzed corpus.
+		executable, err := os.Executable()
+		if err == nil {
+			err = os.WriteFile(filepath.Join(filepath.Dir(executable), "probe-touched"), []byte("executed"), 0600)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		os.Exit(1)
+	}
 	if os.Getenv("DWARF_GRAPH_TEST_CHILD") != "" {
 		graphTestChild()
 		return
@@ -106,6 +118,16 @@ func graphTestChild() {
 		fmt.Fprintln(os.Stderr, "request:", err)
 		os.Exit(2)
 	}
+	if mode == "go-refused" {
+		os.Exit(2)
+	}
+	if mode == "go-unframed" {
+		os.Exit(1)
+	}
+	if mode == "go-malformed" {
+		_, _ = os.Stdout.Write(frameJSON([]byte("{}")))
+		return
+	}
 	if mode == "overflow" {
 		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), maxFrame+6))
 		return
@@ -116,7 +138,7 @@ func graphTestChild() {
 			os.Exit(1)
 		}
 	}
-	if mode == "cancel" || mode == "pause" {
+	if mode == "cancel" || mode == "pause" || mode == "go-pause" {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "listen:", err)
@@ -124,7 +146,7 @@ func graphTestChild() {
 		}
 		defer listener.Close()
 		_, _ = fmt.Fprint(os.Stderr, "ready")
-		if mode == "pause" && os.Getenv("DWARF_GRAPH_TEST_READY") != "" {
+		if (mode == "pause" || mode == "go-pause") && os.Getenv("DWARF_GRAPH_TEST_READY") != "" {
 			connection, err := net.Dial("tcp", os.Getenv("DWARF_GRAPH_TEST_READY"))
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "ready:", err)
@@ -142,10 +164,26 @@ func graphTestChild() {
 		}
 	}
 	out := helperResponse{Protocol: helperProtocol, AnalysisKey: req.AnalysisKey, Adapter: req.Adapter, ConfigurationSHA256: req.ConfigurationSHA256, AnalysisResult: AnalysisResult{NextCursor: ledger.GraphCursor{ArtifactIndex: int64(len(req.Corpus))}, WorkUsed: 100, Nodes: []ledger.GraphNode{}, Edges: []ledger.GraphEdge{}, Coverage: []ledger.CoverageEntry{}, Cost: Cost{InputBytes: int64(len(b)), OutputBytes: 0}}}
+	if req.Adapter == "go" {
+		out.WorkUsed = 1000
+		for _, file := range req.Corpus {
+			if sourceAdapter(file.Path) == "go" {
+				out.Coverage = append(out.Coverage, covered(file.Key, "go", ""))
+			}
+		}
+		sortResult(&out.AnalysisResult)
+		if mode == "go-unknown" {
+			out.AnalysisResult = unknown(AnalysisRequest{Source: req.Source}, "go", ledger.ReasonHelperLimit, 1000)
+			out.NextCursor.ArtifactIndex = int64(len(req.Corpus))
+		}
+	}
 	raw, _ := json.Marshal(out)
 	binary.BigEndian.PutUint32(length[:], uint32(len(raw)))
 	_, _ = os.Stdout.Write(length[:])
 	_, _ = os.Stdout.Write(raw)
+	if mode == "go-crash" {
+		os.Exit(1)
+	}
 }
 
 func testHelperRequest() helperRequest {
@@ -182,7 +220,7 @@ func TestHelperProtocolCancellationOverflowAndLostHandshake(t *testing.T) {
 					cancel()
 				}
 			}
-			raw, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, observe, nil)
+			raw, _, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, observe, nil)
 			if mode == "valid" {
 				if err != nil {
 					t.Fatal(err)
@@ -211,7 +249,7 @@ func TestHelperProtocolCancellationOverflowAndLostHandshake(t *testing.T) {
 			// child can execute immediately without sharing a live predecessor.
 			next, nextCancel := context.WithCancel(context.Background())
 			defer nextCancel()
-			raw, _, err = runHelperProcess(next, nextCancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD=valid"), input, nil, nil)
+			raw, _, _, err = runHelperProcess(next, nextCancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD=valid"), input, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -262,6 +300,20 @@ func TestHelperResponseRejectsUnboundAndMalformedOutput(t *testing.T) {
 	if _, err := decodeHelperResponse(responseFrame(valid), req); err == nil {
 		t.Fatal("accepted out-of-corpus proof")
 	}
+	goRequest, goResponse := goResponseFixture()
+	if _, err := decodeHelperResponse(responseFrame(goResponse), goRequest); err != nil {
+		t.Fatalf("bound Go response: %v", err)
+	}
+	for name, change := range goResponseForgeries() {
+		t.Run("go "+name, func(t *testing.T) {
+			t.Parallel()
+			req, out := goResponseFixture()
+			change(&out)
+			if _, err := decodeHelperResponse(responseFrame(out), req); err == nil {
+				t.Fatal("accepted forged Go proof")
+			}
+		})
+	}
 }
 
 func FuzzGraphHelperResponse(f *testing.F) {
@@ -290,13 +342,24 @@ func FuzzGraphHelperResponse(f *testing.F) {
 	base.AnalysisResult = unknown(source, req.Adapter, ledger.ReasonHelperLimit, req.Allowance)
 	base.NextCursor.ArtifactIndex = int64(len(req.Corpus))
 	f.Add(responseFrame(base))
+	goRequest, goResponse := goResponseFixture()
+	f.Add(responseFrame(goResponse))
+	for _, change := range goResponseForgeries() {
+		_, out := goResponseFixture()
+		change(&out)
+		f.Add(responseFrame(out))
+	}
+	goResponse.AnalysisResult = unknown(AnalysisRequest{Source: goRequest.Source, Corpus: goRequest.Corpus}, "go", ledger.ReasonHelperLimit, maxItems)
+	f.Add(responseFrame(goResponse))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		if len(b) > maxFrame+5 {
 			return
 		}
-		out, err := decodeHelperResponse(b, req)
-		if err == nil && (out.WorkUsed < 0 || out.WorkUsed > req.Allowance) {
-			t.Fatal("accepted excessive work")
+		for _, request := range []helperRequest{req, goRequest} {
+			out, err := decodeHelperResponse(b, request)
+			if err == nil && (out.WorkUsed < 0 || out.WorkUsed > request.Allowance) {
+				t.Fatal("accepted excessive work")
+			}
 		}
 	})
 }
@@ -466,11 +529,11 @@ func TestTypeScriptAnalysisUsesOnlyConfiguredParser(t *testing.T) {
 	}
 }
 
-func TestMissingAdaptersAndUnapprovedGoStayUnknown(t *testing.T) {
+func TestMissingApprovedAdaptersStayUnknown(t *testing.T) {
 	t.Parallel()
 	r := analysisFixture(map[string]string{"a.go": "package a\nimport \"net/http\"", "readme.md": "[dependency](a.go)", "data.json": `{"imports":["a.go"]}`, "upper.PY": "import hidden", "upper.JS": `import "hidden"`, "upper.SQL": "SELECT * FROM hidden;"})
 	r.ConfigurationSHA256 = ConfigurationDigest(Tools{})
-	for _, adapter := range []string{ledger.AdapterPython, ledger.AdapterTypeScript} {
+	for _, adapter := range []string{ledger.AdapterPython, ledger.AdapterTypeScript, "go"} {
 		out, err := NewAnalyzer(Tools{}).Analyze(context.Background(), adapter, r)
 		if err != nil || len(out.Nodes) != 0 || len(out.Edges) != 0 || len(out.Coverage) != 1 || out.Coverage[0].Reasons[0] != ledger.ReasonAdapterUnavailable {
 			t.Fatalf("missing adapter %+v %v", out, err)
@@ -483,7 +546,11 @@ func TestMissingAdaptersAndUnapprovedGoStayUnknown(t *testing.T) {
 	if len(out.Edges) != 0 {
 		t.Fatal("Go or hyperlinks guessed causal edges")
 	}
-	assertCoverage(t, r, out, "go", map[string]string{"a.go": ledger.ReasonDependencyUnapproved})
+	for _, coverage := range out.Coverage {
+		if coverage.Adapter != ledger.AdapterOpaque {
+			t.Fatalf("opaque analysis claimed another producer's coverage: %+v", coverage)
+		}
+	}
 	assertCoverage(t, r, out, ledger.AdapterOpaque, map[string]string{"readme.md": ledger.ReasonUnsupportedSyntax, "data.json": ledger.ReasonUnsupportedSyntax, "upper.PY": ledger.ReasonUnsupportedSyntax, "upper.JS": ledger.ReasonUnsupportedSyntax, "upper.SQL": ledger.ReasonUnsupportedSyntax})
 	sql, err := AnalyzeSQL(context.Background(), r)
 	if err != nil || len(sql.Nodes) != 0 || len(sql.Edges) != 0 || len(sql.Coverage) != 0 {
@@ -580,7 +647,7 @@ func TestHelperStderrTruncation(t *testing.T) {
 			dir := t.TempDir()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			raw, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, nil, nil)
+			raw, _, _, err := runHelperProcess(ctx, cancel, executable, []string{"-test.run=^$"}, dir, append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode), input, nil, nil)
 			if ctx.Err() != nil {
 				t.Fatalf("retention overflow cancelled child: %v", ctx.Err())
 			}
@@ -639,5 +706,64 @@ func TestTypeScriptUnavailableCorpus(t *testing.T) {
 	entry := out.Coverage[0]
 	if entry.Scope != workspaceScope(r.Source.WorkspaceID) || entry.State != ledger.CoverageUnknown || len(entry.Reasons) != 1 || entry.Reasons[0] != ledger.ReasonSourceUnavailable {
 		t.Fatalf("virtual path collision misclassified: %+v", entry)
+	}
+}
+
+func goResponseFixture() (helperRequest, helperResponse) {
+	source := analysisFixture(map[string]string{
+		"a.go":               "package a\nimport _ \"example.test/a/dep\"\n",
+		"dep/dep.go":         "package dep\n",
+		"go.mod":             "module example.test/a\n\ngo 1.27\n",
+		"standard.go":        "package a\nimport _ \"unsafe\"\n",
+		"unselected_test.go": "package a\n",
+	})
+	req := testHelperRequest()
+	req.Adapter, req.Corpus = "go", source.Corpus
+	root := filepath.Join(os.TempDir(), "graph-response-fixture")
+	req.Go = &goHelperRequest{Profile: "go-packages/v1", HelperVersion: goHelperVersion, ToolchainPath: filepath.Join(root, "bin", "go"+goExecutableSuffix()), ToolchainSHA256: digest("tool"), ToolchainVersion: "go1.27.2", ToolchainFileSize: 1, ToolchainModtimeNS: 1, GOROOT: root, GOOS: "windows", GOARCH: "amd64", LoadTimeoutMS: 20000}
+	out := validResponse(req)
+	out.WorkUsed = 1000
+	key, _ := ModuleKey(source.Source.WorkspaceID, "go", "workspace", "example.test/a/dep")
+	out.Nodes = []ledger.GraphNode{{Key: key, VersionSHA256: digest("native member version"), Adapter: "go", ConfigurationSHA256: req.ConfigurationSHA256}}
+	out.Edges = []ledger.GraphEdge{dependency(key, source.Corpus[0], "go", "example.test/a/dep", req.ConfigurationSHA256)}
+	for _, file := range source.Corpus {
+		if sourceAdapter(file.Path) != "go" {
+			continue
+		}
+		reason := ""
+		if strings.HasSuffix(file.Path, "_test.go") {
+			reason = ledger.ReasonUnsupportedSyntax
+		}
+		out.Coverage = append(out.Coverage, covered(file.Key, "go", reason))
+	}
+	sortResult(&out.AnalysisResult)
+	return req, out
+}
+
+func goResponseForgeries() map[string]func(*helperResponse) {
+	return map[string]func(*helperResponse){
+		"missing inventory state": func(out *helperResponse) { out.Coverage = out.Coverage[:len(out.Coverage)-1] },
+		"wrong configuration":     func(out *helperResponse) { out.ConfigurationSHA256 = digest("other configuration") },
+		"forged evidence":         func(out *helperResponse) { out.Edges[0].Evidence.ArtifactSHA256 = digest("other bytes") },
+		"wrong evidence adapter":  func(out *helperResponse) { out.Edges[0].Evidence.Adapter = ledger.AdapterPython },
+		"reversed edge": func(out *helperResponse) {
+			out.Edges[0].From, out.Edges[0].To = out.Edges[0].To, out.Edges[0].From
+			out.Edges[0].EdgeID = ledger.EdgeID(out.Edges[0].From, out.Edges[0].To, out.Edges[0].Type)
+		},
+		"partial edge for unknown file": func(out *helperResponse) {
+			scope := keyScope(out.Edges[0].Evidence.Artifact)
+			for i := range out.Coverage {
+				if out.Coverage[i].Scope == scope {
+					out.Coverage[i].State = ledger.CoverageUnknown
+					out.Coverage[i].Reasons = []string{ledger.ReasonUnresolvedReference}
+				}
+			}
+		},
+		"scope failure with file success": func(out *helperResponse) {
+			out.Nodes, out.Edges = []ledger.GraphNode{}, []ledger.GraphEdge{}
+			out.Coverage = append(out.Coverage, ledger.CoverageEntry{Scope: workspaceScope(testID()), Adapter: "go", State: ledger.CoverageUnknown, Reasons: []string{ledger.ReasonHelperLimit}})
+			sortResult(&out.AnalysisResult)
+		},
+		"over work": func(out *helperResponse) { out.WorkUsed = maxItems + 1 },
 	}
 }
