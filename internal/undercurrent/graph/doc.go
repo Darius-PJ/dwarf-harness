@@ -80,28 +80,34 @@
 // verifies both the payload-stream digest and State.Canonical graph digest.
 // Only an eligible final publishes: its base, workspace subject and colony-wide
 // acceptance frontier must still be current. Otherwise it closes as superseded
-// without changing the image or counter. The effective version is the final's
-// actual sequence, not a predicted durable position. The F-U3-61 golden fixes
-// encodings, not a service history, and Open refuses it.
+// without changing the image or counter. A nonempty final's actual sequence is
+// the version; a zero-net final confirms its base version and digest. The
+// F-U3-61 golden fixes encodings, not a service history, and Open refuses it.
 //
 // Step starts an attempt and returns, or reserves one 10000-unit quantum and
 // runs one bounded unit, with at most two commits in that call. The 2000000-unit
-// total is durable and never refunded. Births come from a paged predecessor-tree
-// and changed-path walk, never the incremental image. Opaque calls use contiguous
-// windows pre-sized at 2+ceil(bytes/256) per artifact. Each other adapter sees its
-// complete bounded corpus once; complete or scope-unknown, it is then finished.
-// Tool-file verification is separate, resumable, charged work before invocation.
-// An empty adapter corpus skips both verification and invocation.
+// total is durable and never refunded. Walk, corpus and opaque units may make
+// consecutive calls of their own kind, charging actual WorkUsed and stopping
+// when complete, stalled or below 512 remaining units. Only calls with the full
+// allowance count toward the two-call no-progress limit. Births come from the
+// predecessor-tree and changed-path walk, never the incremental image. Opaque
+// windows are pre-sized at 2+ceil(bytes/256) per artifact. A helper or SQL call
+// covers its complete bounded corpus once per quantum; complete or scope-unknown,
+// that adapter is finished. Tool-file verification is separate, resumable,
+// charged work before invocation. Empty corpora skip verification and invocation.
+// Immutable object bytes are memoized by Git OID within one attempt, never
+// across attempts or recovery; acceptance events are never coalesced.
 //
-// The private candidate is capped at 64 MiB conservatively. Diff removes edges,
-// removes nodes, puts nodes, puts edges and replaces workspace coverage in key
-// order. Whole-element chunks are at most 512 KiB, with their checkpoint in the
-// same commit; no chunk publishes topology. Current state is bounded to 50000
-// nodes, 200000 edges and 512 MiB including indexes and retained history.
+// The private candidate is capped at 64 MiB conservatively. Diff publishes only
+// net fact mutations: remove edges, remove nodes, put nodes, put edges, then
+// replace analyzed workspace coverage in key order. Whole-element chunks are at
+// most 512 KiB, checkpointed in the same commit; no chunk publishes topology.
+// Current state is bounded to 50000 nodes, 200000 edges and 512 MiB including
+// indexes and retained history.
 // Candidate overflow ends unknown without publishing. If valid replay instead
 // reaches the retained-state cap, it stops at the last complete commit, exposes
 // unknown/state_cap with zero version/digest and no image, and Step/Resume append
-// nothing; every Page returns ErrRevision. Profile recovery is outside S3.
+// nothing; every Page returns ErrRevision. A new limits profile is not defined here.
 //
 // Every acknowledged append hydrates the complete prefix through Committed.Last,
 // including racing Core records, before publication. Uncertain or poisoned
@@ -113,13 +119,20 @@
 // It restarts interrupted invocations, charges them again, and byte-compares
 // regenerated chunks with the durable prefix; disagreement is recovery_unknown.
 // VerifiedCursor is recovery bookkeeping, not a helper input cursor.
-// Exhaustion is sticky for source, scope, epoch, configuration and both profiles;
-// a fresh UUID, reopen or unrelated workspace frontier grants no new allowance.
+// Exhaustion is sticky for source, scope, epoch, configuration and both profiles.
+// A rebuild marks only the scope active at exhaustion, not completed or unreached
+// scopes. A scope transition makes the next scope active before its first read;
+// the last scope stays active through aggregate merge, diff and publication.
+// Replay derives that scope's tuple from terminal coverage and the frontier.
+// Reopen, a fresh UUID or an unrelated acceptance grants no new allowance.
+// Only a marked-scope acceptance or new epoch/profile unblocks that marker;
+// unmarked workspaces can still advance incrementally while a rebuild is blocked.
 //
-// With an available image, ready means no open attempt, no runnable candidate,
-// and no pending workspace. Declared coverage gaps stay in Reasons, not State.
-// Unknown means pending work has no runnable candidate, or the service has a
-// state_cap or recovery_unknown condition.
+// With an available image, ready means no open attempt, runnable candidate,
+// pending workspace or due rebuild. Declared gaps remain in Reasons, not State.
+// Runnable or open work is pending even with a retained terminal reason.
+// Unknown means due work has no runnable candidate; retained-cap fencing also
+// exposes unknown without an image.
 //
 // Observe and Page use one immutable image while work is busy. Page requests
 // bind version, digest, checked cursor and chain hash; stale headers get
@@ -129,9 +142,21 @@
 // fences uncertain persistence. Close cancels and joins work but owns no store.
 // Every subsequent call, including Close, returns ErrClosed.
 //
-// S3 selects incremental work only. Rebuild selection, cadence and the
-// rebuild/incremental comparison belong to ticket 61 S4. This is not
-// accepted-promotion integration (ticket 63), U5 readiness or ticket 61's close.
+// Rebuild precedence is analyzer_epoch, digest_mismatch, structural_100, load.
+// The projection check compares its recorded version/digest with the reducer's
+// effective identity in constant time, never by an unreserved full hash.
+// One rebuild walks every accepted workspace afresh from genesis, in UUID order,
+// using each latest accepted tree as of its input frontier. Its source belongs
+// to the frontier acceptance's workspace. It never seeds births from the image
+// or incremental walk cache. Both candidate and durable-base canonicalization
+// run within reserved units. Equal digests confirm the base without chunks;
+// otherwise only net mutations publish. Cadence runs before the 100th subject's
+// incremental work and publishes a new version, as does an analyzer epoch change.
+// One eligible rebuild resets the structural counter and clears all due flags;
+// unknown or superseded attempts do neither. Staleness is checked before every
+// reservation, and a later Step selects again rather than retrying autonomously.
+// This foundation is not accepted-promotion integration (ticket 63), U5 readiness
+// or ticket 61's close.
 //
 // Native tests use absolute DWARF_GRAPH_PYTHON, DWARF_GRAPH_NODE and
 // DWARF_GRAPH_TYPESCRIPT paths. The last names lib/typescript.js itself, not a

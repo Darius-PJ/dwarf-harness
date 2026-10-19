@@ -481,3 +481,340 @@ func TestGraphLostAckTornTailAndResume(t *testing.T) {
 		}
 	})
 }
+
+func TestGraphRebuildMatchesIncremental(t *testing.T) {
+	t.Parallel()
+	t.Run("load confirmation and exact structural cadence", func(t *testing.T) {
+		t.Parallel()
+		f, service, tree, files := foundationRebuildHistory(t)
+		before, err := service.Observe(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		incremental := foundationState(t, service, before)
+		if err := service.Close(); err != nil {
+			t.Fatal(err)
+		}
+		mark := f.store.Durable()
+		readCalls := 0
+		options := f.options()
+		read := options.ReadArtifacts
+		options.ReadArtifacts = func(ctx context.Context, request graph.ArtifactRequest) (graph.ArtifactBatch, error) {
+			readCalls++
+			return read(ctx, request)
+		}
+		service = f.open(options)
+		observed, err := service.Observe(context.Background())
+		if err != nil || observed.State != "pending" || f.store.Durable() != mark || readCalls != 0 {
+			t.Fatalf("load polled or ran without Step: %+v, %v; reads=%d", observed, err, readCalls)
+		}
+		foundationAssertSameState(t, incremental, foundationState(t, service, observed))
+		if _, err := service.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if started := foundationStartedAfter(t, f, mark); started.Reason != ledger.GraphReasonLoad {
+			t.Fatalf("load selected %s", started.Reason)
+		}
+		confirmed := foundationDrive(t, service)
+		_, final := foundationFinalAfter(t, f, mark)
+		if confirmed.Version != before.Version || confirmed.Digest != before.Digest || final.ChunkCount != 0 || final.ChunksSHA256 != ledger.EmptyChunksDigest || final.StructuralSinceRebuild != 0 || final.GraphDigest != final.BaseDigest {
+			t.Fatalf("load did not confirm zero net change: %+v final=%+v", confirmed, final)
+		}
+		foundationAssertSameState(t, incremental, foundationState(t, service, confirmed))
+		if err := service.Close(); err != nil {
+			t.Fatal(err)
+		}
+		mark = f.store.Durable()
+		service = f.open(f.options())
+		if status, err := service.Step(context.Background()); err != nil || status.State != "ready" || status.Version != confirmed.Version || f.store.Durable() != mark {
+			t.Fatalf("unchanged restart minted another rebuild: %+v, %v", status, err)
+		}
+		foundationNonstructuralRecords(t, f, tree)
+		var alternating [2]string
+		for i := range alternating {
+			files["tick.md"] = fixtureBlob{body: fmt.Sprintf("tick %d", i)}
+			alternating[i] = f.tree(files)
+		}
+		for i := 1; i <= 99; i++ {
+			next := alternating[i%2]
+			f.accept(f.registered.ID, tree, next, "tick.md")
+			tree = next
+		}
+		mark = f.store.Durable()
+		if _, err := service.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if started := foundationStartedAfter(t, f, mark); started.Reason != ledger.GraphReasonIncremental {
+			t.Fatalf("intents/no-change or the 99th acceptance triggered %s", started.Reason)
+		}
+		ninetyNine := foundationDrive(t, service)
+		_, final = foundationFinalAfter(t, f, mark)
+		if final.StructuralSinceRebuild != 99 {
+			t.Fatalf("structural counter included non-acceptances: %d", final.StructuralSinceRebuild)
+		}
+		hundredth := f.accept(f.registered.ID, tree, alternating[0], "tick.md")
+		mark = f.store.Durable()
+		if _, err := service.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		started := foundationStartedAfter(t, f, mark)
+		if started.Reason != ledger.GraphReasonStructural100 || started.Source.Subject.Seq != int64(hundredth.First) || started.Source.Subject != started.InputFrontier {
+			t.Fatalf("100th acceptance did not select rebuild before incremental work: %+v", started)
+		}
+		rebuilt := foundationDrive(t, service)
+		record, final := foundationFinalAfter(t, f, mark)
+		if rebuilt.Version != int64(record.Seq) || rebuilt.Version == ninetyNine.Version || final.ChunkCount == 0 || final.StructuralSinceRebuild != 0 {
+			t.Fatalf("cadence did not publish the new subject and reset its counter: %+v final=%+v", rebuilt, final)
+		}
+		expected := foundationIncrementalOracle(t, f, hundredth.Last, graph.ToolConfig{}, 1)
+		foundationAssertSameState(t, expected, foundationState(t, service, rebuilt))
+		mark = f.store.Durable()
+		if _, err := service.Step(context.Background()); err != nil || f.store.Durable() != mark {
+			t.Fatalf("cadence stayed due after its eligible final: %v", err)
+		}
+	})
+	t.Run("new analyzer configuration matches the independent incremental oracle", func(t *testing.T) {
+		t.Parallel()
+		tools := graph.ToolConfig{
+			Python:           foundationTool(t, "DWARF_GRAPH_PYTHON", "3.13.15"),
+			Node:             foundationTool(t, "DWARF_GRAPH_NODE", "v24.18.0"),
+			TypeScriptParser: foundationTool(t, "DWARF_GRAPH_TYPESCRIPT", "6.0.3"),
+		}
+		// Load/cadence cover the edit/delete/recreate/rename history. This row
+		// needs two published scopes and real native dependencies, not that
+		// entire history again before changing analyzer identities.
+		f := newFoundationFixture(t)
+		files := map[string]fixtureBlob{
+			"a.py":           {body: "import b\n"},
+			"b.py":           {body: "value = 42\n"},
+			"a.ts":           {body: "import {value} from './b'; export const answer = value;"},
+			"b.ts":           {body: "export const value = 42;"},
+			"definition.sql": {body: "CREATE TABLE users (id INTEGER);"},
+			"read.sql":       {body: "SELECT * FROM users;"},
+		}
+		tree := f.tree(files)
+		f.accept(f.registered.ID, f.empty, tree, "a.py", "a.ts", "b.py", "b.ts", "definition.sql", "read.sql")
+		service := f.open(f.options())
+		foundationDrive(t, service)
+		other, otherRoot := f.registerClone()
+		primaryRoot := f.root
+		f.root, f.blobs = otherRoot, make(map[string]string)
+		otherTree := f.tree(map[string]fixtureBlob{"other.md": {body: "other workspace"}})
+		f.accept(other.ID, f.empty, otherTree, "other.md")
+		f.root, f.blobs = primaryRoot, make(map[string]string)
+		foundationDrive(t, service)
+		before, err := service.Observe(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldState := foundationState(t, service, before)
+		oldEpoch := oldState.Scopes[0].AnalyzerEpoch
+		if err := service.Close(); err != nil {
+			t.Fatal(err)
+		}
+		mark := f.store.Durable()
+		options := f.options()
+		options.Tools = tools
+		service = f.open(options)
+		if f.store.Durable() != mark {
+			t.Fatal("configuration change polled without Step")
+		}
+		if _, err := service.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		started := foundationStartedAfter(t, f, mark)
+		if started.Reason != ledger.GraphReasonAnalyzerEpoch || started.AnalyzerEpoch != oldEpoch+1 || started.ConfigurationSHA256 != options.Tools.ConfigurationDigest() {
+			t.Fatalf("configuration did not win over load with one epoch increment: %+v", started)
+		}
+		rebuilt := foundationDrive(t, service)
+		record, final := foundationFinalAfter(t, f, mark)
+		if rebuilt.Version != int64(record.Seq) || rebuilt.Version == before.Version || final.ChunkCount == 0 || final.StructuralSinceRebuild != 0 {
+			t.Fatalf("new configuration did not publish/reset: %+v final=%+v", rebuilt, final)
+		}
+		expected := foundationIncrementalOracle(t, f, mark, options.Tools, oldEpoch+1)
+		state := foundationState(t, service, rebuilt)
+		foundationAssertSameState(t, expected, state)
+		for _, adapter := range []string{ledger.AdapterPython, ledger.AdapterTypeScript} {
+			if !slices.ContainsFunc(state.Edges, func(edge ledger.GraphEdge) bool {
+				return edge.Type == "static_dependency" && edge.Evidence.Adapter == adapter
+			}) {
+				t.Fatalf("configured %s produced no native dependency", adapter)
+			}
+		}
+		mark = f.store.Durable()
+		if _, err := service.Step(context.Background()); err != nil || f.store.Durable() != mark {
+			t.Fatalf("configuration or load stayed due: %v", err)
+		}
+	})
+}
+
+func TestOldRebuildCannotReplaceNewAcceptance(t *testing.T) {
+	t.Parallel()
+	for _, pause := range []string{"before reservation", "before final"} {
+		t.Run(pause, func(t *testing.T) {
+			t.Parallel()
+			f := newFoundationFixture(t)
+			other, otherRoot := f.registerClone()
+			first := f.tree(map[string]fixtureBlob{"first.md": {body: "old"}})
+			f.accept(f.registered.ID, f.empty, first, "first.md")
+			service := f.open(f.options())
+			foundationDrive(t, service)
+			priorRoot := f.root
+			f.root, f.blobs = otherRoot, make(map[string]string)
+			otherOld := f.tree(map[string]fixtureBlob{"other.md": {body: "old"}})
+			otherNew := f.tree(map[string]fixtureBlob{"other.md": {body: "new"}})
+			f.accept(other.ID, f.empty, otherOld, "other.md")
+			f.root, f.blobs = priorRoot, make(map[string]string)
+			before := foundationDrive(t, service)
+			current := foundationState(t, service, before)
+			next := f.tree(map[string]fixtureBlob{"first.md": {body: "candidate"}})
+			f.accept(f.registered.ID, first, next, "first.md")
+			if err := service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			options := f.options()
+			readCalls := 0
+			read := options.ReadArtifacts
+			options.ReadArtifacts = func(ctx context.Context, request graph.ArtifactRequest) (graph.ArtifactBatch, error) {
+				readCalls++
+				return read(ctx, request)
+			}
+			if pause == "before final" {
+				options.Appender = foundationAppender(func(ctx context.Context, drafts []ledger.Draft) (appender.Committed, error) {
+					if drafts[len(drafts)-1].Type == ledger.TypeGraphVersionCommitted {
+						close(entered)
+						select {
+						case <-ctx.Done():
+							return appender.Committed{}, ctx.Err()
+						case <-release:
+						}
+					}
+					return f.store.Append(ctx, drafts)
+				})
+			}
+			service = f.open(options)
+			mark := f.store.Durable()
+			startStatus, err := service.Step(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if started := foundationStartedAfter(t, f, mark); started.Source.WorkspaceID != f.registered.ID || started.Reason != ledger.GraphReasonLoad {
+				t.Fatalf("wrong rebuild control: %+v", started)
+			}
+			type outcome struct {
+				status graph.Status
+				err    error
+			}
+			done := make(chan outcome, 1)
+			if pause == "before final" {
+				go func() {
+					for range 205 {
+						status, err := service.Step(context.Background())
+						if err != nil {
+							done <- outcome{status, err}
+							return
+						}
+						select {
+						case <-entered:
+							done <- outcome{status, nil}
+							return
+						default:
+						}
+					}
+					done <- outcome{err: errors.New("rebuild never reached the final gate")}
+				}()
+				select {
+				case <-entered:
+				case result := <-done:
+					t.Fatalf("rebuild ended before final gate: %+v", result)
+				}
+			}
+			f.root = otherRoot
+			newAcceptance := f.accept(other.ID, otherOld, otherNew, "other.md")
+			f.root = priorRoot
+			var stale graph.Status
+			if pause == "before final" {
+				unblock()
+				result := <-done
+				stale, err = result.status, result.err
+			} else {
+				stale, err = service.Step(context.Background())
+				if stale.Charged != 0 || readCalls != 0 {
+					t.Fatalf("doomed rebuild reserved or read: %+v reads=%d", stale, readCalls)
+				}
+				records := foundationGraphRecords(t, f, mark)
+				if len(records) != 2 || records[1].Type != ledger.TypeGraphAnalysisProgress {
+					t.Fatalf("early supersession performed more work: %+v", records)
+				}
+				progress, decodeErr := ledger.DecodeGraphAnalysisProgress(records[1].Payload)
+				if decodeErr != nil || progress.Phase != ledger.GraphPhaseSuperseded {
+					t.Fatalf("early rebuild was not superseded: %+v, %v", progress, decodeErr)
+				}
+			}
+			if err != nil || stale.Attempt != startStatus.Attempt || stale.Version != before.Version || stale.Digest != before.Digest || stale.Through < newAcceptance.Last || !slices.Contains(stale.Pending, other.ID) {
+				t.Fatalf("old rebuild replaced the current image: %+v, %v", stale, err)
+			}
+			foundationAssertSameState(t, current, foundationState(t, service, stale))
+			observer := f.open(f.options())
+			observed, err := observer.Observe(context.Background())
+			if err != nil || observed.Version != before.Version || observed.Digest != before.Digest || !slices.Contains(observed.Pending, other.ID) {
+				t.Fatalf("replay installed stale work: %+v, %v", observed, err)
+			}
+			foundationAssertSameState(t, current, foundationState(t, observer, observed))
+			if err := service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			service = observer
+			// One accepted subject followed the initial load, then the queued
+			// first-workspace subject and the racing subject: the counter is 3.
+			// Ninety-seven more must select structural_100, not load. A stale
+			// rebuild is forbidden to reset that derived counter.
+			tree := otherNew
+			f.root = otherRoot
+			for range 97 {
+				target := otherOld
+				if tree == otherOld {
+					target = otherNew
+				}
+				f.accept(other.ID, tree, target, "other.md")
+				tree = target
+			}
+			f.root = priorRoot
+			mark = f.store.Durable()
+			if _, err := service.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if started := foundationStartedAfter(t, f, mark); started.Reason != ledger.GraphReasonStructural100 {
+				t.Fatalf("stale rebuild reset the counter: %+v", started)
+			}
+			eligible := foundationDrive(t, service)
+			_, final := foundationFinalAfter(t, f, mark)
+			if eligible.Version == before.Version || final.StructuralSinceRebuild != 0 {
+				t.Fatalf("fresh frontier was not published: %+v final=%+v", eligible, final)
+			}
+			newest := f.tree(map[string]fixtureBlob{"first.md": {body: "newest"}})
+			f.accept(f.registered.ID, next, newest, "first.md")
+			mark = f.store.Durable()
+			if _, err := service.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if started := foundationStartedAfter(t, f, mark); started.Reason != ledger.GraphReasonIncremental {
+				t.Fatalf("eligible rebuild did not clear all due triggers: %+v", started)
+			}
+			latest := foundationDrive(t, service)
+			replayed := f.open(f.options())
+			observed, err = replayed.Observe(context.Background())
+			if err != nil || observed.Version != latest.Version || observed.Digest != latest.Digest || latest.Version <= eligible.Version {
+				t.Fatalf("old candidate replaced a later incremental version: %+v, %v", observed, err)
+			}
+			node := foundationArtifact(t, foundationState(t, replayed, observed), f.registered.ID, "first.md")
+			if node.VersionSHA256 != ledger.Digest(sha256.Sum256([]byte("newest"))) {
+				t.Fatalf("replay lost the newest immutable content: %+v", node)
+			}
+		})
+	}
+}

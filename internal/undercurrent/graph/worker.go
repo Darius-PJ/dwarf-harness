@@ -26,6 +26,10 @@ type workOutput struct {
 }
 type workState struct {
 	started                      ledger.GraphAnalysisStarted
+	scopes                       scopeSet
+	orderedScopes                []Scope
+	scopeIndex                   int
+	failure                      string
 	generation                   *generationWalk
 	stage                        *graphIndex
 	memory                       uint64
@@ -52,25 +56,34 @@ type workState struct {
 	chunksHash                   hash.Hash
 	canonical                    *canonicalWork
 	digest                       ledger.Digest
+	baseCanonical                *canonicalWork
+	objects                      map[string]corpusObject
+	catalog, fetch               []Artifact
+	catalogAt, fetchAt           int
+	requested                    map[string]bool
+	failures                     map[string]string
+	corpusMemory, catalogMemory  uint64
 }
 
 func (s *Service) newWork(started ledger.GraphAnalysisStarted) *workState {
-	workspace := started.Source.WorkspaceID
-	cached := s.generations[workspace]
-	// Transfer the independently walked birth map, never seed it from nodes.
-	// An interrupted transfer simply reconstructs from genesis on the next try.
-	delete(s.generations, workspace)
-	s.generationMemory -= cached.memory
-	for i := range s.tools {
-		s.tools[i].failed = false
-	}
-	w := &workState{started: started, generation: newGenerationWalk(workspace, started.Source.Registered, s.replay.acceptances[workspace], cached), stage: newGraphIndex(), memory: 2 * maxFrame, chunksHash: sha256.New()}
+	scopes := s.replay.attempt.scopes
+	w := &workState{started: started, scopes: scopes, stage: newGraphIndex(), memory: 2 * maxFrame, chunksHash: sha256.New(), objects: make(map[string]corpusObject)}
 	w.formedNodes, w.formedEdges, w.formedMemory = len(s.replay.current.state.Nodes), len(s.replay.current.state.Edges), s.replay.current.memory
-	if old, exists := s.replay.current.index.scopes[workspace]; exists {
-		w.formedMemory -= scopeMemory(old)
+	for id, scope := range scopes {
+		cost := 2 * scopeMemory(scope)
+		if w.memory > stagingLimit || cost > stagingLimit-w.memory {
+			w.failure = ledger.ReasonTemporaryCap
+			return w
+		}
+		w.memory += cost
+		if old, exists := s.replay.current.index.scopes[id]; exists {
+			w.formedMemory -= scopeMemory(old)
+		}
+		w.formedMemory += scopeMemory(scope)
+		w.stage.putScope(scope)
 	}
-	w.formedMemory += scopeMemory(startedScope(started))
-	w.stage.putScope(startedScope(started))
+	w.orderedScopes = scopes.sorted()
+	w.beginScope(s)
 	w.nodes.compare = func(a, b ledger.GraphNode) int { return bytes.Compare(keyBytes(a.Key), keyBytes(b.Key)) }
 	w.edges.compare = func(a, b ledger.GraphEdge) int { return bytes.Compare(a.EdgeID[:], b.EdgeID[:]) }
 	w.coverage.compare = coverageOrder
@@ -97,10 +110,11 @@ func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
 		return ErrRecovery
 	}
 	if s.replay.attempt == nil {
-		started, ok := s.replay.next(s.configuration, s.epoch)
-		if !ok {
+		selection := s.replay.next(s.configuration, s.epoch, s.rebuildReason())
+		if !selection.runnable {
 			return nil
 		}
+		started := selection.started
 		if !s.replay.room(1024 + s.generationMemory) {
 			s.stopProjection(s.replay.through, s.replay.chainHash)
 			return nil
@@ -155,6 +169,9 @@ func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
 	a = s.replay.attempt
 	if output.final {
 		final := ledger.GraphVersionCommitted{AnalysisID: a.started.AnalysisID, AnalysisKey: a.started.AnalysisKey, BaseVersion: a.started.BaseVersion, BaseDigest: a.started.BaseDigest, ChunkCount: int64(len(s.work.chunks)), ChunksSHA256: ledger.Digest(s.work.chunksHash.Sum(nil)), GraphDigest: s.work.digest, StructuralSinceRebuild: s.replay.structural}
+		if a.started.Reason != ledger.GraphReasonIncremental {
+			final.StructuralSinceRebuild = 0
+		}
 		payload, err := final.Encode()
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -163,9 +180,12 @@ func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
 		if err := s.append(ctx, []ledger.Draft{graphDraft(ledger.TypeGraphVersionCommitted, a.started.AnalysisID, payload)}); err != nil {
 			return err
 		}
-		if s.replay.current.index.scopes[a.started.Source.WorkspaceID].Source == a.started.Source {
+		if a.started.Reason == ledger.GraphReasonIncremental && s.replay.current.index.scopes[a.started.Source.WorkspaceID].Source == a.started.Source {
 			s.generations[a.started.Source.WorkspaceID] = work.generation.generationState
 			s.generationMemory += work.generation.memory
+		} else if a.started.Reason != ledger.GraphReasonIncremental && s.replay.lastAttempt.phase == ledger.TypeGraphVersionCommitted {
+			s.generations = make(map[uuid.UUID]generationState)
+			s.generationMemory = 0
 		}
 		s.work = nil
 		return nil
@@ -191,7 +211,11 @@ func (s *Service) endAttempt(ctx context.Context, phase, reason string) error {
 		s.stopProjection(s.replay.through, s.replay.chainHash)
 		return nil
 	}
-	progress := ledger.GraphAnalysisProgress{AnalysisID: a.started.AnalysisID, AnalysisKey: a.started.AnalysisKey, Revision: a.revision + 1, Phase: phase, ReservedTotal: a.reserved, VerifiedCursor: a.cursor, Coverage: reasonCoverage(a.started.Source.WorkspaceID, reason)}
+	workspace := a.started.Source.WorkspaceID
+	if s.work != nil && s.work.generation != nil {
+		workspace = s.work.source().WorkspaceID
+	}
+	progress := ledger.GraphAnalysisProgress{AnalysisID: a.started.AnalysisID, AnalysisKey: a.started.AnalysisKey, Revision: a.revision + 1, Phase: phase, ReservedTotal: a.reserved, VerifiedCursor: a.cursor, Coverage: reasonCoverage(workspace, reason)}
 	payload, err := progress.Encode()
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -212,7 +236,7 @@ func (w *workState) retain(cost uint64) bool {
 	return true
 }
 func (w *workState) request(corpus []CorpusArtifact, allowance int64) AnalysisRequest {
-	return AnalysisRequest{AnalysisKey: w.started.AnalysisKey, Source: w.started.Source, ConfigurationSHA256: w.started.ConfigurationSHA256, Corpus: corpus, Allowance: allowance}
+	return AnalysisRequest{AnalysisKey: w.started.AnalysisKey, Source: w.source(), ConfigurationSHA256: w.started.ConfigurationSHA256, Corpus: corpus, Allowance: allowance}
 }
 func (w *workState) addCoverage(entries []ledger.CoverageEntry) bool {
 	var fresh []ledger.CoverageEntry
@@ -269,47 +293,80 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if w.failure != "" {
+		return &workOutput{reason: w.failure}, nil
+	}
 	var reason string
 	switch w.phase {
 	case 0:
-		if w.generation.done() {
-			w.phase = 1
-			return nil, nil
-		}
-		available := stagingLimit - min(stagingLimit, w.memory+w.generation.memory)
-		var err error
-		reason, err = w.generation.step(ctx, service.opts.ReadArtifacts, allowance, available)
-		if err != nil {
-			return nil, err
-		}
-		if w.generation.done() {
-			w.phase = 1
-		}
-	case 1:
-		var err error
-		reason, err = w.readCorpus(ctx, service, allowance)
-		if err != nil {
-			return nil, err
-		}
-	case 2:
-		end, charge := w.opaqueAt, int64(0)
-		for end < len(w.corpus) {
-			units := int64(2 + (len(w.corpus[end].Bytes)+255)/256)
-			if units > allowance-charge {
+		for allowance >= 512 && !w.generation.done() {
+			g := w.generation
+			beforeAccepted, beforeAfter, beforeInitial := g.accepted, g.after, g.initial
+			available := stagingLimit - min(stagingLimit, w.memory+g.memory)
+			used, failure, err := g.step(ctx, service.opts.ReadArtifacts, allowance, available)
+			if err != nil {
+				return nil, err
+			}
+			reason = failure
+			allowance -= used
+			if reason != "" || beforeAccepted == g.accepted && beforeAfter == g.after && beforeInitial == g.initial {
 				break
 			}
-			charge += units
-			end++
 		}
-		result, err := AnalyzeOpaque(ctx, w.request(w.corpus[w.opaqueAt:end], allowance))
-		if err != nil {
-			return nil, err
+		if w.generation.done() && reason == "" {
+			if w.started.Reason == ledger.GraphReasonIncremental && service.deps.incrementalBirths != nil {
+				service.deps.incrementalBirths(w.source().WorkspaceID, w.generation.births)
+			}
+			w.phase = 1
 		}
-		reason = w.addResult(result, allowance)
-		w.cursor += int64(end - w.opaqueAt)
-		w.opaqueAt = end
-		if end == len(w.corpus) {
-			w.phase = 3
+	case 1, 13:
+		phase := w.phase
+		for allowance >= 512 && w.phase == phase {
+			beforeAfter, beforeFetch := w.after, w.fetchAt
+			read := w.listCorpus
+			if phase == 13 {
+				read = w.readCorpus
+			}
+			used, failure, err := read(ctx, service, allowance)
+			if err != nil {
+				return nil, err
+			}
+			reason = failure
+			allowance -= used
+			if reason != "" || beforeAfter == w.after && beforeFetch == w.fetchAt && w.phase == phase {
+				break
+			}
+		}
+	case 14:
+		reason = w.formCorpus(allowance)
+	case 2:
+		for allowance >= 512 && w.phase == 2 {
+			end, charge := w.opaqueAt, int64(0)
+			for end < len(w.corpus) {
+				units := int64(2 + (len(w.corpus[end].Bytes)+255)/256)
+				if units > allowance-charge {
+					break
+				}
+				charge += units
+				end++
+			}
+			if end == w.opaqueAt && end < len(w.corpus) {
+				break
+			}
+			result, err := AnalyzeOpaque(ctx, w.request(w.corpus[w.opaqueAt:end], allowance))
+			if err != nil {
+				return nil, err
+			}
+			reason = w.addResult(result, allowance)
+			allowance -= result.WorkUsed
+			w.cursor += int64(end - w.opaqueAt)
+			w.opaqueAt = end
+			if end == len(w.corpus) {
+				w.phase = 3
+			}
+			if reason != "" {
+				break
+			}
 		}
 	case 3, 4, 5:
 		language := w.phase - 3
@@ -344,18 +401,23 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 		w.cursor += int64(len(request.Corpus))
 		w.phase++
 	case 6:
-		coverage := reasonCoverage(w.started.Source.WorkspaceID, ledger.ReasonDependencyUnapproved)
+		coverage := reasonCoverage(w.source().WorkspaceID, ledger.ReasonDependencyUnapproved)
 		coverage[0].Adapter = "go"
 		if !w.addCoverage(coverage) {
 			reason = ledger.ReasonTemporaryCap
 		}
-		w.phase = 7
+		if reason == "" && w.scopeIndex+1 < len(w.orderedScopes) {
+			w.scopeIndex++
+			w.beginScope(service)
+		} else {
+			w.phase = 7
+		}
 	case 7:
 		remaining := allowance
 		if !w.nodes.step(&remaining) || !w.edges.step(&remaining) || !w.coverage.step(&remaining) {
 			return nil, nil
 		}
-		w.sorted = State{Scopes: []Scope{startedScope(w.started)}, Nodes: w.nodes.result(), Edges: w.edges.result(), Coverage: w.coverage.result()}
+		w.sorted = State{Scopes: w.orderedScopes, Nodes: w.nodes.result(), Edges: w.edges.result(), Coverage: w.coverage.result()}
 		if len(service.replay.attempt.chunks) != 0 && service.replay.attempt.cursor.ArtifactIndex != w.cursor {
 			reason = ledger.ReasonRecoveryUnknown
 		} else {
@@ -365,24 +427,47 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 		var done bool
 		done, reason = w.buildDiff(service.replay.current, allowance)
 		if done && reason == "" {
-			if int64(w.formedNodes) > service.replay.nodeCap || w.formedEdges > 200000 || !service.replay.room(w.formedMemory+w.memory+w.generation.memory+service.generationMemory) {
+			if int64(w.formedNodes) > service.replay.nodeCap || int64(w.formedEdges) > service.replay.edgeCap || !service.replay.room(w.formedMemory+w.memory+w.generation.memory+service.generationMemory) {
 				reason = ledger.ReasonStateCap
 			} else {
-				w.phase = 9
+				w.phase = 11
 			}
 		}
 	case 9:
 		return w.emitChunk(service.replay.attempt, allowance)
 	case 10:
+		if len(w.chunks) < len(service.replay.attempt.chunks) {
+			reason = ledger.ReasonRecoveryUnknown
+		} else {
+			return &workOutput{final: true}, nil
+		}
+	case 11:
 		if w.canonical == nil {
-			w.canonical = newCanonicalWork(service.replay.current.state, w.sorted, w.started.Source.WorkspaceID)
+			w.canonical = newCanonicalWork(service.replay.current.state, w.sorted, w.scopes)
 		}
 		if w.canonical.step(allowance) {
-			if len(w.chunks) < len(service.replay.attempt.chunks) {
+			w.digest = ledger.Digest(w.canonical.hash.Sum(nil))
+			w.phase = 9
+			if w.started.Reason != ledger.GraphReasonIncremental {
+				w.phase = 12
+			}
+		}
+	case 12:
+		if w.baseCanonical == nil {
+			w.baseCanonical = newCanonicalWork(State{}, service.replay.current.state, nil)
+		}
+		if w.baseCanonical.step(allowance) {
+			baseDigest := ledger.Digest(w.baseCanonical.hash.Sum(nil))
+			if baseDigest != service.replay.current.digest {
 				reason = ledger.ReasonRecoveryUnknown
+			} else if baseDigest == w.digest {
+				if len(service.replay.attempt.chunks) != 0 {
+					reason = ledger.ReasonRecoveryUnknown
+				} else {
+					return &workOutput{final: true}, nil
+				}
 			} else {
-				w.digest = ledger.Digest(w.canonical.hash.Sum(nil))
-				return &workOutput{final: true}, nil
+				w.phase = 9
 			}
 		}
 	}
@@ -392,64 +477,66 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 	return nil, nil
 }
 
-func (w *workState) readCorpus(ctx context.Context, service *Service, allowance int64) (string, error) {
-	request := ArtifactRequest{WorkspaceID: w.started.Source.WorkspaceID, Tree: w.started.Source.Tree, AfterPath: w.after, MaxBytes: maxFrame, WorkAllowance: uint64(allowance)}
-	batch, reason, err := readArtifactPage(ctx, service.opts.ReadArtifacts, request)
-	if err != nil || reason != "" {
-		return reason, err
-	}
-	if batch.NextPath == w.after && !batch.Complete && batch.WorkUsed == uint64(allowance) {
-		w.stalls++
-	} else {
-		w.stalls = 0
-	}
-	if w.stalls >= 2 {
-		return ledger.ReasonHelperLimit, nil
-	}
-	for _, entry := range batch.Entries {
+func (w *workState) formCorpus(allowance int64) string {
+	for w.catalogAt < len(w.catalog) {
+		entry := w.catalog[w.catalogAt]
+		cost := int64(2 + (len(entry.Path)+255)/256)
+		if cost > allowance {
+			return ""
+		}
+		allowance -= cost
 		birth, present := w.generation.births[entry.Path]
 		if !present {
-			return ledger.ReasonSourceUnavailable, nil
+			return ledger.ReasonSourceUnavailable
 		}
-		key, err := ArtifactKey(w.started.Source.WorkspaceID, birth, entry.Path)
+		key, err := ArtifactKey(w.source().WorkspaceID, birth, entry.Path)
 		if err != nil {
-			return ledger.ReasonHelperLimit, nil
+			return ledger.ReasonHelperLimit
 		}
-		if entry.Reason != "" {
-			if !w.addCoverage([]ledger.CoverageEntry{covered(key, ledger.AdapterOpaque, entry.Reason)}) {
-				return ledger.ReasonTemporaryCap, nil
+		object, exists := w.objects[entry.GitOID]
+		reason := entry.Reason
+		if reason == "" && !exists {
+			reason = w.failures[entry.GitOID]
+			if reason == "" {
+				return ledger.ReasonSourceUnavailable
 			}
-			continue
 		}
-		if !w.retain(1024 + uint64(len(entry.Path)+len(key.LocalKey)) + uint64(len(entry.Bytes))*2) {
-			return ledger.ReasonTemporaryCap, nil
+		if reason != "" {
+			if !w.addCoverage([]ledger.CoverageEntry{covered(key, ledger.AdapterOpaque, reason)}) {
+				return ledger.ReasonTemporaryCap
+			}
+		} else {
+			memory := uint64(1024 + len(entry.Path) + len(key.LocalKey))
+			if !w.retain(memory) {
+				return ledger.ReasonTemporaryCap
+			}
+			w.corpusMemory += memory
+			artifact := CorpusArtifact{Path: entry.Path, Key: key, SHA256: object.digest, Bytes: object.body}
+			w.corpus = append(w.corpus, artifact)
+			language := -1
+			switch sourceAdapter(entry.Path) {
+			case ledger.AdapterPython:
+				language = 0
+			case ledger.AdapterSQL:
+				language = 1
+			case ledger.AdapterTypeScript:
+				language = 2
+			}
+			if path.Ext(entry.Path) == ".json" {
+				language = 2
+			}
+			if language >= 0 {
+				w.languages[language] = append(w.languages[language], artifact)
+				w.languageBytes[language] += uint64(len(object.body))
+			}
 		}
-		body := make([]byte, len(entry.Bytes))
-		copy(body, entry.Bytes)
-		artifact := CorpusArtifact{Path: entry.Path, Key: key, SHA256: entry.SHA256, Bytes: body}
-		w.corpus = append(w.corpus, artifact)
-		language := -1
-		switch sourceAdapter(entry.Path) {
-		case ledger.AdapterPython:
-			language = 0
-		case ledger.AdapterSQL:
-			language = 1
-		case ledger.AdapterTypeScript:
-			language = 2
-		}
-		if path.Ext(entry.Path) == ".json" {
-			language = 2
-		}
-		if language >= 0 {
-			w.languages[language] = append(w.languages[language], artifact)
-			w.languageBytes[language] += uint64(len(body))
-		}
+		w.catalogAt++
 	}
-	w.after = batch.NextPath
-	if batch.Complete {
-		w.phase = 2
-	}
-	return "", nil
+	w.memory -= w.catalogMemory
+	w.catalogMemory = 0
+	w.catalog, w.fetch, w.requested, w.failures = nil, nil, nil, nil
+	w.phase = 2
+	return ""
 }
 
 func (s *Service) verifyAdapter(ctx context.Context, adapter string, allowance int64) (bool, error) {
@@ -556,10 +643,6 @@ func (m *boundedMerge[T]) result() []T {
 	return m.runs[0]
 }
 
-func edgeWorkspace(edge ledger.GraphEdge, workspace uuid.UUID) bool {
-	return edge.From.OriginID == workspace || edge.To.OriginID == workspace || edge.Evidence.Artifact.OriginID == workspace
-}
-
 // elementUnits bounds encoded-byte work before allocating JSON. A JSON string
 // expands by at most six bytes per UTF-8 input byte; fixed fields fit the base.
 func elementUnits(value any) int64 {
@@ -586,7 +669,6 @@ func elementUnits(value any) int64 {
 }
 
 func (w *workState) buildDiff(base *graphImage, allowance int64) (bool, string) {
-	workspace := w.started.Source.WorkspaceID
 	for allowance > 0 {
 		var value any
 		switch w.diffPhase {
@@ -639,7 +721,7 @@ func (w *workState) buildDiff(base *graphImage, allowance int64) (bool, string) 
 		switch w.diffPhase {
 		case 0:
 			edge := value.(ledger.GraphEdge)
-			if _, exists := w.stage.edges[edge.EdgeID]; edgeWorkspace(edge, workspace) && !exists {
+			if _, exists := w.stage.edges[edge.EdgeID]; w.scopes.ownsEdge(edge) && !exists {
 				if !w.retain(256) {
 					return false, ledger.ReasonTemporaryCap
 				}
@@ -649,7 +731,7 @@ func (w *workState) buildDiff(base *graphImage, allowance int64) (bool, string) 
 			}
 		case 1:
 			node := value.(ledger.GraphNode)
-			if _, exists := w.stage.nodes[node.Key]; node.Key.OriginID == workspace && !exists {
+			if _, exists := w.stage.nodes[node.Key]; w.scopes.ownsNode(node.Key) && !exists {
 				if !w.retain(512) {
 					return false, ledger.ReasonTemporaryCap
 				}
@@ -681,7 +763,7 @@ func (w *workState) buildDiff(base *graphImage, allowance int64) (bool, string) 
 			}
 		case 4:
 			entry := value.(ledger.CoverageEntry)
-			if coverageWorkspace(entry, workspace) {
+			if w.scopes.ownsCoverage(entry) {
 				w.formedMemory -= coverageMemory(entry)
 			}
 		case 5:
@@ -834,15 +916,15 @@ type canonicalElement struct {
 }
 type canonicalWork struct {
 	base, replacement    State
-	workspace            uuid.UUID
+	scopes               scopeSet
 	section, left, right int
 	first, opened        bool
 	old, next            *canonicalElement
 	hash                 hash.Hash
 }
 
-func newCanonicalWork(base, replacement State, workspace uuid.UUID) *canonicalWork {
-	return &canonicalWork{base: base, replacement: replacement, workspace: workspace, hash: sha256.New()}
+func newCanonicalWork(base, replacement State, scopes scopeSet) *canonicalWork {
+	return &canonicalWork{base: base, replacement: replacement, scopes: scopes, hash: sha256.New()}
 }
 func (c *canonicalWork) value(state State, index int) (any, bool) {
 	switch c.section {
@@ -871,13 +953,13 @@ func (c *canonicalWork) fetch(value any) *canonicalElement {
 	switch value := value.(type) {
 	case Scope:
 		e.key = slices.Clone(value.Source.WorkspaceID[:])
-		e.owned = value.Source.WorkspaceID == c.workspace
+		_, e.owned = c.scopes[value.Source.WorkspaceID]
 	case ledger.GraphNode:
-		e.key, e.owned = keyBytes(value.Key), value.Key.OriginID == c.workspace
+		e.key, e.owned = keyBytes(value.Key), c.scopes.ownsNode(value.Key)
 	case ledger.GraphEdge:
-		e.key, e.owned = slices.Clone(value.EdgeID[:]), edgeWorkspace(value, c.workspace)
+		e.key, e.owned = slices.Clone(value.EdgeID[:]), c.scopes.ownsEdge(value)
 	case ledger.CoverageEntry:
-		e.key, e.owned = []byte(coverageKey(value)), coverageWorkspace(value, c.workspace)
+		e.key, e.owned = []byte(coverageKey(value)), c.scopes.ownsCoverage(value)
 	}
 	return e
 }

@@ -237,8 +237,12 @@ func TestGraphStatusSeparatesReadyFromDeclaredGaps(t *testing.T) {
 	}
 	reopened := f.open(serviceDeps{})
 	observed, err := reopened.Observe(context.Background())
-	if err != nil || observed.State != "ready" || observed.Digest != ready.Digest || !slices.Equal(observed.Reasons, ready.Reasons) {
-		t.Fatalf("replayed readiness: %+v, %v", observed, err)
+	if err != nil || observed.State != "pending" || observed.Digest != ready.Digest || !slices.Equal(observed.Reasons, ready.Reasons) {
+		t.Fatalf("load did not retain the readable image and declared gaps: %+v, %v", observed, err)
+	}
+	confirmed := driveGraph(t, reopened)
+	if confirmed.State != "ready" || confirmed.Version != ready.Version || confirmed.Digest != ready.Digest || !slices.Equal(confirmed.Reasons, ready.Reasons) {
+		t.Fatalf("zero-net confirmation changed readiness: %+v", confirmed)
 	}
 	// A failed source remains pending, but its terminal key cannot be run again.
 	f.accept(workspace, tree, strings.Repeat("e", 40), "readme.md")
@@ -338,7 +342,7 @@ func TestGraphHistoryAtEveryCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := driveGraph(t, service)
-	if status.Version <= int64(accepted.Last) || len(status.Pending) != 0 || len(service.replay.current.state.Nodes) != 1 || len(service.replay.current.state.Edges) != 0 || service.replay.structural != 1 {
+	if status.Version <= int64(accepted.Last) || len(status.Pending) != 0 || len(service.replay.current.state.Nodes) != 1 || len(service.replay.current.state.Edges) != 0 || service.replay.structural != 0 {
 		t.Fatalf("completed immutable graph=%+v state=%+v counter=%d", status, service.replay.current.state, service.replay.structural)
 	}
 	canonical, digest, err := service.replay.current.state.Canonical()
@@ -450,8 +454,18 @@ func assertGraphHistoryCursors(t *testing.T, fixture *graphFixture) {
 				}
 				phase, open = ledger.GraphPhaseSuperseded, false
 				if started.InputFrontier == frontier && latest[started.Source.WorkspaceID] == started.Source.Subject {
-					version, digest = int64(record.Seq), p.GraphDigest
-					covered[started.Source.WorkspaceID] = started.Source.Subject
+					if p.ChunkCount != 0 {
+						version = int64(record.Seq)
+					}
+					digest = p.GraphDigest
+					if started.Reason == ledger.GraphReasonIncremental {
+						covered[started.Source.WorkspaceID] = started.Source.Subject
+					} else {
+						for id, subject := range latest {
+							covered[id] = subject
+						}
+						structural = 0
+					}
 					phase = ledger.TypeGraphVersionCommitted
 				}
 			}

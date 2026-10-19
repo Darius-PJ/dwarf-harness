@@ -95,23 +95,24 @@ type serviceImage struct {
 // Service owns no ledger writer or background worker. op serializes replay and
 // explicit work; mu protects only the published image and cancellation handle.
 type Service struct {
-	op               sync.Mutex
-	mu               sync.Mutex
-	image            *serviceImage
-	closed, busy     bool
-	cancel           context.CancelFunc
-	opts             Options
-	deps             serviceDeps
-	replay           *replayState
-	configuration    ledger.Digest
-	epoch            int64
-	recovery, fenced bool
-	overLimit        bool
-	work             *workState
-	tools            [3]toolSlot
-	analyzer         *Analyzer
-	generations      map[uuid.UUID]generationState
-	generationMemory uint64
+	op                             sync.Mutex
+	mu                             sync.Mutex
+	image                          *serviceImage
+	closed, busy                   bool
+	cancel                         context.CancelFunc
+	opts                           Options
+	deps                           serviceDeps
+	replay                         *replayState
+	configuration                  ledger.Digest
+	epoch                          int64
+	recovery, fenced               bool
+	overLimit                      bool
+	work                           *workState
+	tools                          [3]toolSlot
+	analyzer                       *Analyzer
+	generations                    map[uuid.UUID]generationState
+	generationMemory               uint64
+	loadDue, epochDue, mismatchDue bool
 }
 
 func Open(options Options) (*Service, error) { return openService(options, serviceDeps{}) }
@@ -129,12 +130,15 @@ func openService(options Options, deps serviceDeps) (*Service, error) {
 			*target = &tool
 		}
 	}
-	s := &Service{opts: options, deps: deps, replay: newReplayState(), configuration: options.Tools.ConfigurationDigest(), generations: make(map[uuid.UUID]generationState)}
+	s := &Service{opts: options, deps: deps, replay: newReplayState(), configuration: options.Tools.ConfigurationDigest(), generations: make(map[uuid.UUID]generationState), loadDue: true}
 	if deps.retainedCap != nil {
 		s.replay.retainedCap = *deps.retainedCap
 	}
 	if deps.nodeCap > 0 {
 		s.replay.nodeCap = deps.nodeCap
+	}
+	if deps.edgeCap != nil {
+		s.replay.edgeCap = *deps.edgeCap
 	}
 	s.analyzer = NewAnalyzer(Tools{})
 	s.analyzer.configuration, s.analyzer.deps = s.configuration, deps
@@ -142,6 +146,7 @@ func openService(options Options, deps serviceDeps) (*Service, error) {
 		return nil, err
 	}
 	s.epoch = s.replay.lastEpoch
+	s.epochDue = s.epoch != 0 && s.configuration != s.replay.lastConfiguration
 	if s.epoch == 0 || s.configuration != s.replay.lastConfiguration {
 		s.epoch++
 	}
@@ -167,8 +172,15 @@ func (s *Service) snapshot() (serviceImage, error) {
 }
 
 func (s *Service) publish() {
-	image := s.replay.view(s.configuration, s.epoch)
+	selection := s.replay.next(s.configuration, s.epoch, s.rebuildReason())
+	if selection.confirmed {
+		s.loadDue, s.epochDue, s.mismatchDue = false, false, false
+	}
+	image := s.replay.view(selection)
 	image.available = true
+	if s.epoch != 0 && s.deps.projectionIdentity != nil {
+		image.status.Version, image.status.Digest = s.deps.projectionIdentity(image.status.Version, image.status.Digest)
+	}
 	if s.recovery || s.fenced {
 		image.status.State = "recovery_pending"
 	}
@@ -357,6 +369,7 @@ func (s *Service) Close() error {
 // hydrate uses exactly one bounded reader. Unconsumed payloads remain opaque;
 // their verified envelopes still supply the final checked chain hash.
 func (s *Service) hydrate(ctx context.Context, own []ledger.Draft, acknowledged appender.Committed) error {
+	s.checkProjection()
 	mark := s.opts.Through
 	if mark == 0 {
 		mark = s.opts.Durable()
@@ -371,6 +384,7 @@ func (s *Service) hydrate(ctx context.Context, own []ledger.Draft, acknowledged 
 		if own != nil {
 			return ErrHistory
 		}
+		s.publish()
 		return nil
 	}
 	reader, err := ledger.OpenReader(s.opts.LogDir, ledger.ReadOptions{Colony: s.opts.Colony, After: s.replay.through, Through: mark, Consume: graphConsumption(), AllTypes: true})
@@ -415,6 +429,9 @@ func (s *Service) hydrate(ctx context.Context, own []ledger.Draft, acknowledged 
 	if !found || next.through != mark {
 		return ErrHistory
 	}
+	if s.epoch != 0 && next.lastRebuild != s.replay.lastRebuild {
+		s.loadDue, s.epochDue, s.mismatchDue = false, false, false
+	}
 	s.replay = next
 	s.publish()
 	return nil
@@ -450,9 +467,9 @@ func (s *Service) append(ctx context.Context, drafts []ledger.Draft) error {
 }
 
 func (s *Service) stopProjection(through uint64, chainHash string) {
-	retainedCap, nodeCap := s.replay.retainedCap, s.replay.nodeCap
+	retainedCap, nodeCap, edgeCap := s.replay.retainedCap, s.replay.nodeCap, s.replay.edgeCap
 	s.replay = newReplayState()
-	s.replay.retainedCap, s.replay.nodeCap = retainedCap, nodeCap
+	s.replay.retainedCap, s.replay.nodeCap, s.replay.edgeCap = retainedCap, nodeCap, edgeCap
 	s.replay.through, s.replay.chainHash = through, chainHash
 	s.work, s.generations, s.overLimit = nil, nil, true
 	s.generationMemory = 0

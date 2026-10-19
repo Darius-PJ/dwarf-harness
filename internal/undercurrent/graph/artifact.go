@@ -159,13 +159,13 @@ func readArtifactPage(ctx context.Context, reader func(context.Context, Artifact
 	}
 }
 
-func (g *generationWalk) step(ctx context.Context, reader func(context.Context, ArtifactRequest) (ArtifactBatch, error), allowance int64, memoryAvailable uint64) (string, error) {
+func (g *generationWalk) step(ctx context.Context, reader func(context.Context, ArtifactRequest) (ArtifactBatch, error), allowance int64, memoryAvailable uint64) (int64, string, error) {
 	request := ArtifactRequest{WorkspaceID: g.workspace, Tree: g.tree, AfterPath: g.after, MaxBytes: maxFrame, WorkAllowance: uint64(allowance), ListOnly: true}
 	birth := g.registration
 	if !g.initial {
 		accepted := g.history[g.accepted]
 		if g.tree != accepted.predecessor {
-			return ledger.ReasonSourceUnavailable, nil
+			return 0, ledger.ReasonSourceUnavailable, nil
 		}
 		request.Tree, birth = accepted.tree, accepted.ref.Seq
 		start, _ := slices.BinarySearch(accepted.paths, g.after)
@@ -176,21 +176,21 @@ func (g *generationWalk) step(ctx context.Context, reader func(context.Context, 
 	}
 	batch, reason, err := readArtifactPage(ctx, reader, request)
 	if err != nil || reason != "" {
-		return reason, err
+		return int64(batch.WorkUsed), reason, err
 	}
-	if batch.NextPath == g.after && !batch.Complete && batch.WorkUsed == uint64(allowance) {
+	if allowance == quantum && batch.NextPath == g.after && !batch.Complete {
 		g.stalls++
 	} else {
 		g.stalls = 0
 	}
 	if g.stalls >= 2 {
-		return ledger.ReasonHelperLimit, nil
+		return int64(batch.WorkUsed), ledger.ReasonHelperLimit, nil
 	}
 	for _, entry := range batch.Entries {
 		if _, exists := g.births[entry.Path]; !exists {
 			cost := uint64(512 + len(entry.Path))
 			if cost > memoryAvailable || cost > stagingLimit-g.memory {
-				return ledger.ReasonTemporaryCap, nil
+				return int64(batch.WorkUsed), ledger.ReasonTemporaryCap, nil
 			}
 			memoryAvailable -= cost
 			g.memory += cost
@@ -206,6 +206,9 @@ func (g *generationWalk) step(ctx context.Context, reader func(context.Context, 
 			if i < len(batch.Entries) && batch.Entries[i].Path == path {
 				i++
 			} else {
+				if _, exists := g.births[path]; exists {
+					g.memory -= uint64(512 + len(path))
+				}
 				delete(g.births, path)
 			}
 		}
@@ -222,5 +225,5 @@ func (g *generationWalk) step(ctx context.Context, reader func(context.Context, 
 			}
 		}
 	}
-	return "", nil
+	return int64(batch.WorkUsed), "", nil
 }

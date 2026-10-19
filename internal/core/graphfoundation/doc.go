@@ -4,8 +4,11 @@
 // There is no sequencer callback, observer or background worker. Callers and
 // tests drive graph work only through explicit Step calls.
 //
-// S3 selects incremental work only. Rebuild selection, cadence and the
-// rebuild/incremental comparison belong to ticket 61 S4. This package is not
-// accepted-promotion product integration (ticket 63), U5 readiness or ticket 61's
-// close.
+// Real Git and C1 tests drive frozen C2 fixture records through incremental
+// analysis, all-workspace rebuilds, load confirmation, cadence, analyzer changes
+// and supersession. An independent accepted-ref/analyzer oracle checks rebuilt
+// topology, coverage and generations without reading graph records or images.
+// Paused work leaves Core appends and graph reads available. These are foundation
+// proofs, not live accepted-promotion integration (ticket 63), A2 hard containment,
+// C4 throughput, U5 readiness or ticket 61's close.
 package graphfoundation

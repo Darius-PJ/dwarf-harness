@@ -61,6 +61,7 @@ type attemptSummary struct {
 }
 type replayAttempt struct {
 	attemptSummary
+	scopes                 scopeSet
 	chunks                 [][]byte
 	stage                  *graphIndex
 	mutationPhase          int
@@ -99,9 +100,11 @@ type replayState struct {
 	lastEpoch         int64
 	lastConfiguration ledger.Digest
 	structural        int64
+	lastRebuild       uint64
 	metadataMemory    uint64
 	retainedCap       uint64
 	nodeCap           int64
+	edgeCap           int64
 }
 
 func newGraphIndex() *graphIndex {
@@ -178,7 +181,7 @@ func (g *graphIndex) state() State {
 }
 func newReplayState() *replayState {
 	index := newGraphIndex()
-	return &replayState{retainedCap: retainedLimit, nodeCap: 50000, chainHash: ledger.ZeroHash, registrations: make(map[uuid.UUID]registration), admissions: make(map[uuid.UUID]uuid.UUID), acceptances: make(map[uuid.UUID][]acceptance), current: &graphImage{state: index.state(), index: index, digest: ledger.EmptyGraphDigest}, terminal: make(map[ledger.Digest]attemptSummary), exhausted: make(map[ledger.Digest]bool), analysisIDs: make(map[uuid.UUID]bool)}
+	return &replayState{retainedCap: retainedLimit, nodeCap: 50000, edgeCap: 200000, chainHash: ledger.ZeroHash, registrations: make(map[uuid.UUID]registration), admissions: make(map[uuid.UUID]uuid.UUID), acceptances: make(map[uuid.UUID][]acceptance), current: &graphImage{state: index.state(), index: index, digest: ledger.EmptyGraphDigest}, terminal: make(map[ledger.Digest]attemptSummary), exhausted: make(map[ledger.Digest]bool), analysisIDs: make(map[uuid.UUID]bool)}
 }
 func (r *replayState) clone() *replayState {
 	c := *r
@@ -224,17 +227,43 @@ func (r *replayState) pending() []uuid.UUID {
 	slices.SortFunc(pending, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
 	return pending
 }
-func (r *replayState) next(configuration ledger.Digest, epoch int64) (ledger.GraphAnalysisStarted, bool) {
-	for _, id := range r.pending() {
-		started := r.startFor(id, configuration, epoch)
-		_, terminal := r.terminal[started.AnalysisKey]
-		if !terminal && !r.exhausted[exhaustionKey(started)] {
-			return started, true
+
+type workSelection struct {
+	started    ledger.GraphAnalysisStarted
+	runnable   bool
+	rebuildDue bool
+	exhausted  bool
+	confirmed  bool
+}
+
+func (r *replayState) next(configuration ledger.Digest, epoch int64, rebuildReason string) workSelection {
+	selection := workSelection{}
+	if started, exists := r.rebuildStart(configuration, epoch, rebuildReason); exists {
+		selection.rebuildDue = true
+		selection.exhausted = r.blocked(started, r.scopesAt(started))
+		if !selection.exhausted {
+			if terminal, exists := r.terminal[started.AnalysisKey]; !exists {
+				selection.started, selection.runnable = started, true
+				return selection
+			} else if terminal.phase == ledger.TypeGraphVersionCommitted {
+				selection.rebuildDue, selection.confirmed = false, true
+			}
 		}
 	}
-	return ledger.GraphAnalysisStarted{}, false
+	for _, id := range r.pending() {
+		started := r.startFor(id, configuration, epoch)
+		if r.exhausted[exhaustionKey(started)] {
+			selection.exhausted = true
+			continue
+		}
+		if _, terminal := r.terminal[started.AnalysisKey]; !terminal {
+			selection.started, selection.runnable = started, true
+			return selection
+		}
+	}
+	return selection
 }
-func (r *replayState) view(configuration ledger.Digest, epoch int64) *serviceImage {
+func (r *replayState) view(selection workSelection) *serviceImage {
 	status := Status{State: "ready", Through: r.through, ChainHash: r.chainHash, Version: r.current.version, Digest: r.current.digest, Pending: r.pending()}
 	reasons := make(map[string]bool)
 	for _, c := range r.current.state.Coverage {
@@ -242,20 +271,20 @@ func (r *replayState) view(configuration ledger.Digest, epoch int64) *serviceIma
 			reasons[reason] = true
 		}
 	}
+	if selection.exhausted {
+		reasons[ledger.ReasonWorkExhausted] = true
+	}
 	status.Reasons = slices.Sorted(maps.Keys(reasons))
-	if len(status.Pending) != 0 {
+	if len(status.Pending) != 0 || selection.rebuildDue {
 		status.State = "unknown"
 	}
-	if _, ok := r.next(configuration, epoch); ok {
+	if selection.runnable {
 		status.State = "pending"
 	}
 	last := r.lastAttempt
 	if r.attempt != nil {
 		last = r.attempt.attemptSummary
 		status.State = "pending"
-	}
-	if last.serviceReason != "" {
-		status.State = "unknown"
 	}
 	if last.serviceReason != "" && !slices.Contains(status.Reasons, last.serviceReason) {
 		status.Reasons = append(status.Reasons, last.serviceReason)
@@ -434,7 +463,7 @@ func (r *replayState) start(record ledger.Record, p ledger.GraphAnalysisStarted)
 	if p.AnalysisKey != AnalysisKey(p) {
 		return history(record, "analysis_key")
 	}
-	if r.attempt != nil || r.analysisIDs[p.AnalysisID] || r.exhausted[exhaustionKey(p)] {
+	if r.attempt != nil || r.analysisIDs[p.AnalysisID] {
 		return history(record, "attempt_state")
 	}
 	if _, exists := r.terminal[p.AnalysisKey]; exists {
@@ -458,14 +487,25 @@ func (r *replayState) start(record ledger.Record, p ledger.GraphAnalysisStarted)
 	if !foundSubject || !foundFrontier {
 		return history(record, "source_binding")
 	}
+	scopes := r.scopesAt(p)
+	if scopes[p.Source.WorkspaceID] != startedScope(p) || p.Reason != ledger.GraphReasonIncremental && p.Source.Subject != p.InputFrontier {
+		return history(record, "source_binding")
+	}
+	if r.blocked(p, scopes) {
+		return history(record, "attempt_state")
+	}
 	if p.BaseVersion != r.current.version || p.BaseDigest != r.current.digest {
 		return history(record, "version")
 	}
-	if !r.room(1024) {
+	scopeCost := uint64(0)
+	for _, scope := range scopes {
+		scopeCost += scopeMemory(scope)
+	}
+	if !r.room(1024 + scopeCost) {
 		return errRetainedCap
 	}
 	r.metadataMemory += 512
-	r.attempt = &replayAttempt{attemptSummary: attemptSummary{started: p}, retained: 512, removedNodes: make(map[ledger.NodeKey]bool), putNodes: make(map[ledger.NodeKey]bool), removedEdges: make(map[ledger.Digest]bool), putEdges: make(map[ledger.Digest]bool)}
+	r.attempt = &replayAttempt{attemptSummary: attemptSummary{started: p}, scopes: scopes, retained: 512 + scopeCost, removedNodes: make(map[ledger.NodeKey]bool), putNodes: make(map[ledger.NodeKey]bool), removedEdges: make(map[ledger.Digest]bool), putEdges: make(map[ledger.Digest]bool)}
 	r.analysisIDs[p.AnalysisID] = true
 	r.lastEpoch, r.lastConfiguration = p.AnalyzerEpoch, p.ConfigurationSHA256
 	return nil
@@ -494,16 +534,30 @@ func (r *replayState) progress(record ledger.Record, p ledger.GraphAnalysisProgr
 	}
 	a.revision, a.reserved, a.cursor, a.phase = p.Revision, p.ReservedTotal, p.VerifiedCursor, p.Phase
 	if p.Phase == ledger.GraphPhaseUnknown || p.Phase == ledger.GraphPhaseSuperseded {
-		exhausted := false
+		var exhausted *Scope
 		for _, coverage := range p.Coverage {
-			exhausted = exhausted || slices.Contains(coverage.Reasons, ledger.ReasonWorkExhausted)
+			if slices.Contains(coverage.Reasons, ledger.ReasonWorkExhausted) {
+				if exhausted != nil {
+					return history(record, "source_binding")
+				}
+				for _, scope := range a.scopes {
+					if coverage.Scope == workspaceScope(scope.Source.WorkspaceID) {
+						copy := scope
+						exhausted = &copy
+						break
+					}
+				}
+				if exhausted == nil {
+					return history(record, "source_binding")
+				}
+			}
 			for _, reason := range coverage.Reasons {
 				if reason == ledger.ReasonStateCap || reason == ledger.ReasonRecoveryUnknown {
 					a.serviceReason = reason
 				}
 			}
 		}
-		if exhausted {
+		if exhausted != nil {
 			if p.Phase != ledger.GraphPhaseUnknown || a.reserved != attemptLimit {
 				return history(record, "reservation")
 			}
@@ -511,7 +565,7 @@ func (r *replayState) progress(record ledger.Record, p ledger.GraphAnalysisProgr
 				return errRetainedCap
 			}
 			r.metadataMemory += 512
-			r.exhausted[exhaustionKey(a.started)] = true
+			r.exhausted[scopeExhaustionKey(a.started, *exhausted)] = true
 		}
 		return r.closeAttempt(a.phase)
 	}
@@ -529,13 +583,6 @@ func (r *replayState) closeAttempt(phase string) error {
 	return nil
 }
 
-func coverageWorkspace(entry ledger.CoverageEntry, workspace uuid.UUID) bool {
-	if entry.Scope == workspaceScope(workspace) {
-		return true
-	}
-	var key ledger.NodeKey
-	return json.Unmarshal([]byte(entry.Scope), &key) == nil && key.OriginID == workspace
-}
 func (r *replayState) chunk(record ledger.Record, p ledger.GraphDeltaChunk) error {
 	a := r.attempt
 	if a == nil || p.AnalysisID != a.started.AnalysisID || p.AnalysisKey != a.started.AnalysisKey || a.reserved == 0 {
@@ -545,13 +592,19 @@ func (r *replayState) chunk(record ledger.Record, p ledger.GraphDeltaChunk) erro
 		return history(record, "chunk_order")
 	}
 	if a.stage == nil {
-		if !r.room(r.current.memory + scopeMemory(startedScope(a.started))) {
+		scopeCost := uint64(0)
+		for _, scope := range a.scopes {
+			scopeCost += scopeMemory(scope)
+		}
+		if !r.room(r.current.memory + scopeCost) {
 			return errRetainedCap
 		}
 		a.stage = r.current.index.clone()
-		a.stage.putScope(startedScope(a.started))
+		for _, scope := range a.scopes {
+			a.stage.putScope(scope)
+		}
 		for key, coverage := range a.stage.coverage {
-			if coverageWorkspace(coverage, a.started.Source.WorkspaceID) {
+			if a.scopes.ownsCoverage(coverage) {
 				a.stage.memory -= coverageMemory(coverage)
 				delete(a.stage.coverage, key)
 			}
@@ -573,6 +626,9 @@ func (r *replayState) chunk(record ledger.Record, p ledger.GraphDeltaChunk) erro
 		if _, exists := a.stage.edges[key]; !exists {
 			return history(record, "dangling")
 		}
+		if !a.scopes.ownsEdge(a.stage.edges[key]) {
+			return history(record, "source_binding")
+		}
 		a.stage.removeEdge(key)
 		a.retained += 256
 		a.removedEdges[key] = true
@@ -583,6 +639,9 @@ func (r *replayState) chunk(record ledger.Record, p ledger.GraphDeltaChunk) erro
 		}
 		if _, exists := a.stage.nodes[key]; !exists {
 			return history(record, "dangling")
+		}
+		if !a.scopes.ownsNode(key) {
+			return history(record, "source_binding")
 		}
 		if len(a.stage.adjacency[key]) != 0 {
 			return history(record, "dangling")
@@ -595,7 +654,7 @@ func (r *replayState) chunk(record ledger.Record, p ledger.GraphDeltaChunk) erro
 		if a.removedNodes[node.Key] || a.putNodes[node.Key] || a.stage.nodes[node.Key] == node {
 			return history(record, "chunk_order")
 		}
-		if node.Key.OriginID != a.started.Source.WorkspaceID {
+		if !a.scopes.ownsNode(node.Key) {
 			return history(record, "source_binding")
 		}
 		if _, exists := a.stage.nodes[node.Key]; !exists && int64(len(a.stage.nodes)) == r.nodeCap {
@@ -621,7 +680,10 @@ func (r *replayState) chunk(record ledger.Record, p ledger.GraphDeltaChunk) erro
 		if _, ok := a.stage.nodes[edge.Evidence.Artifact]; !ok {
 			return history(record, "dangling")
 		}
-		if _, exists := a.stage.edges[edge.EdgeID]; !exists && len(a.stage.edges) == 200000 {
+		if !a.scopes.ownsEdge(edge) {
+			return history(record, "source_binding")
+		}
+		if _, exists := a.stage.edges[edge.EdgeID]; !exists && int64(len(a.stage.edges)) == r.edgeCap {
 			return history(record, "state_cap")
 		}
 		if !r.room(edgeMemory(edge) + 256) {
@@ -633,7 +695,7 @@ func (r *replayState) chunk(record ledger.Record, p ledger.GraphDeltaChunk) erro
 	}
 	for _, entry := range p.Coverage {
 		key := coverageKey(entry)
-		if _, duplicate := a.stage.coverage[key]; duplicate || !coverageWorkspace(entry, a.started.Source.WorkspaceID) {
+		if _, duplicate := a.stage.coverage[key]; duplicate || !a.scopes.ownsCoverage(entry) {
 			return history(record, "chunk_order")
 		}
 		if !r.room(coverageMemory(entry)) {
@@ -641,7 +703,7 @@ func (r *replayState) chunk(record ledger.Record, p ledger.GraphDeltaChunk) erro
 		}
 		a.stage.putCoverage(entry)
 	}
-	if int64(len(a.stage.nodes)) > r.nodeCap || len(a.stage.edges) > 200000 {
+	if int64(len(a.stage.nodes)) > r.nodeCap || int64(len(a.stage.edges)) > r.edgeCap {
 		return history(record, "state_cap")
 	}
 	if !r.room(uint64(len(record.Payload)) + 512) {
@@ -682,8 +744,15 @@ func (r *replayState) finish(record ledger.Record, p ledger.GraphVersionCommitte
 	if err != nil {
 		return history(record, "dangling")
 	}
-	if digest != p.GraphDigest || p.ChunkCount == 0 && index.scopes[a.started.Source.WorkspaceID] != startedScope(a.started) {
+	if digest != p.GraphDigest {
 		return history(record, "graph_digest")
+	}
+	if p.ChunkCount == 0 {
+		for id, scope := range a.scopes {
+			if index.scopes[id] != scope {
+				return history(record, "graph_digest")
+			}
+		}
 	}
 	structural := r.structural
 	if a.started.Reason != ledger.GraphReasonIncremental {
@@ -698,6 +767,9 @@ func (r *replayState) finish(record ledger.Record, p ledger.GraphVersionCommitte
 	}
 	r.current = &graphImage{state: state, index: index, version: version, digest: digest, memory: index.memory}
 	r.structural = structural
+	if a.started.Reason != ledger.GraphReasonIncremental {
+		r.lastRebuild = record.Seq
+	}
 	return r.closeAttempt(ledger.TypeGraphVersionCommitted)
 }
 

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
@@ -164,11 +165,14 @@ type ToolConfig struct{ Python, Node, TypeScriptParser *Tool }
 func (c ToolConfig) ConfigurationDigest() ledger.Digest { return configurationDigest(c) }
 
 type serviceDeps struct {
-	environment     func(string) []string
-	afterChildStart func()
-	beforeAppend    func([]ledger.Draft)
-	retainedCap     *uint64
-	nodeCap         int64
+	environment        func(string) []string
+	afterChildStart    func()
+	beforeAppend       func([]ledger.Draft)
+	retainedCap        *uint64
+	nodeCap            int64
+	edgeCap            *int64
+	projectionIdentity func(int64, ledger.Digest) (int64, ledger.Digest)
+	incrementalBirths  func(uuid.UUID, map[string]int64)
 }
 
 // ConfigurationDigest binds fixed script bytes, host tool identities and the
