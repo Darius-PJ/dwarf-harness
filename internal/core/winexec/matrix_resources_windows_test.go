@@ -227,17 +227,47 @@ func TestDefenderResourceEvidence(t *testing.T) {
 		var samples []resourceProcessMemory
 		logical := make(map[string]resourceLogicalFiles)
 		type phaseSample struct {
-			Phase     string
-			UTC       time.Time
-			ElapsedNS int64
+			Phase           string
+			UTC             time.Time
+			ElapsedNS       int64
+			StopStarted     bool
+			StopElapsedNS   int64
+			StopRemainingNS int64
+			PumpsKnown      bool
+			PumpsRetired    int
+			ChannelComplete [3]bool
+			PipeFailure     string
 		}
 		var phases []phaseSample
 		var gaps []string
 		var observationErr error
 		var ready resourceReady
 		started := time.Now()
+		var observedRun *nativeRun
+		recordPhase := func(phase string, r *nativeRun) {
+			now := time.Now()
+			sample := phaseSample{Phase: phase, UTC: now.UTC(), ElapsedNS: now.Sub(started).Nanoseconds(), StopStarted: !r.stopAt.IsZero()}
+			if sample.StopStarted {
+				sample.StopElapsedNS = now.Sub(r.stopAt).Nanoseconds()
+				sample.StopRemainingNS = r.stopAt.Add(r.request.Limits.StopGrace).Sub(now).Nanoseconds()
+			}
+			if r.pipes != nil {
+				r.pipes.mu.Lock()
+				sample.PumpsKnown = true
+				sample.PumpsRetired = r.pipes.done
+				sample.ChannelComplete = r.pipes.complete
+				failure := r.pipes.failure
+				r.pipes.mu.Unlock()
+				if failure != nil {
+					sample.PipeFailure = failure.Error()
+				}
+			}
+			phases = append(phases, sample)
+		}
 		e.observe = func(phase string, r *nativeRun) {
-			phases = append(phases, phaseSample{phase, time.Now().UTC(), time.Since(started).Nanoseconds()})
+			observedRun = r
+			recordPhase(phase, r)
+			defer recordPhase(phase+"_observer_return", r)
 			if phase == "suspended_verified" {
 				var actual windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 				queryErr := queryJob(r.job, windows.JobObjectExtendedLimitInformation, unsafe.Pointer(&actual), unsafe.Sizeof(actual))
@@ -284,7 +314,7 @@ func TestDefenderResourceEvidence(t *testing.T) {
 						samples = append(samples, sample)
 					}
 					readyHeap = resourceGoHeap()
-					phases = append(phases, phaseSample{"readiness-memory-sample", time.Now().UTC(), time.Since(started).Nanoseconds()})
+					recordPhase("readiness-memory-sample", r)
 					return nil
 				}()
 				// The query handle is closed before natural exit/cancel/timeout.
@@ -302,7 +332,9 @@ func TestDefenderResourceEvidence(t *testing.T) {
 			}
 			if phase == "tree_exited" {
 				for name, path := range map[string]string{"input": filepath.Join(r.dir, "input"), "work": filepath.Join(r.dir, "work"), "nativeProfile": r.profile.Path} {
+					recordPhase("logical-"+name+"-start", r)
 					count, err := resourceCountLogicalFiles(path)
+					recordPhase("logical-"+name+"-return", r)
 					if err != nil {
 						observationErr = errors.Join(observationErr, fmt.Errorf("logical %s: %w", name, err))
 						continue
@@ -317,6 +349,9 @@ func TestDefenderResourceEvidence(t *testing.T) {
 		receipt, runErr := e.Run(ctx, request)
 		cancel()
 		elapsed := time.Since(started)
+		if observedRun != nil {
+			recordPhase("run_returned", observedRun)
+		}
 		afterHeap := resourceGoHeap()
 		if observationErr != nil {
 			gaps = append(gaps, observationErr.Error())
@@ -367,6 +402,7 @@ func TestDefenderResourceEvidence(t *testing.T) {
 				"createdUTC": receipt.CreatedUTC, "resumedUTC": receipt.ResumedUTC, "closedUTC": receipt.ClosedUTC,
 				"setupNS": receipt.Setup.Nanoseconds(), "executionNS": receipt.Execution.Nanoseconds(), "stopNS": receipt.Stop.Nanoseconds(), "observedCallNS": elapsed.Nanoseconds(), "phases": phases,
 				"processMemoryAtReadiness": samples, "memoryScope": "per-process working sets and pagefile commit, peaks only through sampling time; never sum these into job or whole-machine RAM",
+				"phaseScope":  "observer entry/return and logical-file walk boundaries; StopElapsedNS/StopRemainingNS apply only when StopStarted; PumpsRetired counts ownership retirement, while ChannelComplete records clean completion, not per-channel retirement",
 				"jobCounters": jobCounters, "jobCounterScope": "User/Kernel are native 100-ns totals; PeakJobMemoryBytes/PeakProcessMemoryBytes are reported native PeakJobMemoryUsed/PeakProcessMemoryUsed, not a RAM or commit claim; I/O fields are native basic-and-I/O transfer totals",
 				"logicalFilesAtProvedTreeExit": logical, "fileScope": "ordinary no-follow logical file bytes before cleanup; not physical allocation and not Job I/O",
 				"goHeapBefore": beforeHeap, "goHeapAtReadiness": readyHeap, "goHeapAfter": afterHeap,
@@ -380,6 +416,11 @@ func TestDefenderResourceEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("RESOURCE_EVIDENCE %s", encoded)
+		if errors.Is(runErr, ErrQuarantined) {
+			stack := make([]byte, 512*1024)
+			n := runtime.Stack(stack, true)
+			t.Logf("RESOURCE_QUARANTINE_STACK scenario=%s truncated=%t\n%s", mode, n == len(stack), stack[:n])
+		}
 		if len(gaps) != 0 {
 			t.Fatalf("resource observer gaps: %v; native result=%+v error=%v", gaps, receipt, runErr)
 		}

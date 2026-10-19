@@ -36,7 +36,9 @@ func testRequest(t *testing.T, operation ...string) Request {
 	}
 	args := []string{"-test.run=^TestWinexecPayload$", "--", "--winexec-payload"}
 	args = append(args, operation...)
-	return Request{Program: "payload.exe", Args: args, Files: []InputFile{{Path: "payload.exe", Data: image}}, Deadline: time.Now().Add(25 * time.Second), Limits: Limits{Wall: 20 * time.Second, UserCPU: 10 * time.Second, CPUPercent: 100, JobCommitBytes: 2 << 30, Processes: 4, InputBytes: uint64(len(image)) + 1<<20, OutputBytes: 16384, StopGrace: 5 * time.Second}}
+	// Stop proof, pump retirement and cleanup share this test-selected budget.
+	// Leave headroom for the check's concurrent race-instrumented packages.
+	return Request{Program: "payload.exe", Args: args, Files: []InputFile{{Path: "payload.exe", Data: image}}, Deadline: time.Now().Add(25 * time.Second), Limits: Limits{Wall: 20 * time.Second, UserCPU: 10 * time.Second, CPUPercent: 100, JobCommitBytes: 2 << 30, Processes: 4, InputBytes: uint64(len(image)) + 1<<20, OutputBytes: 16384, StopGrace: 10 * time.Second}}
 }
 func testExecutor(t *testing.T) *Executor {
 	t.Helper()
