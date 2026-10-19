@@ -172,22 +172,24 @@ func stageInput(dir, owner, sid string, files []InputFile) ([]windows.Handle, er
 	return pins, nil
 }
 func unlink(ctx context.Context, path string) error {
+	var lastErr error
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return errors.Join(err, lastErr)
 		}
 		err := os.Remove(path)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) && !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
 			return err
 		}
+		lastErr = err
 		timer := time.NewTimer(10 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return errors.Join(ctx.Err(), lastErr)
 		case <-timer.C:
 		}
 	}

@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -134,6 +136,136 @@ func TestClosedCleanupDoesNotFollowReparseOrReuseEarly(t *testing.T) {
 	}
 	if data, err := os.ReadFile(canary); err != nil || string(data) != "external-owner-during-pending-cleanup" {
 		t.Fatalf("closed cleanup traversed the private reparse target: %q %v", data, err)
+	}
+}
+
+func TestMappedInputCleanup(t *testing.T) {
+	t.Parallel()
+	for _, held := range []bool{false, true} {
+		name := "released-during-cleanup"
+		if held {
+			name = "held-through-grace"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := testExecutor(t)
+			request := testRequest(t, "output", "1")
+			if held {
+				request.Limits.StopGrace = time.Second
+			}
+			var payload, marker string
+			var release func() error
+			var observationErr error
+			type releaseResult struct {
+				boundary, released time.Time
+				err                error
+			}
+			var released chan releaseResult
+			returned := make(chan struct{})
+			t.Cleanup(func() {
+				if release != nil {
+					if err := release(); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			e.observe = func(phase string, r *nativeRun) {
+				if phase == "tree_exited" {
+					payload = filepath.Join(r.dir, "input", "payload.exe")
+					marker = filepath.Join(r.dir, "fence.json")
+					path, err := windows.UTF16PtrFromString(payload)
+					if err != nil {
+						observationErr = err
+						return
+					}
+					file, err := windows.CreateFile(path, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+					if err != nil {
+						observationErr = err
+						return
+					}
+					const secImage = 0x01000000
+					mapping, mapErr := windows.CreateFileMapping(file, nil, windows.PAGE_READONLY|secImage, 0, 0, nil)
+					closeErr := windows.CloseHandle(file)
+					if mapErr != nil {
+						observationErr = errors.Join(mapErr, closeErr)
+						return
+					}
+					view, err := windows.MapViewOfFile(mapping, windows.FILE_MAP_READ, 0, 0, 0)
+					if err != nil {
+						observationErr = errors.Join(err, closeErr, windows.CloseHandle(mapping))
+						return
+					}
+					release = sync.OnceValue(func() error {
+						return errors.Join(windows.UnmapViewOfFile(view), windows.CloseHandle(mapping))
+					})
+					observationErr = closeErr
+				}
+				if phase == "closed_fence" && !held && observationErr == nil && release != nil {
+					released = make(chan releaseResult, 1)
+					started := time.Now()
+					go func() {
+						timer := time.NewTimer(300 * time.Millisecond)
+						defer timer.Stop()
+						var early error
+						select {
+						case <-timer.C:
+						case <-returned:
+							early = errors.New("Run returned before the mapped image release")
+						}
+						err := errors.Join(early, release())
+						released <- releaseResult{started, time.Now(), err}
+					}()
+				}
+			}
+			r, runErr := e.Run(context.Background(), request)
+			close(returned)
+			if released != nil {
+				result := <-released
+				t.Logf("mapping cleanup boundary=%s release=%s elapsed=%s error=%v", result.boundary.UTC().Format(time.RFC3339Nano), result.released.UTC().Format(time.RFC3339Nano), result.released.Sub(result.boundary), result.err)
+				observationErr = errors.Join(observationErr, result.err)
+			}
+			_, retainedErr := os.Stat(payload)
+			fence, fenceErr := os.ReadFile(marker)
+			if release != nil {
+				observationErr = errors.Join(observationErr, release())
+			}
+			closeErr := e.Close()
+			// Recover the real fixture even on the deliberate no-retry rule break.
+			if r.State == Closed && !r.ResourcesReusable {
+				reopened, err := Open(context.Background(), e.root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := reopened.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !held {
+				assertReusable(t, r, runErr)
+				if released == nil || observationErr != nil || closeErr != nil {
+					t.Fatalf("mapped-image release: observed=%t error=%v close=%v", released != nil, observationErr, closeErr)
+				}
+				return
+			}
+			if observationErr != nil {
+				t.Fatal(observationErr)
+			}
+			if !errors.Is(runErr, ErrCleanupPending) || !errors.Is(runErr, context.DeadlineExceeded) || !errors.Is(runErr, windows.ERROR_ACCESS_DENIED) || r.State != Closed || !r.RootExited || !r.TreeExited || r.ResourcesReusable || r.OutputState != Unpublishable {
+				t.Fatalf("mapped-image cleanup bound: %+v error=%v", r, runErr)
+			}
+			if !errors.Is(closeErr, ErrCleanupPending) || retainedErr != nil || fenceErr != nil {
+				t.Fatalf("mapped image or proof not retained: file=%v fence=%v close=%v", retainedErr, fenceErr, closeErr)
+			}
+			f, err := decodeFence(fence, e.rootID.String(), r.RunID.String())
+			if err != nil || f.State != "closed" || f.Proof != "job_empty" {
+				t.Fatalf("retained closed proof: %+v error=%v", f, err)
+			}
+			for _, path := range []string{payload, marker} {
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("explicit recovery retained %q: %v", path, err)
+				}
+			}
+		})
 	}
 }
 func TestRootOwnershipAndLock(t *testing.T) {

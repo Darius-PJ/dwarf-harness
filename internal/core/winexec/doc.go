@@ -24,7 +24,12 @@
 // cap and monotonic wall budget. Once stopping starts, StopGrace independently
 // bounds proof, I/O completion and cleanup, including after a natural root exit;
 // later cancellation or the wall deadline cannot consume that grace again.
-// Approximately five seconds accommodates observed transient scanner references.
+// Cleanup retries sharing violations and access denials on owned paths. A
+// persistent denial, including a DACL denying delete or a mapping outliving the
+// Job, consumes the remaining StopGrace or Open's five-second recovery cap.
+// Cleanup-pending prevents reuse and retains the closed fence until owned
+// contents and the profile are removed. Failed closed-fence writes and final
+// run-directory removal retain their existing quarantine behavior.
 // A kernel API itself is not preempted by these between-operation deadlines.
 //
 // the child's environment reveals the host's LocalAppData path, hence the user name; it is required by AppContainer launch and is not a grant beyond the owned profile folder.
