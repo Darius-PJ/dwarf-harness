@@ -178,6 +178,7 @@ type serviceDeps struct {
 	retainedCap        *uint64
 	nodeCap            int64
 	edgeCap            *int64
+	structuralCadence  int64
 	projectionIdentity func(int64, ledger.Digest) (int64, ledger.Digest)
 	incrementalBirths  func(uuid.UUID, map[string]int64)
 }
@@ -404,7 +405,7 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 	if adapter == "go" {
 		refused := false
 		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == 2 && outcome.WaitConfirmed && !outcome.ForcedStop {
+		if errors.As(err, &exit) && exit.ExitCode() == 3 && outcome.WaitConfirmed && !outcome.ForcedStop {
 			refused = true
 		}
 		var out AnalysisResult

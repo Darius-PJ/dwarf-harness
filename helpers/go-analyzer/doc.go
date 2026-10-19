@@ -14,7 +14,7 @@
 // The sole entry is --graph-helper go-analyzer/v1. One strict graph-helper/v1
 // request and one response use a big-endian uint32 length plus UTF-8 JSON, at
 // most 8 MiB including the prefix. The fixed response envelope and Cost shape
-// are unchanged. Exit 0 with a bound frame means joined; exit 2 is emitted only
+// are unchanged. Exit 0 with a bound frame means joined; exit 3 is emitted only
 // before the first go process, for a refused request/version/environment or
 // missing telemetry control. Any other exit is unjoined. The helper's 20 s
 // deadline precedes the parent's 30 s wall deadline. It waits for go version
@@ -53,6 +53,8 @@
 // An inside-tree replace is usable only through native selection and containment.
 // Scope failures discard all causal output. Consumers use a file entry first,
 // otherwise the Go workspace entry; absence of both never means complete.
+// Complete means dependency coverage under this metadata profile, with no type
+// check and no build; it does not mean the package compiles.
 //
 // Both the helper and Config.Env use the complete fixed allowlist: PATH is only
 // GOROOT/bin; GOTOOLCHAIN=local, GOENV/GOWORK/GOPROXY/GOPACKAGESDRIVER/GOSUMDB=off,

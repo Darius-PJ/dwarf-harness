@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 	"uuid"
 
@@ -28,6 +29,8 @@ var proofQueryJob = proofKernel.NewProc("QueryInformationJobObject")
 var proofAssignJob = proofKernel.NewProc("AssignProcessToJobObject")
 var proofInJob = proofKernel.NewProc("IsProcessInJob")
 var proofResume = proofKernel.NewProc("ResumeThread")
+var proofCreateCompletionPort = proofKernel.NewProc("CreateIoCompletionPort")
+var proofGetCompletionStatus = proofKernel.NewProc("GetQueuedCompletionStatus")
 
 type proofLimits struct {
 	ProcessTime, JobTime                           int64
@@ -90,6 +93,19 @@ func observeGoProcess(t *testing.T, program string, args, env []string, cwd stri
 	// inactive priority and scheduling fields.
 	if err := proofJobBuffer(proofQueryJob, job, 9, unsafe.Pointer(&actual), unsafe.Sizeof(actual)); err != nil || actual.Flags != limits.Flags {
 		t.Fatalf("unexpected Job limits: %+v, %v", actual, err)
+	}
+	portHandle, _, err := proofCreateCompletionPort.Call(^uintptr(0), 0, 0, 1)
+	if portHandle == 0 {
+		t.Fatalf("CreateIoCompletionPort: %v", err)
+	}
+	port := syscall.Handle(portHandle)
+	defer syscall.CloseHandle(port)
+	association := struct {
+		Key  uintptr
+		Port syscall.Handle
+	}{Key: uintptr(job), Port: port}
+	if err := proofJobBuffer(proofSetJob, job, 7, unsafe.Pointer(&association), unsafe.Sizeof(association)); err != nil {
+		t.Fatalf("associate Job completion port: %v", err)
 	}
 	ioRoot := t.TempDir()
 	paths := []string{filepath.Join(ioRoot, "stdin"), filepath.Join(ioRoot, "stdout"), filepath.Join(ioRoot, "stderr")}
@@ -169,10 +185,11 @@ func observeGoProcess(t *testing.T, program string, args, env []string, cwd stri
 	if ok == 0 || member == 0 {
 		t.Fatalf("suspended root membership: %d, %v", member, memberErr)
 	}
+	deadline := time.Now().Add(30 * time.Second)
 	if previous, _, err := proofResume.Call(uintptr(process.Thread)); previous != 1 {
 		t.Fatalf("ResumeThread suspend count %d: %v", previous, err)
 	}
-	event, err := syscall.WaitForSingleObject(process.Process, 30000)
+	event, err := syscall.WaitForSingleObject(process.Process, uint32(max(0, time.Until(deadline).Milliseconds())))
 	if err != nil || event != syscall.WAIT_OBJECT_0 {
 		t.Fatalf("root wait: event %d, %v", event, err)
 	}
@@ -180,6 +197,31 @@ func observeGoProcess(t *testing.T, program string, args, env []string, cwd stri
 	result := proofRun{PID: process.ProcessId}
 	if err := syscall.GetExitCodeProcess(process.Process, &result.Exit); err != nil {
 		t.Fatal(err)
+	}
+	// Job notifications are best-effort wake-ups, not evidence. Wait for
+	// ACTIVE_PROCESS_ZERO within the root's existing 30 s bound; if delivery
+	// is lost, take the same snapshots at the bound. Only the exact lifetime
+	// accounting and membership assertions below decide whether the Job joined.
+	var message uint32
+	var key, processID uintptr
+	pin.Pin(&message)
+	pin.Pin(&key)
+	pin.Pin(&processID)
+	defer pin.Unpin()
+	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
+		ok, _, err := proofGetCompletionStatus.Call(uintptr(port), uintptr(unsafe.Pointer(&message)), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&processID)), uintptr(max(1, remaining.Milliseconds())))
+		if ok == 0 {
+			if err == syscall.Errno(syscall.WAIT_TIMEOUT) {
+				break
+			}
+			t.Fatalf("Job completion notification: %v", err)
+		}
+		if key != association.Key {
+			t.Fatalf("unexpected Job completion key: %d", key)
+		}
+		if message == 4 { // JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO
+			break
+		}
 	}
 	if err := proofJobBuffer(proofQueryJob, job, 1, unsafe.Pointer(&result.Accounting), unsafe.Sizeof(result.Accounting)); err != nil {
 		t.Fatal(err)

@@ -119,6 +119,9 @@ func graphTestChild() {
 		os.Exit(2)
 	}
 	if mode == "go-refused" {
+		os.Exit(3)
+	}
+	if mode == "go-exit-2" {
 		os.Exit(2)
 	}
 	if mode == "go-unframed" {

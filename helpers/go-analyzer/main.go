@@ -18,23 +18,24 @@ import (
 
 func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
 
-// Exit 2 is used only before the first native process. Once go has started,
+// Exit 3 is used only before the first native process. Once go has started,
 // every return is either a joined bound frame (0) or an unjoined failure (1).
+// Runtime panic/fatal exits (2) are never pre-native refusal.
 func run(args []string, input io.Reader, output, diagnostics io.Writer) int {
 	if len(args) != 2 || args[0] != "--graph-helper" || args[1] != helperVersion {
-		return 2
+		return 3
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return 2
+		return 3
 	}
 	r, used, err := readRequest(input, cwd)
 	if err != nil || r.Go.HelperVersion != helperVersion {
-		return 2
+		return 3
 	}
 	env := profileEnvironment(r.Go, cwd)
 	if !environmentMatches(env) || !telemetryDisabled(cwd) {
-		return 2
+		return 3
 	}
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

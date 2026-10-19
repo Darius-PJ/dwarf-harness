@@ -112,12 +112,16 @@ func (r *replayState) rebuildStart(configuration ledger.Digest, epoch int64, rea
 }
 
 func (s *Service) rebuildReason() string {
+	cadence := s.deps.structuralCadence
+	if cadence == 0 {
+		cadence = 100
+	}
 	switch {
 	case s.epochDue:
 		return ledger.GraphReasonAnalyzerEpoch
 	case s.mismatchDue:
 		return ledger.GraphReasonDigestMismatch
-	case s.replay.structural >= 100:
+	case s.replay.structural >= cadence:
 		return ledger.GraphReasonStructural100
 	case s.loadDue:
 		return ledger.GraphReasonLoad

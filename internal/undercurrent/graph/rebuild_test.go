@@ -315,6 +315,72 @@ func TestGraphExhaustedKeyNeverRefreshes(t *testing.T) {
 	}
 }
 
+func TestGraphScaledStructuralCadenceAndLoadConfirmation(t *testing.T) {
+	t.Parallel()
+	// The real-Git foundation row keeps the frozen 100-acceptance boundary.
+	// This private threshold exercises the same transitions under race.
+	deps := serviceDeps{structuralCadence: 3}
+	f := newGraphFixture(t)
+	workspace := graphFixtureID(1)
+	f.register(workspace)
+	trees := [2]string{
+		f.tree("cadence-zero", map[string]string{"tick.md": "zero"}),
+		f.tree("cadence-one", map[string]string{"tick.md": "one"}),
+	}
+	f.accept(workspace, f.tree("cadence-empty", nil), trees[0], "tick.md")
+	service := f.open(deps)
+	before := driveGraph(t, service)
+	for i := 1; i <= 2; i++ {
+		f.accept(workspace, trees[(i-1)%2], trees[i%2], "tick.md")
+		if _, err := service.Step(t.Context()); err != nil || service.replay.attempt == nil || service.replay.attempt.started.Reason != ledger.GraphReasonIncremental {
+			t.Fatalf("acceptance below the threshold selected a rebuild: %v", err)
+		}
+		before = driveGraph(t, service)
+	}
+	if final := graphAttemptFinal(t, f, before.Attempt); final.StructuralSinceRebuild != 2 {
+		t.Fatalf("counter before the threshold: %+v", final)
+	}
+	threshold := f.accept(workspace, trees[0], trees[1], "tick.md")
+	selected, err := service.Step(t.Context())
+	if err != nil || service.replay.attempt == nil {
+		t.Fatalf("threshold acceptance did not start work: %+v, %v", selected, err)
+	}
+	started := service.replay.attempt.started
+	if started.Reason != ledger.GraphReasonStructural100 || started.Source.Subject.Seq != int64(threshold.First) || started.Source.Subject != started.InputFrontier || selected.Version != before.Version {
+		t.Fatalf("threshold did not select rebuild before incremental work: %+v status=%+v", started, selected)
+	}
+	rebuilt := driveGraph(t, service)
+	final := graphAttemptFinal(t, f, rebuilt.Attempt)
+	records := graphAttemptRecords(t, f, rebuilt.Attempt)
+	if rebuilt.State != "ready" || rebuilt.Version != int64(records[len(records)-1].Seq) || rebuilt.Version == before.Version || final.ChunkCount == 0 || final.StructuralSinceRebuild != 0 {
+		t.Fatalf("cadence did not publish and reset: %+v final=%+v", rebuilt, final)
+	}
+	page, err := service.Page(PageRequest{Version: rebuilt.Version, Digest: rebuilt.Digest, Through: rebuilt.Through, ChainHash: rebuilt.ChainHash, Kind: "nodes", Limit: 256})
+	if err != nil || len(page.Nodes) != 1 || page.Nodes[0].VersionSHA256 != ledger.Digest(sha256.Sum256([]byte("one"))) {
+		t.Fatalf("cadence published the wrong accepted content: %+v, %v", page, err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	service = f.open(deps)
+	mark := f.writer.Durable()
+	if observed, err := service.Observe(t.Context()); err != nil || observed.State != "pending" || f.writer.Durable() != mark {
+		t.Fatalf("load observation ran work: %+v, %v", observed, err)
+	}
+	if _, err := service.Step(t.Context()); err != nil || service.replay.attempt == nil || service.replay.attempt.started.Reason != ledger.GraphReasonLoad {
+		t.Fatalf("load confirmation was not selected: %v", err)
+	}
+	confirmed := driveGraph(t, service)
+	final = graphAttemptFinal(t, f, confirmed.Attempt)
+	if confirmed.State != "ready" || confirmed.Version != rebuilt.Version || confirmed.Digest != rebuilt.Digest || final.ChunkCount != 0 || final.ChunksSHA256 != ledger.EmptyChunksDigest || final.StructuralSinceRebuild != 0 || final.GraphDigest != final.BaseDigest {
+		t.Fatalf("load did not confirm the unchanged image: %+v final=%+v", confirmed, final)
+	}
+	mark = f.writer.Durable()
+	if status, err := service.Step(t.Context()); err != nil || status.State != "ready" || f.writer.Durable() != mark {
+		t.Fatalf("load remained due after confirmation: %+v, %v", status, err)
+	}
+}
+
 func TestGraphRebuildTriggerPrecedence(t *testing.T) {
 	t.Parallel()
 	for _, row := range []struct {

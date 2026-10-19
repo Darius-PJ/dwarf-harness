@@ -185,16 +185,21 @@ func TestGoForcedStopFencesHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"cancel", "overflow", "go-crash", "go-unframed", "go-malformed", "go-unknown", "go-refused"} {
+	for _, mode := range []string{"cancel", "overflow", "go-crash", "go-unframed", "go-malformed", "go-exit-2", "go-unknown", "go-refused"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 			defer cancel()
+			ownedRoot := t.TempDir()
 			command := exec.CommandContext(ctx, executable, "-test.run=^TestGoForcedStopFencesHost$", "-test.v")
-			command.Env = append(os.Environ(), "DWARF_GRAPH_GO_FENCE_HOST="+mode)
+			command.Env = append(os.Environ(), "DWARF_GRAPH_GO_FENCE_HOST="+mode, "TEMP="+ownedRoot, "TMP="+ownedRoot, "TMPDIR="+ownedRoot)
 			output, err := command.CombinedOutput()
 			if err != nil {
 				t.Fatalf("isolated fence host: %v\n%s", err, output)
+			}
+			retained, err := filepath.Glob(filepath.Join(ownedRoot, "graph-helper-*"))
+			if err != nil || len(retained) != 0 {
+				t.Fatalf("reaped fence fixture left helper directories: %v, %v", retained, err)
 			}
 			t.Logf("isolated %s:\n%s", mode, output)
 		})
@@ -306,6 +311,13 @@ func goFenceHost(t *testing.T, mode string) {
 		}
 	}
 	result, err := analyzer.Analyze(ctx, "go", request)
+	// Analyze has synchronously reaped this re-exec fixture, which starts no
+	// descendants. Keep asserting quarantine below, then remove only its files.
+	t.Cleanup(func() {
+		if err := os.RemoveAll(owned); err != nil {
+			t.Errorf("remove reaped helper fixture: %v", err)
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +354,7 @@ func goFenceHost(t *testing.T, mode string) {
 	if _, err := os.Stat(filepath.Join(owned, "corpus", "a.go")); err != nil {
 		t.Fatalf("uncertain invocation was not quarantined: %v", err)
 	}
-	t.Logf("quarantined until this host exits: %s", owned)
+	t.Logf("quarantined until reaped fixture cleanup: %s", owned)
 	fresh := NewAnalyzer(tools)
 	fresh.deps.afterChildStart = func() { t.Fatal("a fresh analyzer launched after the host fence") }
 	if _, err := fresh.Analyze(t.Context(), "go", request); !errors.Is(err, ErrRecovery) {

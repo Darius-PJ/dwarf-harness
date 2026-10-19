@@ -81,7 +81,7 @@
 // borrows ambient PATH, drivers or caches. The helper documents the qualified
 // native profile and the limitations of its measured descendant proof.
 // A Go exit is joined only after an unforced wait and a valid bound frame, or
-// exit 2's pre-native refusal. Every other started outcome retains its directory
+// exit 3's pre-native refusal. Every other started outcome retains its directory
 // and atomically fences every graph service and external analyzer in this host
 // until restart. Step/Resume then return recovery_pending/ErrRecovery without
 // reserving or reading Git. An in-flight unit is discarded. A shared launch
