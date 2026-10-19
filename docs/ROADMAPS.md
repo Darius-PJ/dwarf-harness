@@ -168,7 +168,7 @@ Notes on the edges:
 | C0 | Repository, toolchain, check command, decision log | Nothing; every owner input has arrived (D43–D46) | Done |
 | C1 | Action ledger and body store | C0 | Done |
 | C2 | Workspaces, observation, promotion, temporary scratch | C1; frozen `ledger-format`/`ledger-appender`; explicit D52 owner approval of integrated Core C2 boundary | Done |
-| C3 | Agent runtime | C2; owner: private remote with CI (D42) | Waiting |
+| C3 | Agent runtime | C2; owner: private remote with CI (D42), its first run green on Windows (D133) | Waiting (2026-10-19: the private remote exists and the reviewed CI workflow is on `main`; the owner's first push and its first run are pending) |
 | C4 | Validation runner and promotion gate; real-work gate | C3; U1.L and frozen `law-format` (D47); approved D52 boundary | Waiting |
 | C5 | Check registry and governance | C4 | Waiting |
 | C6 | Broker, role graph and Corps boards | C3; C5 for the Corps-authority gate | Waiting |

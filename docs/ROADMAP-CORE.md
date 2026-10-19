@@ -185,7 +185,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 | C compiler: llvm-mingw 20260922 outside `PATH`, reached through `CC` only for race-detector test builds and the GUI build. Not TDM-GCC or Microsoft's compiler | D28; core Appendix A.9 |
 | Import boundaries are enforced by the import-boundary test, against the per-layer allowlist | D29 |
 | Dependency tiers and records; vendoring when there is a reason; copied code only in `third_party/<name>/` | D29 |
-| Repository: `dwarf-harness` in its own folder, with `docs/` as the only living copy of the design documents; module path `github.com/Darius-PJ/dwarf-harness`; no remote yet | D30, D43 |
+| Repository: `dwarf-harness` in its own folder, with `docs/` as the only living copy of the design documents; module path `github.com/Darius-PJ/dwarf-harness`; the owner's private remote, `https://github.com/Darius-PJ/dwarf-harness`, created 2026-10-19, whose CI is C3's prerequisite (D42) | D30, D43, D133 |
 | A nested `gui/` module, created with the GUI roadmap; a committed `go.work`; the GUI module also tested with `GOWORK=off` | D44 |
 | The package layout and the import table the check enforces | D45 |
 | The full check passes before `main` moves; agents commit on their branches when the tests they touched pass | D46 |
@@ -457,9 +457,9 @@ Capture/materialization/integration and disk costs must be recorded against the 
 | Reservation | A core record that holds a call's maximum cost against every applicable budget scope until it is settled against reported usage (D22) |
 | Static configuration | Fixed provider, model and settings, used while the router runs only in shadow (routing §14 phase 0) |
 
-**Waits for.** C2, and the owner's private GitHub remote with CI on Windows, Linux and macOS (D42).
+**Waits for.** C2, and the owner's private GitHub remote with CI on Windows, Linux and macOS (D42), whose first run passes on Windows (D133).
 
-**Stop point.** Do not start before C2 is Done and the remote with CI exists. Live provider calls stop until the owner supplies API keys; everything that runs against the local fake SSE server can be finished first. All pre-C4 agent runs are testing-only, including live-provider drills; real colony work waits until C4 is Done (D52). C3 does not wait for C4 to complete its own runtime tests. Changes that add a dependency wait for the owner before reaching `main` (D41).
+**Stop point.** Do not start before C2 is Done and the CI's first run has passed on Windows; Linux and macOS failures become repair tickets worked alongside C3, and C3 cannot exit until all three pass (D133). Live provider calls stop until the owner supplies API keys; everything that runs against the local fake SSE server can be finished first. All pre-C4 agent runs are testing-only, including live-provider drills; real colony work waits until C4 is Done (D52). C3 does not wait for C4 to complete its own runtime tests. Changes that add a dependency wait for the owner before reaching `main` (D41).
 
 **Unblocks.** C4, C6, C7 and R0; U2's A1 suite together with C4. Generic eligibility/continuation/task capabilities also feed later C8/C7 integration without making C3 depend on C8, C9 or GUI.
 
@@ -513,7 +513,7 @@ Capture/materialization/integration and disk costs must be recorded against the 
 - a promotion request surfaces unavailable validation, leaves canonical unchanged and is never reported as successful delivery;
 - the check is green on Windows, Linux and macOS in CI.
 
-**Status.** Waiting.
+**Status.** Waiting (2026-10-19: the private remote exists and the reviewed CI workflow is on `main`; the owner's first push and its first run are pending).
 
 ### C4. Validation runner and promotion gate
 
