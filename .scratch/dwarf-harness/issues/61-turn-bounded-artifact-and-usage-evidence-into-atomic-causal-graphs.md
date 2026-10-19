@@ -77,3 +77,13 @@ The rest of this ticket waits:
 - A rebuild stages at most about 18,000 edges within its 64 MiB allowance, so above that size a colony cannot complete one. A later slice of this ticket audits that allowance before ticket 63 relies on rebuilds.
 
 Co-access is ticket 62, and live accepted promotion is ticket 63 (C4).
+
+2026-10-19 — S5 is on `main`: 2c870d3, its review fix-up f0525c7, and cd21243 for D134. Go dependencies now resolve through the `go/packages` helper, `helpers/go-analyzer`, which D132 admitted after the owner approved the go/packages helper at OG-GO. D134, the owner's amendment, turns off `go list`'s module index, which cut a cold call from seconds to about 0.2 s.
+- Every corpus `.go` file gets an explicit state.
+- An import that resolves outside the tree, an incomplete package, or a work or size cap leaves Go unknown.
+- The qualified tuple is go1.27.2 windows/amd64, toolchain SHA-256 b8cd508a0a7aac883cd750e9e75eb306d219e726bdf1cde29009490729437fbf, with the helper built from `golang.org/x/tools` v0.50.0, `golang.org/x/sync` v0.23.0 and `golang.org/x/mod` v0.41.0. Windows Job lifetime counts showed that `go list` starts no process of its own, and every check repeats that proof on the helper it builds.
+- Other platforms are unqualified, so a host enables Go only for a qualified tuple.
+
+Two items remain for a later slice of this ticket, S6, besides the producer freezes:
+- the rebuild staging allowance (about 18,000 edges in 64 MiB), audited before ticket 63 relies on rebuilds;
+- whether a helper result whose only failure is cleaning up its temporary folder is kept, with the leftover folder reported, rather than discarded and retried. That is the S5 review's follow-up.
