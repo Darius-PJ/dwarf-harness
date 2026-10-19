@@ -404,6 +404,9 @@ func goFenceHost(t *testing.T, mode string) {
 func TestGoPinsAndEnvironmentAreBinding(t *testing.T) {
 	t.Parallel()
 	good := installedGoTools(t)
+	if !slices.Contains(goConfiguration(good.config()).Environment, [2]string{"GODEBUG", "goindex=0"}) {
+		t.Fatal("Go configuration must bind GODEBUG=goindex=0")
+	}
 	request := analysisFixture(map[string]string{
 		"go.mod":      "module example.test/pins\n\ngo 1.27\n",
 		"a.go":        "package pins\nimport _ \"example.test/pins/dep\"\n",
@@ -534,7 +537,7 @@ func TestGoPinsAndEnvironmentAreBinding(t *testing.T) {
 			t.Fatal(err)
 		}
 		command := exec.CommandContext(t.Context(), executable, "-test.run=^TestGoPinsAndEnvironmentAreBinding$", "-test.v")
-		command.Env = append(os.Environ(), "DWARF_GRAPH_GO_ENV_HOST=1", "PATH="+filepath.Dir(driver), "GOPACKAGESDRIVER="+driver, "GOFLAGS=-not-a-valid-flag", "GOWORK="+filepath.Join(fake.GOROOT, "untrusted.work"))
+		command.Env = append(os.Environ(), "DWARF_GRAPH_GO_ENV_HOST=1", "PATH="+filepath.Dir(driver), "GOPACKAGESDRIVER="+driver, "GOFLAGS=-not-a-valid-flag", "GOWORK="+filepath.Join(fake.GOROOT, "untrusted.work"), "GODEBUG=goindex=1")
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("ambient overrides changed native resolution: %v\n%s", err, output)
 		}

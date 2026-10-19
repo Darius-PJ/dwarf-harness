@@ -288,7 +288,7 @@ func proofGoEnvironment(t *testing.T, config graph.GoToolConfig, root string, fi
 			t.Fatal(err)
 		}
 	}
-	values := map[string]string{"PATH": filepath.Dir(config.Toolchain.Path), "GOROOT": config.GOROOT, "GOTOOLCHAIN": "local", "GOENV": "off", "GOWORK": "off", "GOPROXY": "off", "GOPACKAGESDRIVER": "off", "GOFLAGS": "", "CGO_ENABLED": "0", "GOOS": config.GOOS, "GOARCH": config.GOARCH, "GOPATH": filepath.Join(root, "gopath"), "GOMODCACHE": filepath.Join(root, "gomodcache"), "GOCACHE": filepath.Join(root, "gocache"), "TEMP": filepath.Join(root, "tmp"), "TMP": filepath.Join(root, "tmp"), "TMPDIR": filepath.Join(root, "tmp"), "HOME": filepath.Join(root, "home"), "USERPROFILE": filepath.Join(root, "home"), "APPDATA": filepath.Join(root, "home"), "LOCALAPPDATA": filepath.Join(root, "home"), "GOSUMDB": "off", "GO111MODULE": "on", "LANG": "C", "LC_ALL": "C"}
+	values := map[string]string{"PATH": filepath.Dir(config.Toolchain.Path), "GOROOT": config.GOROOT, "GOTOOLCHAIN": "local", "GOENV": "off", "GOWORK": "off", "GOPROXY": "off", "GOPACKAGESDRIVER": "off", "GOFLAGS": "", "GODEBUG": "goindex=0", "CGO_ENABLED": "0", "GOOS": config.GOOS, "GOARCH": config.GOARCH, "GOPATH": filepath.Join(root, "gopath"), "GOMODCACHE": filepath.Join(root, "gomodcache"), "GOCACHE": filepath.Join(root, "gocache"), "TEMP": filepath.Join(root, "tmp"), "TMP": filepath.Join(root, "tmp"), "TMPDIR": filepath.Join(root, "tmp"), "HOME": filepath.Join(root, "home"), "USERPROFILE": filepath.Join(root, "home"), "APPDATA": filepath.Join(root, "home"), "LOCALAPPDATA": filepath.Join(root, "home"), "GOSUMDB": "off", "GO111MODULE": "on", "LANG": "C", "LC_ALL": "C"}
 	for _, name := range []string{"SystemRoot", "WINDIR"} {
 		if value := os.Getenv(name); value != "" {
 			values[name] = value

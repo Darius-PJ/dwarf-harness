@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -78,7 +79,11 @@ func runNativeFixture(t *testing.T, root string, files map[string]string) (reque
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, "--graph-helper", helperVersion)
-	cmd.Dir, cmd.Env, cmd.Stdin = root, profileEnvironment(r.Go, root), bytes.NewReader(requestFrame(r))
+	env := profileEnvironment(r.Go, root)
+	if !slices.Contains(env, "GODEBUG=goindex=0") {
+		t.Fatal("native profile must bind GODEBUG=goindex=0")
+	}
+	cmd.Dir, cmd.Env, cmd.Stdin = root, env, bytes.NewReader(requestFrame(r))
 	cmd.WaitDelay = 2 * time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

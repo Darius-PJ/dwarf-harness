@@ -58,9 +58,11 @@
 //
 // Both the helper and Config.Env use the complete fixed allowlist: PATH is only
 // GOROOT/bin; GOTOOLCHAIN=local, GOENV/GOWORK/GOPROXY/GOPACKAGESDRIVER/GOSUMDB=off,
-// GOFLAGS empty, CGO_ENABLED=0, GO111MODULE=on, and an explicit target. GOPATH,
-// GOMODCACHE, GOCACHE, temporary/config/home paths are private, initially empty
-// directories. Only OS runtime SystemRoot/WINDIR values are retained. The
+// GOFLAGS empty, GODEBUG=goindex=0, CGO_ENABLED=0, GO111MODULE=on, and an explicit
+// target. Disabling the standard-library module index is part of the bound
+// configuration (D134), not an ambient debug override. GOPATH, GOMODCACHE,
+// GOCACHE, temporary/config/home paths are private, initially empty directories.
+// Only OS runtime SystemRoot/WINDIR values are retained. The
 // library's PWD addition and GO111MODULE=off version probe are part of the
 // profile. No ambient driver, compiler, credentials, startup setting or cache
 // is borrowed. GOTELEMETRY is not a control: before any native process the

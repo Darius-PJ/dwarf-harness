@@ -153,7 +153,7 @@ func goEnvironmentRows(c GoToolConfig, root string) [][2]string {
 	values := map[string]string{
 		"PATH": filepath.Dir(c.Toolchain.Path), "GOROOT": c.GOROOT,
 		"GOTOOLCHAIN": "local", "GOENV": "off", "GOWORK": "off", "GOPROXY": "off", "GOPACKAGESDRIVER": "off",
-		"GOFLAGS": "", "CGO_ENABLED": "0", "GOOS": c.GOOS, "GOARCH": c.GOARCH,
+		"GOFLAGS": "", "GODEBUG": "goindex=0", "CGO_ENABLED": "0", "GOOS": c.GOOS, "GOARCH": c.GOARCH,
 		"GOPATH": join("gopath"), "GOMODCACHE": join("gomodcache"), "GOCACHE": join("gocache"),
 		"TEMP": join("tmp"), "TMP": join("tmp"), "TMPDIR": join("tmp"),
 		"HOME": join("home"), "USERPROFILE": join("home"), "APPDATA": join("home"), "LOCALAPPDATA": join("home"),

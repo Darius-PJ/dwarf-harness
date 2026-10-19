@@ -78,8 +78,11 @@
 // entry, with no per-file expansion. Consumers prefer a file entry, otherwise
 // the workspace entry; absence is never complete. No .go means no invocation.
 // Go has a private environment, caches and exact telemetry mode "off"; it never
-// borrows ambient PATH, drivers or caches. The helper documents the qualified
-// native profile and the limitations of its measured descendant proof.
+// borrows ambient PATH, drivers or caches. Both the helper process and Config.Env
+// fix GODEBUG=goindex=0, disabling the standard-library module index. That row is
+// part of the configuration digest and therefore the analyzer epoch (D134).
+// The helper documents the qualified native profile and the limitations of its
+// measured descendant proof.
 // A Go exit is joined only after an unforced wait and a valid bound frame, or
 // exit 3's pre-native refusal. Every other started outcome retains its directory
 // and atomically fences every graph service and external analyzer in this host

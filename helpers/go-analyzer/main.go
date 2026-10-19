@@ -126,7 +126,7 @@ func profileEnvironment(g goProfile, root string) []string {
 	values := map[string]string{
 		"PATH": filepath.Dir(g.ToolchainPath), "GOROOT": g.GOROOT,
 		"GOTOOLCHAIN": "local", "GOENV": "off", "GOWORK": "off", "GOPROXY": "off", "GOPACKAGESDRIVER": "off",
-		"GOFLAGS": "", "CGO_ENABLED": "0", "GOOS": g.GOOS, "GOARCH": g.GOARCH,
+		"GOFLAGS": "", "GODEBUG": "goindex=0", "CGO_ENABLED": "0", "GOOS": g.GOOS, "GOARCH": g.GOARCH,
 		"GOPATH": filepath.Join(root, "gopath"), "GOMODCACHE": filepath.Join(root, "gomodcache"), "GOCACHE": filepath.Join(root, "gocache"),
 		"TEMP": filepath.Join(root, "tmp"), "TMP": filepath.Join(root, "tmp"), "TMPDIR": filepath.Join(root, "tmp"),
 		"HOME": filepath.Join(root, "home"), "USERPROFILE": filepath.Join(root, "home"), "APPDATA": filepath.Join(root, "home"), "LOCALAPPDATA": filepath.Join(root, "home"),
