@@ -58,3 +58,5 @@ Canonical sections: Core roadmap C3; its cited controlling Core design and lates
 - **macOS** (`macos-15-arm64`, image 20260907.0337.1, Git 2.55.0): staticcheck, tests and race failed, in the same four packages. The check took 207.4 s.
 
 Causes and repairs are in [ticket 138](138-repair-the-first-three-os-ci-run.md). This ticket's CI start gate (D133, a green Windows job) is not met; a passing run on the repair clears it.
+
+2026-10-20 — The second run, on the repair branch `fix/ci-portability` at 6c59119, passed on Linux (665.1 s) and macOS (361.1 s). On Windows (1,805.8 s) one test failed, `TestCaptureUnreadable`, in both the tests and race steps; the cause and its repair are in [ticket 138](138-repair-the-first-three-os-ci-run.md). The gate is still not met.
