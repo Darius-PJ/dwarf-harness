@@ -85,6 +85,26 @@ func TestCaptureLongPath(t *testing.T) {
 	assertRefusal(t, err, "unobservable_path")
 }
 
+func TestCaptureLongPathReadable(t *testing.T) {
+	t.Parallel()
+	f := newCaptureFixture(t)
+	f.p.Normalization.LongPaths = "true"
+	path := filepath.ToSlash(filepath.Join(strings.Repeat("a", 100), strings.Repeat("b", 100), strings.Repeat("c", 100), "long.txt"))
+	const content = "long path bytes\n"
+	writeTestFile(t, filepath.Join(f.s.Worktree.Dir, filepath.FromSlash(path)), []byte(content))
+	for _, row := range manifestRows(t, mustCapture(t, f, sealCapture)) {
+		if row.Path != path {
+			continue
+		}
+		body, err := f.f.git.readBlob(context.Background(), f.f.colony, f.p.CommonDir, row.ID)
+		if err != nil || string(body) != content {
+			t.Fatalf("long-path captured content: %q, %v", body, err)
+		}
+		return
+	}
+	t.Fatal("long path missing from capture")
+}
+
 func TestCaptureUnreadable(t *testing.T) {
 	t.Parallel()
 	f := newCaptureFixture(t)

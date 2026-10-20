@@ -313,7 +313,7 @@ func (e *captureEngine) capture(ctx context.Context, s captureScratch, baseline 
 		if err != nil || !sameObservation(observation.info, before) {
 			return result, refuse("scratch_changed", path, "file changed after walk")
 		}
-		file, err := os.Open(full)
+		file, err := openCaptureFile(full)
 		if err != nil {
 			return result, refuse("unreadable", path, err.Error())
 		}
