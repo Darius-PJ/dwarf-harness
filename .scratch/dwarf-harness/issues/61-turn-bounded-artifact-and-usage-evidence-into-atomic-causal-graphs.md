@@ -87,3 +87,5 @@ Co-access is ticket 62, and live accepted promotion is ticket 63 (C4).
 Two items remain for a later slice of this ticket, S6, besides the producer freezes:
 - the rebuild staging allowance (about 18,000 edges in 64 MiB), audited before ticket 63 relies on rebuilds;
 - whether a helper result whose only failure is cleaning up its temporary folder is kept, with the leftover folder reported, rather than discarded and retried. That is the S5 review's follow-up.
+
+2026-10-20 — The first three-OS CI run found a defect in S5: when the temporary folder has a second name, an 8.3 short name on Windows or `/var` on macOS, the Go analyzer compared the root it created, in that form, with the canonical paths `go list` reports, and left in-tree files unknown. [Ticket 138](138-repair-the-first-three-os-ci-run.md) resolves the root once when it is created, with regression rows for both kinds of alias.
