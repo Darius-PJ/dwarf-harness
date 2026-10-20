@@ -11,6 +11,29 @@ import (
 	"testing"
 )
 
+func TestStaticChecksCoverTargets(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/static\n\ngo 1.27\n")
+	writeFile(t, filepath.Join(root, "base.go"), "package fixture\n")
+	linuxFile := filepath.Join(root, "only_linux.go")
+	writeFile(t, linuxFile, "//go:build linux\n\npackage fixture\nfunc broken() { value := 1; value = value }\n")
+	var log strings.Builder
+	err := checkStatic(&log, "vet", goCommand(root, "0", "vet", "./..."))
+	if err == nil {
+		t.Fatalf("Linux-only vet error was missed:\n%s", log.String())
+	}
+	failed := regexp.MustCompile(`[a-z]+/(?:amd64|arm64)`).FindAllString(err.Error(), -1)
+	if !slices.Equal(failed, []string{"linux/amd64", "linux/arm64"}) {
+		t.Fatalf("wrong failed targets: %v: %v\n%s", failed, err, log.String())
+	}
+	writeFile(t, linuxFile, "//go:build linux\n\npackage fixture\nfunc valid() {}\n")
+	log.Reset()
+	if err := checkStatic(&log, "vet", goCommand(root, "0", "vet", "./...")); err != nil {
+		t.Fatalf("valid module failed static analysis: %v\n%s", err, log.String())
+	}
+}
+
 func TestParseGoVersion(t *testing.T) {
 	tests := []struct {
 		name string

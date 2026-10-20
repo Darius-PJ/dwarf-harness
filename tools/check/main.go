@@ -8,6 +8,7 @@
 // failed. Verdicts and the summary include elapsed seconds for executed steps
 // and the total. Every child go command sets GOTOOLCHAIN=local and an explicit
 // CGO_ENABLED itself instead of inheriting them (D28, D45).
+// Vet, staticcheck and govulncheck analyze every supported target.
 package main
 
 import (
@@ -45,7 +46,7 @@ func run(w io.Writer, args []string) int {
 	checks, cleanup := steps(root)
 	code := runAll(w, checks, race)
 	if err := cleanup(); err != nil {
-		fmt.Fprintf(w, "FAIL: removing the check-owned Go helper: %v\n", err)
+		fmt.Fprintf(w, "FAIL: removing check-owned tools: %v\n", err)
 		return 1
 	}
 	return code
@@ -82,19 +83,38 @@ type step struct {
 }
 
 func steps(root string) ([]step, func() error) {
-	var helperDir string
+	var helperDir, staticDir string
 	var nativeEnv []string
 	var provisionErr error
 	provisioned := false
-	goStep := func(cgo string, args ...string) func(io.Writer) error {
-		return func(w io.Writer) error { return stream(w, goCommand(root, cgo, args...)) }
+	staticStep := func(name, pkg string, args ...string) func(io.Writer) error {
+		return func(w io.Writer) error {
+			if staticDir == "" {
+				var err error
+				staticDir, err = os.MkdirTemp("", "dwarf-check-static-")
+				if err != nil {
+					return err
+				}
+			}
+			tool := filepath.Join(staticDir, name+exeSuffix())
+			// go tool would build the analyzer for the analysis target too.
+			// Build the pinned module tool for this host, then vary its inputs.
+			build := goCommand(root, "0", "build", "-trimpath", "-o", tool, pkg).
+				with("GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH)
+			if err := stream(w, build); err != nil {
+				return err
+			}
+			c := goCommand(root, "0", args...)
+			c.name = tool
+			return checkStatic(w, name, c)
+		}
 	}
 	return []step{
 		{"toolchain", func(w io.Writer) error { return checkToolchain(w, root) }},
 		{"gofmt", func(w io.Writer) error { return checkFormat(w, root) }},
-		{"vet", goStep("0", "vet", "./...")},
-		{"staticcheck", goStep("0", "tool", "staticcheck", "./...")},
-		{"govulncheck", goStep("0", "tool", "govulncheck", "-db", "https://vuln.go.dev", "./...")},
+		{"vet", func(w io.Writer) error { return checkStatic(w, "vet", goCommand(root, "0", "vet", "./...")) }},
+		{"staticcheck", staticStep("staticcheck", "honnef.co/go/tools/cmd/staticcheck", "./...")},
+		{"govulncheck", staticStep("govulncheck", "golang.org/x/vuln/cmd/govulncheck", "-db", "https://vuln.go.dev", "./...")},
 		{"import boundary", func(w io.Writer) error { return checkBoundary(w, root) }},
 		// Disable test caching: validating and storing results re-stats every logged path
 		// (863,700 for internal/core/workspace; a cache hit took 293 s on Windows).
@@ -117,10 +137,7 @@ func steps(root string) ([]step, func() error) {
 		}},
 		{"cross builds", func(w io.Writer) error { return checkCrossBuilds(w, root) }},
 	}, func() error {
-		if helperDir == "" {
-			return nil
-		}
-		return os.RemoveAll(helperDir)
+		return errors.Join(os.RemoveAll(helperDir), os.RemoveAll(staticDir))
 	}
 }
 
@@ -405,6 +422,20 @@ func exeSuffix() string {
 		return ".exe"
 	}
 	return ""
+}
+
+// checkStatic analyzes every supported target, retaining all failed targets.
+func checkStatic(w io.Writer, name string, c command) error {
+	var failed []string
+	for _, t := range targets {
+		if err := stream(w, c.with("GOOS="+t.goos, "GOARCH="+t.goarch)); err != nil {
+			failed = append(failed, t.String())
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%s failed for %s", name, strings.Join(failed, ", "))
+	}
+	return nil
 }
 
 // checkCrossBuilds is step 8: the module builds without cgo for every target.
