@@ -668,34 +668,3 @@ func foundationGoConfig(t *testing.T) graph.GoToolConfig {
 	}
 	return graph.GoToolConfig{Helper: identity(helper, "go-analyzer/v1"), Toolchain: identity(tool, "go1.27.2"), GOROOT: root, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
 }
-
-// foundationDerivedGoFiles copies only immutable HEAD blobs. The generated
-// module/probe make a bounded metadata fixture, not a claim that the repository
-// itself, or these deliberately incomplete packages, compiles.
-func foundationDerivedGoFiles(t *testing.T) map[string]string {
-	t.Helper()
-	root, err := filepath.Abs("../../..")
-	if err != nil {
-		t.Fatal(err)
-	}
-	git := func(args ...string) []byte {
-		command := exec.CommandContext(t.Context(), "git", args...)
-		command.Dir = root
-		output, err := command.Output()
-		if err != nil {
-			t.Fatalf("immutable derived fixture %v: %v", args, err)
-		}
-		return output
-	}
-	commit := strings.TrimSpace(string(git("rev-parse", "HEAD")))
-	files := map[string]string{
-		"go.mod":        "module github.com/Darius-PJ/dwarf-harness\n\ngo 1.27\n\ntoolchain go1.27.2\n",
-		"probe/main.go": "package main\nimport _ \"github.com/Darius-PJ/dwarf-harness/internal/undercurrent/graph\"\nfunc init() { panic(\"analyzed target executed\") }\nfunc main() {}\n",
-	}
-	for _, path := range []string{"internal/undercurrent/graph/model.go", "contract/ledger/digest.go", "internal/undercurrent/graph/helper_test.go"} {
-		body := git("show", commit+":"+path)
-		files[path] = string(body)
-		t.Logf("derived source commit=%s path=%s sha256=%x bytes=%d", commit, path, sha256.Sum256(body), len(body))
-	}
-	return files
-}

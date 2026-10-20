@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -263,23 +262,6 @@ func TestIndexInstallOwnedLock(t *testing.T) {
 				t.Fatalf("index installation moved branch: %s %v", branch, err)
 			}
 		})
-	}
-}
-
-// Avoid Git's racy-stat fallback without sleeping or testing a duration.
-func ageMaterializeFiles(t *testing.T, root string) {
-	t.Helper()
-	past := time.Unix(1_000_000_000, 0)
-	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && d.Name() != ".git" {
-			return os.Chtimes(path, past, past)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
 	}
 }
 

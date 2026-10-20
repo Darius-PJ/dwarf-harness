@@ -103,7 +103,7 @@ func TestInspectRefuses(t *testing.T) {
 	t.Run("bare", func(t *testing.T) {
 		t.Parallel()
 		f := newGitFixture(t, "sha1")
-		bare := filepath.Join(t.TempDir(), "bare.git")
+		bare := filepath.Join(canonicalTempDir(t), "bare.git")
 		gitCommand(t, f.env, f.root, nil, "clone", "--no-hardlinks", "--bare", f.root, bare)
 		p, err := f.git.inspect(context.Background(), bare)
 		if err != nil {

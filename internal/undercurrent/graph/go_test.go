@@ -401,6 +401,48 @@ func goFenceHost(t *testing.T, mode string) {
 	}
 }
 
+func TestGoAnalyzerTempAliases(t *testing.T) {
+	t.Parallel()
+	tools := Tools{Go: installedGoTools(t)}
+	if os.Getenv("DWARF_GRAPH_GO_TEMP_ALIAS_CHILD") == "1" {
+		request := analysisFixture(map[string]string{
+			"go.mod":     "module example.test/alias\n\ngo 1.27\n",
+			"a.go":       "package alias\nimport _ \"example.test/alias/dep\"\n",
+			"dep/dep.go": "package dep\n",
+		})
+		request.ConfigurationSHA256 = ConfigurationDigest(tools)
+		result, err := NewAnalyzer(tools).Analyze(t.Context(), "go", request)
+		if err != nil || len(result.Nodes) != 1 || len(result.Edges) != 1 {
+			t.Fatalf("aliased temporary root lost native dependencies: %+v, %v", result, err)
+		}
+		assertCoverage(t, request, result, "go", map[string]string{"a.go": "", "dep/dep.go": ""})
+		entries, err := os.ReadDir(os.TempDir())
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("analysis retained owned temporary files: %v, %v", entries, err)
+		}
+		return
+	}
+	kinds := []string{"symlink"}
+	if runtime.GOOS == "windows" {
+		kinds = []string{"short"}
+	}
+	for _, kind := range kinds {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			alias := goTempAlias(t)
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := exec.CommandContext(t.Context(), executable, "-test.run=^TestGoAnalyzerTempAliases$", "-test.v", "-test.count=1")
+			command.Env = append(os.Environ(), "DWARF_GRAPH_GO_TEMP_ALIAS_CHILD=1", "TEMP="+alias, "TMP="+alias, "TMPDIR="+alias)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("native analysis through %s: %v\n%s", kind, err, output)
+			}
+		})
+	}
+}
+
 func TestGoPinsAndEnvironmentAreBinding(t *testing.T) {
 	t.Parallel()
 	good := installedGoTools(t)

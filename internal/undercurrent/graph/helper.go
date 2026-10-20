@@ -345,6 +345,13 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 			}
 		}
 	}()
+	// Only this freshly created, owned root may be resolved through a temp
+	// directory alias. Corpus entries still undergo the helper's no-follow checks.
+	canonicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return AnalysisResult{}, err
+	}
+	dir = canonicalDir
 	root := filepath.Join(dir, "corpus")
 	if err := os.Mkdir(root, 0700); err != nil {
 		return AnalysisResult{}, err

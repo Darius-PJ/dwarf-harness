@@ -91,6 +91,15 @@ func gitCommand(t testing.TB, env []string, dir string, input []byte, args ...st
 	return out
 }
 
+func canonicalTempDir(t testing.TB) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func writeTestFile(t testing.TB, path string, b []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -144,7 +153,7 @@ func fixtureSeed(t testing.TB, format string) *gitFixtureSeed {
 		}
 
 		// A private copy must preserve every inspected input, not just its objects.
-		copyRoot, copyEnv := t.TempDir(), testEnv(t)
+		copyRoot, copyEnv := canonicalTempDir(t), testEnv(t)
 		if err := os.CopyFS(copyRoot, os.DirFS(root)); err != nil {
 			t.Fatal(err)
 		}
@@ -169,7 +178,7 @@ func fixtureSeed(t testing.TB, format string) *gitFixtureSeed {
 func newGitFixture(t testing.TB, format string) gitFixture {
 	t.Helper()
 	seed := fixtureSeed(t, format)
-	f := gitFixture{root: t.TempDir(), colony: t.TempDir(), env: testEnv(t), seed: seed}
+	f := gitFixture{root: canonicalTempDir(t), colony: canonicalTempDir(t), env: testEnv(t), seed: seed}
 	if err := os.CopyFS(f.root, os.DirFS(seed.root)); err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +468,7 @@ func copyGitHistory(t testing.TB, history gitFixture, env []string, root string)
 
 func serviceFromHistory(t *testing.T, history gitFixture) *serviceFixture {
 	t.Helper()
-	fixture := gitFixture{root: filepath.Join(t.TempDir(), "repo"), colony: t.TempDir(), env: history.env}
+	fixture := gitFixture{root: filepath.Join(canonicalTempDir(t), "repo"), colony: canonicalTempDir(t), env: history.env}
 	fixture.seed = copyGitHistory(t, history, fixture.env, fixture.root)
 	fixture.git = newGitRunner(func() []string { return fixture.env })
 	f := openFixtureService(t, fixture)

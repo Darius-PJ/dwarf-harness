@@ -4,15 +4,34 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
+
+// Avoid Git's racy-stat fallback without sleeping or testing a duration.
+func ageMaterializeFiles(t *testing.T, root string) {
+	t.Helper()
+	past := time.Unix(1_000_000_000, 0)
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && d.Name() != ".git" {
+			return os.Chtimes(path, past, past)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // Deny deletion/replacement, but permit the host to observe the retained bytes.
 func holdMaterializeFile(t *testing.T, path string) func() {

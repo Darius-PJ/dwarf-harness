@@ -2,6 +2,7 @@ package winexec
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -49,6 +50,34 @@ type nativeRun struct {
 	cause                                                    Outcome
 	err                                                      error
 }
+
+func writeMarker(path string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if len(data) > markerLimit {
+		return fmt.Errorf("%w: marker exceeds %d bytes", ErrInvalid, markerLimit)
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return durable.Rename(tmp, path)
+}
+func fencePath(root, run string) string { return filepath.Join(root, "runs", run, "fence.json") }
 
 // Open claims a dedicated local root without adopting unrelated contents.
 // Recovery cleans validated closed runs only; uncertainty stays quarantined.

@@ -71,6 +71,13 @@ func nativeRequest(t *testing.T, root string, files map[string]string) request {
 
 func runNativeFixture(t *testing.T, root string, files map[string]string) (request, response) {
 	t.Helper()
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := nativeRequest(t, root, files)
 	executable, err := os.Executable()
 	if err != nil {

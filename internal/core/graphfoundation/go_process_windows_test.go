@@ -22,6 +22,37 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/undercurrent/graph"
 )
 
+// foundationDerivedGoFiles copies only immutable HEAD blobs. The generated
+// module/probe make a bounded metadata fixture, not a claim that the repository
+// itself, or these deliberately incomplete packages, compiles.
+func foundationDerivedGoFiles(t *testing.T) map[string]string {
+	t.Helper()
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) []byte {
+		command := exec.CommandContext(t.Context(), "git", args...)
+		command.Dir = root
+		output, err := command.Output()
+		if err != nil {
+			t.Fatalf("immutable derived fixture %v: %v", args, err)
+		}
+		return output
+	}
+	commit := strings.TrimSpace(string(git("rev-parse", "HEAD")))
+	files := map[string]string{
+		"go.mod":        "module github.com/Darius-PJ/dwarf-harness\n\ngo 1.27\n\ntoolchain go1.27.2\n",
+		"probe/main.go": "package main\nimport _ \"github.com/Darius-PJ/dwarf-harness/internal/undercurrent/graph\"\nfunc init() { panic(\"analyzed target executed\") }\nfunc main() {}\n",
+	}
+	for _, path := range []string{"internal/undercurrent/graph/model.go", "contract/ledger/digest.go", "internal/undercurrent/graph/helper_test.go"} {
+		body := git("show", commit+":"+path)
+		files[path] = string(body)
+		t.Logf("derived source commit=%s path=%s sha256=%x bytes=%d", commit, path, sha256.Sum256(body), len(body))
+	}
+	return files
+}
+
 var proofKernel = syscall.NewLazyDLL("kernel32.dll")
 var proofCreateJob = proofKernel.NewProc("CreateJobObjectW")
 var proofSetJob = proofKernel.NewProc("SetInformationJobObject")
@@ -31,6 +62,15 @@ var proofInJob = proofKernel.NewProc("IsProcessInJob")
 var proofResume = proofKernel.NewProc("ResumeThread")
 var proofCreateCompletionPort = proofKernel.NewProc("CreateIoCompletionPort")
 var proofGetCompletionStatus = proofKernel.NewProc("GetQueuedCompletionStatus")
+var proofInitializeAttributes = proofKernel.NewProc("InitializeProcThreadAttributeList")
+var proofUpdateAttribute = proofKernel.NewProc("UpdateProcThreadAttribute")
+var proofDeleteAttributes = proofKernel.NewProc("DeleteProcThreadAttributeList")
+var proofPeekNamedPipe = proofKernel.NewProc("PeekNamedPipe")
+
+type proofStartupInfoEx struct {
+	syscall.StartupInfo
+	Attributes unsafe.Pointer
+}
 
 type proofLimits struct {
 	ProcessTime, JobTime                           int64
@@ -74,6 +114,94 @@ func proofJobBuffer(proc *syscall.LazyProc, job syscall.Handle, class uintptr, p
 	return nil
 }
 
+func proofStartSuspended(t *testing.T, program string, args, env []string, cwd string, paths [3]string) syscall.ProcessInformation {
+	t.Helper()
+	app, err := syscall.UTF16PtrFromString(program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := syscall.UTF16PtrFromString(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	words := []string{syscall.EscapeArg(program)}
+	for _, arg := range args {
+		words = append(words, syscall.EscapeArg(arg))
+	}
+	command, err := syscall.UTF16FromString(strings.Join(words, " "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env = slices.Clone(env)
+	slices.SortFunc(env, func(a, b string) int { return strings.Compare(strings.ToUpper(a), strings.ToUpper(b)) })
+	var environment []uint16
+	for _, entry := range env {
+		value, err := syscall.UTF16FromString(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		environment = append(environment, value...)
+	}
+	environment = append(environment, 0)
+	var handles [3]syscall.Handle
+	for i, path := range paths {
+		name, err := syscall.UTF16PtrFromString(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attributes := syscall.SecurityAttributes{Length: uint32(unsafe.Sizeof(syscall.SecurityAttributes{})), InheritHandle: 1}
+		access, creation := uint32(syscall.GENERIC_WRITE), uint32(syscall.CREATE_ALWAYS)
+		if i == 0 {
+			access, creation = syscall.GENERIC_READ, syscall.OPEN_EXISTING
+		}
+		handles[i], err = syscall.CreateFile(name, access, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, &attributes, creation, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer syscall.CloseHandle(handles[i])
+	}
+	// An explicit handle list excludes other commands' inheritable pipe writers.
+	// ForkLock does not coordinate process creation on Windows.
+	var size uintptr
+	var pin runtime.Pinner
+	pin.Pin(&size)
+	pin.Pin(&handles[0])
+	defer pin.Unpin()
+	if ok, _, err := proofInitializeAttributes.Call(0, 1, 0, uintptr(unsafe.Pointer(&size))); ok != 0 || err != syscall.ERROR_INSUFFICIENT_BUFFER || size == 0 {
+		t.Fatalf("InitializeProcThreadAttributeList size: %d, %v", size, err)
+	}
+	attributes := make([]byte, size)
+	pin.Pin(&attributes[0])
+	list := unsafe.Pointer(&attributes[0])
+	if ok, _, err := proofInitializeAttributes.Call(uintptr(list), 1, 0, uintptr(unsafe.Pointer(&size))); ok == 0 {
+		t.Fatalf("InitializeProcThreadAttributeList: %v", err)
+	}
+	defer func() {
+		proofDeleteAttributes.Call(uintptr(list))
+		runtime.KeepAlive(attributes)
+		runtime.KeepAlive(handles)
+	}()
+	const handleList = 0x00020002 // PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+	if ok, _, err := proofUpdateAttribute.Call(uintptr(list), 0, handleList, uintptr(unsafe.Pointer(&handles[0])), unsafe.Sizeof(handles), 0, 0); ok == 0 {
+		t.Fatalf("UpdateProcThreadAttribute handle list: %v", err)
+	}
+	startup := proofStartupInfoEx{Attributes: list}
+	startup.Cb = uint32(unsafe.Sizeof(startup))
+	startup.Flags = syscall.STARTF_USESTDHANDLES
+	startup.StdInput, startup.StdOutput, startup.StdErr = handles[0], handles[1], handles[2]
+	var process syscall.ProcessInformation
+	const createSuspended = 0x00000004
+	const extendedStartupInfo = 0x00080000 // EXTENDED_STARTUPINFO_PRESENT
+	err = syscall.CreateProcess(app, &command[0], nil, nil, true, createSuspended|extendedStartupInfo|syscall.CREATE_UNICODE_ENVIRONMENT, &environment[0], directory, &startup.StartupInfo, &process)
+	runtime.KeepAlive(command)
+	runtime.KeepAlive(environment)
+	if err != nil {
+		t.Fatalf("CreateProcess suspended: %v", err)
+	}
+	// Deferred closure of the parent's std handles precedes Job assignment.
+	return process
+}
+
 // observeGoProcess assigns the still-suspended root. Lifetime Total, not the
 // current PID list alone, detects a descendant which exited before its parent.
 func observeGoProcess(t *testing.T, program string, args, env []string, cwd string, input []byte) proofRun {
@@ -108,63 +236,11 @@ func observeGoProcess(t *testing.T, program string, args, env []string, cwd stri
 		t.Fatalf("associate Job completion port: %v", err)
 	}
 	ioRoot := t.TempDir()
-	paths := []string{filepath.Join(ioRoot, "stdin"), filepath.Join(ioRoot, "stdout"), filepath.Join(ioRoot, "stderr")}
+	paths := [3]string{filepath.Join(ioRoot, "stdin"), filepath.Join(ioRoot, "stdout"), filepath.Join(ioRoot, "stderr")}
 	if err := os.WriteFile(paths[0], input, 0600); err != nil {
 		t.Fatal(err)
 	}
-	var handles [3]syscall.Handle
-	for i, path := range paths {
-		name, err := syscall.UTF16PtrFromString(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		attributes := syscall.SecurityAttributes{Length: uint32(unsafe.Sizeof(syscall.SecurityAttributes{})), InheritHandle: 1}
-		access, creation := uint32(syscall.GENERIC_WRITE), uint32(syscall.CREATE_ALWAYS)
-		if i == 0 {
-			access, creation = syscall.GENERIC_READ, syscall.OPEN_EXISTING
-		}
-		handles[i], err = syscall.CreateFile(name, access, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, &attributes, creation, syscall.FILE_ATTRIBUTE_NORMAL, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer syscall.CloseHandle(handles[i])
-	}
-	app, err := syscall.UTF16PtrFromString(program)
-	if err != nil {
-		t.Fatal(err)
-	}
-	directory, err := syscall.UTF16PtrFromString(cwd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	words := []string{syscall.EscapeArg(program)}
-	for _, arg := range args {
-		words = append(words, syscall.EscapeArg(arg))
-	}
-	command, err := syscall.UTF16FromString(strings.Join(words, " "))
-	if err != nil {
-		t.Fatal(err)
-	}
-	env = slices.Clone(env)
-	slices.SortFunc(env, func(a, b string) int { return strings.Compare(strings.ToUpper(a), strings.ToUpper(b)) })
-	var environment []uint16
-	for _, entry := range env {
-		value, err := syscall.UTF16FromString(entry)
-		if err != nil {
-			t.Fatal(err)
-		}
-		environment = append(environment, value...)
-	}
-	environment = append(environment, 0)
-	startup := syscall.StartupInfo{Cb: uint32(unsafe.Sizeof(syscall.StartupInfo{})), Flags: syscall.STARTF_USESTDHANDLES, StdInput: handles[0], StdOutput: handles[1], StdErr: handles[2]}
-	var process syscall.ProcessInformation
-	const createSuspended = 0x00000004
-	err = syscall.CreateProcess(app, &command[0], nil, nil, true, createSuspended|syscall.CREATE_UNICODE_ENVIRONMENT, &environment[0], directory, &startup, &process)
-	runtime.KeepAlive(command)
-	runtime.KeepAlive(environment)
-	if err != nil {
-		t.Fatalf("CreateProcess suspended: %v", err)
-	}
+	process := proofStartSuspended(t, program, args, env, cwd, paths)
 	defer syscall.CloseHandle(process.Process)
 	defer syscall.CloseHandle(process.Thread)
 	joined := false
@@ -247,6 +323,52 @@ func observeGoProcess(t *testing.T, program string, args, env []string, cwd stri
 		t.Fatalf("profile did not join its Job: %+v", result)
 	}
 	return result
+}
+
+func TestGoProcessHandleInheritance(t *testing.T) {
+	t.Parallel()
+	t.Run("unrelated_pipe", func(t *testing.T) {
+		t.Parallel()
+		attributes := syscall.SecurityAttributes{Length: uint32(unsafe.Sizeof(syscall.SecurityAttributes{})), InheritHandle: 1}
+		var reader, writer syscall.Handle
+		if err := syscall.CreatePipe(&reader, &writer, &attributes, 0); err != nil {
+			t.Fatal(err)
+		}
+		defer syscall.CloseHandle(reader)
+		defer func() {
+			if writer != 0 {
+				syscall.CloseHandle(writer)
+			}
+		}()
+		program, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := t.TempDir()
+		paths := [3]string{filepath.Join(root, "stdin"), filepath.Join(root, "stdout"), filepath.Join(root, "stderr")}
+		if err := os.WriteFile(paths[0], nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		process := proofStartSuspended(t, program, []string{"-test.run=^TestGoProcessProofChild$"}, os.Environ(), root, paths)
+		defer syscall.CloseHandle(process.Process)
+		defer syscall.CloseHandle(process.Thread)
+		defer func() {
+			if err := syscall.TerminateProcess(process.Process, 1); err != nil {
+				t.Errorf("terminate suspended child: %v", err)
+				return
+			}
+			if event, err := syscall.WaitForSingleObject(process.Process, syscall.INFINITE); err != nil || event != syscall.WAIT_OBJECT_0 {
+				t.Errorf("join terminated child: event %d, %v", event, err)
+			}
+		}()
+		if err := syscall.CloseHandle(writer); err != nil {
+			t.Fatal(err)
+		}
+		writer = 0
+		if ok, _, err := proofPeekNamedPipe.Call(uintptr(reader), 0, 0, 0, 0, 0); ok != 0 || err != syscall.ERROR_BROKEN_PIPE {
+			t.Fatalf("suspended child retained an unrelated pipe writer: ok=%d, err=%v", ok, err)
+		}
+	})
 }
 
 func TestGoProcessProofChild(t *testing.T) {
@@ -359,7 +481,10 @@ func TestGoListHasNoDescendants(t *testing.T) {
 	}
 	// This helper-in-Job uses exact immutable repository blobs, not edited files.
 	files := foundationDerivedGoFiles(t)
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	env := proofGoEnvironment(t, config, root, files)
 	input := proofHelperInput(t, config, root, files)
 	result := observeGoProcess(t, config.Helper.Path, []string{"--graph-helper", "go-analyzer/v1"}, env, root, input)

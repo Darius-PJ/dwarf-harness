@@ -155,7 +155,11 @@ func strconvQuote(value string) string {
 // boundary against real filesystem objects, not a replacement native resolver.
 func standardContainmentResult(t *testing.T, standardRoot, directory, file string) (request, response) {
 	t.Helper()
-	r := requestFixture(t.TempDir(), map[string]string{"consumer.go": "package consumer\nimport _ \"standard\"\n"})
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := requestFixture(root, map[string]string{"consumer.go": "package consumer\nimport _ \"standard\"\n"})
 	consumerFile := r.Corpus[0]
 	writeFixtureFile(t, filepath.Join(r.MaterializationRoot, consumerFile.Path), consumerFile.Bytes)
 	dependency := &packages.Package{ID: "standard", PkgPath: "standard", Dir: directory, GoFiles: []string{file}}
