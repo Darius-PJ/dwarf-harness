@@ -43,7 +43,7 @@ func (s privateScope) materialize(slot string, data []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := checkDirectories(s.components(), true); err != nil {
+	if err := s.dirs.checkDirectories(s.components(), true); err != nil {
 		return err
 	}
 	if _, err := regularEntry(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -70,7 +70,7 @@ func (s privateScope) classifyMaterialization(slot string, head ledger.Digest, e
 	if err != nil {
 		return foreign, err
 	}
-	if err := checkDirectories(s.components(), false); err != nil {
+	if err := s.dirs.checkDirectories(s.components(), false); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return materializationObservation{state: materializationStale, kind: observationMissing}, nil
 		}

@@ -21,7 +21,7 @@ func testRoot(t *testing.T) string {
 
 func testScope(t *testing.T, root, context string) privateScope {
 	t.Helper()
-	s, err := newPrivateScope(root, "Scout-a1", context)
+	s, err := newPrivateScope(root, "Scout-a1", context, &directoryDurability{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestPrivateScopePaths(t *testing.T) {
 		t.Fatalf("scope directory = %q, want %q", s.directory(), want)
 	}
 	for _, context := range []string{"../escape", "019A0700-0000-7000-8000-000000000003", "019a0700000070008000000000000003", "00000000-0000-0000-0000-000000000000"} {
-		if _, err := newPrivateScope(root, "Scout-a1", context); !errors.Is(err, ErrInvalid) {
+		if _, err := newPrivateScope(root, "Scout-a1", context, &directoryDurability{}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("accepted context %q: %v", context, err)
 		}
 	}
@@ -141,5 +141,159 @@ func TestPrivateScopeRejectsFileAncestor(t *testing.T) {
 	}
 	if err := testScope(t, root, "").ensureObjects(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("accepted file ancestor: %v", err)
+	}
+}
+
+func TestPrivatePublicationRetriesAncestorDurability(t *testing.T) {
+	t.Parallel()
+	root := testRoot(t)
+	s := testScope(t, root, testContext)
+	fault := errors.New("ancestor flush refused")
+	blocked := true
+	s.dirs.beforeSyncDir = func(path string) error {
+		if blocked && path == filepath.Join(root, "agents") {
+			return fault
+		}
+		return nil
+	}
+	data := []byte("durable private bytes")
+	digest, err := hashObject(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(s.objects(), digest.String())
+	for attempt := range 2 {
+		if _, err := s.publishObject(data); !errors.Is(err, fault) {
+			t.Fatalf("attempt %d bypassed ancestor flush failure: %v", attempt+1, err)
+		}
+		if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("attempt %d published an object without durable ancestors: %v", attempt+1, err)
+		}
+	}
+	// A different context shares the failed ancestor but creates its own
+	// descendants. Its success must not depend on which publisher made agents/.
+	sibling := testScope(t, root, "019a0700-0000-7000-8000-000000000004")
+	sibling.dirs = s.dirs
+	if _, err := sibling.publishObject(data); !errors.Is(err, fault) {
+		t.Fatalf("sibling bypassed shared ancestor flush failure: %v", err)
+	}
+	if err := s.materialize("memory", data); !errors.Is(err, fault) {
+		t.Fatalf("Markdown bypassed ancestor flush failure: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(s.directory(), "Memory.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Markdown became visible without durable ancestors: %v", err)
+	}
+
+	blocked = false
+	for _, scope := range []privateScope{s, sibling} {
+		got, err := scope.publishObject(data)
+		if err != nil || got != digest {
+			t.Fatalf("publication after clearing flush fault: %s, %v", got, err)
+		}
+		if got := string(readTestFile(t, filepath.Join(scope.objects(), digest.String()))); got != string(data) {
+			t.Fatalf("publication after retry changed bytes: %q", got)
+		}
+	}
+	if err := s.materialize("memory", data); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(readTestFile(t, filepath.Join(s.directory(), "Memory.md"))); got != string(data) {
+		t.Fatalf("Markdown after retry changed bytes: %q", got)
+	}
+}
+
+func TestPrivateDirectoryDurabilityInstance(t *testing.T) {
+	t.Parallel()
+	root := testRoot(t)
+	s := testScope(t, root, testContext)
+	if _, err := s.publishObject([]byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	fault := errors.New("ancestor flush refused")
+	s.dirs.beforeSyncDir = func(path string) error {
+		if path == filepath.Join(root, "agents") {
+			return fault
+		}
+		return nil
+	}
+	digest, err := s.publishObject([]byte("second"))
+	if err != nil {
+		t.Fatalf("already durable ancestor flushed again: %v", err)
+	}
+	if got := string(readTestFile(t, filepath.Join(s.objects(), digest.String()))); got != "second" {
+		t.Fatalf("second object = %q", got)
+	}
+	if err := s.materialize("memory", []byte("second")); err != nil {
+		t.Fatalf("Markdown did not reuse instance durability: %v", err)
+	}
+	fresh := testScope(t, root, testContext)
+	fresh.dirs.beforeSyncDir = s.dirs.beforeSyncDir
+	if _, err := fresh.publishObject([]byte("third")); !errors.Is(err, fault) {
+		t.Fatalf("fresh instance trusted another instance's flushes: %v", err)
+	}
+}
+
+func TestPrivateDirectoryDurabilityRechecksReplacement(t *testing.T) {
+	t.Parallel()
+	s := testScope(t, testRoot(t), testContext)
+	if _, err := s.publishObject([]byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	objects := s.objects()
+	if err := os.Rename(objects, objects+"-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(objects, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fault := errors.New("replacement parent flush refused")
+	s.dirs.beforeSyncDir = func(path string) error {
+		if path == filepath.Dir(objects) {
+			return fault
+		}
+		return nil
+	}
+	if _, err := s.publishObject([]byte("second")); !errors.Is(err, fault) {
+		t.Fatalf("replacement reused old directory durability: %v", err)
+	}
+	s.dirs.beforeSyncDir = nil
+	digest, err := s.publishObject([]byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(readTestFile(t, filepath.Join(objects, digest.String()))); got != "second" {
+		t.Fatalf("replacement object = %q", got)
+	}
+}
+
+func TestPrivateDirectoryDurabilitySharedPublishers(t *testing.T) {
+	t.Parallel()
+	root := testRoot(t)
+	first := testScope(t, root, testContext)
+	second := testScope(t, root, "019a0700-0000-7000-8000-000000000004")
+	second.dirs = first.dirs
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, scope := range []privateScope{first, second} {
+		go func() {
+			<-start
+			_, err := scope.publishObject([]byte(scope.context))
+			results <- err
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Error(err)
+		}
+	}
+	for _, scope := range []privateScope{first, second} {
+		digest, err := hashObject([]byte(scope.context))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(readTestFile(t, filepath.Join(scope.objects(), digest.String()))); got != scope.context {
+			t.Fatalf("concurrent publication = %q, want %q", got, scope.context)
+		}
 	}
 }
