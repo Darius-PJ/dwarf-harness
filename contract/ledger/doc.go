@@ -171,7 +171,7 @@
 // also by addition to format version 1.
 // F-U3-61 is ticket 61's part, U3's first producer family, frozen (D130),
 // also by addition to format version 1.
-// F3-10 is ticket 10's part of F3, proposed for freeze (D125),
+// F3-10 is ticket 10's part of F3, frozen (D139),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -1549,8 +1549,8 @@
 //
 // # F3-10 private-state record types
 //
-// These four version-1 types are ticket 10's part of F3, proposed for freeze
-// (D125). C3 owns their payload specifications. Only Core's agent service
+// These four version-1 types are ticket 10's part of F3, frozen
+// (D139). C3 owns their payload specifications. Only Core's agent service
 // (internal/core/agents) may produce them, through the ledger store's Submit;
 // permitted callers are enforced by review. The service checks the record
 // rules below both before submission and at Open. Check, Reader, EncodeCommit

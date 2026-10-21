@@ -48,8 +48,8 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypePolicyActivationHoldChanged, TypePolicyActivationEnded and
 // TypePolicyActivated; and F-U3-61, ticket 61's part and U3's first producer
 // family, frozen (D130): TypeGraphAnalysisStarted, TypeGraphAnalysisProgress,
-// TypeGraphDeltaChunk and TypeGraphVersionCommitted; and F3-10, proposed for
-// freeze (D125): TypeRuntimeAgentRegistered, TypeRuntimeContextCreated,
+// TypeGraphDeltaChunk and TypeGraphVersionCommitted; and F3-10, frozen
+// (D139): TypeRuntimeAgentRegistered, TypeRuntimeContextCreated,
 // TypePrivateRevision and TypeRuntimeCommandReceipt. All twenty-eight are at
 // version 1. It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {

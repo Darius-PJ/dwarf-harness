@@ -442,7 +442,7 @@ func FuzzDecodeU3_61(f *testing.F) {
 	})
 }
 
-// FuzzDecodeF3_10 exercises F3-10, proposed for freeze (D125), with a byte
+// FuzzDecodeF3_10 exercises F3-10, frozen (D139), with a byte
 // tag selecting each decoder and seeds at syntax, nesting and size boundaries.
 func FuzzDecodeF3_10(f *testing.F) {
 	fixtures := f3_10Payloads()

@@ -9,7 +9,7 @@ import (
 	"uuid"
 )
 
-// The F3-10 record types, each at version 1, proposed for freeze (D125).
+// The F3-10 record types, each at version 1, frozen (D139).
 // These codecs enforce payload rules; the service enforces record rules.
 const (
 	TypeRuntimeAgentRegistered = "runtime.agent_registered"
@@ -18,7 +18,7 @@ const (
 	TypeRuntimeCommandReceipt  = "runtime.command_receipt"
 )
 
-// F3-10's closed scope, slot and mode values, proposed for freeze (D125).
+// F3-10's closed scope, slot and mode values, frozen (D139).
 const (
 	PrivateScopeAgent       = "agent"
 	PrivateScopeContext     = "context"
@@ -32,8 +32,8 @@ const (
 	PrivateModeClear        = "clear"
 )
 
-// F3-10's version-1 writer values under open token grammars, proposed for
-// freeze (D125). Readers also accept other well-formed tokens.
+// F3-10's version-1 writer values under open token grammars, frozen
+// (D139). Readers also accept other well-formed tokens.
 const (
 	RuntimeKindGeneral            = "general"
 	RuntimeKindWork               = "work"
@@ -43,7 +43,7 @@ const (
 	RuntimeOutcomeApplied         = "applied"
 )
 
-// MaxPrivatePayloadBytes is F3-10's complete payload cap, proposed for freeze (D125).
+// MaxPrivatePayloadBytes is F3-10's complete payload cap, frozen (D139).
 const MaxPrivatePayloadBytes = 16 << 10
 
 // RuntimeAgentRegistered binds a safe directory and the agent's general context.

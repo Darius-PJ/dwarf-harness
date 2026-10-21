@@ -34,7 +34,7 @@ func privateFixtureChange(slot, mode, text string) PrivateChange {
 	return PrivateChange{Slot: slot, Mode: mode, SHA256: Digest(sha256.Sum256([]byte(text))), Bytes: int64(len(text))}
 }
 
-// privateInputs covers F3-10, proposed for freeze (D125), with complete groups.
+// privateInputs covers F3-10, frozen (D139), with complete groups.
 func privateInputs() []goldenCommit {
 	agent, session, general, work := fid("a1"), fid("b1"), fid("d1"), fid("d2")
 	instructions := privateFixtureChange("instructions", "replace", "# Ada\n")
