@@ -51,3 +51,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — Consolidation cross-link: Ticket [129](129-qualify-the-complete-fortress-on-supported-native-platforms.md) reapplies these accessibility and packaging gates with the fortress enabled; GUI-E parity remains independently deliverable. These extensions add no blocker or criterion to this ticket.
+
+2026-10-20 — For the first release, this ticket needs only its Windows parts; its Linux and macOS parts follow the release ([D138](../../../docs/DECISIONS.md#d138-a-windows-first-release-with-portable-code)). The code stays portable and is tested on Linux and macOS in CI. Its number, blockers and criteria are unchanged.

@@ -765,3 +765,12 @@ Implementation decision 5 now names the go1.27.2 toolchain the owner approved af
 ### 2026-10-09 — Character views and Corps markers (D108)
 
 Implementation decision 58 now describes the two character views and the Corps emblems and colours the owner asked for ([D108](../../docs/DECISIONS.md#d108-character-sprites-a-still-front-view-an-animated-three-quarter-view-and-corps-emblems-and-colours)). Tickets 88 and 108 gained matching criteria with unchanged numbers and blockers, and tickets 107, 113 and 117 gained cross-links. No D52 approval, contract freeze, readiness status or unrun gate is advanced.
+
+### 2026-10-20 — A Windows first release with portable code (D138)
+
+The first release needs only Windows hosts ([D138](../../docs/DECISIONS.md#d138-a-windows-first-release-with-portable-code)).
+- Testing decision 3's check runs on Windows, Linux and macOS continue as the three-OS CI.
+- User story 64, implementation decision 21 and testing decision 16 reach the Linux and macOS profiles after the release. Tickets 47–51 and 68–70 follow it, and tickets 58, 123 and 129 need only their Windows parts for it.
+- The code stays portable.
+
+Numbers, blockers and criteria are unchanged. No D52 approval, contract freeze, readiness status or unrun gate is advanced.

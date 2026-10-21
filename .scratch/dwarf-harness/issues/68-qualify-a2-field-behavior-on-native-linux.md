@@ -59,3 +59,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-20 — This ticket follows the first release, which needs Windows only ([D138](../../../docs/DECISIONS.md#d138-a-windows-first-release-with-portable-code)). The owner decided that the code be written portably all the same. Its number, blockers and criteria are unchanged. Until it starts, the code it will extend stays portable and is tested on Linux and macOS in CI.

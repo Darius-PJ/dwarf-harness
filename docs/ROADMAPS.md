@@ -177,7 +177,7 @@ Notes on the edges:
 | C9 | Recipes, workflows and skills; whole-step includes GUI gate | C4, C5, C6; C7 + Fyne + C9 backend capability for GUI parity | Waiting |
 | GUI | Native GUI launcher and C9 parity | C7; selected Fyne v2.8.1; C9 backend capability | Waiting |
 | GUI-F | Fortress/RPG creation, inspection and resumable cosmetic building | GUI-A/B; actual C3/C6/C8/C9-backend capabilities; corresponding owner-frozen C7 additions; native acceptance gates | Waiting |
-| C10 | Isolation boundary and assurance A2 | C2 | In progress (ticket 45, Windows executor, 2026-10-18; C3 integration and A2 qualification wait for C3 and ticket 46; Linux and macOS executors are tickets 47 and 49) |
+| C10 | Isolation boundary and assurance A2 | C2 | In progress (ticket 45, Windows executor, 2026-10-18; C3 integration and A2 qualification wait for C3 and ticket 46; the Linux and macOS executors and qualifications, tickets 47–51, follow the first release, D138) |
 | R0 | Shadow mode | C3 | Waiting |
 | R1 | Safe per-turn settings, provider awareness, R11 events | R0; C1's frozen `ledger-format`, `ledger-reader` and `ledger-appender` (D40, D50) | Waiting |
 | R2 | Effort ladder | R1 | Waiting |
@@ -244,3 +244,13 @@ These rules implement D41, D42, D78, D79 and D116; the existing repository worki
 ### 2026-10-08 — Ordinary service-loss procedure (D97–D102)
 
 [D97–D102](DECISIONS.md#d97-officer-service-loss-causes-onset-held-questions-and-restoration-evidence) specify the ordinary service-loss and officer-recovery procedure that D96 left open (Core §13.11). The index now names its owners: C3's generic service-loss state, R1's grouped outage prompt, C8's outage Corps operation, owner stand-in and office handover, and C7's projections. Statuses, the six Not-started contracts, D52's pending approval and unrun gates are unchanged.
+
+### 2026-10-20 — A Windows first release with portable code (D138)
+
+[D138](DECISIONS.md#d138-a-windows-first-release-with-portable-code) makes Windows the only host the first release needs. The following work follows the release:
+- C10's Linux and macOS executors and qualifications (tickets 47–51);
+- U2's A2 measurements on those hosts (tickets 68–70);
+- GUI-E's macOS and Linux packages;
+- the Linux and macOS parts of tickets 58, 123 and 129.
+
+The code stays portable. The three-OS CI (D133) and the five-target static steps (D137) keep checking it, and C3's exit still needs all three CI jobs green. No other status or gate changes.
