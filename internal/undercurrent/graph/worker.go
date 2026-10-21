@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"path"
@@ -33,6 +34,8 @@ type workState struct {
 	generation                   *generationWalk
 	stage                        *graphIndex
 	memory                       uint64
+	stagingCap                   uint64
+	cleanup                      *CleanupError
 	phase                        int
 	corpus                       []CorpusArtifact
 	languages                    [3][]CorpusArtifact
@@ -47,6 +50,11 @@ type workState struct {
 	sorted                       State
 	diff                         ledger.GraphDeltaChunk
 	diffPhase, diffAt            int
+	changedCoverage              map[uuid.UUID]bool
+	emptyCoverage                int
+	legacyEncoding               bool
+	encodingSelected             bool
+	chunkMemory                  uint64
 	formedNodes, formedEdges     int
 	formedMemory                 uint64
 	builder                      ledger.GraphDeltaChunk
@@ -70,11 +78,16 @@ type workState struct {
 
 func (s *Service) newWork(started ledger.GraphAnalysisStarted) *workState {
 	scopes := s.replay.attempt.scopes
-	w := &workState{started: started, scopes: scopes, stage: newGraphIndex(), memory: 2 * maxFrame, chunksHash: sha256.New(), objects: make(map[string]corpusObject)}
+	w := &workState{started: started, scopes: scopes, stage: newGraphIndex(), stagingCap: stagingLimit, chunksHash: sha256.New(), objects: make(map[string]corpusObject)}
+	if s.deps.stagingCap != nil {
+		w.stagingCap = *s.deps.stagingCap
+	}
+	w.legacyEncoding = started.Reason == ledger.GraphReasonIncremental
+	w.encodingSelected = len(s.replay.attempt.chunks) == 0
 	w.formedNodes, w.formedEdges, w.formedMemory = len(s.replay.current.state.Nodes), len(s.replay.current.state.Edges), s.replay.current.memory
 	for id, scope := range scopes {
 		cost := 2 * scopeMemory(scope)
-		if w.memory > stagingLimit || cost > stagingLimit-w.memory {
+		if w.memory > w.stagingCap || cost > w.stagingCap-w.memory {
 			w.failure = ledger.ReasonTemporaryCap
 			return w
 		}
@@ -93,7 +106,7 @@ func (s *Service) newWork(started ledger.GraphAnalysisStarted) *workState {
 	return w
 }
 
-func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
+func (s *Service) drive(ctx context.Context, resume *uuid.UUID) (err error) {
 	if analysisFence.Load() {
 		return ErrRecovery
 	}
@@ -162,6 +175,13 @@ func (s *Service) drive(ctx context.Context, resume *uuid.UUID) error {
 	if !s.replay.eligible(s.replay.attempt.started) {
 		return s.endAttempt(ctx, ledger.GraphPhaseSuperseded, ledger.ReasonStaleSource)
 	}
+	work := s.work
+	defer func() {
+		if work.cleanup != nil {
+			err = errors.Join(err, work.cleanup)
+			work.cleanup = nil
+		}
+	}()
 	output, err := s.work.unit(ctx, s, allowance)
 	if analysisFence.Load() {
 		s.work, s.recovery = nil, true
@@ -239,7 +259,7 @@ func (s *Service) endAttempt(ctx context.Context, phase, reason string) error {
 
 func (w *workState) retain(cost uint64) bool {
 	used := w.memory + w.generation.memory
-	if used > stagingLimit || cost > stagingLimit-used {
+	if used > w.stagingCap || cost > w.stagingCap-used {
 		return false
 	}
 	w.memory += cost
@@ -315,7 +335,7 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 		for allowance >= 512 && !w.generation.done() {
 			g := w.generation
 			beforeAccepted, beforeAfter, beforeInitial := g.accepted, g.after, g.initial
-			available := stagingLimit - min(stagingLimit, w.memory+g.memory)
+			available := w.stagingCap - min(w.stagingCap, w.memory+g.memory)
 			used, failure, err := g.step(ctx, service.opts.ReadArtifacts, allowance, available)
 			if err != nil {
 				return nil, err
@@ -389,6 +409,12 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 			return nil, nil
 		}
 		if language != 1 && len(w.languages[language]) <= maxItems && w.languageBytes[language] <= maxFrame {
+			if service.externalWork(adapter) {
+				if !w.retain(2 * maxFrame) {
+					return &workOutput{reason: ledger.ReasonTemporaryCap}, nil
+				}
+				defer func() { w.memory -= 2 * maxFrame }()
+			}
 			consumed, err := service.verifyAdapter(ctx, adapter, allowance)
 			if err != nil {
 				return nil, err
@@ -406,6 +432,9 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 			result, err = AnalyzeSQL(ctx, request)
 		} else {
 			result, err = service.analyzer.Analyze(ctx, adapter, request)
+		}
+		if cleanup, ok := err.(*CleanupError); ok {
+			w.cleanup, err = cleanup, nil
 		}
 		if analysisFence.Load() {
 			return nil, ErrRecovery
@@ -427,6 +456,12 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 				result = unknown(request, "go", w.goUnavailable[0], 1)
 				result.Coverage[0].Reasons = slices.Clone(w.goUnavailable)
 			default:
+				if service.externalWork("go") {
+					if !w.retain(2 * maxFrame) {
+						return &workOutput{reason: ledger.ReasonTemporaryCap}, nil
+					}
+					defer func() { w.memory -= 2 * maxFrame }()
+				}
 				consumed, err := service.verifyAdapter(ctx, "go", allowance)
 				if err != nil {
 					return nil, err
@@ -435,6 +470,9 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 					return nil, nil
 				}
 				result, err = service.analyzer.Analyze(ctx, "go", request)
+				if cleanup, ok := err.(*CleanupError); ok {
+					w.cleanup, err = cleanup, nil
+				}
 				if analysisFence.Load() {
 					return nil, ErrRecovery
 				}
@@ -466,17 +504,19 @@ func (w *workState) unit(ctx context.Context, service *Service, allowance int64)
 		var done bool
 		done, reason = w.buildDiff(service.replay.current, allowance)
 		if done && reason == "" {
-			if int64(w.formedNodes) > service.replay.nodeCap || int64(w.formedEdges) > service.replay.edgeCap || !service.replay.room(w.formedMemory+w.memory+w.generation.memory+service.generationMemory) {
+			if int64(w.formedNodes) > service.replay.nodeCap || int64(w.formedEdges) > service.replay.edgeCap || w.started.Reason == ledger.GraphReasonIncremental && !service.replay.room(w.formedMemory+w.memory+w.generation.memory+service.generationMemory) {
 				reason = ledger.ReasonStateCap
 			} else {
 				w.phase = 11
 			}
 		}
 	case 9:
-		return w.emitChunk(service.replay.attempt, allowance)
+		return w.emitChunk(service, allowance)
 	case 10:
 		if len(w.chunks) < len(service.replay.attempt.chunks) {
-			reason = ledger.ReasonRecoveryUnknown
+			return w.encodingMismatch(), nil
+		} else if !w.finalRoom(service) {
+			reason = ledger.ReasonStateCap
 		} else {
 			return &workOutput{final: true}, nil
 		}
@@ -597,7 +637,26 @@ func (w *workState) formCorpus(allowance int64) string {
 	return ""
 }
 
+// A configured, nonfailed slot can still verify or invoke during this unit.
+func (s *Service) externalWork(adapter string) bool {
+	if s.analyzer.fenced {
+		return false
+	}
+	switch adapter {
+	case ledger.AdapterPython:
+		return s.opts.Tools.Python != nil && !s.tools[0].failed
+	case ledger.AdapterTypeScript:
+		return s.opts.Tools.Node != nil && !s.tools[1].failed || s.opts.Tools.TypeScriptParser != nil && !s.tools[2].failed
+	case "go":
+		return s.opts.Tools.Go != nil && (!s.tools[3].failed || !s.tools[4].failed)
+	}
+	return false
+}
+
 func (s *Service) verifyAdapter(ctx context.Context, adapter string, allowance int64) (bool, error) {
+	if s.analyzer.fenced {
+		return false, nil
+	}
 	indices := []int{0}
 	if adapter == ledger.AdapterTypeScript {
 		indices = []int{1, 2}
@@ -778,9 +837,23 @@ func (w *workState) buildDiff(base *graphImage, allowance int64) (bool, string) 
 			value = base.state.Coverage[w.diffAt]
 		case 5:
 			if w.diffAt == len(w.sorted.Coverage) {
-				return true, ""
+				if w.emptyCoverage != 0 {
+					w.useLegacyEncoding()
+				}
+				w.diffPhase++
+				w.diffAt = 0
+				continue
 			}
 			value = w.stage.coverage[coverageKey(w.sorted.Coverage[w.diffAt])]
+		case 6:
+			if w.legacyEncoding {
+				w.diff.Coverage = w.sorted.Coverage
+				return true, ""
+			}
+			if w.diffAt == len(w.sorted.Coverage) {
+				return true, ""
+			}
+			value = w.sorted.Coverage[w.diffAt]
 		}
 		cost := elementUnits(value)
 		if cost > allowance {
@@ -832,18 +905,97 @@ func (w *workState) buildDiff(base *graphImage, allowance int64) (bool, string) 
 			}
 		case 4:
 			entry := value.(ledger.CoverageEntry)
-			if w.scopes.ownsCoverage(entry) {
-				w.formedMemory -= coverageMemory(entry)
+			if id, owned := coverageWorkspace(w.scopes, entry); owned {
+				next, exists := w.stage.coverage[coverageKey(entry)]
+				if !exists || !sameCoverage(entry, next) {
+					w.formedMemory -= coverageMemory(entry)
+					if !w.legacyEncoding && !w.markCoverageChanged(id, false) {
+						return false, ledger.ReasonTemporaryCap
+					}
+				}
 			}
 		case 5:
 			entry := value.(ledger.CoverageEntry)
 			w.sorted.Coverage[w.diffAt] = entry
-			w.diff.Coverage = append(w.diff.Coverage, entry)
-			w.formedMemory += coverageMemory(entry)
+			old, exists := base.index.coverage[coverageKey(entry)]
+			id, _ := coverageWorkspace(w.scopes, entry)
+			if !exists || !sameCoverage(old, entry) {
+				w.formedMemory += coverageMemory(entry)
+				if !w.legacyEncoding && !w.markCoverageChanged(id, true) {
+					return false, ledger.ReasonTemporaryCap
+				}
+			}
+			if nonempty, changed := w.changedCoverage[id]; changed && !nonempty {
+				w.changedCoverage[id] = true
+				w.emptyCoverage--
+			}
+		case 6:
+			entry := value.(ledger.CoverageEntry)
+			id, _ := coverageWorkspace(w.scopes, entry)
+			if w.changedCoverage[id] {
+				w.diff.Coverage = append(w.diff.Coverage, entry)
+			}
 		}
 		w.diffAt++
 	}
 	return false, ""
+}
+
+func sameCoverage(a, b ledger.CoverageEntry) bool {
+	return a.Scope == b.Scope && a.Adapter == b.Adapter && a.State == b.State && slices.Equal(a.Reasons, b.Reasons)
+}
+
+func (w *workState) markCoverageChanged(id uuid.UUID, nonempty bool) bool {
+	if _, exists := w.changedCoverage[id]; exists {
+		return true
+	}
+	if !w.retain(512) {
+		return false
+	}
+	if w.changedCoverage == nil {
+		w.changedCoverage = make(map[uuid.UUID]bool)
+	}
+	w.changedCoverage[id] = nonempty
+	if !nonempty {
+		w.emptyCoverage++
+	}
+	return true
+}
+
+func (w *workState) useLegacyEncoding() {
+	w.legacyEncoding = true
+	w.diff.Coverage = w.sorted.Coverage
+	w.memory -= uint64(len(w.changedCoverage)) * 512
+	w.changedCoverage = nil
+}
+
+// Only encoding scratch is discarded. Rebuilt facts, cursor and durable
+// reservations survive a selective probe that cannot reproduce the prefix.
+func (w *workState) encodingMismatch() *workOutput {
+	if w.legacyEncoding || w.encodingSelected {
+		return &workOutput{reason: ledger.ReasonRecoveryUnknown}
+	}
+	w.useLegacyEncoding()
+	w.memory -= w.chunkMemory
+	w.chunkMemory = 0
+	w.chunks = nil
+	w.chunksHash = sha256.New()
+	w.builder, w.builderSize, w.builderElements = ledger.GraphDeltaChunk{}, 0, 0
+	w.splitPhase, w.splitAt, w.phase = 0, 0, 9
+	return nil
+}
+
+func (w *workState) finalRoom(service *Service) bool {
+	if w.started.Reason == ledger.GraphReasonIncremental {
+		return true // Preserve incremental production's existing admission.
+	}
+	// room already includes the current image and open replay stage. The
+	// formed image is the transactional copy, including restored coverage.
+	additional := w.formedMemory + w.memory + w.generation.memory + service.generationMemory
+	if !w.legacyEncoding {
+		additional += uint64(len(w.changedCoverage)) * 512
+	}
+	return service.replay.room(additional)
 }
 
 func (w *workState) nextMutation() (any, bool) {
@@ -875,7 +1027,8 @@ func (w *workState) nextMutation() (any, bool) {
 	}
 	return nil, false
 }
-func (w *workState) emitChunk(attempt *replayAttempt, allowance int64) (*workOutput, error) {
+func (w *workState) emitChunk(service *Service, allowance int64) (*workOutput, error) {
+	attempt := service.replay.attempt
 	if w.builderSize == 0 {
 		w.builder = ledger.GraphDeltaChunk{AnalysisID: w.started.AnalysisID, AnalysisKey: w.started.AnalysisKey, ChunkIndex: int64(len(w.chunks))}
 		empty, err := w.builder.Encode()
@@ -942,7 +1095,7 @@ func (w *workState) emitChunk(attempt *replayAttempt, allowance int64) (*workOut
 				return &workOutput{reason: ledger.ReasonTemporaryCap}, nil
 			}
 		}
-		if w.builderElements == 0 {
+		if w.builderElements == 0 && (len(w.chunks) != 0 || w.digest == w.started.BaseDigest) {
 			w.phase = 10
 			return nil, nil
 		}
@@ -955,6 +1108,7 @@ func (w *workState) emitChunk(attempt *replayAttempt, allowance int64) (*workOut
 		if !w.retain(uint64(w.builderSize)*2 + 512) {
 			return &workOutput{reason: ledger.ReasonTemporaryCap}, nil
 		}
+		w.chunkMemory += uint64(w.builderSize)*2 + 512
 		encoded, err := w.builder.Encode()
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -964,13 +1118,19 @@ func (w *workState) emitChunk(attempt *replayAttempt, allowance int64) (*workOut
 		}
 		index := len(w.chunks)
 		if index < len(attempt.chunks) && !bytes.Equal(encoded, attempt.chunks[index]) {
-			return &workOutput{reason: ledger.ReasonRecoveryUnknown}, nil
+			return w.encodingMismatch(), nil
 		}
 		w.chunks = append(w.chunks, encoded)
 		_, _ = w.chunksHash.Write(encoded)
 		w.builder, w.builderSize, w.builderElements = ledger.GraphDeltaChunk{}, 0, 0
 		if !exists {
 			w.phase = 10
+		}
+		if len(w.chunks) >= len(attempt.chunks) {
+			w.encodingSelected = true
+			if !w.finalRoom(service) {
+				return &workOutput{reason: ledger.ReasonStateCap}, nil
+			}
 		}
 		if index < len(attempt.chunks) {
 			return nil, nil

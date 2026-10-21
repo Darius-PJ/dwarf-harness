@@ -93,6 +93,11 @@
 // their existing local wait fence in addition to that host-wide check.
 // The parent framed decoder also reserves 64 MiB conservatively for encoded
 // and decoded copies and per-token allocations before constructing output.
+// A cleanup-only failure after a selected joined result returns that result and
+// a direct *CleanupError with the retained absolute directory. Step/Resume
+// process it once before reporting the diagnostic, including alongside later
+// failures. Primary errors and fences never authorize result retention. The
+// next invocation uses a fresh root; no automatic cleanup or retry is implied.
 //
 // Service consumes only v1 workspace.registered, workspace.promotion_admitted,
 // workspace.promotion_accepted, graph.analysis_started, graph.analysis_progress,
@@ -127,10 +132,24 @@
 // Immutable object bytes are memoized by Git OID within one attempt, never
 // across attempts or recovery; acceptance events are never coalesced.
 //
-// The private candidate is capped at 64 MiB conservatively. Diff publishes only
-// net fact mutations: remove edges, remove nodes, put nodes, put edges, then
-// replace analyzed workspace coverage in key order. Whole-element chunks are at
-// most 512 KiB, checkpointed in the same commit; no chunk publishes topology.
+// The private candidate is capped at 64 MiB conservatively. Its 16 MiB helper
+// frame reservation exists only during external verification/invocation units,
+// through validation and result retention; SQL and opaque units do not hold it.
+// This reclaims idle headroom, not a guarantee that 200000 edges can be rebuilt.
+// Element coefficients, the 512 MiB retained cap and both profiles are unchanged.
+// Diff publishes net facts in remove-edge, remove-node, put-node, put-edge order.
+// Incremental coverage replaces the analyzed workspace. Rebuild coverage emits
+// whole changed workspace sets, including state/reasons; an empty replacement
+// selects legacy all-analyzed-workspace coverage. Unchanged coverage is omitted.
+// Whole-element chunks are at most 512 KiB, checkpointed in the same commit;
+// no chunk publishes topology. A changed digest with no mutations emits one
+// ordinary empty chunk to install scope descriptors. Equal state uses no chunks.
+// Replay clears analyzed coverage once, exactly as legacy histories require,
+// and verifies the legacy final first. Only a positive-chunk eligible mismatch
+// restores base coverage for workspaces without supplied replacements, reserving
+// bookkeeping and restored entries before allocation. A second digest mismatch
+// is invalid history. Legacy matches, stale finals and zero-chunk confirmations
+// need no fallback headroom. Producer admission includes the selected peak.
 // Current state is bounded to 50000 nodes, 200000 edges and 512 MiB including
 // indexes and retained history.
 // Candidate overflow ends unknown without publishing. If valid replay instead
@@ -145,13 +164,19 @@
 // durable reservation. The next Step reconstructs from the durable prefix as
 // Resume does; every recomputed unit gets a fresh reservation and charge.
 // Open attempts are recovery_pending: only Resume of the exact ID can continue.
-// It restarts interrupted invocations, charges them again, and byte-compares
-// regenerated chunks with the durable prefix; disagreement is recovery_unknown.
+// It restarts interrupted invocations and charges them again. Before any new
+// chunk append, a rebuild regenerates and byte-compares the entire durable
+// prefix, trying selective then legacy when eligible, preferring selective if
+// both match. Only encoding scratch is regenerated, never helper facts merely
+// to choose an encoding; original work/memory budgets apply with no refunds.
+// Neither representation matching is recovery_unknown.
 // VerifiedCursor is recovery bookkeeping, not a helper input cursor.
 // Exhaustion is sticky for source, scope, epoch, configuration and both profiles.
 // A rebuild marks only the scope active at exhaustion, not completed or unreached
 // scopes. A scope transition makes the next scope active before its first read;
 // the last scope stays active through aggregate merge, diff and publication.
+// A Resume that finds the key already at the cumulative cap marks the first
+// scope in workspace UUID order, because the resumed attempt restarts there.
 // Replay derives that scope's tuple from terminal coverage and the frontier.
 // Reopen, a fresh UUID or an unrelated acceptance grants no new allowance.
 // Only a marked-scope acceptance or new epoch/profile unblocks that marker;

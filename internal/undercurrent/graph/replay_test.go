@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -350,6 +351,22 @@ func TestGraphHistoryRefusesMalformedMutation(t *testing.T) {
 			t.Fatalf("stale subject ending: %+v, %v", progress, err)
 		}
 	})
+	t.Run("neither coverage interpretation matches", func(t *testing.T) {
+		t.Parallel()
+		f, _, _, _ := graphCoverageHistory(t, true, false, false)
+		commits := graphHistory(t, f.writer)
+		target := commits[len(commits)-1].Records[0]
+		mutation := graphMutation{"neither coverage digest", "graph_digest", target, func(t testing.TB, draft ledger.Draft, _ byte) ledger.Draft {
+			final, err := ledger.DecodeGraphVersionCommitted(draft.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			final.GraphDigest[0] ^= 1
+			draft.Payload = graphEncoded(t, final)
+			return draft
+		}}
+		assertGraphMutation(t, commits, mutation, 1, serviceDeps{})
+	})
 	for _, mutation := range graphMutations(t, commits) {
 		t.Run(mutation.name, func(t *testing.T) { t.Parallel(); assertGraphMutation(t, commits, mutation, 1, serviceDeps{}) })
 	}
@@ -429,4 +446,267 @@ func assertGraphStateCapMutation(t *testing.T, writer *graphFileAppender, deps s
 		return draft
 	}}
 	assertGraphMutation(t, commits, mutation, 1, deps)
+}
+
+// graphCoverageHistory supplies service-valid frozen records independently of
+// the current producer. In particular, legacy empty replacements cannot be
+// obtained by treating the encoding-only contract golden as a service log.
+func graphCoverageHistory(t *testing.T, selective, empty, stale bool) (*graphFixture, State, Status, uint64) {
+	t.Helper()
+	return graphCoverageHistorySize(t, selective, empty, stale, false)
+}
+
+func graphCoverageHistorySize(t *testing.T, selective, empty, stale, large bool) (*graphFixture, State, Status, uint64) {
+	t.Helper()
+	count, pathPrefix := 16, ""
+	if large {
+		count, pathPrefix = 200, strings.Repeat("segment/", 350)
+	}
+	f := newGraphFixture(t)
+	first, other := graphFixtureID(1), graphFixtureID(2)
+	emptyTree := f.tree("empty", nil)
+	for _, id := range []uuid.UUID{first, other} {
+		f.register(id)
+		_, paths := graphFiles(count, pathPrefix)
+		files := make(map[string]string, len(paths))
+		for i, path := range paths {
+			paths[i] = strings.TrimSuffix(path, ".py") + ".md"
+			files[paths[i]] = ""
+		}
+		f.accept(id, emptyTree, f.tree(id.String(), files), paths...)
+	}
+	service := f.open(serviceDeps{})
+	before := driveGraph(t, service)
+	base := service.replay.current.state
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	service = f.open(serviceDeps{})
+	if _, err := service.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	a := service.replay.attempt
+	if a == nil || a.started.Reason == ledger.GraphReasonIncremental {
+		t.Fatal("fixture did not start an eligible rebuild")
+	}
+	want := base
+	want.Coverage = nil
+	var replacement []ledger.CoverageEntry
+	for _, entry := range base.Coverage {
+		id, _ := coverageWorkspace(a.scopes, entry)
+		if id == first {
+			if empty {
+				continue
+			}
+			entry.State, entry.Reasons = ledger.CoverageUnknown, []string{ledger.ReasonHelperLimit}
+			replacement = append(replacement, entry)
+		} else if !selective {
+			replacement = append(replacement, entry)
+		}
+		want.Coverage = append(want.Coverage, entry)
+	}
+	var changedNodes []ledger.GraphNode
+	if large {
+		want.Nodes = slices.Clone(base.Nodes)
+		for i := range want.Nodes {
+			if want.Nodes[i].Key.OriginID == first {
+				want.Nodes[i].VersionSHA256 = ledger.Digest(sha256.Sum256([]byte("incorrect retained artifact version")))
+				changedNodes = append(changedNodes, want.Nodes[i])
+			}
+		}
+	}
+	_, digest, err := want.Canonical()
+	if err != nil || digest == before.Digest {
+		t.Fatalf("invalid coverage expectation: %v", err)
+	}
+	progress := ledger.GraphAnalysisProgress{AnalysisID: a.started.AnalysisID, AnalysisKey: a.started.AnalysisKey, Revision: 1, Phase: ledger.GraphPhaseReserved, ReservedTotal: quantum}
+	f.append(graphDraft(ledger.TypeGraphAnalysisProgress, a.started.AnalysisID, graphEncoded(t, progress)))
+	hash := sha256.New()
+	chunkCount := int64(0)
+	appendChunk := func(chunk ledger.GraphDeltaChunk) {
+		chunk.AnalysisID, chunk.AnalysisKey, chunk.ChunkIndex = a.started.AnalysisID, a.started.AnalysisKey, chunkCount
+		payload := graphEncoded(t, chunk)
+		if len(payload) > chunkLimit {
+			t.Fatal("compatibility fixture exceeded frozen chunk bound")
+		}
+		_, _ = hash.Write(payload)
+		progress.Revision++
+		progress.Phase = ledger.GraphPhaseCheckpoint
+		progress.VerifiedCursor = ledger.GraphCursor{ArtifactIndex: int64(2 * count), OutputIndex: chunkCount + 1}
+		f.append(graphDraft(ledger.TypeGraphDeltaChunk, a.started.AnalysisID, payload), graphDraft(ledger.TypeGraphAnalysisProgress, a.started.AnalysisID, graphEncoded(t, progress)))
+		chunkCount++
+	}
+	for len(changedNodes) != 0 {
+		n := min(100, len(changedNodes))
+		appendChunk(ledger.GraphDeltaChunk{PutNodes: changedNodes[:n]})
+		changedNodes = changedNodes[n:]
+	}
+	// Deliberately split one workspace's replacement set across chunks.
+	part := min(100, max(1, len(replacement)/2))
+	for len(replacement) != 0 {
+		n := min(part, len(replacement))
+		appendChunk(ledger.GraphDeltaChunk{Coverage: replacement[:n]})
+		replacement = replacement[n:]
+	}
+	prefix := f.writer.Durable()
+	if stale {
+		files, paths := graphFiles(17, "")
+		f.accept(other, a.scopes[other].Source.Tree, f.tree("racing", files), paths...)
+	}
+	final := ledger.GraphVersionCommitted{AnalysisID: a.started.AnalysisID, AnalysisKey: a.started.AnalysisKey, BaseVersion: a.started.BaseVersion, BaseDigest: a.started.BaseDigest, ChunkCount: chunkCount, ChunksSHA256: ledger.Digest(hash.Sum(nil)), GraphDigest: digest}
+	f.append(graphDraft(ledger.TypeGraphVersionCommitted, a.started.AnalysisID, graphEncoded(t, final)))
+	return f, want, before, prefix
+}
+
+func TestGraphCoverageReplayCompatibility(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name                    string
+		selective, empty, stale bool
+	}{
+		{"legacy replacement", false, false, false},
+		{"legacy empty replacement", false, true, false},
+		{"selective split replacement", true, false, false},
+		{"stale final", true, false, true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			f, expected, before, prefix := graphCoverageHistory(t, row.selective, row.empty, row.stale)
+			for _, commit := range graphHistory(t, f.writer) {
+				if commit.Last <= before.Through {
+					continue
+				}
+				options := f.options()
+				options.Through = commit.Last
+				service, err := openService(options, serviceDeps{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				current := service.replay.current
+				if commit.Last <= prefix || row.stale {
+					if current.version != before.Version || current.digest != before.Digest {
+						t.Fatalf("partial/stale coverage published at %d", commit.Last)
+					}
+				} else {
+					got, digest, err := current.state.Canonical()
+					want, wantDigest, wantErr := expected.Canonical()
+					if err != nil || wantErr != nil || digest != wantDigest || !bytes.Equal(got, want) || current.version != int64(commit.Last) {
+						t.Fatalf("coverage interpretation lost exact state: %v/%v", err, wantErr)
+					}
+				}
+				if row.stale && commit.Last == f.writer.Durable() && service.replay.lastAttempt.phase != ledger.GraphPhaseSuperseded {
+					t.Fatal("stale final was not superseded")
+				}
+				_ = service.Close()
+			}
+		})
+	}
+}
+
+func TestGraphLegacyReplayRetainedBoundary(t *testing.T) {
+	t.Parallel()
+	f, expected, _, prefix := graphCoverageHistory(t, false, false, false)
+	options := f.options()
+	options.Through = prefix
+	prior, err := openService(options, serviceDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prior.Close()
+	// Closing the legacy final retains exactly one terminal summary. There is
+	// no room for a selective presence set before that close.
+	cap := prior.replay.retained() + 512
+	options.Through = f.writer.Durable()
+	bounded, err := openService(options, serviceDeps{retainedCap: &cap})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bounded.Close()
+	want, digest, err := expected.Canonical()
+	got, actualDigest, actualErr := bounded.replay.current.state.Canonical()
+	if err != nil || actualErr != nil || bounded.overLimit || digest != actualDigest || !bytes.Equal(got, want) || bounded.replay.current.version != int64(f.writer.Durable()) {
+		t.Fatalf("legacy final acquired fallback headroom: overLimit=%v errors=%v/%v", bounded.overLimit, err, actualErr)
+	}
+}
+
+func TestGraphSelectiveFallbackRetainedCap(t *testing.T) {
+	t.Parallel()
+	f, expected, before, prefix := graphCoverageHistory(t, true, false, false)
+	options := f.options()
+	options.Through = prefix
+	prior, err := openService(options, serviceDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prior.Close()
+	var restoration uint64
+	for _, entry := range expected.Coverage {
+		id, _ := coverageWorkspace(prior.replay.attempt.scopes, entry)
+		if id == graphFixtureID(2) {
+			restoration += coverageMemory(entry)
+		}
+	}
+	cap := prior.replay.retained() + restoration + 512 - 1
+	boundedPrefix, err := openService(options, serviceDeps{retainedCap: &cap})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer boundedPrefix.Close()
+	if boundedPrefix.overLimit || boundedPrefix.replay.current.digest != before.Digest {
+		t.Fatal("fixture cap did not admit the complete legacy prefix")
+	}
+	options.Through = f.writer.Durable()
+	bounded, err := openService(options, serviceDeps{retainedCap: &cap})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bounded.Close()
+	status, err := bounded.Observe(t.Context())
+	if err != nil || !bounded.overLimit || status.Through != prefix || status.State != "unknown" || !slices.Contains(status.Reasons, ledger.ReasonStateCap) {
+		t.Fatalf("selective restoration escaped its retained bound: %+v, %v", status, err)
+	}
+	if _, err := bounded.Page(graphPageRequest(status, "coverage")); !errors.Is(err, ErrRevision) {
+		t.Fatalf("partly restored coverage exposed: %v", err)
+	}
+	if prior.replay.current.digest != before.Digest {
+		t.Fatal("failed restoration mutated the published base")
+	}
+}
+
+func TestGraphSelectiveProducerRetainedCap(t *testing.T) {
+	t.Parallel()
+	f, _, _, _ := graphCoverageHistory(t, false, false, false)
+	service := f.open(serviceDeps{})
+	before := service.replay.current
+	for range 205 {
+		if service.work != nil && service.work.phase == 9 {
+			break
+		}
+		if _, err := service.Step(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := service.work
+	if w == nil || w.phase != 9 || len(w.changedCoverage) != 1 {
+		t.Fatal("fixture did not reach selective publication")
+	}
+	chunk := w.diff
+	chunk.AnalysisID, chunk.AnalysisKey = w.started.AnalysisID, w.started.AnalysisKey
+	encoded := graphEncoded(t, chunk)
+	chunkCost := uint64(2*len(encoded) + 512)
+	service.replay.retainedCap = service.replay.retained() + w.formedMemory + w.memory + w.generation.memory + service.generationMemory + chunkCost + 512 - 1
+	status := driveGraph(t, service)
+	if status.Version != before.version || status.Digest != before.digest || !slices.Contains(status.Reasons, ledger.ReasonStateCap) {
+		t.Fatalf("producer omitted its selected fallback peak: %+v", status)
+	}
+	for _, record := range graphAttemptRecords(t, f, status.Attempt) {
+		if record.Type == ledger.TypeGraphDeltaChunk || record.Type == ledger.TypeGraphVersionCommitted {
+			t.Fatal("producer appended beyond its admitted selected peak")
+		}
+	}
+	page, err := service.Page(graphPageRequest(status, "coverage"))
+	if err != nil || !slices.EqualFunc(page.Coverage, before.state.Coverage, sameCoverage) {
+		t.Fatalf("refused producer changed the available old page: %v", err)
+	}
+	assertGraphExactReplay(t, f, service)
 }

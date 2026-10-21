@@ -224,6 +224,12 @@ func goFenceHost(t *testing.T, mode string) {
 		t.Fatalf("initial readable image: %+v, %v", oldPage, err)
 	}
 	analyzer := NewAnalyzer(tools)
+	if mode != "go-unknown" && mode != "go-refused" {
+		analyzer.deps.removeAll = func(string) error {
+			t.Error("a fenced result attempted cleanup or gained cleanup-only authority")
+			return errors.New("quarantined directory removal refused")
+		}
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	childMode := mode

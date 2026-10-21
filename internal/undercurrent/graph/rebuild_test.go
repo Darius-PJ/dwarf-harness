@@ -113,6 +113,11 @@ func TestGraphRebuildIndependentOfImage(t *testing.T) {
 			for _, node := range delta.PutNodes {
 				put = append(put, node.Key)
 			}
+			for _, coverage := range delta.Coverage {
+				if id, _ := coverageWorkspace(rebuild.replay.current.index.scopes, coverage); id == other {
+					t.Fatal("publishing rebuild re-emitted untouched workspace coverage")
+				}
+			}
 		}
 		if !slices.Equal(removed, []ledger.NodeKey{wrong}) || !slices.Equal(put, []ledger.NodeKey{right}) {
 			t.Fatalf("rebuild replaced unchanged nodes: removes=%v puts=%v", removed, put)
@@ -541,4 +546,315 @@ func graphAttemptFinal(t testing.TB, f *graphFixture, id uuid.UUID) ledger.Graph
 		t.Fatal(err)
 	}
 	return final
+}
+
+func TestGraphScopeOnlyRebuild(t *testing.T) {
+	t.Parallel()
+	f := newGraphFixture(t)
+	id := graphFixtureID(1)
+	f.register(id)
+	files := map[string]string{"a.md": "unchanged"}
+	tree := f.tree("regular", files)
+	f.accept(id, f.tree("empty", nil), tree, "a.md")
+	service := f.open(serviceDeps{})
+	before := driveGraph(t, service)
+	old := service.replay.current.state
+	_ = service.Close()
+	executableTree := f.tree("executable", files)
+	f.trees[executableTree][0].Mode = "100755"
+	accepted := f.accept(id, tree, executableTree, "a.md")
+	rebuild := f.open(serviceDeps{})
+	after := driveGraph(t, rebuild)
+	final := graphAttemptFinal(t, f, after.Attempt)
+	if after.Version != int64(f.writer.Durable()) || after.Version == before.Version || after.Digest == before.Digest || final.ChunkCount != 1 || rebuild.replay.structural != 0 {
+		t.Fatalf("scope-only publication was lost: before=%+v after=%+v final=%+v", before, after, final)
+	}
+	current := rebuild.replay.current.state
+	if current.Scopes[0].Source.Subject.Seq != int64(accepted.First) || current.Scopes[0].Source.Tree != executableTree || !slices.Equal(old.Nodes, current.Nodes) || !slices.Equal(old.Edges, current.Edges) || !slices.EqualFunc(old.Coverage, current.Coverage, sameCoverage) {
+		t.Fatal("scope-only publication changed facts or failed to advance subject")
+	}
+	var chunks, checkpoints int
+	for _, record := range graphAttemptRecords(t, f, after.Attempt) {
+		if record.Type == ledger.TypeGraphDeltaChunk {
+			chunk, err := ledger.DecodeGraphDeltaChunk(record.Payload)
+			if err != nil || chunk.ChunkIndex != 0 || len(chunk.RemoveEdges)+len(chunk.RemoveNodes)+len(chunk.PutNodes)+len(chunk.PutEdges)+len(chunk.Coverage) != 0 {
+				t.Fatalf("scope-only chunk was not an ordinary empty mutation: %+v, %v", chunk, err)
+			}
+			chunks++
+		}
+		if record.Type == ledger.TypeGraphAnalysisProgress {
+			progress, err := ledger.DecodeGraphAnalysisProgress(record.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if progress.Phase == ledger.GraphPhaseCheckpoint {
+				checkpoints++
+			}
+		}
+	}
+	if chunks != 1 || checkpoints != 1 {
+		t.Fatalf("scope-only durable boundary: chunks=%d checkpoints=%d", chunks, checkpoints)
+	}
+	assertGraphExactReplay(t, f, rebuild)
+	assertGraphHistoryCursors(t, f)
+	_ = rebuild.Close()
+	confirmation := f.open(serviceDeps{})
+	confirmed := driveGraph(t, confirmation)
+	if confirmed.Version != after.Version || confirmed.Digest != after.Digest || graphAttemptFinal(t, f, confirmed.Attempt).ChunkCount != 0 {
+		t.Fatalf("unchanged control emitted a mutation: %+v", confirmed)
+	}
+}
+
+func TestGraphCoverageRebuildComparesStateAndReasons(t *testing.T) {
+	t.Parallel()
+	f, _, original, _ := graphCoverageHistory(t, false, false, false)
+	service := f.open(serviceDeps{})
+	status := driveGraph(t, service)
+	if status.State != "ready" || status.Digest != original.Digest {
+		t.Fatalf("coverage state/reasons were not corrected: %+v", status)
+	}
+	var replaced []ledger.CoverageEntry
+	for _, record := range graphAttemptRecords(t, f, status.Attempt) {
+		if record.Type != ledger.TypeGraphDeltaChunk {
+			continue
+		}
+		chunk, err := ledger.DecodeGraphDeltaChunk(record.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range chunk.Coverage {
+			id, _ := coverageWorkspace(service.replay.current.index.scopes, entry)
+			if id != graphFixtureID(1) {
+				t.Fatal("unchanged workspace coverage was not omitted")
+			}
+			replaced = append(replaced, entry)
+		}
+	}
+	var expected []ledger.CoverageEntry
+	for _, entry := range service.replay.current.state.Coverage {
+		if id, _ := coverageWorkspace(service.replay.current.index.scopes, entry); id == graphFixtureID(1) {
+			expected = append(expected, entry)
+		}
+	}
+	if !slices.EqualFunc(replaced, expected, sameCoverage) {
+		t.Fatal("changed workspace did not emit its entire replacement set")
+	}
+	assertGraphExactReplay(t, f, service)
+}
+
+func TestGraphCoverageProducerEmptyFallback(t *testing.T) {
+	t.Parallel()
+	f, _, _, _ := graphCoverageHistory(t, false, false, false)
+	service := f.open(serviceDeps{})
+	if _, err := service.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	w := service.work
+	expected := service.replay.current.state
+	expected.Coverage = nil
+	for _, entry := range service.replay.current.state.Coverage {
+		if id, _ := coverageWorkspace(w.scopes, entry); id != graphFixtureID(1) {
+			expected.Coverage = append(expected.Coverage, entry)
+		}
+	}
+	// Valid rebuilt facts at the diff boundary isolate the encoding's empty-set
+	// case; ordinary corpus construction also emits upstream-unknown entries.
+	w.sorted = expected
+	w.stage = newGraphIndex()
+	for _, node := range expected.Nodes {
+		w.stage.putNode(node)
+	}
+	for _, entry := range expected.Coverage {
+		w.stage.putCoverage(entry)
+	}
+	w.phase = 8
+	status := driveGraph(t, service)
+	want, digest, err := expected.Canonical()
+	got, _, actualErr := service.replay.current.state.Canonical()
+	if err != nil || actualErr != nil || status.State != "ready" || status.Digest != digest || !bytes.Equal(want, got) {
+		t.Fatalf("empty replacement did not select legacy publication: %+v errors=%v/%v", status, err, actualErr)
+	}
+	assertGraphExactReplay(t, f, service)
+}
+
+func graphPrefixFixture(t *testing.T, source *graphFixture, through uint64, mutation graphMutation) *graphFixture {
+	t.Helper()
+	var prefix []ledger.Commit
+	for _, commit := range graphHistory(t, source.writer) {
+		if commit.Last <= through {
+			prefix = append(prefix, commit)
+		}
+	}
+	options := graphMutatedOptions(t, prefix, mutation, 1)
+	f := &graphFixture{t: t, trees: source.trees, writer: &graphFileAppender{colony: options.Colony, directory: options.LogDir, chain: ledger.Chain{Seq: through}}}
+	commits := graphHistory(t, f.writer)
+	last := commits[len(commits)-1].Records
+	record := last[len(last)-1]
+	f.writer.chain.Hash, f.writer.chain.EventTimeNS = record.Hash, record.EventTimeNS
+	return f
+}
+
+func graphChunkPayloads(t *testing.T, f *graphFixture, id uuid.UUID) ([][]byte, []uint64) {
+	t.Helper()
+	var payloads [][]byte
+	var checkpoints []uint64
+	for _, commit := range graphHistory(t, f.writer) {
+		for _, record := range commit.Records {
+			if record.OperationID == id && record.Type == ledger.TypeGraphDeltaChunk {
+				payloads = append(payloads, record.Payload)
+				checkpoints = append(checkpoints, commit.Last)
+			}
+		}
+	}
+	return payloads, checkpoints
+}
+
+func TestGraphRebuildResumeEncodings(t *testing.T) {
+	t.Parallel()
+	base, _, original, _ := graphCoverageHistorySize(t, false, false, false, true)
+	starting := base.open(serviceDeps{})
+	start, err := starting.Step(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = starting.Close()
+	startThrough := base.writer.Durable()
+	type encodingControl struct {
+		fixture     *graphFixture
+		chunks      [][]byte
+		checkpoints []uint64
+		reads       int
+	}
+	controls := make(map[bool]encodingControl)
+	for _, legacy := range []bool{false, true} {
+		f := graphPrefixFixture(t, base, startThrough, graphMutation{})
+		options := f.options()
+		reads := 0
+		options.ReadArtifacts = func(ctx context.Context, request ArtifactRequest) (ArtifactBatch, error) {
+			reads++
+			return f.read(ctx, request)
+		}
+		service, err := openService(options, serviceDeps{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.Resume(t.Context(), start.Attempt); err != nil {
+			t.Fatal(err)
+		}
+		encodingReached := false
+		for range 200 {
+			if service.work != nil && service.work.phase == 9 {
+				if legacy {
+					service.work.useLegacyEncoding()
+				}
+				encodingReached = true
+				break
+			}
+			if _, err := service.Step(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !encodingReached {
+			t.Fatal("fixture failed before encoding selection")
+		}
+		status := driveGraph(t, service)
+		if status.State != "ready" || status.Digest != original.Digest {
+			t.Fatalf("encoding control did not restore independent facts: %+v", status)
+		}
+		chunks, checkpoints := graphChunkPayloads(t, f, start.Attempt)
+		controls[legacy] = encodingControl{f, chunks, checkpoints, reads}
+		_ = service.Close()
+	}
+	selective, legacy := controls[false], controls[true]
+	if len(selective.chunks) < 2 || len(legacy.chunks) < 2 || !bytes.Equal(selective.chunks[0], legacy.chunks[0]) || bytes.Equal(selective.chunks[1], legacy.chunks[1]) {
+		t.Fatal("fixture lacks a common-first, distinguishing-later prefix")
+	}
+	for _, row := range []struct {
+		name    string
+		legacy  bool
+		prefix  int
+		corrupt bool
+	}{
+		{"legacy distinguishing later", true, 2, false},
+		{"selective distinguishing later", false, 2, false},
+		{"both match prefers selective", true, 1, false},
+		{"neither matches", false, 2, true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			control := controls[row.legacy]
+			through := control.checkpoints[row.prefix-1]
+			var mutation graphMutation
+			if row.corrupt {
+				for _, record := range graphAttemptRecords(t, control.fixture, start.Attempt) {
+					if record.Type != ledger.TypeGraphDeltaChunk {
+						continue
+					}
+					chunk, err := ledger.DecodeGraphDeltaChunk(record.Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if chunk.ChunkIndex == 1 {
+						mutation = graphMutation{target: record, change: func(t testing.TB, draft ledger.Draft, _ byte) ledger.Draft {
+							chunk.PutNodes[0].VersionSHA256[0] ^= 1
+							draft.Payload = graphEncoded(t, chunk)
+							return draft
+						}}
+					}
+				}
+			}
+			f := graphPrefixFixture(t, control.fixture, through, mutation)
+			persisted, _ := graphChunkPayloads(t, f, start.Attempt)
+			options := f.options()
+			reads := 0
+			options.ReadArtifacts = func(ctx context.Context, request ArtifactRequest) (ArtifactBatch, error) {
+				reads++
+				return f.read(ctx, request)
+			}
+			service, err := openService(options, serviceDeps{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			prior := service.replay.attempt.attemptSummary
+			if _, err := service.Resume(t.Context(), start.Attempt); err != nil {
+				t.Fatal(err)
+			}
+			status := driveGraph(t, service)
+			actual, _ := graphChunkPayloads(t, f, start.Attempt)
+			if status.Attempt != start.Attempt || status.AttemptKey != start.AttemptKey || status.Charged <= prior.reserved || reads != selective.reads {
+				t.Fatalf("Resume reset identity/charges or rebuilt facts to select encoding: %+v prior=%+v reads=%d/%d", status, prior, reads, selective.reads)
+			}
+			for index, payload := range persisted {
+				if !bytes.Equal(payload, actual[index]) {
+					t.Fatal("Resume rewrote a persisted payload")
+				}
+			}
+			if row.corrupt {
+				if status.State != "unknown" || !slices.Contains(status.Reasons, ledger.ReasonRecoveryUnknown) || len(actual) != len(persisted) || status.Digest != prior.started.BaseDigest {
+					t.Fatalf("unmatched prefix appended or published: %+v", status)
+				}
+				return
+			}
+			want := control.chunks
+			if row.prefix == 1 {
+				want = selective.chunks
+			}
+			if status.State != "ready" || status.Digest != original.Digest || !slices.EqualFunc(actual, want, bytes.Equal) || status.VerifiedCursor.ArtifactIndex != prior.cursor.ArtifactIndex {
+				t.Fatalf("Resume changed encoding or lost reconstructed state: %+v", status)
+			}
+			assertGraphExactReplay(t, f, service)
+			lastReserved := int64(0)
+			for _, record := range graphAttemptRecords(t, f, start.Attempt) {
+				if record.Type != ledger.TypeGraphAnalysisProgress {
+					continue
+				}
+				progress, err := ledger.DecodeGraphAnalysisProgress(record.Payload)
+				if err != nil || progress.ReservedTotal < lastReserved {
+					t.Fatalf("Resume refunded original reservations: %+v, %v", progress, err)
+				}
+				lastReserved = progress.ReservedTotal
+			}
+		})
+	}
 }

@@ -180,6 +180,26 @@ func graphTestChild() {
 			out.NextCursor.ArtifactIndex = int64(len(req.Corpus))
 		}
 	}
+	if mode == "coverage-valid" || mode == "coverage-unknown" {
+		out.WorkUsed = 1000
+		key, err := ModuleKey(req.Source.WorkspaceID, req.Adapter, "workspace", "fixture")
+		if err != nil {
+			os.Exit(2)
+		}
+		out.Nodes = append(out.Nodes, ledger.GraphNode{Key: key, VersionSHA256: ledger.Digest(sha256.Sum256([]byte("fixture"))), Adapter: req.Adapter, ConfigurationSHA256: req.ConfigurationSHA256})
+		out.Coverage = []ledger.CoverageEntry{}
+		for _, file := range req.Corpus {
+			if sourceAdapter(file.Path) == req.Adapter {
+				out.Coverage = append(out.Coverage, covered(file.Key, req.Adapter, ""))
+				out.Edges = append(out.Edges, dependency(key, file, req.Adapter, "fixture", req.ConfigurationSHA256))
+			}
+		}
+		if mode == "coverage-unknown" {
+			out.AnalysisResult = unknown(AnalysisRequest{Source: req.Source}, req.Adapter, ledger.ReasonHelperLimit, 1000)
+			out.NextCursor.ArtifactIndex = int64(len(req.Corpus))
+		}
+		sortResult(&out.AnalysisResult)
+	}
 	raw, _ := json.Marshal(out)
 	binary.BigEndian.PutUint32(length[:], uint32(len(raw)))
 	_, _ = os.Stdout.Write(length[:])
@@ -768,5 +788,97 @@ func goResponseForgeries() map[string]func(*helperResponse) {
 			sortResult(&out.AnalysisResult)
 		},
 		"over work": func(out *helperResponse) { out.WorkUsed = maxItems + 1 },
+	}
+}
+
+func cleanupFixtureTools(t *testing.T, adapter string) Tools {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := verifyGoFixtureTool(t, executable, "fixture")
+	switch adapter {
+	case ledger.AdapterPython:
+		return Tools{Python: tool}
+	case ledger.AdapterTypeScript:
+		return Tools{Node: tool, TypeScriptParser: tool}
+	default:
+		return Tools{Go: fixtureGoTools(t)}
+	}
+}
+
+func TestHelperCleanupOnlyFailure(t *testing.T) {
+	t.Parallel()
+	for _, adapter := range []string{ledger.AdapterPython, ledger.AdapterTypeScript, "go"} {
+		t.Run(adapter, func(t *testing.T) {
+			t.Parallel()
+			tools := cleanupFixtureTools(t, adapter)
+			extension := map[string]string{ledger.AdapterPython: ".py", ledger.AdapterTypeScript: ".ts", "go": ".go"}[adapter]
+			request := analysisFixture(map[string]string{"a" + extension: ""})
+			request.ConfigurationSHA256 = ConfigurationDigest(tools)
+			for _, mode := range []string{"coverage-valid", "coverage-unknown", "go-refused"} {
+				t.Run(mode, func(t *testing.T) {
+					t.Parallel()
+					analyzer := NewAnalyzer(tools)
+					var roots []string
+					analyzer.deps.environment = func(dir string) []string {
+						roots = append(roots, dir)
+						t.Cleanup(func() { _ = os.RemoveAll(dir) })
+						return append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD="+mode)
+					}
+					refusal := errors.New("owned cleanup refused")
+					analyzer.deps.removeAll = func(string) error { return refusal }
+					for invocation := range 2 {
+						result, err := analyzer.Analyze(t.Context(), adapter, request)
+						cleanup, direct := err.(*CleanupError)
+						if !direct || !errors.Is(cleanup, refusal) || cleanup.Directory != roots[invocation] || !filepath.IsAbs(cleanup.Directory) {
+							t.Fatalf("joined result lost its direct owned-root diagnostic: %+v, %v", result, err)
+						}
+						if _, err := os.Stat(cleanup.Directory); err != nil {
+							t.Fatal(err)
+						}
+						if result.Cost.InputBytes == 0 {
+							t.Fatalf("observed invocation cost lost: %+v", result.Cost)
+						}
+						if mode == "coverage-valid" {
+							key, _ := ModuleKey(request.Source.WorkspaceID, adapter, "workspace", "fixture")
+							if result.WorkUsed != 1000 || result.NextCursor.ArtifactIndex != 1 || len(result.Nodes) != 1 || result.Nodes[0].Key != key || len(result.Edges) != 1 || result.Edges[0] != dependency(key, request.Corpus[0], adapter, "fixture", request.ConfigurationSHA256) || len(result.Coverage) != 1 || !sameCoverage(result.Coverage[0], covered(request.Corpus[0].Key, adapter, "")) {
+								t.Fatalf("selected result changed: %+v", result)
+							}
+						} else {
+							reason, work := ledger.ReasonHelperLimit, int64(1000)
+							if mode == "go-refused" {
+								reason, work = ledger.ReasonAdapterUnavailable, request.Allowance
+							}
+							want := ledger.CoverageEntry{Scope: workspaceScope(request.Source.WorkspaceID), Adapter: adapter, State: ledger.CoverageUnknown, Reasons: []string{reason}}
+							if result.WorkUsed != work || len(result.Nodes) != 0 || len(result.Edges) != 0 || len(result.Coverage) != 1 || !sameCoverage(result.Coverage[0], want) {
+								t.Fatalf("joined unknown became causal or lost its charge: %+v", result)
+							}
+						}
+					}
+					if roots[0] == roots[1] || analyzer.fenced {
+						t.Fatal("cleanup reused a retained root or fenced a joined child")
+					}
+				})
+			}
+			t.Run("primary failure is not usable", func(t *testing.T) {
+				t.Parallel()
+				analyzer := NewAnalyzer(tools)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				analyzer.deps.environment = func(dir string) []string {
+					t.Cleanup(func() { _ = os.RemoveAll(dir) })
+					cancel()
+					return helperEnvironment(dir)
+				}
+				refusal := errors.New("owned cleanup refused")
+				analyzer.deps.removeAll = func(string) error { return refusal }
+				result, err := analyzer.Analyze(ctx, adapter, request)
+				if _, direct := err.(*CleanupError); direct || !errors.Is(err, refusal) || len(result.Nodes) != 0 || len(result.Edges) != 0 || result.WorkUsed != 0 {
+					t.Fatalf("primary failure acquired usable-result authority: %+v, %v", result, err)
+				}
+			})
+		})
 	}
 }

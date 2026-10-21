@@ -176,6 +176,8 @@ type serviceDeps struct {
 	afterChildStart    func()
 	beforeAppend       func([]ledger.Draft)
 	retainedCap        *uint64
+	stagingCap         *uint64
+	removeAll          func(string) error
 	nodeCap            int64
 	edgeCap            *int64
 	structuralCadence  int64
@@ -277,6 +279,18 @@ type Analyzer struct {
 
 var ErrBusy = errors.New("graph analyzer busy")
 
+// CleanupError reports an owned directory retained after a selected, joined
+// helper result. The result remains usable; cleanup must not cause a retry.
+type CleanupError struct {
+	Directory string
+	Err       error
+}
+
+func (e *CleanupError) Error() string {
+	return fmt.Sprintf("graph helper cleanup failed for %q: %v", e.Directory, e.Err)
+}
+func (e *CleanupError) Unwrap() error { return e.Err }
+
 func NewAnalyzer(tools Tools) *Analyzer {
 	if tools.Go != nil {
 		goTools := *tools.Go
@@ -337,11 +351,20 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 	if err != nil {
 		return AnalysisResult{}, err
 	}
+	selected := false
 	defer func() {
 		if !a.fenced {
-			if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
-				result = AnalysisResult{}
-				err = errors.Join(err, cleanupErr)
+			remove := a.deps.removeAll
+			if remove == nil {
+				remove = os.RemoveAll
+			}
+			if cleanupErr := remove(dir); cleanupErr != nil {
+				if selected && err == nil {
+					err = &CleanupError{Directory: dir, Err: cleanupErr}
+				} else {
+					result = AnalysisResult{}
+					err = errors.Join(err, fmt.Errorf("graph helper cleanup failed for %q: %w", dir, cleanupErr))
+				}
 			}
 		}
 	}()
@@ -409,6 +432,11 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 	child, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	raw, cost, outcome, err := runHelperProcess(child, cancel, tool.tool.Path, args, dir, environment, input, nil, a.deps.afterChildStart)
+	defer func() {
+		if selected && err == nil {
+			result.Cost = cost
+		}
+	}()
 	if adapter == "go" {
 		refused := false
 		var exit *exec.ExitError
@@ -427,6 +455,7 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 		if analysisFence.Load() {
 			return AnalysisResult{}, ErrRecovery
 		}
+		selected = outcome.WaitConfirmed && !outcome.ForcedStop
 		if err != nil || refused || !a.tools.Go.unchanged() {
 			return unknown(r, adapter, ledger.ReasonAdapterUnavailable, r.Allowance), nil
 		}
@@ -436,6 +465,7 @@ func (a *Analyzer) Analyze(ctx context.Context, adapter string, r AnalysisReques
 	if analysisFence.Load() {
 		return AnalysisResult{}, ErrRecovery
 	}
+	selected = outcome.WaitConfirmed && !outcome.ForcedStop
 	if err != nil {
 		if errors.Is(err, errHelperUnjoined) {
 			a.fenced = true

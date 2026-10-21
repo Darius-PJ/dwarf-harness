@@ -280,7 +280,12 @@ func (s *Service) run(ctx context.Context, resume *uuid.UUID) (Status, error) {
 		err = s.drive(workContext, resume)
 	}
 	if errors.Is(err, errRetainedCap) {
-		err = nil
+		var cleanup *CleanupError
+		if errors.As(err, &cleanup) {
+			err = cleanup
+		} else {
+			err = nil
+		}
 	}
 	s.publish()
 	s.mu.Lock()

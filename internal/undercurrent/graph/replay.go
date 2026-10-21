@@ -7,6 +7,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -40,6 +41,21 @@ func tupleDigest(value []any) ledger.Digest {
 	return ledger.Digest(sha256.Sum256(encoded))
 }
 func coverageKey(entry ledger.CoverageEntry) string { return entry.Scope + "\x00" + entry.Adapter }
+
+// coverageWorkspace uses the same workspace/NodeKey ownership grammar as
+// scopeSet.ownsCoverage; callers cannot infer ownership from an arbitrary prefix.
+func coverageWorkspace(scopes scopeSet, entry ledger.CoverageEntry) (uuid.UUID, bool) {
+	if !scopes.ownsCoverage(entry) {
+		return uuid.UUID{}, false
+	}
+	if text, ok := strings.CutPrefix(entry.Scope, "workspace:"); ok {
+		id, _ := uuid.Parse(strings.TrimSuffix(text, ":canonical"))
+		return id, true
+	}
+	var key ledger.NodeKey
+	_ = json.Unmarshal([]byte(entry.Scope), &key)
+	return key.OriginID, true
+}
 func startedScope(started ledger.GraphAnalysisStarted) Scope {
 	return Scope{Source: started.Source, Scope: started.Scope, AnalyzerEpoch: started.AnalyzerEpoch, ConfigurationSHA256: started.ConfigurationSHA256}
 }
@@ -743,6 +759,44 @@ func (r *replayState) finish(record ledger.Record, p ledger.GraphVersionCommitte
 	_, digest, err := state.Canonical()
 	if err != nil {
 		return history(record, "dangling")
+	}
+	if digest != p.GraphDigest && a.stage != nil && p.ChunkCount > 0 {
+		// Legacy histories need neither this set nor restoration headroom.
+		// Keep the set's charge live through the second digest and publication.
+		var bookkeeping uint64
+		defer func() { a.retained -= bookkeeping }()
+		var supplied map[uuid.UUID]bool
+		for _, entry := range index.coverage {
+			id, owned := coverageWorkspace(a.scopes, entry)
+			if !owned || supplied[id] {
+				continue
+			}
+			if !r.room(512) {
+				return errRetainedCap
+			}
+			a.retained += 512
+			bookkeeping += 512
+			if supplied == nil {
+				supplied = make(map[uuid.UUID]bool)
+			}
+			supplied[id] = true
+		}
+		state = State{}
+		for _, entry := range r.current.index.coverage {
+			id, owned := coverageWorkspace(a.scopes, entry)
+			if !owned || supplied[id] {
+				continue
+			}
+			if !r.room(coverageMemory(entry)) {
+				return errRetainedCap
+			}
+			index.putCoverage(entry)
+		}
+		state = index.state()
+		_, digest, err = state.Canonical()
+		if err != nil {
+			return history(record, "dangling")
+		}
 	}
 	if digest != p.GraphDigest {
 		return history(record, "graph_digest")

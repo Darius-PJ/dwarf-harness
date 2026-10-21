@@ -1116,3 +1116,199 @@ func graphMemory(index *graphIndex) uint64 {
 	}
 	return n
 }
+
+func copyGraphFixture(t *testing.T, source *graphFixture) *graphFixture {
+	t.Helper()
+	copy := newGraphFixture(t)
+	copy.writer.colony, copy.writer.chain = source.writer.colony, source.writer.chain
+	copy.trees = source.trees // Immutable input trees are shared, never modified.
+	entries, err := os.ReadDir(source.writer.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(source.writer.directory, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(copy.writer.directory, entry.Name()), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return copy
+}
+
+func assertGraphExactReplay(t *testing.T, fixture *graphFixture, service *Service) {
+	t.Helper()
+	want, digest, err := service.replay.current.state.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := fixture.open(serviceDeps{})
+	got, gotDigest, err := replayed.replay.current.state.Canonical()
+	if err != nil || !bytes.Equal(got, want) || gotDigest != digest || replayed.replay.current.version != service.replay.current.version {
+		t.Fatalf("replay lost canonical image/version: digest=%v want=%v error=%v", gotDigest, digest, err)
+	}
+}
+
+func TestGraphTemporaryReservationLifetime(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name, path, body string
+		native, refuse   bool
+		cap              uint64
+	}{
+		{"SQL has no idle frames", "a.sql", "CREATE TABLE t(id INTEGER); SELECT * FROM t;", false, false, 1 << 20},
+		{"native reserves before verification", "a.py", "", true, true, 1 << 20},
+		{"verification releases frames before invocation", "a.py", "", true, false, 2*maxFrame + 1<<20},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			f := newGraphFixture(t)
+			id := graphFixtureID(1)
+			f.register(id)
+			f.accept(id, f.tree("empty", nil), f.tree("input", map[string]string{row.path: row.body}), row.path)
+			control := copyGraphFixture(t, f)
+			options, controlOptions := f.options(), control.options()
+			var calls int
+			deps := serviceDeps{stagingCap: &row.cap}
+			controlDeps := serviceDeps{}
+			if row.native {
+				tools := cleanupFixtureTools(t, ledger.AdapterPython)
+				options.Tools.Python, controlOptions.Tools.Python = &tools.Python.tool, &tools.Python.tool
+				environment := func(dir string) []string {
+					return append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD=coverage-valid")
+				}
+				deps.environment, controlDeps.environment = environment, environment
+				deps.afterChildStart = func() { calls++ }
+			}
+			service, err := openService(options, deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			status := driveGraph(t, service)
+			if row.refuse {
+				if calls != 0 || status.Version != 0 || status.Digest != ledger.EmptyGraphDigest {
+					t.Fatalf("native work escaped admission: calls=%d status=%+v", calls, status)
+				}
+				assertGraphTerminalReason(t, f, ledger.ReasonTemporaryCap)
+				assertGraphExactReplay(t, f, service)
+				return
+			}
+			unbounded, err := openService(controlOptions, controlDeps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unbounded.Close()
+			wantStatus := driveGraph(t, unbounded)
+			got, _, err := service.replay.current.state.Canonical()
+			want, _, wantErr := unbounded.replay.current.state.Canonical()
+			if err != nil || wantErr != nil || status.State != "ready" || status.Version == 0 || status.Digest != wantStatus.Digest || !bytes.Equal(got, want) || row.native && calls != 1 {
+				t.Fatalf("frame lifetime lost completed graph: %+v control=%+v calls=%d errors=%v/%v", status, wantStatus, calls, err, wantErr)
+			}
+			if len(service.replay.current.state.Edges) != 1 {
+				t.Fatal("exact SQL/native dependency was not published")
+			}
+			assertGraphExactReplay(t, f, service)
+		})
+	}
+}
+
+func TestGraphCleanupDiagnosticDoesNotRepeatHelper(t *testing.T) {
+	t.Parallel()
+	for _, cofailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retained-cap=%v", cofailure), func(t *testing.T) {
+			t.Parallel()
+			f := newGraphFixture(t)
+			id := graphFixtureID(1)
+			f.register(id)
+			f.accept(id, f.tree("empty", nil), f.tree("python", map[string]string{"a.py": ""}), "a.py")
+			control := copyGraphFixture(t, f)
+			tools := cleanupFixtureTools(t, ledger.AdapterPython)
+			options, controlOptions := f.options(), control.options()
+			options.Tools.Python, controlOptions.Tools.Python = &tools.Python.tool, &tools.Python.tool
+			environment := func(dir string) []string {
+				return append(helperEnvironment(dir), "DWARF_GRAPH_TEST_CHILD=coverage-valid")
+			}
+			var calls, diagnostics int
+			var retained string
+			var service *Service
+			refusal := errors.New("joined owned-root removal refused")
+			deps := serviceDeps{
+				environment:     environment,
+				afterChildStart: func() { calls++ },
+				removeAll: func(dir string) error {
+					retained = dir
+					t.Cleanup(func() { _ = os.RemoveAll(dir) })
+					if cofailure {
+						// Refuse result retention, then exercise the actual durable
+						// terminal append's retained-cap normalization below.
+						service.work.stagingCap = service.work.memory + service.work.generation.memory
+					}
+					return refusal
+				},
+				beforeAppend: func(drafts []ledger.Draft) {
+					if !cofailure || retained == "" || drafts[0].Type != ledger.TypeGraphAnalysisProgress {
+						return
+					}
+					progress, err := ledger.DecodeGraphAnalysisProgress(drafts[0].Payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if progress.Phase == ledger.GraphPhaseUnknown {
+						service.replay.retainedCap = service.replay.metadataMemory + service.replay.current.memory
+					}
+				},
+			}
+			var err error
+			service, err = openService(options, deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			var status Status
+			for range 205 {
+				status, err = service.Step(t.Context())
+				if err != nil {
+					var cleanup *CleanupError
+					if !errors.As(err, &cleanup) || !errors.Is(err, refusal) || cleanup.Directory != retained {
+						t.Fatalf("cleanup diagnostic lost: %v", err)
+					}
+					diagnostics++
+				}
+				if status.State == "ready" || status.State == "unknown" {
+					break
+				}
+			}
+			mark := f.writer.Durable()
+			if _, err := service.Step(t.Context()); err != nil || f.writer.Durable() != mark || calls != 1 || diagnostics != 1 {
+				t.Fatalf("cleanup retried/reported or appended twice: calls=%d diagnostics=%d error=%v", calls, diagnostics, err)
+			}
+			if cofailure {
+				if status.State != "unknown" || !slices.Contains(status.Reasons, ledger.ReasonStateCap) || status.Version != 0 {
+					t.Fatalf("retained failure published helper output: %+v", status)
+				}
+				if _, err := service.Page(graphPageRequest(status, "nodes")); !errors.Is(err, ErrRevision) {
+					t.Fatalf("retained failure exposed partial page: %v", err)
+				}
+				return
+			}
+			unfailed, err := openService(controlOptions, serviceDeps{environment: environment})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unfailed.Close()
+			controlStatus := driveGraph(t, unfailed)
+			got, _, err := service.replay.current.state.Canonical()
+			want, _, wantErr := unfailed.replay.current.state.Canonical()
+			if err != nil || wantErr != nil || status.State != "ready" || status.Digest != controlStatus.Digest || status.Charged != controlStatus.Charged || !bytes.Equal(got, want) || len(service.replay.current.state.Edges) != 1 {
+				t.Fatalf("cleanup continuation differs from successful cleanup: %+v control=%+v errors=%v/%v", status, controlStatus, err, wantErr)
+			}
+			assertGraphExactReplay(t, f, service)
+		})
+	}
+}
