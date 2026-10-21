@@ -1,6 +1,6 @@
 # 138: Repair the first three-OS CI run
 
-Status: claimed
+Status: resolved
 Type: task
 Published: 2026-10-20
 Spec: [DwarfHarness system specification](../spec.md)
@@ -29,6 +29,10 @@ The first run of the three-OS CI ([D133](../../../docs/DECISIONS.md#d133-three-o
 - [x] On Windows the capture opens each candidate as Git does, without the backup flag, so a file Git cannot read is refused as unreadable even with SeBackupPrivilege enabled.
 - [x] A three-OS run on the repair passes, or each remaining failure has its own repair ticket.
 
+## Answer
+
+The first three-OS run's five causes are repaired, reviewed and on `main`. The Go analyzer resolves the temporary root it creates once, so it compares one form of each path, and a temporary folder below a junction fails closed. Test fixtures take canonical roots. The four Windows-only helpers live in the Windows files that use them. `go run ./tools/check` runs vet, staticcheck and govulncheck for all five targets ([D137](../../../docs/DECISIONS.md#d137-the-check-analyzes-every-supported-target)). The Job observer's child inherits only its three standard handles. On Windows the capture opens each candidate as Git does, without the backup flag, so a file Git cannot read is refused as unreadable. The third run passed on Windows, Linux and macOS, which met C3's CI start gate ([D133](../../../docs/DECISIONS.md#d133-three-os-ci-for-c3)).
+
 ## Comments
 
 2026-10-20 — Claimed and built at the owner's instruction to fix it now, continuing with the fixes for A and B in a new coder and deferring the advisor's review. The project manager added reason 3 at the owner's request (D137) and found reason 4 while the repair was verified.
@@ -46,3 +50,5 @@ The first run of the three-OS CI ([D133](../../../docs/DECISIONS.md#d133-three-o
 - The full check on f3fcdde: `check PASSED: all 9 steps passed in 973.4s` (tests 386.4 s, race 521.4 s; the workspace package 380.1 s and 480.4 s).
 
 2026-10-20 — The owner had f3fcdde and the records commit 3da420b pushed and dispatched the third run, on 3da420b. It passed on all three systems, so the last criterion is met: Windows in 2,297.2 s, Linux in 778.3 s and macOS in 342.4 s; [ticket 10](10-persist-and-recover-independent-private-contexts.md) has the details. The owner confirmed the green result. D137's static steps (vet, staticcheck and govulncheck for five targets, with no cache) took 364.9 s on Windows, 284.1 s on Linux and 66.9 s on macOS. Fast-forwarding `main` waits for the build advisor's review, since Fable advisor runs remain paused.
+
+2026-10-21 — The build advisor approved the branch: all seven criteria are met with evidence, nothing goes beyond the owner's minimal scope, and no known failure is left unfixed. Its two minor findings land with this close: [D138](../../../docs/DECISIONS.md#d138-a-windows-first-release-with-portable-code)'s **Decided by:** line also names item 2's ticket mapping as the project manager's, and [ticket 10](10-persist-and-recover-independent-private-contexts.md)'s comments on runs 2 and 3 note that their links are pending, with run 2's images and Git versions. Its one nit, a second copy of the long-path prefix switch beside `internal/core/durable`'s, stays unless a third copy appears. `main` fast-forwarded c6bfc5e → 881eae0 under D116 item 5: the full check passed on f3fcdde, and every later commit changes only Markdown (D128).
