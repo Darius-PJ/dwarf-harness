@@ -60,3 +60,10 @@ Canonical sections: Core roadmap C3; its cited controlling Core design and lates
 Causes and repairs are in [ticket 138](138-repair-the-first-three-os-ci-run.md). This ticket's CI start gate (D133, a green Windows job) is not met; a passing run on the repair clears it.
 
 2026-10-20 — The second run, on the repair branch `fix/ci-portability` at 6c59119, passed on Linux (665.1 s) and macOS (361.1 s). On Windows (1,805.8 s) one test failed, `TestCaptureUnreadable`, in both the tests and race steps; the cause and its repair are in [ticket 138](138-repair-the-first-three-os-ci-run.md). The gate is still not met.
+
+2026-10-20 — The third run, on `fix/ci-portability` at 3da420b, passed on all three systems. Each job checked out 3da420b and ran go1.27.2.
+- **Windows** (`windows-2022`, image 20261012.333.1; Windows Server 2022 Datacenter, build 20348; administrator; Defender real-time protection off, with `C:\` and `D:\` excluded; Git 2.56.0.windows.2): the check took 2,297.2 s, with vet 168.3 s, staticcheck 172.9 s, tests 816.8 s and race 1,100.4 s. Its slowest package, `internal/core/workspace`, took 725.7 s plain and 860.9 s under race.
+- **Linux** (`ubuntu-24.04`, image 20261012.334.1, Git 2.55.0): 778.3 s, with vet 125.0 s, staticcheck 142.8 s, tests 101.0 s and race 384.3 s.
+- **macOS** (`macos-15-arm64`, image 20260907.0337.1, Git 2.55.0): 342.4 s, with tests 75.0 s and race 196.2 s.
+
+This ticket's CI start gate (D133, a green Windows job) is met, and its design started the same day. The repair reaches `main` after the build advisor's review ([ticket 138](138-repair-the-first-three-os-ci-run.md)).

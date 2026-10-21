@@ -27,7 +27,7 @@ The first run of the three-OS CI ([D133](../../../docs/DECISIONS.md#d133-three-o
 - [x] `go run ./tools/check` runs vet, staticcheck and govulncheck for every supported target (D137).
 - [x] The observer passes `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` with its three standard handles. A deterministic subtest shows that an unrelated inheritable pipe is not inherited.
 - [x] On Windows the capture opens each candidate as Git does, without the backup flag, so a file Git cannot read is refused as unreadable even with SeBackupPrivilege enabled.
-- [ ] A three-OS run on the repair passes, or each remaining failure has its own repair ticket.
+- [x] A three-OS run on the repair passes, or each remaining failure has its own repair ticket.
 
 ## Comments
 
@@ -44,3 +44,5 @@ The first run of the three-OS CI ([D133](../../../docs/DECISIONS.md#d133-three-o
   - a probe showed that an open with the backup flag reads a file held with share mode 0 only while SeBackupPrivilege is enabled;
   - with the privilege enabled, the test failed on 6c59119 exactly as on CI and passed on the fix, f3fcdde.
 - The full check on f3fcdde: `check PASSED: all 9 steps passed in 973.4s` (tests 386.4 s, race 521.4 s; the workspace package 380.1 s and 480.4 s).
+
+2026-10-20 — The owner had f3fcdde and the records commit 3da420b pushed and dispatched the third run, on 3da420b. It passed on all three systems, so the last criterion is met: Windows in 2,297.2 s, Linux in 778.3 s and macOS in 342.4 s; [ticket 10](10-persist-and-recover-independent-private-contexts.md) has the details. The owner confirmed the green result. D137's static steps (vet, staticcheck and govulncheck for five targets, with no cache) took 364.9 s on Windows, 284.1 s on Linux and 66.9 s on macOS. Fast-forwarding `main` waits for the build advisor's review, since Fable advisor runs remain paused.
