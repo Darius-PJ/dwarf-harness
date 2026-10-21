@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -432,6 +433,60 @@ func FuzzDecodeU3_61(f *testing.F) {
 			t.Fatalf("Encode decoded %+v: %v", p, err)
 		}
 		again, err := decodeU3_61(typ, js)
+		if err != nil || !reflect.DeepEqual(again, p) {
+			t.Fatalf("Decode re-encoded = %+v, %v; want %+v", again, err, p)
+		}
+		if encoded, err := again.Encode(); err != nil || !bytes.Equal(encoded, js) {
+			t.Fatalf("re-encoding = %s, %v; want %s", encoded, err, js)
+		}
+	})
+}
+
+// FuzzDecodeF3_10 exercises F3-10, proposed for freeze (D125), with a byte
+// tag selecting each decoder and seeds at syntax, nesting and size boundaries.
+func FuzzDecodeF3_10(f *testing.F) {
+	fixtures := f3_10Payloads()
+	for i, tc := range fixtures {
+		js := []byte(tc.wire)
+		f.Add(uint8(i), js)
+		f.Add(uint8(i), []byte(`{}`))
+		f.Add(uint8(i), []byte(`{"future":{"items":[{"x":1,"x":2}]},`+tc.wire[1:]))
+		f.Add(uint8(i), []byte(`{"future":[[{"x":null}]],`+tc.wire[1:]))
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(js, &fields); err != nil {
+			f.Fatal(err)
+		}
+		for key, value := range fields {
+			f.Add(uint8(i), []byte(`{"`+key+`":`+string(value)+`,`+tc.wire[1:]))
+			f.Add(uint8(i), bytes.Replace(js, []byte(`"`+key+`":`+string(value)), []byte(`"`+key+`":null`), 1))
+		}
+		for _, size := range []int{16384, 16385} {
+			f.Add(uint8(i), append(bytes.Clone(js), bytes.Repeat([]byte(" "), size-len(js))...))
+		}
+	}
+	for _, bad := range []string{
+		`{"scope":"context","expected_version":9223372036854775808,"revision":2,"changes":[]}`,
+		`{"scope":"context","expected_version":9223372036854775807,"revision":0,"changes":[]}`,
+		`{"scope":"context","expected_version":1,"revision":2,"changes":[{"slot":"transcript","mode":"append","sha256":"` + goldenB1.String() + `","bytes":9223372036854775808}]}`,
+		`{"scope":"context","expected_version":1,"revision":2,"changes":[{"slot":"continuation","mode":"clear","bytes":null}]}`,
+	} {
+		f.Add(uint8(2), []byte(bad))
+	}
+	f.Fuzz(func(t *testing.T, kind uint8, data []byte) {
+		t.Parallel()
+		typ := fixtures[int(kind)%len(fixtures)].typ
+		p, err := decodeF3_10(typ, data)
+		if err != nil {
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Decode error = %v, want ErrInvalid", err)
+			}
+			return
+		}
+		js, err := p.Encode()
+		if err != nil {
+			t.Fatalf("Encode decoded %+v: %v", p, err)
+		}
+		again, err := decodeF3_10(typ, js)
 		if err != nil || !reflect.DeepEqual(again, p) {
 			t.Fatalf("Decode re-encoded = %+v, %v; want %+v", again, err, p)
 		}

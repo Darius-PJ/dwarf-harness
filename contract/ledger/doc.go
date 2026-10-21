@@ -158,8 +158,8 @@
 // A Catalogue lists the record type versions a writer may append. Defined
 // returns those this contract version defines: the four F0 record types,
 // the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
-// F2-08 types, the four F2-09 types and the four F-U3-61 types below,
-// twenty-four in all, each at version 1.
+// F2-08 types, the four F2-09 types, the four F-U3-61 types and the four
+// F3-10 types below, twenty-eight in all, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -171,12 +171,15 @@
 // also by addition to format version 1.
 // F-U3-61 is ticket 61's part, U3's first producer family, frozen (D130),
 // also by addition to format version 1.
+// F3-10 is ticket 10's part of F3, proposed for freeze (D125),
+// also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
 // family may use it, and Defined never contains it.
 // The namespace "workspace." is reserved for C2's record families.
 // The namespace "graph." is reserved for U3's record families.
+// The namespaces "runtime." and "private." are reserved for C3's Core runtime.
 //
 // # F0 record types
 //
@@ -1543,4 +1546,165 @@
 // rebuild retaining the version, a stale final record after another
 // workspace's racing acceptance, an attempt ending unknown, and an attempt
 // superseded by its own workspace's newer acceptance.
+//
+// # F3-10 private-state record types
+//
+// These four version-1 types are ticket 10's part of F3, proposed for freeze
+// (D125). C3 owns their payload specifications. Only Core's agent service
+// (internal/core/agents) may produce them, through the ledger store's Submit;
+// permitted callers are enforced by review. The service checks the record
+// rules below both before submission and at Open. Check, Reader, EncodeCommit
+// and the payload codecs do not enforce cross-record or filesystem rules.
+// Nothing here changes the rules or bytes of an earlier family.
+//
+// Common decoder rules are F0's strict JSON, required-member, duplicate-key,
+// non-null known-member, canonical UUIDv7/digest and plain unsigned-decimal
+// rules, including nested change and target objects. Unknown optional members
+// are ignored at every object level; duplicate keys are refused even inside
+// ignored values. The complete input, including whitespace and extensions,
+// must fit MaxPrivatePayloadBytes (16 KiB). Encoders emit compact JSON in the
+// tabled order and enforce the same cap. Errors wrap ErrInvalid.
+//
+// kind, operation and outcome are open tokens matching ^[a-z][a-z0-9_]*$,
+// at most 64 ASCII bytes. Version-1 producers write general/work, operations
+// agent_register/context_create/private_write, and outcome applied. Decoders
+// preserve other well-formed tokens; an unfamiliar outcome is not evidence
+// of an applied effect. scope, slot and mode are closed values.
+//
+// runtime.agent_registered v1 (RuntimeAgentRegistered):
+//
+//	key                 type    rule
+//	directory           string  safe basename, 1 through 128 ASCII bytes
+//	general_context_id  UUIDv7  agent's general context
+//
+// Decoder rules: directory matches [A-Za-z0-9][A-Za-z0-9_-]* and is not CON,
+// PRN, AUX, NUL, COM1 through COM9 or LPT1 through LPT9, case-insensitively.
+// Record rules: new agent and session IDs; exactly one immutable session per
+// agent; globally unique directory spelling under case-insensitive comparison
+// on every host. general_context_id equals the envelope context and is created
+// in this group. Identities are not inferred from names or regenerated at Open.
+//
+// runtime.context_created v1 (RuntimeContextCreated):
+//
+//	key   type   rule
+//	kind  token  v1 writes general or work
+//
+// Record rules: general appears exactly once, during registration; work
+// belongs to an existing matching agent/session. A context UUID is new in the
+// colony, never reused by another agent. Creation includes its initial revision.
+// A work context confers neither a task nor a grant.
+//
+// private.revision v1 (PrivateRevision):
+//
+//	key               type             rule
+//	scope             string           agent or context
+//	expected_version  integer          0 through MaxInt64-1
+//	revision          integer          expected_version plus one
+//	changes           PrivateChange[]  non-empty, strictly slot-sorted
+//
+// Each change's keys, in encoder order:
+//
+//	key              type     rule
+//	slot             string   scope's slot
+//	mode             string   replace, append or clear as allowed below
+//	sha256           digest   required except clear; exact selected bytes
+//	bytes            integer  required except clear; 0 through MaxInt64
+//	previous_sha256  digest   optional, only on transcript append
+//
+// Decoder rules: agent slots are instructions and memory (at most two);
+// context slots are continuation, handoff, memory and transcript (at most
+// four). Slots are strictly ascending UTF-8 bytes, without duplicates.
+// Instructions, memory and handoff require replace; transcript requires
+// append; continuation requires replace or clear. Transcript and continuation
+// replacements are non-empty. Markdown may be empty, represented by its real
+// digest and bytes:0, not a zero digest. Clear omits sha256, bytes and
+// previous_sha256 altogether, even when a supplied value would be null or zero.
+// Non-transcript changes omit previous_sha256. Initialization (expectation 0)
+// requires exactly the sorted replacement set {instructions,memory} for agent
+// or {handoff,memory} for context; no initial transcript or continuation.
+//
+// Record rules: one current revision per agent scope and one per context;
+// the expectation equals the current scope revision, checked under the lock
+// immediately before Submit. Each selected object is durably published in
+// its owning private directory before the commit. At most one revision per
+// scope/group; registration's two scopes are distinct. Transcript append
+// selects one non-empty opaque chunk; previous_sha256 is absent for the
+// first chunk and equals the exact previous head thereafter. Identical chunks
+// appended twice are two occurrences, distinguished by revision. Hash equality
+// grants no cross-context alias. Private object hashes are not body references.
+//
+// runtime.command_receipt v1 (RuntimeCommandReceipt):
+//
+//	key                type           rule
+//	command_id         UUIDv7         group's command ID
+//	submission_sha256  digest         group's canonical submission digest
+//	operation          token          operation being acknowledged
+//	target             PrivateTarget  keys scope, slots in that order
+//	expected_version   integer        original revision expectation
+//	outcome            token          v1 writes applied
+//	request_id         UUIDv7         optional; v1 producers omit it
+//
+// Decoder rules: target.scope is agent/context; target.slots is a required
+// array (possibly []), strictly sorted and distinct, containing only that
+// scope's slots. agent_register requires agent/[] and expectation 0;
+// context_create requires context/[] and expectation 0; private_write requires
+// non-empty slots and expectation 1 through MaxInt64-1. Unknown operations
+// retain the structural rules, with expectation 0 through MaxInt64. Record
+// rules: the receipt is last and immutable in its group. command_id and
+// submission_sha256 match its single F0 command. A write target lists exactly
+// its revision's manifest slots and scope, with the same expectation. Principal
+// is the derived owner actor plus the identity envelope, not caller text.
+// The returned sequence is the actual receipt envelope's, never a payload
+// self-sequence. Receipt and result are one value, not admission and completion.
+//
+// Group shapes, in order, each in one commit (names omit their namespaces):
+//
+//	register: command, agent_registered, context_created(general),
+//	          revision(agent,1), revision(context,1), command_receipt
+//	create:   command, context_created(work), revision(context,1), command_receipt
+//	write:    command, revision, command_receipt
+//
+// Every record in a group, including the F0 command, has the same agent_id,
+// execution_session_id, context_id and operation_id; each is required, and
+// operation_id equals the command ID. The session is the agent's sole session.
+// An agent-scope write carries the originating registered context of that
+// agent, not necessarily its general context. Actors are owner for command,
+// registration, creation and receipt, and core for revision. turn_id,
+// measurement_path and body_refs are absent. Private bytes never enter the
+// public ledger or body store.
+//
+// Services refuse extra, missing or reordered records, wrong actors or
+// bindings, reused identity/command IDs, receipt ID/digest/target mismatches,
+// illegal initialization, stale revisions or transcript predecessors, and
+// overflow. Stale, invalid, busy, publication failure or caller cancellation
+// before Submit writes nothing and consumes no command ID. Unreferenced
+// published objects have no external effect. There are no private start/end
+// records, pending/interrupted outcomes or recovery appends. After commit,
+// materialization and projection complete before acknowledgement. Open replays
+// complete groups without dispatch or append; it completes and reports stale
+// materializations from verified objects. Foreign bytes or missing/corrupt
+// objects block the scope rather than being inferred as committed state.
+//
+// Schema-1 canonical submission is a producer rule: SHA-256 hashes compact
+// JSON with fixed keys schema (1), actor ("owner"), agent_id, session_id,
+// context_id, operation, target, expected_version, arguments, in that order.
+// target has scope then slots, using the receipt rules and sorted slots.
+// Registration arguments have directory, agent_sha256, agent_bytes in order;
+// creation has kind; private_write has changes, using the change key order
+// above but excluding the derived transcript predecessor. Hash every exact
+// supplied byte through its digest and size. All supplied binding IDs and
+// expectations enter this form; the command ID itself, ephemeral handles,
+// paths/view spellings, ledger metadata and derived predecessor do not.
+// Same command ID and digest replays its receipt; a different digest refuses
+// before revision/CAS checks. Schema-1 bytes remain stable when future producers
+// are added; a new meaning cannot reuse an old command ID.
+//
+// The F3-10 golden at testdata/f3/10/log/00000000000000000001.jsonl has ten
+// commits and thirty-four records: registration 1-6; work creation 7-10;
+// general memory replace 11-13; first and second work transcript chunks 14-16
+// and 17-19; continuation replace 20-22 and clear 23-25; agent memory from
+// the work context 26-28; work handoff/memory/transcript 29-31; agent
+// instructions from the general context 32-34. Replays and refusals add no
+// record. IDs, times, schema-1 digests and content digests are deterministic;
+// EncodeCommit supplies the actual record hash chain.
 package ledger

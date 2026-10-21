@@ -48,7 +48,9 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypePolicyActivationHoldChanged, TypePolicyActivationEnded and
 // TypePolicyActivated; and F-U3-61, ticket 61's part and U3's first producer
 // family, frozen (D130): TypeGraphAnalysisStarted, TypeGraphAnalysisProgress,
-// TypeGraphDeltaChunk and TypeGraphVersionCommitted. All twenty-four are at
+// TypeGraphDeltaChunk and TypeGraphVersionCommitted; and F3-10, proposed for
+// freeze (D125): TypeRuntimeAgentRegistered, TypeRuntimeContextCreated,
+// TypePrivateRevision and TypeRuntimeCommandReceipt. All twenty-eight are at
 // version 1. It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
@@ -76,5 +78,9 @@ func Defined() Catalogue {
 		{TypeGraphAnalysisProgress, 1}:       true,
 		{TypeGraphDeltaChunk, 1}:             true,
 		{TypeGraphVersionCommitted, 1}:       true,
+		{TypeRuntimeAgentRegistered, 1}:      true,
+		{TypeRuntimeContextCreated, 1}:       true,
+		{TypePrivateRevision, 1}:             true,
+		{TypeRuntimeCommandReceipt, 1}:       true,
 	}}
 }

@@ -64,6 +64,10 @@ func TestNewCatalogue(t *testing.T) {
 		{"graph.analysis_progress", 1}:                  true,
 		{"graph.delta_chunk", 1}:                        true,
 		{"graph.version_committed", 1}:                  true,
+		{"runtime.agent_registered", 1}:                 true,
+		{"runtime.context_created", 1}:                  true,
+		{"private.revision", 1}:                         true,
+		{"runtime.command_receipt", 1}:                  true,
 	}
 	if !maps.Equal(def.set, want) || def.Contains(TypeVersion{"fixture.sample", 1}) {
 		t.Errorf("Defined() holds %v, want %v", def.set, want)
