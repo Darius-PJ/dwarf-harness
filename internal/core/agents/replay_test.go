@@ -174,7 +174,7 @@ func TestPrivateReplayRefreshesRacingTail(t *testing.T) {
 	req := memoryWrite(b, 20, 1, "race")
 	hold.Store(true)
 	type result struct {
-		r   CommandResult
+		r   Receipt
 		err error
 	}
 	done := make(chan result, 1)

@@ -21,18 +21,18 @@ var (
 
 // Limits bound preparation and reads, not the validity of historical objects.
 type Limits struct {
-	MaxObjectBytes    int64
-	MaxOperationBytes int64
-	MaxPendingWrites  int
-	MaxReadBytes      int64
-	MaxReadChunks     int
+	MaxObjectBytes      int64
+	MaxOperationBytes   int64
+	MaxConcurrentWrites int
+	MaxReadBytes        int64
+	MaxReadChunks       int
 }
 
 func DefaultLimits() Limits {
 	return Limits{maxObjectBytes, maxOperationBytes, 16, maxOperationBytes, 64}
 }
 func (l Limits) validate() error {
-	if l.MaxObjectBytes <= 0 || l.MaxObjectBytes > maxObjectBytes || l.MaxOperationBytes < l.MaxObjectBytes || l.MaxOperationBytes > maxOperationBytes || l.MaxPendingWrites <= 0 || l.MaxReadBytes <= 0 || l.MaxReadBytes > maxOperationBytes || l.MaxReadChunks <= 0 || l.MaxReadChunks > 64 {
+	if l.MaxObjectBytes <= 0 || l.MaxObjectBytes > maxObjectBytes || l.MaxOperationBytes < l.MaxObjectBytes || l.MaxOperationBytes > maxOperationBytes || l.MaxConcurrentWrites <= 0 || l.MaxReadBytes <= 0 || l.MaxReadBytes > maxOperationBytes || l.MaxReadChunks <= 0 || l.MaxReadChunks > 64 {
 		return ErrInvalid
 	}
 	return nil
@@ -91,8 +91,8 @@ type CommandLookup struct {
 	SubmissionSHA256 ledger.Digest
 }
 
-// CommandResult is the immutable applied receipt. Availability is queried separately.
-type CommandResult struct {
+// Receipt is the immutable applied receipt. Availability is queried separately.
+type Receipt struct {
 	Binding
 	SessionID, CommandID                               uuid.UUID
 	SubmissionSHA256                                   ledger.Digest

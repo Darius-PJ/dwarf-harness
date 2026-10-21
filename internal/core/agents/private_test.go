@@ -131,7 +131,7 @@ func TestPrivateExpectedRevisionCAS(t *testing.T) {
 			b := registerPrivate(t, f.service, 10)
 			start := make(chan struct{})
 			type outcome struct {
-				r       CommandResult
+				r       Receipt
 				err     error
 				request PrivateWrite
 			}
@@ -179,7 +179,7 @@ func TestPrivateReceiptReplayAndMismatch(t *testing.T) {
 		defer once.Do(func() { close(release) })
 		var hold atomic.Bool
 		limits := DefaultLimits()
-		limits.MaxPendingWrites = 1
+		limits.MaxConcurrentWrites = 1
 		f := newServiceFixtureWithLimits(t, serviceDeps{beforePublish: func(b Binding, scope string) error {
 			if hold.Load() {
 				close(entered)

@@ -172,7 +172,7 @@ func TestPrivateMaterializationFailureAndCancellation(t *testing.T) {
 			return os.ErrPermission
 		}
 		return nil
-	}, afterCommit: func(r CommandResult) {
+	}, afterCommit: func(r Receipt) {
 		if cancel != nil {
 			cancel()
 		}
@@ -187,6 +187,9 @@ func TestPrivateMaterializationFailureAndCancellation(t *testing.T) {
 	var material *MaterializationError
 	if !errors.As(err, &material) || material.Revision != 2 {
 		t.Fatalf("false ack after committed failure: %v", err)
+	}
+	if !errors.Is(err, ErrMaterialization) || !errors.Is(err, os.ErrPermission) || !errors.Is(material.Cause, os.ErrPermission) {
+		t.Fatalf("committed failure lost original error classification: %v (cause %v)", err, material.Cause)
 	}
 	snap, err := f.service.Snapshot(context.Background(), ReadBinding{b, "context"})
 	if err != nil || snap.Revision != 2 || snap.Materializations["memory"] != "stale" {
@@ -298,7 +301,7 @@ func TestPrivateCloseDrainsOperations(t *testing.T) {
 	var once sync.Once
 	defer once.Do(func() { close(release) })
 	var hold atomic.Bool
-	f := newServiceFixture(t, serviceDeps{afterCloseFence: func() { close(fenced) }, afterCommit: func(CommandResult) {
+	f := newServiceFixture(t, serviceDeps{afterCloseFence: func() { close(fenced) }, afterCommit: func(Receipt) {
 		if hold.Load() {
 			close(entered)
 			<-release

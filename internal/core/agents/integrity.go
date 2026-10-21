@@ -217,7 +217,7 @@ func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope str
 				err = path.materialize(slot, data)
 			}
 			if err != nil {
-				materialErr = errors.Join(materialErr, ErrMaterialization)
+				materialErr = errors.Join(materialErr, ErrMaterialization, err)
 				if opening && report != nil {
 					report.Issues = append(report.Issues, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: st.revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "stale_completion_failed"})
 				}

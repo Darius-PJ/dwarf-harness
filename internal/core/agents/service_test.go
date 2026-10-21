@@ -61,7 +61,7 @@ func registerPrivate(t *testing.T, s *Service, n int) Binding {
 	}
 	return b
 }
-func writePrivate(t *testing.T, s *Service, b Binding, id int, revision uint64, changes ...Change) CommandResult {
+func writePrivate(t *testing.T, s *Service, b Binding, id int, revision uint64, changes ...Change) Receipt {
 	t.Helper()
 	r, err := s.WritePrivate(context.Background(), PrivateWrite{Binding: b, CommandID: privateID(id), Scope: "context", ExpectedVersion: revision, Changes: changes})
 	if err != nil {

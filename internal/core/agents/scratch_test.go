@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"testing"
 
@@ -125,5 +126,70 @@ func TestPrivateScratchRefreshAcrossOtherCommits(t *testing.T) {
 	view, err = f.service.ScratchBinding(ctx, ScratchLookup{Binding: b, WorkspaceID: w.ID})
 	if err != nil || view.State != "closed" || view.ScratchID != scratch.ID || f.store.Durable() != before {
 		t.Fatalf("restart created replacement: %+v %v", view, err)
+	}
+}
+
+func TestPrivateScratchClosureActorBinding(t *testing.T) {
+	t.Parallel()
+	for _, actor := range []ledger.Actor{ledger.ActorOwner, ledger.ActorAgent} {
+		t.Run(string(actor), func(t *testing.T) {
+			t.Parallel()
+			f := newServiceFixture(t, serviceDeps{})
+			b := registerPrivate(t, f.service, 10)
+			ws, w := privateWorkspace(t, f)
+			ctx := context.Background()
+			scratch, err := ws.Scratch(ctx, b.ContextID, w.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lookup := ScratchLookup{Binding: b, WorkspaceID: w.ID}
+			view, err := f.service.ScratchBinding(ctx, lookup)
+			if err != nil || view.State != "present" || view.ScratchID != scratch.ID {
+				t.Fatalf("initial scratch binding: %+v %v", view, err)
+			}
+			// CloseScratch always supplies an envelope context. Append the frozen
+			// F2 variant directly through the real store, not a replacement writer.
+			payload, err := (ledger.ScratchClosed{ScratchID: scratch.ID, ContextID: b.ContextID, Reason: "abandoned"}).Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			draft := ledger.Draft{Type: ledger.TypeScratchClosed, TypeVersion: 1, Actor: actor, Payload: payload}
+			if actor == ledger.ActorAgent {
+				draft.ContextID = privateID(99)
+			}
+			if _, err := f.store.Append(ctx, []ledger.Draft{draft}); err != nil {
+				t.Fatal(err)
+			}
+			before := f.store.Durable()
+			view, err = f.service.ScratchBinding(ctx, lookup)
+			if actor == ledger.ActorAgent {
+				if !errors.Is(err, ErrInconsistent) {
+					t.Fatalf("live refresh accepted another agent context: %v", err)
+				}
+			} else if err != nil || view.State != "closed" || view.ScratchID != scratch.ID || f.store.Durable() != before {
+				t.Fatalf("owner closure without envelope context: %+v %v", view, err)
+			}
+			if err := f.service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			opened, _, err := Open(ctx, f.store, f.root, DefaultLimits())
+			if actor == ledger.ActorAgent {
+				if opened != nil {
+					_ = opened.Close()
+				}
+				if !errors.Is(err, ErrInconsistent) {
+					t.Fatalf("Open accepted another agent context: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.service = opened
+			view, err = f.service.ScratchBinding(ctx, lookup)
+			if err != nil || view.State != "closed" || view.ScratchID != scratch.ID || f.store.Durable() != before {
+				t.Fatalf("restart lost owner closure: %+v %v", view, err)
+			}
+		})
 	}
 }

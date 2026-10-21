@@ -20,7 +20,7 @@ type privateGroup struct {
 	kind            string
 	revisions       []ledger.PrivateRevision
 	revisionIndexes []int
-	result          CommandResult
+	result          Receipt
 }
 
 // decodeGroup checks the complete envelope, never a filtered F3 subsequence.
@@ -126,7 +126,7 @@ func decodeGroup(d []ledger.Draft, first uint64) (*privateGroup, error) {
 	if err != nil || canonical != command.SubmissionSHA256 {
 		return bad("canonical submission digest")
 	}
-	g.result = CommandResult{Binding: Binding{ids.agent, ids.context}, SessionID: ids.session, CommandID: command.CommandID, SubmissionSHA256: command.SubmissionSHA256, Operation: r.Operation, Target: ledger.PrivateTarget{Scope: r.Target.Scope, Slots: slices.Clone(r.Target.Slots)}, ExpectedVersion: uint64(r.ExpectedVersion), Sequence: first + uint64(len(d)) - 1}
+	g.result = Receipt{Binding: Binding{ids.agent, ids.context}, SessionID: ids.session, CommandID: command.CommandID, SubmissionSHA256: command.SubmissionSHA256, Operation: r.Operation, Target: ledger.PrivateTarget{Scope: r.Target.Scope, Slots: slices.Clone(r.Target.Slots)}, ExpectedVersion: uint64(r.ExpectedVersion), Sequence: first + uint64(len(d)) - 1}
 	for _, rev := range g.revisions {
 		if rev.Scope == "context" {
 			g.result.Revision = uint64(rev.Revision)
@@ -306,7 +306,7 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 					return err
 				}
 				old, ok := s.p.scratches[p.ScratchID]
-				if !ok || old.ContextID != p.ContextID || p.ContextID != r.ContextID {
+				if !ok || old.ContextID != p.ContextID || (r.Actor != ledger.ActorOwner && (r.Actor != ledger.ActorAgent || p.ContextID != r.ContextID)) {
 					return inconsistent(c.First, "scratch closure")
 				}
 				old.closed = true
@@ -355,15 +355,15 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 	})
 	return found, err
 }
-func matchReceipt(m commandMatch, ids submissionIDs, digest ledger.Digest) (CommandResult, error) {
+func matchReceipt(m commandMatch, ids submissionIDs, digest ledger.Digest) (Receipt, error) {
 	if m.group != nil && m.group.ids != ids {
-		return CommandResult{}, ErrNotBound
+		return Receipt{}, ErrNotBound
 	}
 	if m.command.SubmissionSHA256 != digest {
-		return CommandResult{}, ErrCommandMismatch
+		return Receipt{}, ErrCommandMismatch
 	}
 	if m.group == nil {
-		return CommandResult{}, ErrUnavailable
+		return Receipt{}, ErrUnavailable
 	}
 	return m.group.result, nil
 }

@@ -32,50 +32,50 @@ func (s *Service) initialIDs(ctx context.Context, b Binding, creation bool) (sub
 	}
 	return s.bindingLocked(b, creation)
 }
-func (s *Service) RegisterAgent(ctx context.Context, r AgentRegistration) (CommandResult, error) {
+func (s *Service) RegisterAgent(ctx context.Context, r AgentRegistration) (Receipt, error) {
 	if err := s.enter(ctx); err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	defer s.active.Done()
 	ids := submissionIDs{r.AgentID, r.SessionID, r.ContextID}
 	if !validID(r.CommandID) || r.ExpectedVersion != 0 {
-		return CommandResult{}, ErrInvalid
+		return Receipt{}, ErrInvalid
 	}
 	_, digest, err := encodeRegistration(ids, r.Directory, r.AgentMarkdown)
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	return s.perform(ctx, privateOperation{ids: ids, id: r.CommandID, digest: digest, operation: "agent_register", scope: "agent", directory: r.Directory, changes: []privateChange{{slot: "instructions", mode: "replace", data: r.AgentMarkdown}, {slot: "memory", mode: "replace"}}})
 }
-func (s *Service) CreateContext(ctx context.Context, r ContextCreation) (CommandResult, error) {
+func (s *Service) CreateContext(ctx context.Context, r ContextCreation) (Receipt, error) {
 	if err := s.enter(ctx); err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	defer s.active.Done()
 	ids, err := s.initialIDs(ctx, r.Binding, true)
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if !validID(r.CommandID) || r.ExpectedVersion != 0 || r.Kind != "work" {
-		return CommandResult{}, ErrInvalid
+		return Receipt{}, ErrInvalid
 	}
 	_, digest, err := encodeCreation(ids, r.Kind)
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	return s.perform(ctx, privateOperation{ids: ids, id: r.CommandID, digest: digest, operation: "context_create", scope: "context", kind: r.Kind, changes: []privateChange{{slot: "handoff", mode: "replace"}, {slot: "memory", mode: "replace"}}})
 }
-func (s *Service) WritePrivate(ctx context.Context, r PrivateWrite) (CommandResult, error) {
+func (s *Service) WritePrivate(ctx context.Context, r PrivateWrite) (Receipt, error) {
 	if err := s.enter(ctx); err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	defer s.active.Done()
 	ids, err := s.initialIDs(ctx, r.Binding, false)
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if !validID(r.CommandID) {
-		return CommandResult{}, ErrInvalid
+		return Receipt{}, ErrInvalid
 	}
 	changes := make([]privateChange, len(r.Changes))
 	for i, c := range r.Changes {
@@ -83,7 +83,7 @@ func (s *Service) WritePrivate(ctx context.Context, r PrivateWrite) (CommandResu
 	}
 	_, digest, err := encodePrivateWrite(ids, r.Scope, r.ExpectedVersion, changes)
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	slices.SortFunc(changes, func(a, b privateChange) int {
 		if a.slot < b.slot {
@@ -158,11 +158,11 @@ func (s *Service) lookupOperation(ctx context.Context, op privateOperation) (com
 	}
 	return m, err
 }
-func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResult, error) {
+func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, error) {
 	m, err := s.lookupOperation(ctx, op)
 	if err != nil {
 		s.mu.Unlock()
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if m.found {
 		s.mu.Unlock()
@@ -172,17 +172,17 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 	for _, c := range op.changes {
 		if int64(len(c.data)) > s.limits.MaxObjectBytes {
 			s.mu.Unlock()
-			return CommandResult{}, ErrTooLarge
+			return Receipt{}, ErrTooLarge
 		}
 		total += int64(len(c.data))
 	}
 	if total > s.limits.MaxOperationBytes {
 		s.mu.Unlock()
-		return CommandResult{}, ErrTooLarge
+		return Receipt{}, ErrTooLarge
 	}
-	if s.preparing >= s.limits.MaxPendingWrites {
+	if s.preparing >= s.limits.MaxConcurrentWrites {
 		s.mu.Unlock()
-		return CommandResult{}, &BusyError{}
+		return Receipt{}, &BusyError{}
 	}
 	s.preparing++
 	s.mu.Unlock()
@@ -194,13 +194,13 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 	b := Binding{op.ids.agent, op.ids.context}
 	unlock, err := s.acquireScope(ctx, keyFor(op.ids, op.scope))
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	defer unlock()
 	if op.operation == "agent_register" {
 		release, err := s.acquireScope(ctx, keyFor(op.ids, "context"))
 		if err != nil {
-			return CommandResult{}, err
+			return Receipt{}, err
 		}
 		defer release()
 	}
@@ -215,38 +215,38 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 	}
 	s.mu.Unlock()
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	paths, err := s.operationPaths(op)
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if op.operation == "private_write" {
 		if err := s.inspectLive(ctx, op.ids, op.scope); err != nil {
-			return CommandResult{}, err
+			return Receipt{}, err
 		}
 	} else {
 		for _, path := range paths {
 			if err := refuseInitialMarkdown(path); err != nil {
-				return CommandResult{}, err
+				return Receipt{}, err
 			}
 		}
 	}
 	if s.deps.beforePublish != nil {
 		if err := s.deps.beforePublish(b, op.scope); err != nil {
-			return CommandResult{}, err
+			return Receipt{}, err
 		}
 	}
 	for _, c := range op.changes {
 		if c.mode != "clear" {
 			if _, err := paths[0].publishObject(c.data); err != nil {
-				return CommandResult{}, err
+				return Receipt{}, err
 			}
 		}
 	}
 	if len(paths) == 2 {
 		if _, err := paths[1].publishObject(nil); err != nil {
-			return CommandResult{}, err
+			return Receipt{}, err
 		}
 	}
 	if s.deps.afterPublish != nil {
@@ -255,7 +255,7 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 	m, err = s.lookupOperation(ctx, op)
 	if err != nil {
 		s.mu.Unlock()
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if m.found {
 		s.mu.Unlock()
@@ -263,12 +263,12 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 	}
 	if err := s.scopeIssuesLocked(op.ids, op.scope); err != nil {
 		s.mu.Unlock()
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	drafts, err := s.operationDrafts(op)
 	if err != nil {
 		s.mu.Unlock()
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if s.deps.beforeSubmit != nil {
 		drafts = s.deps.beforeSubmit(drafts)
@@ -283,7 +283,7 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 	}
 	if err != nil {
 		s.mu.Unlock()
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	// Verify selected bytes again at the final boundary before committing them.
 	for i, rev := range g.revisions {
@@ -292,14 +292,14 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 				_, err = readObject(paths[i], Head{SHA256: c.SHA256, Bytes: c.Bytes})
 				if err != nil {
 					s.mu.Unlock()
-					return CommandResult{}, err
+					return Receipt{}, err
 				}
 			}
 		}
 	}
 	if err := s.usableLocked(ctx); err != nil {
 		s.mu.Unlock()
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	committed, err := s.store.Submit(ctx, drafts[0], drafts[1:])
 	if err != nil {
@@ -308,15 +308,15 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 		}
 		s.mu.Unlock()
 		if errors.Is(err, ledgerstore.ErrCommandMismatch) {
-			return CommandResult{}, ErrCommandMismatch
+			return Receipt{}, ErrCommandMismatch
 		}
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	// Submit's actual range is authoritative. Refresh all intervening commits,
 	// including workspace records, rather than jumping a guessed cursor.
 	if err := s.refreshLocked(context.Background(), max(s.p.through, committed.Last)); err != nil {
 		s.mu.Unlock()
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	actual, err := s.findCommand(context.Background(), op.id, committed.First-1, committed.Last)
 	if err != nil || !actual.found {
@@ -325,12 +325,12 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 		if err == nil {
 			err = ErrInconsistent
 		}
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	result, err := matchReceipt(actual, op.ids, op.digest)
 	s.mu.Unlock()
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if committed.Duplicate {
 		return result, nil
@@ -341,7 +341,7 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (CommandResu
 	// Caller cancellation no longer owns this durable transition.
 	for _, rev := range actual.group.revisions {
 		if err := s.completeScope(context.Background(), op.ids, rev.Scope, false, nil); err != nil {
-			return CommandResult{}, &MaterializationError{ReadBinding: ReadBinding{b, rev.Scope}, Revision: uint64(rev.Revision), Cause: err}
+			return Receipt{}, &MaterializationError{ReadBinding: ReadBinding{b, rev.Scope}, Revision: uint64(rev.Revision), Cause: err}
 		}
 	}
 	return result, nil
@@ -437,25 +437,25 @@ func (s *Service) operationDrafts(op privateOperation) ([]ledger.Draft, error) {
 	appendPayload(ledger.TypeRuntimeCommandReceipt, ledger.ActorOwner, p)
 	return d, nil
 }
-func (s *Service) CommandStatus(ctx context.Context, r CommandLookup) (CommandResult, error) {
+func (s *Service) CommandStatus(ctx context.Context, r CommandLookup) (Receipt, error) {
 	if err := s.enter(ctx); err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	defer s.active.Done()
 	ids, err := s.initialIDs(ctx, r.Binding, false)
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if !validID(r.CommandID) || r.SubmissionSHA256 == (ledger.Digest{}) {
-		return CommandResult{}, ErrInvalid
+		return Receipt{}, ErrInvalid
 	}
 	m, err := s.lookupOperation(ctx, privateOperation{ids: ids, id: r.CommandID, digest: r.SubmissionSHA256})
 	s.mu.Unlock()
 	if err != nil {
-		return CommandResult{}, err
+		return Receipt{}, err
 	}
 	if !m.found {
-		return CommandResult{}, ErrUnavailable
+		return Receipt{}, ErrUnavailable
 	}
 	return matchReceipt(m, ids, r.SubmissionSHA256)
 }
