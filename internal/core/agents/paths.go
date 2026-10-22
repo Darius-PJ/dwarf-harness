@@ -151,7 +151,7 @@ func (d *directoryDurability) checkDirectories(parts []string, create bool) erro
 			if err := durable.SyncDir(path); err != nil {
 				return err
 			}
-			// Resolve file identity now, before retaining this observation.
+			// Windows loads the file ID lazily; load it now so a replaced directory cannot later compare equal.
 			if !os.SameFile(info, info) {
 				return fmt.Errorf("%w: cannot identify directory %s", ErrInvalid, path)
 			}

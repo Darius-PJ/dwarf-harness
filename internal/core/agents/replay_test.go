@@ -2,11 +2,15 @@ package agents
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"io"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
@@ -20,6 +24,71 @@ func testPayload(t *testing.T, p interface {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestPrivateFrozenGoldenReplay(t *testing.T) {
+	t.Parallel()
+	colony, err := uuid.Parse("0199c000-0000-7000-8000-000000000007")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := ledger.OpenReader("../../../contract/ledger/testdata/f3/10/log", ledger.ReadOptions{Colony: colony, Through: ledger.ToEnd, Consume: privateConsumption(), AllTypes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	p := newProjection()
+	var general, work submissionIDs
+	var transcript []Head
+	commits := 0
+	for {
+		c, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		g, err := decodeGroup(draftsOf(c), c.First)
+		if err != nil || g == nil {
+			t.Fatalf("decode commit at %d: %v", c.First, err)
+		}
+		next, err := p.planGroup(g, c.First)
+		if err != nil {
+			t.Fatalf("plan commit at %d: %v", c.First, err)
+		}
+		p.install(g, next)
+		commits++
+		switch g.kind {
+		case "general":
+			general = g.ids
+		case "work":
+			work = g.ids
+		}
+		if g.ids == work {
+			if h := p.scopes[keyFor(work, "context")].heads["transcript"]; h.Sequence >= c.First {
+				transcript = append(transcript, h)
+			}
+		}
+	}
+	if commits != 10 || len(p.scopes) != 3 {
+		t.Fatalf("golden replay: %d commits, %d scopes; want 10, 3", commits, len(p.scopes))
+	}
+	for key, want := range map[scopeKey]uint64{keyFor(general, "agent"): 3, keyFor(general, "context"): 2, keyFor(work, "context"): 6} {
+		if st := p.scopes[key]; st == nil || st.revision != want {
+			t.Fatalf("scope %+v: %+v; want revision %d", key, st, want)
+		}
+	}
+	first := ledger.Digest(sha256.Sum256([]byte("opaque chunk\n")))
+	third := ledger.Digest(sha256.Sum256([]byte("another chunk\n")))
+	want := []Head{{first, 13, 2, 15}, {first, 13, 3, 18}, {third, 14, 6, 30}}
+	if !reflect.DeepEqual(transcript, want) || p.scopes[keyFor(work, "context")].heads["transcript"] != want[2] {
+		t.Fatalf("transcript predecessor chain: %+v; want %+v", transcript, want)
+	}
 }
 
 func TestF3_10PayloadsAndRecordRules(t *testing.T) {

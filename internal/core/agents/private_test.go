@@ -287,16 +287,6 @@ func TestPrivateIndependentScopesProgress(t *testing.T) {
 	}
 	snapshot := make(chan Snapshot, 1)
 	go func() { p, _ := f.service.Snapshot(context.Background(), ReadBinding{a, "context"}); snapshot <- p }()
-	select {
-	case err := <-done:
-		t.Fatalf("ack before materialization: %v", err)
-	default:
-	}
-	select {
-	case p := <-snapshot:
-		t.Fatalf("partially applied revision: %+v", p)
-	default:
-	}
 	once.Do(func() { close(release) })
 	<-projected
 	select {

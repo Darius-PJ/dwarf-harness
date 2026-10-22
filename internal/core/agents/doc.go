@@ -66,9 +66,13 @@
 // after restart, before CAS, integrity and capacity checks; a different digest
 // returns ErrCommandMismatch. CommandStatus requires the receipt's own binding,
 // command ID and submission digest. It returns ErrUnavailable for an absent
-// private receipt. Old receipt lookups and historical reads scan ledger history;
-// latency grows with that history. No constant-latency or product-capacity claim
-// follows from storage-only measurements.
+// private receipt. Old receipt lookups and historical reads scan ledger history.
+// A new private write scans the whole ledger for preflight integrity and again
+// for committed materialization. After replay, Open scans the whole history
+// per scope to validate objects, with another scan for each scope it completes.
+// These costs grow with ledger history and, for Open, the number of scopes.
+// No constant-latency or product-capacity claim follows from storage-only
+// measurements.
 //
 // # Materialization and integrity
 //
