@@ -39,8 +39,10 @@ func crashDigest(t *testing.T, r PrivateWrite) ledger.Digest {
 // These are process-death boundaries, not a claim about power-loss survival.
 // The torn row additionally injects a truncated final commit before death.
 func TestPrivateInterruptedRecovery(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"before_commit", "torn_commit", "after_commit", "after_materialization"} {
 		t.Run(boundary, func(t *testing.T) {
+			t.Parallel()
 			f := newServiceFixture(t, serviceDeps{})
 			b := registerPrivate(t, f.service, 10)
 			before := f.store.Durable()
