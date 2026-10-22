@@ -58,11 +58,7 @@ func TestBasenameCaseCollision(t *testing.T) {
 func TestPrivateScopePaths(t *testing.T) {
 	t.Parallel()
 	root := testRoot(t)
-	rel, err := filepath.Rel(mustWorkingDirectory(t), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := testScope(t, rel, testContext)
+	s := testScope(t, root, testContext)
 	want := filepath.Join(root, "agents", "Scout-a1", "contexts", testContext)
 	if s.directory() != want || !filepath.IsAbs(s.directory()) {
 		t.Fatalf("scope directory = %q, want %q", s.directory(), want)
@@ -83,13 +79,15 @@ func TestPrivateScopePaths(t *testing.T) {
 	}
 }
 
-func mustWorkingDirectory(t *testing.T) string {
-	t.Helper()
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
+func TestPrivateScopeRelativeRoot(t *testing.T) {
+	// Sequential because t.Chdir changes process-wide state.
+	root := testRoot(t)
+	t.Chdir(filepath.Dir(root))
+	s := testScope(t, filepath.Base(root), testContext)
+	want := filepath.Join(root, "agents", "Scout-a1", "contexts", testContext)
+	if s.directory() != want || !filepath.IsAbs(s.directory()) {
+		t.Fatalf("scope directory = %q, want %q", s.directory(), want)
 	}
-	return cwd
 }
 
 func TestPrivateScopeRejectsLinkedAncestors(t *testing.T) {
