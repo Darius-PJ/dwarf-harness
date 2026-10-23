@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -37,26 +35,8 @@ type scopedBinding struct {
 	ContextID uuid.UUID `json:"context_id"`
 }
 
-const maxResourcePathBytes = 1024
-
 func validScopedPath(path string) bool {
-	if len(path) > maxResourcePathBytes || !utf8.ValidString(path) || strings.ContainsAny(path, `\:`) {
-		return false
-	}
-	for _, r := range path {
-		if unicode.IsControl(r) {
-			return false
-		}
-	}
-	if path == "" {
-		return true
-	}
-	for _, component := range strings.Split(path, "/") {
-		if component == "" || component == "." || component == ".." || strings.EqualFold(component, ".git") {
-			return false
-		}
-	}
-	return true
+	return ledger.ValidResourcePath(path)
 }
 
 func resourceContains(parent, child grantResource) bool {

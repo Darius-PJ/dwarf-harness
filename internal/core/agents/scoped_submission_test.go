@@ -9,6 +9,12 @@ import (
 
 func TestScopedCanonicalSubmission(t *testing.T) {
 	t.Parallel()
+	artifact := taskArtifact()
+	digest, err := hashObject([]byte("artifact"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.Artifact.SHA256 = digest
 	generation := int64(2)
 	authority := uint64(7)
 	origin := testSubmissionIDs(t)
@@ -19,8 +25,8 @@ func TestScopedCanonicalSubmission(t *testing.T) {
 		json      string
 	}{
 		{"task_complete", scopedEnvelope{actor: "agent", origin: origin, operation: "task.complete", target: grantResource{kind: "task", task: privateID(50)}, grant: privateID(10), expected: scopedExpected{Version: 9, AssignmentID: privateID(51), Generation: &generation}},
-			taskMutationArguments{TaskID: privateID(50), Action: "complete", Submission: taskArtifact()},
-			`{"schema":2,"actor":"agent","origin":{"agent_id":"019a0700-0000-7000-8000-000000000001","session_id":"019a0700-0000-7000-8000-000000000002","context_id":"019a0700-0000-7000-8000-000000000003"},"operation":"task.complete","target":{"kind":"task","task_id":"019a0700-0000-7000-8000-000000000032"},"grant_id":"019a0700-0000-7000-8000-00000000000a","expected":{"version":9,"assignment_id":"019a0700-0000-7000-8000-000000000033","generation":2},"arguments":{"task_id":"019a0700-0000-7000-8000-000000000032","action":"complete","submission":{"kind":"artifact","artifact":{"source_sequence":4,"sha256":"0000000000000000000000000000000000000000000000000000000000000000","bytes":8}}}}`},
+			taskMutationArguments{TaskID: privateID(50), Action: "complete", Submission: artifact},
+			`{"schema":2,"actor":"agent","origin":{"agent_id":"019a0700-0000-7000-8000-000000000001","session_id":"019a0700-0000-7000-8000-000000000002","context_id":"019a0700-0000-7000-8000-000000000003"},"operation":"task.complete","target":{"kind":"task","task_id":"019a0700-0000-7000-8000-000000000032"},"grant_id":"019a0700-0000-7000-8000-00000000000a","expected":{"version":9,"assignment_id":"019a0700-0000-7000-8000-000000000033","generation":2},"arguments":{"task_id":"019a0700-0000-7000-8000-000000000032","action":"complete","submission":{"kind":"artifact","artifact":{"source_sequence":4,"sha256":"c7c5c1d70c5dec4416ab6158afd0b223ef40c29b1dc1f97ed9428b94d4cadb1c","bytes":8}}}}`},
 		{"owner_revoke", scopedEnvelope{actor: "owner", origin: origin, operation: "grant.revoke", target: grantResource{kind: "task"}, expected: scopedExpected{Version: 1, AuthorityVersion: &authority}},
 			grantRevokeArguments{GrantID: privateID(10)},
 			`{"schema":2,"actor":"owner","origin":{"agent_id":"019a0700-0000-7000-8000-000000000001","session_id":"019a0700-0000-7000-8000-000000000002","context_id":"019a0700-0000-7000-8000-000000000003"},"operation":"grant.revoke","target":{"kind":"task"},"expected":{"version":1,"authority_version":7},"arguments":{"grant_id":"019a0700-0000-7000-8000-00000000000a"}}`},
@@ -42,7 +48,7 @@ func TestScopedCanonicalSubmission(t *testing.T) {
 }
 
 var scopedDigestVectors = map[string]string{
-	"task_complete": "cc2eb0ef15db12b0d48f2bd201dbdb5fe7b509070e2d7b82c4fca663fcb2d151",
+	"task_complete": "41a99254652ee2b64d3ebca47501647dd9b6012b93b6c7ef52033f1c312829b3",
 	"owner_revoke":  "17f804c5c7f7d656f74c2277cf627183f6780af9aec596330027ffde34692da2",
 }
 

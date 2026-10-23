@@ -1707,4 +1707,350 @@
 // instructions from the general context 32-34. Replays and refusals add no
 // record. IDs, times, schema-1 digests and content digests are deterministic;
 // EncodeCommit supplies the actual record hash chain.
+//
+// # Scoped authority, tasks and non-paid work (F3-11)
+//
+// F3-11 is proposed for freeze (D125). It adds ten version-1 types to
+// ledger-format version 1; Defined contains thirty-eight types. Only the
+// internal/core/agents producer writes this family, through Submit. Authorization
+// and resource metadata, task/assignment metadata, work/usage metadata and
+// private revision metadata are all access-filtered. No payload contains private
+// text, credentials or a capability handle, and no unfiltered agent ledger
+// stream is introduced. BindAgent is a trusted-host origin binding, not
+// authentication; authority is re-derived from the ledger on each operation.
+//
+// F3-10's text, bytes, actors, group shapes, codecs and golden are unchanged.
+// private.scoped_revision advances the SAME scope revision and transcript
+// predecessor chain as private.revision. A consumer reconstructing private heads
+// consumes both types in ledger order. A consumer of F3-10 alone cannot
+// reconstruct the heads of a log holding F3-11 and MUST NOT be used on one: it
+// could retain an old head or reject a subsequent owner revision as stale.
+// F3-11 groups never embed F3-10 records. Services dispatch the two families
+// separately before applying their common private-change reducer.
+//
+// # Common codec rules
+//
+// The complete input and compact encoded output, including whitespace and
+// extensions, each fit MaxScopedPayloadBytes (65536 bytes). Check the input
+// bound before parsing. F0's strict complete JSON, recursive duplicate-key
+// rejection, canonical UUIDv7s, nonzero lowercase SHA-256 digests, and unknown
+// optional-member rules apply. A known member may never be null. Unknown
+// optional members are ignored, but duplicate keys inside them still refuse.
+// Integers are plain unsigned JSON decimals in 0..MaxInt64; checked increments
+// cannot overflow. Errors wrap ErrInvalid.
+//
+// Numeric runtime ceilings (slots, delegation depth, list counts, selected
+// objects, description/body bytes and max_bytes) are producer Limits guards
+// before Submit, NOT decoder ceilings. Historical larger values remain valid
+// within the complete payload cap. Nonempty, sorted/distinct and kind-conditional
+// structure, scopes >=4, units=1 and checked version increments are codec rules.
+// Capacity's five amounts are independent and nonnegative, including
+// max_operation_bytes; it is not coupled to local_slots.
+//
+// All following lists specify compact encoder key order; ? means optional,
+// not null. Nested objects:
+//
+//	Binding         agent_id, context_id
+//	Origin          agent_id, session_id, context_id
+//	Assignment      assignment_id, generation, assignee, assigner_actor, assigner
+//	TaskBinding     task_id, assignment_id, generation
+//	ObjectRef       sha256, bytes
+//	ArtifactRef     source_sequence, sha256, bytes
+//	Capacity        turn_slots, local_slots, buffer_bytes, local_units,
+//	                max_operation_bytes
+//	ScopeKey        kind, id?
+//	PrivateReadRef  scope, slot, revision, cursor, max_bytes
+//	SelectedObject  sha256, bytes, revision, sequence
+//
+// Binding/Origin IDs are required. The service verifies registered pairs and
+// the agent's sole session. Assignment generation and TaskBinding generation
+// are positive; assigner_actor is owner or agent, assignee is Binding and
+// assigner is Origin. An absent assignment is generation zero, never a partial
+// object. A TaskBinding is wholly present or absent. ArtifactRef's
+// source_sequence is positive; the service verifies that source's body_refs
+// actually lists the digest. ObjectRef bytes and ArtifactRef bytes are
+// nonnegative. A description's source is its task-change envelope.
+//
+// ScopeKey kind is colony, agent, context or grant, in that sorting order,
+// then UUID bytes; colony forbids id, the others require it. Lists are strictly
+// sorted, hence distinct. PrivateReadRef requires a valid scope/slot, positive
+// revision and max_bytes, and nonnegative cursor (zero for nontranscript slots).
+// SelectedObject is an exact head/chunk occurrence with nonnegative bytes and
+// positive revision/sequence. Its revision cannot exceed the requested revision.
+// Transcript occurrences are in increasing revision/sequence order after cursor.
+//
+// Resource has a closed kind, followed only by that kind's known members:
+//
+//	context    kind, binding, scope, slots
+//	task       kind, task_id?
+//	workspace  kind, workspace_id, binding, path_prefix
+//	artifact   kind, artifact
+//	external   kind, resource_key
+//
+// Context scope is agent/context. Sorted slots are instructions/memory for
+// agent and continuation/handoff/memory/transcript for context. Empty slots
+// are valid for context inspection, turn controls and delegation, never private
+// read/write. A grant task_id is absent only for task.create plus delegation
+// controls; an absent task ID contains a present ID, and a child may add one.
+// Creation is bounded by the grant's recipients and finite units, not a fresh
+// per-task consent grant. Other known kinds' members are forbidden, even null.
+//
+// Resource paths are 0..1024 UTF-8 bytes: slash-separated relative components,
+// with no empty internal component, dot/dotdot, backslash, colon, control
+// character, absolute/drive/UNC form or ASCII-case-insensitive .git component.
+// Empty means the root prefix. No clean-then-accept coercion is permitted.
+// ValidResourcePath is lexical and host-independent, NOT symlink containment or
+// a file executor. Concrete targets equal or descend component-wise from a
+// permitted prefix. External keys are opaque, nonsecret 1..256-byte UTF-8 strings
+// without controls; there is no URL inference.
+//
+// Resources sort strictly by compact encoded bytes, operations by ASCII bytes,
+// bindings by (agent UUID, context UUID) bytes and ID lists by UUID bytes.
+// Context resources have private data class; the other classes equal their
+// resource kind. Operations per class are closed:
+//
+//	private    context.inspect, private.read, private.write, turn.start,
+//	           turn.inspect, turn.cancel
+//	task       task.inspect/create/claim/assign/start/wait/resume/submit/
+//	           complete/fail/cancel/reassign (each with the task. prefix)
+//	workspace  file.read, file.search, file.write, file.edit
+//	artifact   artifact.read
+//	external   shell.execute, process.spawn, network.connect, connector.call,
+//	           model.call
+//
+// grant.issue and grant.revoke may accompany any class. An external grant has
+// at most one effect operation plus those controls; there is no implicit
+// external authority in a local grant. External producers are not present here.
+//
+// SubjectRef is kind followed by that kind's members. Kind is an OPEN token;
+// this producer writes artifact, followed by artifact (ArtifactRef). For artifact
+// the decoder checks those members normally. For an unfamiliar kind it checks
+// only the token and generic well-formedness (including duplicates and cap),
+// preserving the members and their order/values. It never interprets unfamiliar
+// members as an ArtifactRef. The service refuses to apply an unfamiliar kind;
+// ticket 12 can add kinds by addition. SubjectRef.Members exposes those unknown
+// members as an object excluding kind. Compact re-encoding retains their order.
+//
+// Lifetime, outcome and failure-cause tokens are also open:
+// ^[a-z][a-z0-9_]*$, at most 64 ASCII bytes. Version 1 writes lifetime
+// until_revoked; ANY other lifetime grants nothing in this service. There is no
+// timer or implicit lease. Operation tokens have the same components separated
+// by dots, at most 64 bytes; only the documented operation meanings apply.
+//
+// Payloads (version 1)
+//
+//	runtime.grant_issued:
+//	  grant_id, expected_authority_version, authority_version, grantee,
+//	  parent_grant_id?, operations, resources, data_class, recipients, limits,
+//	  delegation_depth, lifetime, task_binding?
+//	runtime.grant_revoked:
+//	  grant_id, expected_authority_version, authority_version
+//	runtime.task_changed:
+//	  task_id, action, expected_version, version, creator_actor, creator,
+//	  description, acceptance_sha256, dependencies, audience, assignment?,
+//	  state, wait_reason?, wait_artifact?, submission?, failure_cause?,
+//	  failure_evidence?
+//	runtime.capacity_configured:
+//	  scope, expected_version, version, limits
+//	runtime.work_admitted:
+//	  work_id, kind, expected_version, version, authority_version, grant_id,
+//	  scopes, operation, target, task_binding?, parent_turn_id?,
+//	  arguments_sha256?, tool_schema?, max_bytes?
+//	runtime.work_dispatched:
+//	  work_id, expected_version, version, authority_version, grant_id,
+//	  arguments_sha256
+//	runtime.work_ended:
+//	  work_id, expected_version, version, outcome
+//	runtime.local_used:
+//	  authority_version, grant_id, scopes, units, bytes, read?, artifact?,
+//	  selected?, next_cursor?
+//	private.scoped_revision:
+//	  scope, expected_version, revision, changes
+//	runtime.scoped_receipt:
+//	  command_id, submission_sha256, submission, outcome, version, work_id?
+//
+// Grant authority_version is expected+1. Operations, resources and recipients
+// are nonempty, sorted sets; delegation_depth is nonnegative. Owner roots omit
+// parent; agents require a current parent and attenuation: one leaf and its
+// entire chain authorize an operation, never a union. Explicit delegation
+// requires grant.issue, a permitted recipient, subset regions/operations/
+// recipients, no larger capacities and decreasing depth. Parent ceilings are
+// shared. Revocation is irreversible, makes descendants unusable by ancestry,
+// and releases no holds or counters. No mutable grant updates exist.
+//
+// Task version is expected+1. creator_actor is owner/agent; creator, description,
+// acceptance hash, dependencies and audience are immutable. Dependencies is a
+// required array (possibly []), distinct and not self; audience is a nonempty
+// sorted set of AGENT IDs, not bindings. The service checks existing dependencies
+// and prevents new-ID cycles. Assignment names a never-task-bound work context
+// of an audience agent; reassignment imports no context bytes, scratch or grants.
+// Action/state are closed. create has expectation 0 and state waiting, optional
+// generation-1 assignment; claim/assign produce assigned waiting at generation 1.
+// start produces active; wait produces waiting with reason dependency/input/
+// review/explicit_hold and optional SubjectRef wait_artifact; resume produces
+// waiting with reason cleared. submit produces submitted with SubjectRef
+// submission; complete produces completed with that same exact submission.
+// fail produces failed with an open failure_cause and SubjectRef failure_evidence;
+// cancel produces cancelled. reassign produces waiting with new assignment ID,
+// next generation and all wait/submission/failure fields cleared. Wait fields
+// occur only while waiting, submission only submitted/completed, failure fields
+// only failed. Post-assignment mutations compare prior assignment expectations.
+// Terminal tasks never reopen. Completion/failure are authorized decisions, not
+// review, promotion or evidence that future ticket-12 guards passed.
+//
+// Capacity scope permits colony/agent/context only and version is expected+1.
+// Owner configuration changes future ceilings without resetting used/held
+// exposure, including a reduction below usage. Colony/agent enrollment is
+// required by service admission; context enrollment is optional (absence means
+// no extra context ceiling), though context is always in the scope set.
+//
+// Admission has expected_version=0/version=1 and a closed kind turn/local.
+// Turn operation is turn.start, with context target; all four local-only fields
+// are absent. Local operations are file.read/search/write/edit with workspace
+// target; parent_turn_id, arguments_sha256, tool_schema=1 and positive max_bytes
+// are required. Scope sets have at least four sorted distinct entries and are
+// recomputed by the service, not trusted as caller authority. Turn admission is
+// agent-only and executes nothing. Local dispatch has expected=1/version=2,
+// consumes the held local unit once and retains local/buffer holds.
+//
+// Work ending requires positive expected and version=expected+1. Turn outcomes
+// released/cancelled/interrupted require every child to have an ending record.
+// Local released_unsent is only before dispatch; succeeded/failed/interrupted
+// after dispatch require trusted Core completion observation. unknown IS an
+// ending record matching a start but releases NOTHING; later proven ending can
+// advance it. Every unfamiliar well-formed outcome is likewise held. Never infer
+// success/release from an unknown token. A repeated identical current unknown
+// under a new command ID refuses no_effect. Honest Core endings use original
+// work identity, not a requirement that a revoked grant remain current.
+//
+// Local usage has units=1 and nonnegative bytes. Private read requires read and
+// selected, with checked sum(selected.bytes)=bytes <= read.max_bytes. Empty
+// selected is valid only for absent continuation or transcript end/empty page.
+// Nontranscript present heads select one object; transcript chunks are whole
+// ordered occurrences. next_cursor occurs only when more chunks remain, equals
+// the last selected sequence and advances cursor; an empty advancing page is
+// invalid. Artifact read requires artifact, exact returned bytes and no other
+// read fields. Other atomic operations omit all read fields. The service checks
+// selected identities against the exact historical revision, never current heads.
+// Private writes charge supplied bytes, task creation description bytes, other
+// task/delegation operations zero. Owner administration/revocation/release and
+// passive metadata have no local_used. Artifact disclosure verifies full hash/
+// size and exact source body_refs, current authority and the store's real read
+// allocation; missing/corrupt/collected do not become empty successful artifacts.
+//
+// PrivateScopedRevision reuses PrivateRevision's exact manifest/change rules
+// and compact change key order, but expectation is >=1 (no initialization).
+// Its scope head and transcript chain are shared as specified above.
+// Receipt is last, immutable, and embeds the canonical submission below.
+// Its digest is checked by re-encoding that submission. Receipt outcome is
+// applied for atomic/control/task/private/read, admitted for admission,
+// dispatched for dispatch, recorded for ending; unfamiliar well-formed outcomes
+// survive codecs but the service must not assume applied effects. Version is
+// the resulting authority/task/config/work/private version, or zero for reads.
+// work_id is present exactly on work admission/dispatch/ending receipts. The
+// receipt's own actual envelope sequence is not a payload field.
+//
+// Record and group rules (service-enforced)
+//
+// One Submit commit has one of these complete ordered shapes. C=F0 command,
+// R=scoped_receipt, U=local_used, T=task_changed:
+//
+//	owner issue/revoke/configure   C, effect, R
+//	agent issue                   C, grant_issued, U, R
+//	agent revoke                  C, grant_revoked, R
+//	owner task create             C, body_pin, T, R
+//	agent task create             C, body_pin, T, U, R
+//	owner nonterminal mutation    C, T, R
+//	agent nonterminal mutation    C, T, U, R
+//	owner terminal mutation       C, T, body_unpin, R
+//	agent terminal mutation       C, T, body_unpin, U, R
+//	work admission/dispatch/end   C, effect, R
+//	agent private write           C, private.scoped_revision, U, R
+//	agent private/artifact read   C, U, R
+//
+// No unrelated, extra, detached, missing or reordered record is accepted by
+// producer preflight or Open. Each group has identical originating agent,
+// session, context and operation_id=CommandID. Turn ID is absent outside work;
+// work groups use their immutable original bound turn/origin, including Core
+// endings. Command/receipt and grant/task/config actors are the derived
+// owner/agent/core principal; work/private-revision/U/body-pin/unpin actors are
+// core. No measurement_path. All body_refs are absent except creation body_pin
+// and EVERY nonterminal task snapshot's description. Pin ID is task ID. Terminal
+// snapshots retain description digest/size but omit body_refs and unpin, so
+// historical replay does not require a collected description. SubjectRefs make
+// no new retention promises and are not copied to body_refs. Private object
+// hashes are not body-store refs. Sources and receipt/effect sequences are actual
+// readback identities, never predicted before Submit.
+//
+// authority_version on U/admission/dispatch is the projection observed BEFORE
+// the transition. Agent issuance U carries old, grant carries old+1, receipt
+// returns old+1; apply all group changes atomically. Services reconstruct and
+// compare canonical requests, group identities, prior versions/assignments,
+// authority chain, scope sets, allowances, charges and resulting state both
+// before Submit and during Open. Ledgerstore remains unchanged: it owns F0
+// identities/pins/catalogue/body availability; Check, Reader and EncodeCommit
+// do not enforce these service rules. A fixture dispatch or failure is not
+// evidence of an executed file tool; there is no production executor here.
+//
+// Schema-2 canonical submission (producer rule)
+//
+// SHA-256 covers compact JSON in this exact key order:
+//
+//	schema (2), actor, origin, operation, target, grant_id?, expected, arguments
+//	expected: version, assignment_id?, generation?, authority_version?
+//
+// Actor is owner/agent/core. grant_id is required for agent operations AND all
+// work operations regardless of actor, including Core dispatch/end. Assignment
+// ID/generation are both present or absent and only on task mutations; generation
+// is positive. authority_version is present exactly for grant issue/revoke.
+// Expected version is 0 for issue/task.create/turn.start/local.admit/reads, 1 for
+// revoke/local.begin, nonnegative current configuration version for configure,
+// positive current entity version otherwise; every advancing value is below
+// MaxInt64. Issue/revoke expected authority is independent of entity version.
+//
+// The closed operations and ordered arguments are:
+//
+//	grant.issue: grant_id, grantee, parent_grant_id?, operations, resources,
+//	  data_class, recipients, limits, delegation_depth, lifetime, task_binding?
+//	grant.revoke: grant_id
+//	capacity.configure: scope, limits
+//	task.create: task_id, description, acceptance_sha256, dependencies,
+//	  audience, assignment? {assignment_id, assignee}
+//	task.claim/assign/start/wait/resume/submit/complete/fail/cancel/reassign:
+//	  task_id, action, new_assignment? {assignment_id, assignee},
+//	  wait_reason?, wait_artifact?, submission?, failure_cause?, failure_evidence?
+//	turn.start: turn_id, task_binding?
+//	local.admit: work_id, parent_turn_id, local_operation, arguments_sha256,
+//	  tool_schema, max_bytes, task_binding?
+//	local.begin: work_id, arguments_sha256
+//	local.end / turn.end / turn.cancel: work_id, outcome
+//	private.write: changes (F3-10 canonical change order, no previous_sha256)
+//	private.read: read
+//	artifact.read: artifact, max_bytes
+//
+// New assignment input occurs exactly on claim/assign/reassign, optionally
+// create; generation and assigner derive. Mutation conditional fields match the
+// action above. Every supplied target/binding, expectation, argument/ref hash,
+// byte size and limit is bound. Command ID, receipt sequence, observed authority,
+// recomputed scope set, transcript predecessor and prepared handle are excluded.
+// No private input bytes enter the submission. Control target is the changed
+// grant's first canonical Resource (not extra authority), configured context or
+// origin context for colony/agent config, exact task, original admitted-work
+// Resource, or current private/artifact Resource. local_operation binds the
+// actual file effect; local.admit alone does not authorize it. Dispatch/end select
+// immutable original work rather than accepting a retargeted origin/turn.
+// Same ID/new spelling cannot change meaning, and schema 1 stays byte-identical.
+//
+// The F3-11 golden at testdata/f3/11/log/00000000000000000001.jsonl contains
+// thirty-nine commits and 130 records. Its first four commits are unchanged
+// F3-10 identity shapes for G/W1/W2/W3, followed by complete F2 registration and
+// dedicated scratch shapes. The scoped history includes every group shape,
+// owner assignment (not claim) of A, A's private/read/admission/unknown/proven
+// ending history and terminal unpin, then agent creation/reassignment/cancellation
+// of B under two explicit owner roots. The unnamed creation root precedes B;
+// B's exact mutation root follows its creation. Final colony capacity is reduced
+// below consumed usage without a reset. Hash-named objects and bodies alongside
+// the log contain all private/task/capture-input fixture bytes. TestGoldenF3_11
+// generates every file with -update, with fixed UUIDv7s/times, real content and
+// submission hashes, and EncodeCommit's actual chain. It claims no execution.
 package ledger

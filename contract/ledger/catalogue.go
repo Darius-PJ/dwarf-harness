@@ -50,8 +50,12 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // family, frozen (D130): TypeGraphAnalysisStarted, TypeGraphAnalysisProgress,
 // TypeGraphDeltaChunk and TypeGraphVersionCommitted; and F3-10, frozen
 // (D139): TypeRuntimeAgentRegistered, TypeRuntimeContextCreated,
-// TypePrivateRevision and TypeRuntimeCommandReceipt. All twenty-eight are at
-// version 1. It never contains a type in the reserved fixture namespace.
+// TypePrivateRevision and TypeRuntimeCommandReceipt; and F3-11, proposed for
+// freeze (D125): TypeRuntimeGrantIssued, TypeRuntimeGrantRevoked,
+// TypeRuntimeTaskChanged, TypeRuntimeCapacityConfigured, TypeRuntimeWorkAdmitted,
+// TypeRuntimeWorkDispatched, TypeRuntimeWorkEnded, TypeRuntimeLocalUsed,
+// TypePrivateScopedRevision and TypeRuntimeScopedReceipt. All thirty-eight are
+// at version 1. It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
 		{TypeCommand, 1}:                     true,
@@ -82,5 +86,15 @@ func Defined() Catalogue {
 		{TypeRuntimeContextCreated, 1}:       true,
 		{TypePrivateRevision, 1}:             true,
 		{TypeRuntimeCommandReceipt, 1}:       true,
+		{TypeRuntimeGrantIssued, 1}:          true,
+		{TypeRuntimeGrantRevoked, 1}:         true,
+		{TypeRuntimeTaskChanged, 1}:          true,
+		{TypeRuntimeCapacityConfigured, 1}:   true,
+		{TypeRuntimeWorkAdmitted, 1}:         true,
+		{TypeRuntimeWorkDispatched, 1}:       true,
+		{TypeRuntimeWorkEnded, 1}:            true,
+		{TypeRuntimeLocalUsed, 1}:            true,
+		{TypePrivateScopedRevision, 1}:       true,
+		{TypeRuntimeScopedReceipt, 1}:        true,
 	}}
 }
