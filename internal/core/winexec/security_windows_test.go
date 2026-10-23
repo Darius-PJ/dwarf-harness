@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unsafe"
@@ -36,8 +37,38 @@ func testRequest(t *testing.T, operation ...string) Request {
 	}
 	args := []string{"-test.run=^TestWinexecPayload$", "--", "--winexec-payload"}
 	args = append(args, operation...)
-	// Stop proof, pump retirement and cleanup share this test-selected budget.
-	// Leave headroom for the check's concurrent race-instrumented packages.
+	// Shared native-run budgets: admission Wall=20s under Deadline=25s;
+	// CPU=10s at 100%, commit=2GiB, processes=4, input=image+1MiB,
+	// output=16KiB, StopGrace=10s for proof, pump retirement and cleanup.
+	// Admission includes image copying/scanning, profile creation and durable
+	// writes: setup reached 7.48s in the check and 11.81s in a heavier load.
+	// Wall rows use this one admission pair; the resource grace stays 10s
+	// until its loaded stop-path latency is attributed, not guessed.
+	//
+	// Per-row overrides, each preserving its tested boundary:
+	// - natural-exit/wall: grace=shared Wall+StopGrace (30s), so natural exit
+	//   can precede the real wall and the deliberate drain wait can outlast it;
+	// - resource payload hold guard=shared Wall+StopGrace (30s), so its work-file
+	//   wait cannot expire before the real wall; the old 10s guard did so;
+	// - mapped input held through cleanup: grace=2s, ruled after the check's
+	//   1.28s stop exhausted 1s before a native denial could be retained;
+	// - closed-fence seed: grace=100ms, intentional expiry without a child;
+	// - native CPU=2s, commit=256MiB, and process-count/resource processes=2;
+	// - output boundary=256 bytes; expired admission Deadline=now-1s.
+	// Validation-only finiteRequest uses 1s wall/deadline/grace and 100ns CPU;
+	// its invalid/zero/overflow overrides do not launch a native workload.
+	//
+	// Readiness guards remain independent and unchanged: descendantPID=3s;
+	// resourceWaitReady, testWaitLiveJob, testWaitHeldTree,
+	// testWaitProcessCountProbe and the behavioral descendant report=5s.
+	// These waits start after resume and can also lose headroom under load;
+	// no measured check exceedance authorizes raising them. Crash cleanup/Open
+	// contexts use 5s from recovery entry, independently of admission.
+	// Loopback probes use 2s; mapped release waits 300ms after closed_fence.
+	// Other fixture guards (not request limits) remain: awaitResult=30s;
+	// supervisor parent/child=40s/35s, handshake=15s; native exit=3s/10s;
+	// other work-file, root-exit, suspended and peer barriers=10s; Git=20s/10s;
+	// junction creation=5s. Polls of 10ms and zero-time queries are not budgets.
 	return Request{Program: "payload.exe", Args: args, Files: []InputFile{{Path: "payload.exe", Data: image}}, Deadline: time.Now().Add(25 * time.Second), Limits: Limits{Wall: 20 * time.Second, UserCPU: 10 * time.Second, CPUPercent: 100, JobCommitBytes: 2 << 30, Processes: 4, InputBytes: uint64(len(image)) + 1<<20, OutputBytes: 16384, StopGrace: 10 * time.Second}}
 }
 func testExecutor(t *testing.T) *Executor {
@@ -55,6 +86,109 @@ func testExecutor(t *testing.T) *Executor {
 		}
 	})
 	return e
+}
+
+const testPhaseScope = "elapsed and retirement offsets are from admission; setup freezes at resume or pre-resume stop; wall remaining uses the effective admission deadline; stop offsets apply only when StopStarted; channel arrays are stdin/stdout/stderr; terminal errors precede EOF/cancellation normalization; pump_loop_exited may lack proof; finalization_handles_closed excludes the Job handle; closed_fence precedes Job close and cleanup"
+
+type testPhaseSample struct {
+	Phase                string
+	UTC                  time.Time
+	ElapsedNS            int64
+	SetupElapsedNS       int64
+	WallRemainingNS      int64
+	StopStarted          bool
+	StopElapsedNS        int64
+	StopRemainingNS      int64
+	PumpsKnown           bool
+	PumpsRetired         int
+	ChannelComplete      [3]bool
+	RetiredUTC           [3]time.Time
+	RetiredElapsedNS     [3]int64
+	RetiredStopElapsedNS [3]int64
+	TerminalErrors       [3]string
+	TerminalNative       [3]bool
+	TerminalCodes        [3]uint32
+	PipeFailure          string
+}
+
+type testPhaseRecorder []testPhaseSample
+
+func (phases *testPhaseRecorder) record(phase string, r *nativeRun) {
+	sample := testPhaseSample{Phase: phase, StopStarted: !r.stopAt.IsZero()}
+	now := time.Now()
+	var retired [3]time.Time
+	var terminal [3]error
+	var failure error
+	if r.pipes != nil {
+		r.pipes.mu.Lock()
+		sample.PumpsKnown = true
+		sample.PumpsRetired = r.pipes.done
+		sample.ChannelComplete = r.pipes.complete
+		retired, terminal, failure = r.pipes.retiredAt, r.pipes.terminal, r.pipes.failure
+		now = time.Now()
+		r.pipes.mu.Unlock()
+	}
+	sample.UTC = now.UTC()
+	sample.ElapsedNS = now.Sub(r.admitted).Nanoseconds()
+	sample.WallRemainingNS = r.wallEnd.Sub(now).Nanoseconds()
+	setupEnd := now
+	if !r.resumed.IsZero() {
+		setupEnd = r.resumed
+	} else if sample.StopStarted {
+		setupEnd = r.stopAt
+	}
+	sample.SetupElapsedNS = setupEnd.Sub(r.admitted).Nanoseconds()
+	if sample.StopStarted {
+		sample.StopElapsedNS = now.Sub(r.stopAt).Nanoseconds()
+		sample.StopRemainingNS = r.stopAt.Add(r.request.Limits.StopGrace).Sub(now).Nanoseconds()
+	}
+	for i, at := range retired {
+		if !at.IsZero() {
+			sample.RetiredUTC[i] = at.UTC()
+			sample.RetiredElapsedNS[i] = at.Sub(r.admitted).Nanoseconds()
+			if sample.StopStarted {
+				sample.RetiredStopElapsedNS[i] = at.Sub(r.stopAt).Nanoseconds()
+			}
+		}
+		if terminal[i] != nil {
+			sample.TerminalErrors[i] = terminal[i].Error()
+			var code syscall.Errno
+			sample.TerminalNative[i] = errors.As(terminal[i], &code)
+			sample.TerminalCodes[i] = uint32(code)
+		}
+	}
+	if failure != nil {
+		sample.PipeFailure = failure.Error()
+	}
+	*phases = append(*phases, sample)
+}
+
+func (phases testPhaseRecorder) stopEvidenceError() error {
+	required := []string{"tree_exited", "pump_loop_exited", "finalization_handles_closed", "closed_fence"}
+	next := 0
+	for _, sample := range phases {
+		if next == len(required) || sample.Phase != required[next] {
+			continue
+		}
+		if !sample.StopStarted || !sample.PumpsKnown {
+			return fmt.Errorf("stop attribution lacks clock or pump state at %s", sample.Phase)
+		}
+		if sample.Phase == "pump_loop_exited" {
+			if sample.PumpsRetired != 3 {
+				return fmt.Errorf("stop attribution reached loop exit with %d retired pumps", sample.PumpsRetired)
+			}
+			for i, at := range sample.RetiredUTC {
+				if at.IsZero() {
+					return fmt.Errorf("stop attribution lacks retirement instant for channel %d", i)
+				}
+			}
+		}
+		next++
+	}
+	if next != len(required) {
+		return fmt.Errorf("stop attribution missing ordered phase %s", required[next])
+	}
+	return nil
 }
 func testProtectedFile(t *testing.T, dir, name, contents string) string {
 	t.Helper()

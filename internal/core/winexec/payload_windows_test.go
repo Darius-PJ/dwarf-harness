@@ -37,7 +37,7 @@ func TestWinexecPayload(t *testing.T) {
 	}
 	switch args[0] {
 	case "resource":
-		payloadResourceEvidence(t)
+		payloadResourceEvidence(t, args[1:])
 	case "exchange":
 		if len(args) != 3 {
 			t.Fatal("missing protected targets")

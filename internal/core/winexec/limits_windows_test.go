@@ -49,7 +49,12 @@ func TestWallDeadlineStopsWholeTree(t *testing.T) {
 	e := testExecutor(t)
 	observed := false
 	var liveErr error
+	var phases testPhaseRecorder
+	var observedRun *nativeRun
 	e.observe = func(phase string, r *nativeRun) {
+		observedRun = r
+		phases.record(phase, r)
+		defer phases.record(phase+"_observer_return", r)
 		switch phase {
 		case "unconfirmed", "profile_bound", "suspended_created", "resumed", "root_exited", "tree_exited":
 			var accounting jobBasicAccounting
@@ -63,7 +68,7 @@ func TestWallDeadlineStopsWholeTree(t *testing.T) {
 			if r.pipes != nil {
 				stdout, stderr = r.pipes.output()
 			}
-			t.Logf("WALL_PHASE measurement phase=%s elapsed=%s wallRemaining=%s cause=%d stopAt=%s rootPID=%d created=%s resumed=%s rootExited=%t exitKnown=%t exitCode=%#x Job=%+v accountingError=%v PIDs=%v pidError=%v stdout=%q stderr=%q", phase, time.Since(r.admitted), time.Until(r.wallEnd), r.cause, r.stopAt, r.pi.ProcessId, r.receipt.CreatedUTC, r.receipt.ResumedUTC, r.receipt.RootExited, r.receipt.ExitCodeKnown, r.receipt.ExitCode, accounting, accountErr, pids, pidErr, stdout, stderr)
+			t.Logf("WALL_NATIVE measurement phase=%s cause=%d rootPID=%d created=%s resumed=%s rootExited=%t exitKnown=%t exitCode=%#x Job=%+v accountingError=%v PIDs=%v pidError=%v stdout=%q stderr=%q", phase, r.cause, r.pi.ProcessId, r.receipt.CreatedUTC, r.receipt.ResumedUTC, r.receipt.RootExited, r.receipt.ExitCodeKnown, r.receipt.ExitCode, accounting, accountErr, pids, pidErr, stdout, stderr)
 		}
 		if phase == "root_exited" {
 			observed = true
@@ -76,13 +81,22 @@ func TestWallDeadlineStopsWholeTree(t *testing.T) {
 		}
 	}
 	request := testRequest(t, "descendant-held")
-	// The admission wall includes native setup under concurrent package load.
-	request.Limits.Wall = 10 * time.Second
 	// The child tree never reads stdin; cancellation must retire this pending
 	// overlapped write as well as both concurrently drained output operations.
 	request.Stdin = make([]byte, 128*1024)
 	r, err := e.Run(context.Background(), request)
+	if observedRun != nil {
+		phases.record("run_returned", observedRun)
+	}
+	encoded, encodeErr := json.Marshal(map[string]any{"receipt": r, "phases": phases, "phaseScope": testPhaseScope})
+	if encodeErr != nil {
+		t.Fatal(encodeErr)
+	}
+	t.Logf("WALL_EVIDENCE %s", encoded)
 	t.Logf("WALL_RESULT measurement receipt=%+v error=%v stdout=%q stderr=%q", r, err, r.Stdout, r.Stderr)
+	if phaseErr := phases.stopEvidenceError(); phaseErr != nil {
+		t.Fatal(phaseErr)
+	}
 	if !observed || liveErr != nil {
 		t.Fatalf("held native tree was not observed: observed=%t error=%v receipt=%+v runError=%v stdout=%q stderr=%q", observed, liveErr, r, err, r.Stdout, r.Stderr)
 	}

@@ -99,9 +99,7 @@ func TestNaturalExitKeepsStopGrace(t *testing.T) {
 			defer cancel()
 			request := testRequest(t, "output", "1")
 			if late == "wall" {
-				// Cover native setup, then retain drain time after the real wall.
-				request.Limits.Wall = 10 * time.Second
-				request.Limits.StopGrace = 15 * time.Second
+				request.Limits.StopGrace = request.Limits.Wall + request.Limits.StopGrace
 			}
 			observed := false
 			var closeResult chan error

@@ -159,24 +159,8 @@ func TestMappedInputCleanup(t *testing.T) {
 			var payload, marker string
 			var release func() error
 			var observationErr error
-			type phaseSample struct {
-				Phase           string
-				UTC             time.Time
-				StopStarted     bool
-				StopElapsedNS   int64
-				StopRemainingNS int64
-			}
-			var phases []phaseSample
+			var phases testPhaseRecorder
 			var observedRun *nativeRun
-			recordPhase := func(phase string, r *nativeRun) {
-				now := time.Now()
-				sample := phaseSample{Phase: phase, UTC: now.UTC(), StopStarted: !r.stopAt.IsZero()}
-				if sample.StopStarted {
-					sample.StopElapsedNS = now.Sub(r.stopAt).Nanoseconds()
-					sample.StopRemainingNS = r.stopAt.Add(r.request.Limits.StopGrace).Sub(now).Nanoseconds()
-				}
-				phases = append(phases, sample)
-			}
 			type releaseResult struct {
 				boundary, released time.Time
 				err                error
@@ -192,8 +176,8 @@ func TestMappedInputCleanup(t *testing.T) {
 			})
 			e.observe = func(phase string, r *nativeRun) {
 				observedRun = r
-				recordPhase(phase, r)
-				defer recordPhase(phase+"_observer_return", r)
+				phases.record(phase, r)
+				defer phases.record(phase+"_observer_return", r)
 				if phase == "tree_exited" {
 					payload = filepath.Join(r.dir, "input", "payload.exe")
 					marker = filepath.Join(r.dir, "fence.json")
@@ -203,22 +187,22 @@ func TestMappedInputCleanup(t *testing.T) {
 						return
 					}
 					file, err := windows.CreateFile(path, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
-					recordPhase("mapping_file_open_return", r)
+					phases.record("mapping_file_open_return", r)
 					if err != nil {
 						observationErr = err
 						return
 					}
 					const secImage = 0x01000000
 					mapping, mapErr := windows.CreateFileMapping(file, nil, windows.PAGE_READONLY|secImage, 0, 0, nil)
-					recordPhase("mapping_create_return", r)
+					phases.record("mapping_create_return", r)
 					closeErr := windows.CloseHandle(file)
-					recordPhase("mapping_file_close_return", r)
+					phases.record("mapping_file_close_return", r)
 					if mapErr != nil {
 						observationErr = errors.Join(mapErr, closeErr)
 						return
 					}
 					view, err := windows.MapViewOfFile(mapping, windows.FILE_MAP_READ, 0, 0, 0)
-					recordPhase("mapping_view_return", r)
+					phases.record("mapping_view_return", r)
 					if err != nil {
 						observationErr = errors.Join(err, closeErr, windows.CloseHandle(mapping))
 						return
@@ -248,7 +232,7 @@ func TestMappedInputCleanup(t *testing.T) {
 			r, runErr := e.Run(context.Background(), request)
 			close(returned)
 			if observedRun != nil {
-				recordPhase("run_returned", observedRun)
+				phases.record("run_returned", observedRun)
 			}
 			errorText := ""
 			if runErr != nil {
@@ -259,7 +243,7 @@ func TestMappedInputCleanup(t *testing.T) {
 				"receipt": r, "error": errorText, "phases": phases,
 				"cleanupPending": errors.Is(runErr, ErrCleanupPending), "deadlineExceeded": errors.Is(runErr, context.DeadlineExceeded),
 				"accessDenied": errors.Is(runErr, windows.ERROR_ACCESS_DENIED), "sharingViolation": errors.Is(runErr, windows.ERROR_SHARING_VIOLATION),
-				"phaseScope": "observer entry/return and mapping API returns; stop fields apply only when StopStarted; closed_fence precedes Job close and cleanup, not a direct cleanup-entry observation",
+				"phaseScope": testPhaseScope,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -285,6 +269,9 @@ func TestMappedInputCleanup(t *testing.T) {
 				if err := reopened.Close(); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if err := phases.stopEvidenceError(); err != nil {
+				t.Fatal(err)
 			}
 			if !held {
 				assertReusable(t, r, runErr)

@@ -107,8 +107,15 @@ type resourceReady struct {
 	Digest string
 }
 
-func payloadResourceEvidence(t *testing.T) {
+func payloadResourceEvidence(t *testing.T, args []string) {
 	t.Helper()
+	if len(args) != 1 {
+		t.Fatal("missing resource hold guard")
+	}
+	guard, err := time.ParseDuration(args[0])
+	if err != nil || guard <= 0 {
+		t.Fatalf("invalid resource hold guard: %q %v", args[0], err)
+	}
 	nonce, err := os.ReadFile("nonce")
 	if err != nil || string(nonce) != "resource-input-nonce" {
 		t.Fatalf("resource authorized input: %q %v", nonce, err)
@@ -160,7 +167,7 @@ func payloadResourceEvidence(t *testing.T) {
 	if err := json.NewEncoder(os.Stdout).Encode(resourceReady{uint32(child.Process.Pid), fmt.Sprintf("%x", hash.Sum(nil))}); err != nil {
 		t.Fatal(err)
 	}
-	payloadWaitFile(t, "resource-scratch", func(data []byte) bool { return len(data) == 256 && bytes.HasPrefix(data, []byte("release-nonce")) })
+	payloadWaitFile(t, "resource-scratch", guard, func(data []byte) bool { return len(data) == 256 && bytes.HasPrefix(data, []byte("release-nonce")) })
 	if _, err := io.WriteString(write, "released\r\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +217,7 @@ func TestDefenderResourceEvidence(t *testing.T) {
 	}
 	for _, mode := range []string{"ordinary", "cancel", "timeout"} {
 		request := testRequest(t, "resource")
-		request.Limits.Wall = 10 * time.Second
+		request.Args = append(request.Args, (request.Limits.Wall + request.Limits.StopGrace).String())
 		request.Limits.Processes = 2
 		request.Stdin = []byte("resource-stdin-nonce")
 		request.Files = append(request.Files, InputFile{Path: "nonce", Data: []byte("resource-input-nonce")})
@@ -224,48 +231,16 @@ func TestDefenderResourceEvidence(t *testing.T) {
 		var readyHeap map[string]uint64
 		var samples []resourceProcessMemory
 		logical := make(map[string]resourceLogicalFiles)
-		type phaseSample struct {
-			Phase           string
-			UTC             time.Time
-			ElapsedNS       int64
-			StopStarted     bool
-			StopElapsedNS   int64
-			StopRemainingNS int64
-			PumpsKnown      bool
-			PumpsRetired    int
-			ChannelComplete [3]bool
-			PipeFailure     string
-		}
-		var phases []phaseSample
+		var phases testPhaseRecorder
 		var gaps []string
 		var observationErr error
 		var ready resourceReady
 		started := time.Now()
 		var observedRun *nativeRun
-		recordPhase := func(phase string, r *nativeRun) {
-			now := time.Now()
-			sample := phaseSample{Phase: phase, UTC: now.UTC(), ElapsedNS: now.Sub(started).Nanoseconds(), StopStarted: !r.stopAt.IsZero()}
-			if sample.StopStarted {
-				sample.StopElapsedNS = now.Sub(r.stopAt).Nanoseconds()
-				sample.StopRemainingNS = r.stopAt.Add(r.request.Limits.StopGrace).Sub(now).Nanoseconds()
-			}
-			if r.pipes != nil {
-				r.pipes.mu.Lock()
-				sample.PumpsKnown = true
-				sample.PumpsRetired = r.pipes.done
-				sample.ChannelComplete = r.pipes.complete
-				failure := r.pipes.failure
-				r.pipes.mu.Unlock()
-				if failure != nil {
-					sample.PipeFailure = failure.Error()
-				}
-			}
-			phases = append(phases, sample)
-		}
 		e.observe = func(phase string, r *nativeRun) {
 			observedRun = r
-			recordPhase(phase, r)
-			defer recordPhase(phase+"_observer_return", r)
+			phases.record(phase, r)
+			defer phases.record(phase+"_observer_return", r)
 			if phase == "suspended_verified" {
 				var actual windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 				queryErr := queryJob(r.job, windows.JobObjectExtendedLimitInformation, unsafe.Pointer(&actual), unsafe.Sizeof(actual))
@@ -312,7 +287,7 @@ func TestDefenderResourceEvidence(t *testing.T) {
 						samples = append(samples, sample)
 					}
 					readyHeap = resourceGoHeap()
-					recordPhase("readiness-memory-sample", r)
+					phases.record("readiness-memory-sample", r)
 					return nil
 				}()
 				// The query handle is closed before natural exit/cancel/timeout.
@@ -330,9 +305,9 @@ func TestDefenderResourceEvidence(t *testing.T) {
 			}
 			if phase == "tree_exited" {
 				for name, path := range map[string]string{"input": filepath.Join(r.dir, "input"), "work": filepath.Join(r.dir, "work"), "nativeProfile": r.profile.Path} {
-					recordPhase("logical-"+name+"-start", r)
+					phases.record("logical-"+name+"-start", r)
 					count, err := resourceCountLogicalFiles(path)
-					recordPhase("logical-"+name+"-return", r)
+					phases.record("logical-"+name+"-return", r)
 					if err != nil {
 						observationErr = errors.Join(observationErr, fmt.Errorf("logical %s: %w", name, err))
 						continue
@@ -348,11 +323,14 @@ func TestDefenderResourceEvidence(t *testing.T) {
 		cancel()
 		elapsed := time.Since(started)
 		if observedRun != nil {
-			recordPhase("run_returned", observedRun)
+			phases.record("run_returned", observedRun)
 		}
 		afterHeap := resourceGoHeap()
 		if observationErr != nil {
 			gaps = append(gaps, observationErr.Error())
+		}
+		if err := phases.stopEvidenceError(); err != nil {
+			gaps = append(gaps, err.Error())
 		}
 		if readyHeap == nil {
 			gaps = append(gaps, "readiness Go-heap sample unavailable")
@@ -398,7 +376,7 @@ func TestDefenderResourceEvidence(t *testing.T) {
 				"createdUTC": receipt.CreatedUTC, "resumedUTC": receipt.ResumedUTC, "closedUTC": receipt.ClosedUTC,
 				"setupNS": receipt.Setup.Nanoseconds(), "executionNS": receipt.Execution.Nanoseconds(), "stopNS": receipt.Stop.Nanoseconds(), "observedCallNS": elapsed.Nanoseconds(), "phases": phases,
 				"processMemoryAtReadiness": samples, "memoryScope": "per-process working sets and pagefile commit, peaks only through sampling time; never sum these into job or whole-machine RAM",
-				"phaseScope":  "observer entry/return and logical-file walk boundaries; StopElapsedNS/StopRemainingNS apply only when StopStarted; PumpsRetired counts ownership retirement, while ChannelComplete records clean completion, not per-channel retirement",
+				"phaseScope":  testPhaseScope,
 				"jobCounters": jobCounters, "jobCounterScope": "User/Kernel are native 100-ns totals; PeakJobMemoryBytes/PeakProcessMemoryBytes are reported native PeakJobMemoryUsed/PeakProcessMemoryUsed, not a RAM or commit claim; I/O fields are native basic-and-I/O transfer totals",
 				"logicalFilesAtProvedTreeExit": logical, "fileScope": "ordinary no-follow logical file bytes before cleanup; not physical allocation and not Job I/O",
 				"goHeapBefore": beforeHeap, "goHeapAtReadiness": readyHeap, "goHeapAfter": afterHeap,

@@ -41,9 +41,9 @@ func payloadCommand(t *testing.T, operation string, args ...string) *exec.Cmd {
 	return command
 }
 
-func payloadWaitFile(t *testing.T, name string, accept func([]byte) bool) []byte {
+func payloadWaitFile(t *testing.T, name string, guard time.Duration, accept func([]byte) bool) []byte {
 	t.Helper()
-	deadline := time.NewTimer(10 * time.Second)
+	deadline := time.NewTimer(guard)
 	defer deadline.Stop()
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
@@ -65,7 +65,7 @@ func payloadWaitFile(t *testing.T, name string, accept func([]byte) bool) []byte
 
 func payloadReleaseFile(t *testing.T, name string) {
 	t.Helper()
-	payloadWaitFile(t, name, func(data []byte) bool { return string(data) == "release-nonce" })
+	payloadWaitFile(t, name, 10*time.Second, func(data []byte) bool { return string(data) == "release-nonce" })
 }
 
 func payloadDescendantRoot(t *testing.T, args []string) {
@@ -118,7 +118,7 @@ func payloadDescendantChild(t *testing.T, args []string) {
 	}
 	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
 	var grandchild descendantProbe
-	payloadWaitFile(t, "grandchild-proof.json", func(data []byte) bool { return json.Unmarshal(data, &grandchild) == nil })
+	payloadWaitFile(t, "grandchild-proof.json", 10*time.Second, func(data []byte) bool { return json.Unmarshal(data, &grandchild) == nil })
 	if grandchild.PID != uint32(command.Process.Pid) {
 		t.Fatal("grandchild report is not the actual spawned process")
 	}

@@ -22,6 +22,8 @@ type pipeGroup struct {
 	frozen        bool
 	done          int
 	complete      [3]bool
+	retiredAt     [3]time.Time
+	terminal      [3]error
 	failure       error
 	event         chan struct{}
 	stop          chan struct{}
@@ -137,13 +139,15 @@ func (p *pipeGroup) start(input []byte) {
 		go p.pump(i)
 	}
 }
-func (p *pipeGroup) finish(index int, complete bool, err error) {
+func (p *pipeGroup) finish(index int, complete bool, err, terminal error) {
 	p.mu.Lock()
 	if index == 0 {
 		p.input = nil
 	}
 	p.done++
 	p.complete[index] = complete
+	p.retiredAt[index] = time.Now()
+	p.terminal[index] = terminal
 	p.failure = errors.Join(p.failure, err)
 	p.mu.Unlock()
 	p.signal()
@@ -205,7 +209,7 @@ func (p *pipeGroup) pump(index int) {
 	h := p.parent[index]
 	event, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
-		p.finish(index, false, errors.Join(nativeError("CreateEvent.pipe", err), closeOwnedHandle("CloseHandle.parent-pipe", h)))
+		p.finish(index, false, errors.Join(nativeError("CreateEvent.pipe", err), closeOwnedHandle("CloseHandle.parent-pipe", h)), err)
 		return
 	}
 	buffer := make([]byte, pipeBufferSize)
@@ -218,10 +222,11 @@ func (p *pipeGroup) pump(index int) {
 	pin.Pin(&ov)
 	pin.Pin(&transferred)
 	complete := false
+	var terminal error
 	defer func() {
 		pin.Unpin()
 		err = errors.Join(err, closeOwnedHandle("CloseHandle.parent-pipe", h), closeOwnedHandle("CloseHandle.pipe-event", event))
-		p.finish(index, complete, err)
+		p.finish(index, complete, err, terminal)
 	}()
 	position := 0
 	for {
@@ -243,6 +248,7 @@ func (p *pipeGroup) pump(index int) {
 		}
 		ov = windows.Overlapped{HEvent: event}
 		if err = windows.ResetEvent(event); err != nil {
+			terminal = err
 			err = nativeError("ResetEvent.pipe", err)
 			return
 		}
@@ -259,6 +265,9 @@ func (p *pipeGroup) pump(index int) {
 		if errors.Is(err, windows.ERROR_IO_PENDING) || errors.Is(err, windows.ERROR_IO_INCOMPLETE) {
 			n, err = p.await(h, &ov)
 		}
+		// Retain the native terminal result for attribution before ordinary EOF
+		// and requested cancellation are normalized for the public result.
+		terminal = err
 		if errors.Is(err, windows.ERROR_BROKEN_PIPE) || errors.Is(err, windows.ERROR_HANDLE_EOF) {
 			// This completes channel ownership, not a claim that stdin was
 			// consumed. An actual early child close is ordinary broken-pipe EOF.

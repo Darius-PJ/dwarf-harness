@@ -688,6 +688,7 @@ func (r *nativeRun) finish() {
 			}
 		}
 	}
+	r.observe("pump_loop_exited")
 	// Every completed pump's final close/error must be consumed before a
 	// durable closed fence can authorize cleanup.
 	r.check(nil)
@@ -729,6 +730,7 @@ func (r *nativeRun) finish() {
 		}
 		r.sid = nil
 	}
+	r.observe("finalization_handles_closed")
 	if !r.uncertain && r.profileMade && !r.fence.ProfileCreated {
 		// A failed getter/binding before any child permits only native deletion
 		// of the profile we just created, never walking its unproved path.
