@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
 func TestScopedTaskAssignmentInvariants(t *testing.T) {
@@ -48,7 +50,7 @@ func TestScopedTaskAssignmentInvariants(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
 			s, f := taskRuleFixture()
-			a := taskAction{action: "reassign", task: s.id, assignment: taskAssignmentInput{AssignmentID: privateID(52), Assignee: scopedBinding{privateID(1), privateID(3)}}}
+			a := taskAction{action: "reassign", task: s.id, assignment: ledger.AssignmentInput{AssignmentID: privateID(52), Assignee: ledger.Binding{AgentID: privateID(1), ContextID: privateID(3)}}}
 			e := taskExpectation{s.version, s.assignment.id, s.assignment.generation}
 			row.change(&s, &f, &a, &e)
 			next, err := transitionTask(s, f, a, e)

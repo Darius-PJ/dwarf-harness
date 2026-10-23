@@ -11,51 +11,24 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-// These values describe authority, not ledger records or filesystem handles.
 // Workspace containment is lexical only; an executor must separately check links.
-type grantResource struct {
-	kind            string
-	binding         Binding
-	scope           string
-	slots           []string
-	task, workspace uuid.UUID
-	path            string
-	artifact        artifactIdentity
-	key             string
-}
-
-type artifactIdentity struct {
-	SourceSequence uint64        `json:"source_sequence"`
-	SHA256         ledger.Digest `json:"sha256"`
-	Bytes          int64         `json:"bytes"`
-}
-
-type scopedBinding struct {
-	AgentID   uuid.UUID `json:"agent_id"`
-	ContextID uuid.UUID `json:"context_id"`
-}
-
-func validScopedPath(path string) bool {
-	return ledger.ValidResourcePath(path)
-}
-
-func resourceContains(parent, child grantResource) bool {
-	if parent.kind != child.kind {
+func resourceContains(parent, child ledger.Resource) bool {
+	if parent.Kind != child.Kind {
 		return false
 	}
-	switch parent.kind {
+	switch parent.Kind {
 	case "context":
-		return parent.binding == child.binding && parent.scope == child.scope && stringSubset(parent.slots, child.slots)
+		return parent.Binding == child.Binding && parent.Scope == child.Scope && stringSubset(parent.Slots, child.Slots)
 	case "task":
-		return parent.task == (uuid.UUID{}) || parent.task == child.task
+		return parent.TaskID == (uuid.UUID{}) || parent.TaskID == child.TaskID
 	case "workspace":
-		return parent.workspace == child.workspace && parent.binding == child.binding &&
-			validScopedPath(parent.path) && validScopedPath(child.path) &&
-			(parent.path == "" || child.path == parent.path || strings.HasPrefix(child.path, parent.path+"/"))
+		return parent.WorkspaceID == child.WorkspaceID && parent.Binding == child.Binding &&
+			ledger.ValidResourcePath(parent.PathPrefix) && ledger.ValidResourcePath(child.PathPrefix) &&
+			(parent.PathPrefix == "" || child.PathPrefix == parent.PathPrefix || strings.HasPrefix(child.PathPrefix, parent.PathPrefix+"/"))
 	case "artifact":
-		return parent.artifact == child.artifact
+		return parent.Artifact == child.Artifact
 	case "external":
-		return parent.key == child.key
+		return parent.ResourceKey == child.ResourceKey
 	default:
 		return false
 	}
@@ -89,46 +62,7 @@ func compareBinding(a, b Binding) int {
 	return bytes.Compare(a.ContextID[:], b.ContextID[:])
 }
 
-// MarshalJSON fixes the kind-conditional Resource order without defining a
-// ledger record. Validation belongs to the caller's authority checks.
-func (r grantResource) MarshalJSON() ([]byte, error) {
-	binding := scopedBinding{r.binding.AgentID, r.binding.ContextID}
-	switch r.kind {
-	case "context":
-		return json.Marshal(struct {
-			Kind    string        `json:"kind"`
-			Binding scopedBinding `json:"binding"`
-			Scope   string        `json:"scope"`
-			Slots   []string      `json:"slots"`
-		}{r.kind, binding, r.scope, append([]string{}, r.slots...)})
-	case "task":
-		return json.Marshal(struct {
-			Kind   string    `json:"kind"`
-			TaskID uuid.UUID `json:"task_id,omitzero"`
-		}{r.kind, r.task})
-	case "workspace":
-		return json.Marshal(struct {
-			Kind        string        `json:"kind"`
-			WorkspaceID uuid.UUID     `json:"workspace_id"`
-			Binding     scopedBinding `json:"binding"`
-			PathPrefix  string        `json:"path_prefix"`
-		}{r.kind, r.workspace, binding, r.path})
-	case "artifact":
-		return json.Marshal(struct {
-			Kind     string           `json:"kind"`
-			Artifact artifactIdentity `json:"artifact"`
-		}{r.kind, r.artifact})
-	case "external":
-		return json.Marshal(struct {
-			Kind        string `json:"kind"`
-			ResourceKey string `json:"resource_key"`
-		}{r.kind, r.key})
-	default:
-		return nil, ErrInvalid
-	}
-}
-
-func compareResource(a, b grantResource) int {
+func compareResource(a, b ledger.Resource) int {
 	left, _ := json.Marshal(a)
 	right, _ := json.Marshal(b)
 	return cmp.Compare(string(left), string(right))

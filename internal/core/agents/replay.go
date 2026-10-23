@@ -169,8 +169,12 @@ func (p *projection) planGroup(g *privateGroup, first uint64) (map[scopeKey]*sco
 			return nil, inconsistent(first, "context binding")
 		}
 	}
+	return p.planPrivateRevisions(ids, g.revisions, g.revisionIndexes, first)
+}
+
+func (p *projection) planPrivateRevisions(ids submissionIDs, revisions []ledger.PrivateRevision, indexes []int, first uint64) (map[scopeKey]*scopeState, error) {
 	next := map[scopeKey]*scopeState{}
-	for i, rev := range g.revisions {
+	for i, rev := range revisions {
 		k := keyFor(ids, rev.Scope)
 		old := p.scopes[k]
 		current := uint64(0)
@@ -203,7 +207,7 @@ func (p *projection) planGroup(g *privateGroup, first uint64) (map[scopeKey]*sco
 			if c.Mode == "clear" {
 				delete(st.heads, c.Slot)
 			} else {
-				st.heads[c.Slot] = Head{c.SHA256, c.Bytes, uint64(rev.Revision), first + uint64(g.revisionIndexes[i])}
+				st.heads[c.Slot] = Head{c.SHA256, c.Bytes, uint64(rev.Revision), first + uint64(indexes[i])}
 			}
 			if markdownSlot(c.Slot) {
 				st.materials[c.Slot] = string(materializationStale)
@@ -261,13 +265,20 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 	}
 	err := s.scan(ctx, s.p.through, through, func(c ledger.Commit) error {
 		d := draftsOf(c)
-		g, err := decodeGroup(d, c.First)
+		g, scoped, err := decodeFamily(d, c.First)
 		if err != nil {
 			return err
 		}
+		var command *ledger.Command
 		if g != nil {
-			if bytes.Compare(g.command.CommandID[:], s.p.maxCommand[:]) <= 0 {
-				old, err := s.findCommand(ctx, g.command.CommandID, 0, c.First-1)
+			command = &g.command
+		}
+		if scoped != nil {
+			command = &scoped.command
+		}
+		if command != nil {
+			if bytes.Compare(command.CommandID[:], s.p.maxCommand[:]) <= 0 {
+				old, err := s.findCommand(ctx, command.CommandID, 0, c.First-1)
 				if err != nil {
 					return err
 				}
@@ -275,11 +286,23 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 					return inconsistent(c.First, "reused command ID")
 				}
 			}
+		}
+		if g != nil {
 			next, err := s.p.planGroup(g, c.First)
 			if err != nil {
 				return inconsistent(c.First, "invalid private transition")
 			}
 			s.p.install(g, next)
+		}
+		if scoped != nil {
+			next, err := s.planScoped(ctx, scoped, c.First)
+			if err != nil {
+				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+					return err
+				}
+				return inconsistent(c.First, "invalid scoped transition: "+err.Error())
+			}
+			s.p.installScoped(next)
 		}
 		for _, r := range d {
 			switch r.Type {
@@ -326,6 +349,7 @@ type commandMatch struct {
 	found   bool
 	command ledger.Command
 	group   *privateGroup
+	scoped  *scopedGroup
 }
 
 func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
@@ -345,11 +369,11 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 			if found.found {
 				return inconsistent(c.First, "duplicate command")
 			}
-			g, err := decodeGroup(draftsOf(c), c.First)
+			g, scoped, err := decodeFamily(draftsOf(c), c.First)
 			if err != nil {
 				return err
 			}
-			found = commandMatch{true, cmd, g}
+			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped}
 		}
 		return nil
 	})

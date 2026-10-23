@@ -1,11 +1,14 @@
 package agents
 
 import (
+	"crypto/sha256"
 	"errors"
 	"math"
 	"reflect"
 	"testing"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
 func taskRuleFixture() (taskState, taskFacts) {
@@ -19,8 +22,8 @@ func taskRuleFixture() (taskState, taskFacts) {
 	}
 }
 
-func taskArtifact() taskSubject {
-	return taskSubject{Kind: "artifact", Artifact: artifactIdentity{SourceSequence: 4, Bytes: 8}}
+func taskArtifact() ledger.SubjectRef {
+	return ledger.SubjectRef{Kind: "artifact", Artifact: ledger.ArtifactRef{SourceSequence: 4, SHA256: ledger.Digest(sha256.Sum256([]byte("artifact"))), Bytes: 8}}
 }
 
 func TestScopedTaskAllowedEdges(t *testing.T) {
@@ -60,10 +63,10 @@ func TestScopedTaskAllowedEdges(t *testing.T) {
 				state = taskState{}
 				request.task, request.audience = privateID(50), []uuid.UUID{privateID(1), privateID(4)}
 				if row.assigned {
-					request.assignment = taskAssignmentInput{AssignmentID: privateID(52), Assignee: scopedBinding{privateID(1), privateID(3)}}
+					request.assignment = ledger.AssignmentInput{AssignmentID: privateID(52), Assignee: ledger.Binding{AgentID: privateID(1), ContextID: privateID(3)}}
 				}
 			case "claim", "assign", "reassign":
-				request.assignment = taskAssignmentInput{AssignmentID: privateID(52), Assignee: scopedBinding{privateID(1), privateID(3)}}
+				request.assignment = ledger.AssignmentInput{AssignmentID: privateID(52), Assignee: ledger.Binding{AgentID: privateID(1), ContextID: privateID(3)}}
 			case "wait":
 				request.waitReason, request.waitSubject = "input", taskArtifact()
 			case "submit", "complete":
@@ -81,16 +84,16 @@ func TestScopedTaskAllowedEdges(t *testing.T) {
 				t.Fatal("transition mutated its input")
 			}
 			if row.action == "reassign" {
-				if next.assignment.generation != 2 || next.assignment.id != privateID(52) || next.waitReason != "" || next.submission != (taskSubject{}) || next.waitSubject != (taskSubject{}) || next.failureCause != "" {
+				if next.assignment.generation != 2 || next.assignment.id != privateID(52) || next.waitReason != "" || !emptySubject(next.submission) || !emptySubject(next.waitSubject) || next.failureCause != "" {
 					t.Fatalf("reassignment retained old work: %+v", next)
 				}
 			} else if request.assignment.AssignmentID != (uuid.UUID{}) && next.assignment.generation != 1 {
 				t.Fatal("first assignment generation is not one")
 			}
-			if row.action == "resume" && (next.waitReason != "" || next.waitSubject != (taskSubject{})) {
+			if row.action == "resume" && (next.waitReason != "" || !emptySubject(next.waitSubject)) {
 				t.Fatal("resume did not clear wait")
 			}
-			if row.action == "complete" && next.submission != taskArtifact() {
+			if row.action == "complete" && !equalSubject(next.submission, taskArtifact()) {
 				t.Fatal("completion changed exact subject")
 			}
 		})
@@ -142,7 +145,12 @@ func TestScopedTaskRefusals(t *testing.T) {
 		{"unknown_subject", func(s *taskState, f *taskFacts, a *taskAction, e *taskExpectation) {
 			s.state = "active"
 			a.action = "submit"
-			a.submission = taskSubject{Kind: "promotion"}
+			a.submission = ledger.SubjectRef{Kind: "promotion"}
+		}, "subject"},
+		{"zero_subject_digest", func(s *taskState, f *taskFacts, a *taskAction, e *taskExpectation) {
+			s.state = "active"
+			a.action, a.submission = "submit", taskArtifact()
+			a.submission.Artifact.SHA256 = ledger.Digest{}
 		}, "subject"},
 		{"unauthorized_subject", func(s *taskState, f *taskFacts, a *taskAction, e *taskExpectation) {
 			s.state = "active"

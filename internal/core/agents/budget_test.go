@@ -6,6 +6,8 @@ import (
 	"slices"
 	"testing"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
 func TestScopedBudgetScopeSet(t *testing.T) {
@@ -13,7 +15,7 @@ func TestScopedBudgetScopeSet(t *testing.T) {
 	binding := Binding{privateID(1), privateID(2)}
 	chains := [][]uuid.UUID{{privateID(12), privateID(10)}, {privateID(11), privateID(10)}}
 	got, err := budgetScopes(binding, chains...)
-	want := []budgetScope{{Kind: "colony"}, {Kind: "agent", ID: binding.AgentID}, {Kind: "context", ID: binding.ContextID}, {Kind: "grant", ID: privateID(10)}, {Kind: "grant", ID: privateID(11)}, {Kind: "grant", ID: privateID(12)}}
+	want := []ledger.ScopeKey{{Kind: "colony"}, {Kind: "agent", ID: binding.AgentID}, {Kind: "context", ID: binding.ContextID}, {Kind: "grant", ID: privateID(10)}, {Kind: "grant", ID: privateID(11)}, {Kind: "grant", ID: privateID(12)}}
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("scope set = %v, %v; want %v", got, err, want)
 	}
@@ -56,6 +58,16 @@ func TestScopedCheckedBudget(t *testing.T) {
 			if got != row.want || (err != nil) != row.refuse {
 				t.Fatalf("budget = %+v, %v; want %+v, refuse=%v", got, err, row.want, row.refuse)
 			}
+			if row.refuse {
+				var busy *BusyError
+				if row.name == "capacity" {
+					if !errors.As(err, &busy) {
+						t.Fatalf("capacity refusal is not busy: %v", err)
+					}
+				} else if !errors.Is(err, ErrInvalid) {
+					t.Fatalf("arithmetic refusal is not invalid: %v", err)
+				}
+			}
 		})
 	}
 }
@@ -81,7 +93,11 @@ func TestScopedLiveLimits(t *testing.T) {
 	}
 	limits := DefaultLimits()
 	limits.MaxLiveTasks, limits.MaxLiveGrants, limits.MaxPendingLocalWork = 0, 0, 0
+	if err := limits.validate(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero live limits accepted: %v", err)
+	}
+	limits.MaxLiveTasks, limits.MaxLiveGrants, limits.MaxPendingLocalWork = 1, 1, 1
 	if err := limits.validate(); err != nil {
-		t.Fatalf("disabled new admissions refused: %v", err)
+		t.Fatalf("small positive live limits refused: %v", err)
 	}
 }

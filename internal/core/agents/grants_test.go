@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
 func ruleGrant() grantRules {
@@ -11,9 +13,9 @@ func ruleGrant() grantRules {
 	return grantRules{
 		id: privateID(10), grantee: b,
 		operations: []string{"file.read", "file.write", "grant.issue", "grant.revoke"},
-		resources:  []grantResource{{kind: "workspace", binding: b, workspace: privateID(3), path: "a"}},
+		resources:  []ledger.Resource{{Kind: "workspace", Binding: ledger.Binding(b), WorkspaceID: privateID(3), PathPrefix: "a"}},
 		dataClass:  "workspace", recipients: []Binding{b, {privateID(4), privateID(5)}},
-		limits: capacityAmounts{TurnSlots: 3, LocalSlots: 4, BufferBytes: 100, LocalUnits: 10, MaxOperationBytes: 50},
+		limits: ledger.Capacity{TurnSlots: 3, LocalSlots: 4, BufferBytes: 100, LocalUnits: 10, MaxOperationBytes: 50},
 		depth:  3, lifetime: "until_revoked",
 	}
 }
@@ -28,12 +30,12 @@ func TestScopedGrantAttenuation(t *testing.T) {
 		{"equal_region", func(p, c *grantRules) {}, true},
 		{"narrow", func(p, c *grantRules) {
 			c.operations = []string{"file.read"}
-			c.resources[0].path = "a/b"
+			c.resources[0].PathPrefix = "a/b"
 			c.recipients = c.recipients[:1]
 			c.limits.LocalUnits = 1
 		}, true},
 		{"operation", func(p, c *grantRules) { c.operations = []string{"file.edit"} }, false},
-		{"resource", func(p, c *grantRules) { c.resources[0].path = "other" }, false},
+		{"resource", func(p, c *grantRules) { c.resources[0].PathPrefix = "other" }, false},
 		{"recipient", func(p, c *grantRules) { c.recipients = []Binding{{privateID(8), privateID(9)}} }, false},
 		{"grantee", func(p, c *grantRules) { c.grantee = Binding{privateID(8), privateID(9)} }, false},
 		{"class", func(p, c *grantRules) { c.dataClass = "private" }, false},
@@ -50,11 +52,18 @@ func TestScopedGrantAttenuation(t *testing.T) {
 		{"duplicate_operations", func(p, c *grantRules) { c.operations = []string{"file.read", "file.read"} }, false},
 		{"duplicate_resources", func(p, c *grantRules) { c.resources = append(c.resources, c.resources[0]) }, false},
 		{"duplicate_recipients", func(p, c *grantRules) { c.recipients = append(c.recipients[:1], c.recipients[0]) }, false},
-		{"new_task_binding", func(p, c *grantRules) { c.task = taskRestriction{privateID(20), privateID(21), 1} }, true},
-		{"inherited_task", func(p, c *grantRules) { p.task = taskRestriction{privateID(20), privateID(21), 1}; c.task = p.task }, true},
-		{"removed_task", func(p, c *grantRules) { p.task = taskRestriction{privateID(20), privateID(21), 1} }, false},
+		{"new_task_binding", func(p, c *grantRules) {
+			c.task = ledger.TaskBinding{TaskID: privateID(20), AssignmentID: privateID(21), Generation: 1}
+		}, true},
+		{"inherited_task", func(p, c *grantRules) {
+			p.task = ledger.TaskBinding{TaskID: privateID(20), AssignmentID: privateID(21), Generation: 1}
+			c.task = p.task
+		}, true},
+		{"removed_task", func(p, c *grantRules) {
+			p.task = ledger.TaskBinding{TaskID: privateID(20), AssignmentID: privateID(21), Generation: 1}
+		}, false},
 		{"changed_generation", func(p, c *grantRules) {
-			p.task = taskRestriction{privateID(20), privateID(21), 1}
+			p.task = ledger.TaskBinding{TaskID: privateID(20), AssignmentID: privateID(21), Generation: 1}
 			c.task = p.task
 			c.task.Generation++
 		}, false},
@@ -87,14 +96,14 @@ func TestScopedGrantChain(t *testing.T) {
 		{"wrong_leaf", func(c *[]grantRules, r *authorityRequest) { r.grant = privateID(99) }, false},
 		{"wrong_origin", func(c *[]grantRules, r *authorityRequest) { r.origin.ContextID = privateID(99) }, false},
 		{"wrong_operation", func(c *[]grantRules, r *authorityRequest) { r.operation = "model.call" }, false},
-		{"wrong_target", func(c *[]grantRules, r *authorityRequest) { r.targets[0].path = "b" }, false},
+		{"wrong_target", func(c *[]grantRules, r *authorityRequest) { r.targets[0].PathPrefix = "b" }, false},
 		{"wrong_class", func(c *[]grantRules, r *authorityRequest) { r.dataClass = "external" }, false},
 		{"stale_task", func(c *[]grantRules, r *authorityRequest) {
-			(*c)[0].task = taskRestriction{privateID(20), privateID(21), 1}
-			r.task = taskRestriction{privateID(20), privateID(22), 2}
+			(*c)[0].task = ledger.TaskBinding{TaskID: privateID(20), AssignmentID: privateID(21), Generation: 1}
+			r.task = ledger.TaskBinding{TaskID: privateID(20), AssignmentID: privateID(22), Generation: 2}
 		}, false},
 		{"current_task", func(c *[]grantRules, r *authorityRequest) {
-			(*c)[0].task = taskRestriction{privateID(20), privateID(21), 1}
+			(*c)[0].task = ledger.TaskBinding{TaskID: privateID(20), AssignmentID: privateID(21), Generation: 1}
 			r.task = (*c)[0].task
 		}, true},
 		{"recipient", func(c *[]grantRules, r *authorityRequest) { r.recipients = []Binding{{privateID(90), privateID(91)}} }, false},
@@ -103,15 +112,15 @@ func TestScopedGrantChain(t *testing.T) {
 			(*c)[0].parent = uuid.UUID{}
 			(*c)[0].operations = []string{"file.read"}
 			(*c)[1].operations = []string{"file.write"}
-			(*c)[1].resources[0].path = "other"
+			(*c)[1].resources[0].PathPrefix = "other"
 			r.operation = "file.write"
 		}, false},
 		{"delegation_not_data_access", func(c *[]grantRules, r *authorityRequest) {
-			other := Binding{privateID(4), privateID(5)}
+			other := ledger.Binding{AgentID: privateID(4), ContextID: privateID(5)}
 			for i := range *c {
-				(*c)[i].resources[0].binding = other
+				(*c)[i].resources[0].Binding = other
 			}
-			r.targets[0].binding = other
+			r.targets[0].Binding = other
 		}, false},
 	} {
 		t.Run(row.name, func(t *testing.T) {
@@ -131,10 +140,10 @@ func TestScopedGrantChain(t *testing.T) {
 func TestScopedTaskCreationRegion(t *testing.T) {
 	t.Parallel()
 	g := ruleGrant()
-	g.dataClass, g.operations, g.resources = "task", []string{"grant.issue", "task.create"}, []grantResource{{kind: "task"}}
+	g.dataClass, g.operations, g.resources = "task", []string{"grant.issue", "task.create"}, []ledger.Resource{{Kind: "task"}}
 	child := g
 	child.id, child.parent, child.depth = privateID(11), g.id, 1
-	child.resources = []grantResource{{kind: "task", task: privateID(50)}}
+	child.resources = []ledger.Resource{{Kind: "task", TaskID: privateID(50)}}
 	if !grantAttenuates(g, child) {
 		t.Fatal("creation grant cannot add an exact task")
 	}
@@ -154,7 +163,7 @@ func TestScopedExternalOperationSeparation(t *testing.T) {
 			if chainAuthorizes([]grantRules{g}, request) {
 				t.Fatal("local grant authorized external effect")
 			}
-			g.dataClass, g.operations, g.resources = "external", []string{op}, []grantResource{{kind: "external", key: "producer_key"}}
+			g.dataClass, g.operations, g.resources = "external", []string{op}, []ledger.Resource{{Kind: "external", ResourceKey: "producer_key"}}
 			request.dataClass, request.targets = "external", slices.Clone(g.resources)
 			if !chainAuthorizes([]grantRules{g}, request) {
 				t.Fatal("separate external authority refused")

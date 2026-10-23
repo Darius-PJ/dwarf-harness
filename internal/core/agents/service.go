@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 type privateStore interface {
 	Submit(context.Context, ledger.Draft, []ledger.Draft) (ledgerstore.Receipt, error)
+	PublishBody(context.Context, io.Reader) (ledger.Digest, int64, error)
 	LogDir() string
 	Colony() uuid.UUID
 	Durable() uint64
@@ -22,6 +24,7 @@ type serviceDeps struct {
 	afterPublish      func(Binding, string)
 	beforeSubmit      func([]ledger.Draft) []ledger.Draft
 	afterCommit       func(Receipt)
+	afterScopedCommit func(ScopedReceipt) error
 	beforeMaterialize func(Binding, string, string) error
 	beforeProjection  func(Binding, string)
 	beforeLookup      func()
@@ -54,29 +57,40 @@ type projection struct {
 	sessions   map[uuid.UUID]uuid.UUID
 	scopes     map[scopeKey]*scopeState
 	scratches  map[uuid.UUID]scratchState
+	authority  int64
+	grants     map[uuid.UUID]grantState
+	tasks      map[uuid.UUID]scopedTaskState
+	work       map[uuid.UUID]scopedWorkState
+	book       budgetBook
 	maxCommand uuid.UUID
 	through    uint64
 }
 
 func newProjection() projection {
-	return projection{agents: map[uuid.UUID]agentState{}, contexts: map[uuid.UUID]uuid.UUID{}, sessions: map[uuid.UUID]uuid.UUID{}, scopes: map[scopeKey]*scopeState{}, scratches: map[uuid.UUID]scratchState{}}
+	return projection{
+		agents: map[uuid.UUID]agentState{}, contexts: map[uuid.UUID]uuid.UUID{}, sessions: map[uuid.UUID]uuid.UUID{},
+		scopes: map[scopeKey]*scopeState{}, scratches: map[uuid.UUID]scratchState{},
+		grants: map[uuid.UUID]grantState{}, tasks: map[uuid.UUID]scopedTaskState{}, work: map[uuid.UUID]scopedWorkState{},
+		book: budgetBook{accounts: map[ledger.ScopeKey]budgetAccount{}, preparing: map[ledger.ScopeKey][4]int64{}},
+	}
 }
 
-// Service owns the private state projection, not the shared colony store.
+// Service owns the private and scoped projections, not the shared colony store.
 // All public entry points are owner-only, under the host's trust boundary.
 type Service struct {
-	mu        sync.Mutex
-	active    sync.WaitGroup
-	closed    bool
-	poisoned  bool
-	store     privateStore
-	colony    string
-	limits    Limits
-	deps      serviceDeps
-	dirs      directoryDurability
-	p         projection
-	gates     map[scopeKey]*scopeGate
-	preparing int
+	mu            sync.Mutex
+	active        sync.WaitGroup
+	closed        bool
+	poisoned      bool
+	store         privateStore
+	colony        string
+	limits        Limits
+	deps          serviceDeps
+	dirs          directoryDurability
+	p             projection
+	gates         map[scopeKey]*scopeGate
+	preparing     int
+	openedThrough uint64
 }
 
 func Open(ctx context.Context, store privateStore, colonyDir string, limits Limits) (*Service, Reconciliation, error) {
@@ -106,7 +120,12 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 	if err := s.refreshLocked(ctx, store.Durable()); err != nil {
 		return nil, report, err
 	}
+	s.openedThrough = s.p.through
 	report, err = s.inspectOpen(ctx)
+	if err != nil {
+		return nil, report, err
+	}
+	report.PendingWork, err = s.pendingWorkViews()
 	if err != nil {
 		return nil, report, err
 	}
@@ -219,7 +238,14 @@ func (s *Service) scopeIssuesLocked(ids submissionIDs, scope string) error {
 	return nil
 }
 func privateConsumption() ledger.Consumption {
-	return ledger.Consumption{ledger.TypeCommand: {1}, ledger.TypeRuntimeAgentRegistered: {1}, ledger.TypeRuntimeContextCreated: {1}, ledger.TypePrivateRevision: {1}, ledger.TypeRuntimeCommandReceipt: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1}}
+	return ledger.Consumption{
+		ledger.TypeCommand: {1}, ledger.TypeBodyPin: {1}, ledger.TypeBodyUnpin: {1},
+		ledger.TypeRuntimeAgentRegistered: {1}, ledger.TypeRuntimeContextCreated: {1}, ledger.TypePrivateRevision: {1}, ledger.TypeRuntimeCommandReceipt: {1},
+		ledger.TypeWorkspaceRegistered: {1}, ledger.TypeScratchCreated: {1}, ledger.TypeScratchClosed: {1},
+		ledger.TypeRuntimeGrantIssued: {1}, ledger.TypeRuntimeGrantRevoked: {1}, ledger.TypeRuntimeTaskChanged: {1}, ledger.TypeRuntimeCapacityConfigured: {1},
+		ledger.TypeRuntimeWorkAdmitted: {1}, ledger.TypeRuntimeWorkDispatched: {1}, ledger.TypeRuntimeWorkEnded: {1}, ledger.TypeRuntimeLocalUsed: {1},
+		ledger.TypePrivateScopedRevision: {1}, ledger.TypeRuntimeScopedReceipt: {1},
+	}
 }
 func isPrivateType(t string) bool {
 	return t == ledger.TypeRuntimeAgentRegistered || t == ledger.TypeRuntimeContextCreated || t == ledger.TypePrivateRevision || t == ledger.TypeRuntimeCommandReceipt

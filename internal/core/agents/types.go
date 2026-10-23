@@ -21,15 +21,23 @@ var (
 
 // Limits bound producer admission, preparation and reads, not historical state.
 type Limits struct {
-	MaxObjectBytes      int64
-	MaxOperationBytes   int64
-	MaxConcurrentWrites int
-	MaxReadBytes        int64
-	MaxReadChunks       int
-	// Zero disables new admissions of the corresponding kind.
-	MaxLiveTasks        int
-	MaxLiveGrants       int
-	MaxPendingLocalWork int
+	MaxObjectBytes          int64
+	MaxOperationBytes       int64
+	MaxConcurrentWrites     int
+	MaxReadBytes            int64
+	MaxReadChunks           int
+	MaxLiveTasks            int
+	MaxLiveGrants           int
+	MaxPendingLocalWork     int
+	MaxDelegationDepth      int64
+	MaxGrantOperations      int
+	MaxGrantResources       int
+	MaxGrantRecipients      int
+	MaxTaskAudience         int
+	MaxTaskDependencies     int
+	MaxBudgetScopes         int
+	MaxTaskDescriptionBytes int64
+	MaxAgentTurnSlots       int64
 }
 
 func DefaultLimits() Limits {
@@ -37,13 +45,20 @@ func DefaultLimits() Limits {
 		MaxObjectBytes: maxObjectBytes, MaxOperationBytes: maxOperationBytes,
 		MaxConcurrentWrites: 16, MaxReadBytes: maxOperationBytes, MaxReadChunks: 64,
 		MaxLiveTasks: 4096, MaxLiveGrants: 8192, MaxPendingLocalWork: 4096,
+		MaxDelegationDepth: 8, MaxGrantOperations: 32, MaxGrantResources: 32,
+		MaxGrantRecipients: 64, MaxTaskAudience: 64, MaxTaskDependencies: 32,
+		MaxBudgetScopes: 12, MaxTaskDescriptionBytes: 1 << 20,
+		MaxAgentTurnSlots: 3,
 	}
 }
 func (l Limits) validate() error {
 	if l.MaxObjectBytes <= 0 || l.MaxObjectBytes > maxObjectBytes || l.MaxOperationBytes < l.MaxObjectBytes || l.MaxOperationBytes > maxOperationBytes || l.MaxConcurrentWrites <= 0 || l.MaxReadBytes <= 0 || l.MaxReadBytes > maxOperationBytes || l.MaxReadChunks <= 0 || l.MaxReadChunks > 64 {
 		return ErrInvalid
 	}
-	if l.MaxLiveTasks < 0 || l.MaxLiveGrants < 0 || l.MaxPendingLocalWork < 0 {
+	if l.MaxLiveTasks <= 0 || l.MaxLiveGrants <= 0 || l.MaxPendingLocalWork <= 0 ||
+		l.MaxDelegationDepth < 0 || l.MaxGrantOperations <= 0 || l.MaxGrantResources <= 0 ||
+		l.MaxGrantRecipients <= 0 || l.MaxTaskAudience <= 0 || l.MaxTaskDependencies < 0 ||
+		l.MaxBudgetScopes <= 0 || l.MaxTaskDescriptionBytes <= 0 || l.MaxAgentTurnSlots < 0 {
 		return ErrInvalid
 	}
 	return nil
@@ -137,7 +152,10 @@ func (e IntegrityIssue) Error() string {
 }
 func (e IntegrityIssue) Unwrap() error { return ErrIntegrity }
 
-type Reconciliation struct{ Issues, Completed []IntegrityIssue }
+type Reconciliation struct {
+	Issues, Completed []IntegrityIssue
+	PendingWork       []WorkView
+}
 type RevisionError struct{ Expected, Current uint64 }
 
 func (e *RevisionError) Error() string {
@@ -145,9 +163,14 @@ func (e *RevisionError) Error() string {
 }
 func (e *RevisionError) Unwrap() error { return ErrRevision }
 
-type BusyError struct{}
+type BusyError struct{ Reason string }
 
-func (*BusyError) Error() string { return "agents: private_capacity" }
+func (e *BusyError) Error() string {
+	if e.Reason == "" {
+		return "agents: private_capacity"
+	}
+	return "agents: " + e.Reason
+}
 
 type MaterializationError struct {
 	ReadBinding

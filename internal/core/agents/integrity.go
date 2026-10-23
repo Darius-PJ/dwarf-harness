@@ -62,20 +62,21 @@ func refuseInitialMarkdown(path privateScope) error {
 func (s *Service) scopeHistory(ctx context.Context, ids submissionIDs, scope string, through, revision uint64, visit func(string, Head, string) error) (uint64, error) {
 	var current uint64
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		g, err := decodeGroup(draftsOf(c), c.First)
+		g, scoped, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return err
 		}
-		if g == nil || g.ids.agent != ids.agent || g.ids.session != ids.session || scope == "context" && g.ids.context != ids.context {
+		origin, revisions, indexes := scopedRevisions(g, scoped)
+		if origin.agent != ids.agent || origin.session != ids.session || scope == "context" && origin.context != ids.context {
 			return nil
 		}
-		for i, rev := range g.revisions {
+		for i, rev := range revisions {
 			if rev.Scope != scope || uint64(rev.Revision) > revision {
 				continue
 			}
 			current = uint64(rev.Revision)
 			for _, change := range rev.Changes {
-				if err := visit(change.Slot, Head{change.SHA256, change.Bytes, current, c.First + uint64(g.revisionIndexes[i])}, change.Mode); err != nil {
+				if err := visit(change.Slot, Head{change.SHA256, change.Bytes, current, c.First + uint64(indexes[i])}, change.Mode); err != nil {
 					return err
 				}
 			}

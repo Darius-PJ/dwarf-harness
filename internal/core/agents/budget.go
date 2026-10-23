@@ -6,20 +6,17 @@ import (
 	"math"
 	"slices"
 	"uuid"
-)
 
-type budgetScope struct {
-	Kind string    `json:"kind"`
-	ID   uuid.UUID `json:"id,omitzero"`
-}
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+)
 
 // budgetScopes accepts identities already selected by authority, not additional
 // grants to authorize. Shared ancestors in several chains occupy only one scope.
-func budgetScopes(binding Binding, chains ...[]uuid.UUID) ([]budgetScope, error) {
+func budgetScopes(binding Binding, chains ...[]uuid.UUID) ([]ledger.ScopeKey, error) {
 	if !validID(binding.AgentID) || !validID(binding.ContextID) || len(chains) == 0 {
 		return nil, ErrInvalid
 	}
-	scopes := []budgetScope{{Kind: "colony"}, {Kind: "agent", ID: binding.AgentID}, {Kind: "context", ID: binding.ContextID}}
+	scopes := []ledger.ScopeKey{{Kind: "colony"}, {Kind: "agent", ID: binding.AgentID}, {Kind: "context", ID: binding.ContextID}}
 	for _, chain := range chains {
 		if len(chain) == 0 {
 			return nil, ErrInvalid
@@ -28,10 +25,10 @@ func budgetScopes(binding Binding, chains ...[]uuid.UUID) ([]budgetScope, error)
 			if !validID(id) {
 				return nil, ErrInvalid
 			}
-			scopes = append(scopes, budgetScope{Kind: "grant", ID: id})
+			scopes = append(scopes, ledger.ScopeKey{Kind: "grant", ID: id})
 		}
 	}
-	slices.SortFunc(scopes, func(a, b budgetScope) int {
+	slices.SortFunc(scopes, func(a, b ledger.ScopeKey) int {
 		order := func(kind string) int {
 			switch kind {
 			case "colony":

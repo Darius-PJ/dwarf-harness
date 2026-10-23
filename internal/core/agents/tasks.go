@@ -5,17 +5,9 @@ import (
 	"math"
 	"slices"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
-
-type taskSubject struct {
-	Kind     string           `json:"kind"`
-	Artifact artifactIdentity `json:"artifact"`
-}
-
-type taskAssignmentInput struct {
-	AssignmentID uuid.UUID     `json:"assignment_id"`
-	Assignee     scopedBinding `json:"assignee"`
-}
 
 type taskAssignment struct {
 	id         uuid.UUID
@@ -30,9 +22,9 @@ type taskState struct {
 	audience, dependencies  []uuid.UUID
 	assignment              taskAssignment
 	waitReason              string
-	waitSubject, submission taskSubject
+	waitSubject, submission ledger.SubjectRef
 	failureCause            string
-	failureEvidence         taskSubject
+	failureEvidence         ledger.SubjectRef
 }
 
 type taskDependency struct {
@@ -63,11 +55,11 @@ type taskAction struct {
 	action                  string
 	task                    uuid.UUID
 	audience, dependencies  []uuid.UUID
-	assignment              taskAssignmentInput
+	assignment              ledger.AssignmentInput
 	waitReason              string
-	waitSubject, submission taskSubject
+	waitSubject, submission ledger.SubjectRef
 	failureCause            string
-	failureEvidence         taskSubject
+	failureEvidence         ledger.SubjectRef
 }
 
 type taskRefusal struct{ reason string }
@@ -112,12 +104,8 @@ func transitionTask(current taskState, facts taskFacts, action taskAction, expec
 				return refuse("dependency")
 			}
 		}
-		if facts.actor == "agent" {
-			for _, agent := range action.audience {
-				if !slices.ContainsFunc(facts.recipients, func(b Binding) bool { return b.AgentID == agent }) {
-					return refuse("audience")
-				}
-			}
+		if facts.actor == "agent" && !audienceContained(action.audience, facts.recipients) {
+			return refuse("audience")
 		}
 		next.id, next.state = action.task, "waiting"
 		next.audience, next.dependencies = slices.Clone(action.audience), slices.Clone(action.dependencies)
@@ -148,7 +136,7 @@ func transitionTask(current taskState, facts taskFacts, action taskAction, expec
 					return refuse("dependency")
 				}
 			}
-			next.waitReason, next.waitSubject = "", taskSubject{}
+			next.waitReason, next.waitSubject = "", ledger.SubjectRef{}
 			if action.action == "start" {
 				next.state = "active"
 			}
@@ -166,7 +154,7 @@ func transitionTask(current taskState, facts taskFacts, action taskAction, expec
 			if current.state != "submitted" || !assigned {
 				return refuse("edge")
 			}
-			if current.submission != action.submission {
+			if !equalSubject(current.submission, action.submission) {
 				return refuse("subject")
 			}
 			next.state = "completed"
@@ -175,22 +163,22 @@ func transitionTask(current taskState, facts taskFacts, action taskAction, expec
 				return refuse("edge")
 			}
 			next.state, next.failureCause, next.failureEvidence = "failed", action.failureCause, action.failureEvidence
-			next.waitReason, next.waitSubject, next.submission = "", taskSubject{}, taskSubject{}
+			next.waitReason, next.waitSubject, next.submission = "", ledger.SubjectRef{}, ledger.SubjectRef{}
 		case "cancel":
 			if !slices.Contains([]string{"waiting", "active", "submitted"}, current.state) {
 				return refuse("edge")
 			}
-			next.state, next.waitReason, next.waitSubject, next.submission = "cancelled", "", taskSubject{}, taskSubject{}
+			next.state, next.waitReason, next.waitSubject, next.submission = "cancelled", "", ledger.SubjectRef{}, ledger.SubjectRef{}
 		case "reassign":
 			if !assigned || !slices.Contains([]string{"waiting", "active", "submitted"}, current.state) {
 				return refuse("edge")
 			}
-			next.state, next.waitReason, next.waitSubject, next.submission, next.failureCause, next.failureEvidence = "waiting", "", taskSubject{}, taskSubject{}, "", taskSubject{}
+			next.state, next.waitReason, next.waitSubject, next.submission, next.failureCause, next.failureEvidence = "waiting", "", ledger.SubjectRef{}, ledger.SubjectRef{}, "", ledger.SubjectRef{}
 		default:
 			return refuse("edge")
 		}
 	}
-	if action.assignment != (taskAssignmentInput{}) {
+	if action.assignment != (ledger.AssignmentInput{}) {
 		binding := Binding{action.assignment.Assignee.AgentID, action.assignment.Assignee.ContextID}
 		if !validID(action.assignment.AssignmentID) || !validID(binding.AgentID) || !validID(binding.ContextID) || !facts.newAssignmentUnused || action.assignment.AssignmentID == current.assignment.id {
 			return refuse("assignment")
@@ -209,21 +197,30 @@ func transitionTask(current taskState, facts taskFacts, action taskAction, expec
 		}
 		next.assignment = taskAssignment{id: action.assignment.AssignmentID, generation: current.assignment.generation + 1, binding: binding}
 	}
-	for _, subject := range []taskSubject{action.waitSubject, action.submission, action.failureEvidence} {
-		if subject != (taskSubject{}) && (!validTaskSubject(subject) || !facts.subjectAuthorized) {
+	for _, subject := range []ledger.SubjectRef{action.waitSubject, action.submission, action.failureEvidence} {
+		if !emptySubject(subject) && (!validTaskSubject(subject) || !facts.subjectAuthorized) {
 			return refuse("subject")
 		}
 	}
-	if (action.action == "submit" || action.action == "complete") && action.submission == (taskSubject{}) || action.action == "fail" && action.failureEvidence == (taskSubject{}) {
+	if (action.action == "submit" || action.action == "complete") && emptySubject(action.submission) || action.action == "fail" && emptySubject(action.failureEvidence) {
 		return refuse("subject")
 	}
 	next.version++
 	return next, nil
 }
 
+func audienceContained(audience []uuid.UUID, recipients []Binding) bool {
+	for _, agent := range audience {
+		if !slices.ContainsFunc(recipients, func(b Binding) bool { return b.AgentID == agent }) {
+			return false
+		}
+	}
+	return true
+}
+
 func validTaskArguments(a taskAction) bool {
 	assigning := a.action == "create" || a.action == "claim" || a.action == "assign" || a.action == "reassign"
-	if !assigning && a.assignment != (taskAssignmentInput{}) || assigning && a.action != "create" && a.assignment == (taskAssignmentInput{}) {
+	if !assigning && a.assignment != (ledger.AssignmentInput{}) || assigning && a.action != "create" && a.assignment == (ledger.AssignmentInput{}) {
 		return false
 	}
 	if a.action != "create" && (len(a.audience) != 0 || len(a.dependencies) != 0) {
@@ -233,24 +230,32 @@ func validTaskArguments(a taskAction) bool {
 		if !slices.Contains([]string{"dependency", "input", "review", "explicit_hold"}, a.waitReason) {
 			return false
 		}
-	} else if a.waitReason != "" || a.waitSubject != (taskSubject{}) {
+	} else if a.waitReason != "" || !emptySubject(a.waitSubject) {
 		return false
 	}
-	if a.action != "submit" && a.action != "complete" && a.submission != (taskSubject{}) {
+	if a.action != "submit" && a.action != "complete" && !emptySubject(a.submission) {
 		return false
 	}
 	if a.action == "fail" {
 		if !validScopedToken(a.failureCause) {
 			return false
 		}
-	} else if a.failureCause != "" || a.failureEvidence != (taskSubject{}) {
+	} else if a.failureCause != "" || !emptySubject(a.failureEvidence) {
 		return false
 	}
 	return true
 }
 
-func validTaskSubject(subject taskSubject) bool {
-	return subject.Kind == "artifact" && subject.Artifact.SourceSequence > 0 && subject.Artifact.SourceSequence <= math.MaxInt64 && subject.Artifact.Bytes >= 0
+func validTaskSubject(subject ledger.SubjectRef) bool {
+	return subject.Kind == "artifact" && subject.Members == nil && validResource(ledger.Resource{Kind: "artifact", Artifact: subject.Artifact})
+}
+
+func equalSubject(a, b ledger.SubjectRef) bool {
+	return a.Kind == b.Kind && a.Artifact == b.Artifact && bytes.Equal(a.Members, b.Members)
+}
+
+func emptySubject(subject ledger.SubjectRef) bool {
+	return equalSubject(subject, ledger.SubjectRef{})
 }
 
 func validScopedToken(token string) bool {
