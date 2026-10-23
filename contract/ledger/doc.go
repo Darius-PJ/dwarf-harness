@@ -1710,7 +1710,7 @@
 //
 // # Scoped authority, tasks and non-paid work (F3-11)
 //
-// F3-11 is proposed for freeze (D125). It adds ten version-1 types to
+// F3-11 is frozen (D140). It adds ten version-1 types to
 // ledger-format version 1; Defined contains thirty-eight types. Only the
 // internal/core/agents producer writes this family, through Submit. Authorization
 // and resource metadata, task/assignment metadata, work/usage metadata and
@@ -1905,7 +1905,7 @@
 // no extra context ceiling), though context is always in the scope set.
 //
 // Admission has expected_version=0/version=1 and a closed kind turn/local.
-// Turn operation is turn.start, with context target; all four local-only fields
+// Turn operation is turn.start, with a context target whose scope is context; all four local-only fields
 // are absent. Local operations are file.read/search/write/edit with workspace
 // target; parent_turn_id, arguments_sha256, tool_schema=1 and positive max_bytes
 // are required. Scope sets have at least four sorted distinct entries and are
@@ -2026,7 +2026,7 @@
 //	local.end / turn.end / turn.cancel: work_id, outcome
 //	private.write: changes (F3-10 canonical change order, no previous_sha256)
 //	private.read: read
-//	artifact.read: artifact, max_bytes
+//	artifact.read: artifact, max_bytes (at least artifact.bytes)
 //
 // New assignment input occurs exactly on claim/assign/reassign, optionally
 // create; generation and assigner derive. Mutation conditional fields match the

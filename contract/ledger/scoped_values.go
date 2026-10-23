@@ -13,7 +13,7 @@ import (
 	"uuid"
 )
 
-// MaxScopedPayloadBytes is F3-11's complete payload cap, proposed for freeze (D125).
+// MaxScopedPayloadBytes is F3-11's complete payload cap, frozen (D140).
 const MaxScopedPayloadBytes = 64 << 10
 
 const maxResourcePathBytes = 1024

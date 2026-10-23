@@ -50,8 +50,8 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // family, frozen (D130): TypeGraphAnalysisStarted, TypeGraphAnalysisProgress,
 // TypeGraphDeltaChunk and TypeGraphVersionCommitted; and F3-10, frozen
 // (D139): TypeRuntimeAgentRegistered, TypeRuntimeContextCreated,
-// TypePrivateRevision and TypeRuntimeCommandReceipt; and F3-11, proposed for
-// freeze (D125): TypeRuntimeGrantIssued, TypeRuntimeGrantRevoked,
+// TypePrivateRevision and TypeRuntimeCommandReceipt; and F3-11, frozen
+// (D140): TypeRuntimeGrantIssued, TypeRuntimeGrantRevoked,
 // TypeRuntimeTaskChanged, TypeRuntimeCapacityConfigured, TypeRuntimeWorkAdmitted,
 // TypeRuntimeWorkDispatched, TypeRuntimeWorkEnded, TypeRuntimeLocalUsed,
 // TypePrivateScopedRevision and TypeRuntimeScopedReceipt. All thirty-eight are

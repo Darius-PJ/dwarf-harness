@@ -18,8 +18,8 @@ type ScopedExpected struct {
 	AuthorityVersion *int64    `json:"authority_version,omitempty"`
 }
 
-// ScopedSubmission is schema 2's canonical producer encoding, proposed for
-// freeze (D125). Arguments must be the corresponding concrete argument type
+// ScopedSubmission is schema 2's canonical producer encoding, frozen
+// (D140). Arguments must be the corresponding concrete argument type
 // below, never a map, pointer or arbitrary JSON. Command IDs and derived facts
 // are deliberately absent. Encode returns compact JSON; errors wrap ErrInvalid.
 type ScopedSubmission struct {

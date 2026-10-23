@@ -8,7 +8,7 @@ import (
 	"uuid"
 )
 
-// F3-11's version-1 record types are proposed for freeze (D125).
+// F3-11's version-1 record types are frozen (D140).
 const (
 	TypeRuntimeGrantIssued        = "runtime.grant_issued"
 	TypeRuntimeGrantRevoked       = "runtime.grant_revoked"
