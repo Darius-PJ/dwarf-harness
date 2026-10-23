@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -219,7 +220,12 @@ func TestJobZeroWithObserverHandle(t *testing.T) {
 			}
 			observed := make(chan observation, 1)
 			release := make(chan struct{})
+			var phases testPhaseRecorder
+			var phaseMu sync.Mutex
 			e.observe = func(phase string, r *nativeRun) {
+				phaseMu.Lock()
+				phases.record(phase, r)
+				phaseMu.Unlock()
 				if phase != "root_exited" {
 					return
 				}
@@ -241,11 +247,16 @@ func TestJobZeroWithObserverHandle(t *testing.T) {
 				operation = "descendant-natural"
 			}
 			request := testRequest(t, operation)
+			guard := testAdmissionWait(t, request.Limits, request.Limits.Wall+request.Limits.StopGrace)
 			go func() { r, err := e.Run(ctx, request); result <- runResult{r, err} }()
 			var observedRun observation
 			select {
 			case observedRun = <-observed:
-			case <-time.After(10 * time.Second):
+			case <-guard:
+				phaseMu.Lock()
+				data, logErr := json.Marshal(map[string]any{"phaseScope": testPhaseScope, "phases": phases})
+				phaseMu.Unlock()
+				t.Logf("ADMISSION_BARRIER_EVIDENCE %s marshalError=%v", data, logErr)
 				close(release)
 				t.Fatal("root exit was not observed")
 			}
@@ -323,6 +334,7 @@ func TestCancelWaitsForEveryDescendant(t *testing.T) {
 	}
 	request := testRequest(t, "descendant-quiet")
 	result := make(chan runResult, 1)
+	guard := testAdmissionWait(t, request.Limits, request.Limits.Wall+request.Limits.StopGrace)
 	go func() { r, err := e.Run(ctx, request); result <- runResult{r, err} }()
 	select {
 	case err := <-ready:
@@ -331,7 +343,7 @@ func TestCancelWaitsForEveryDescendant(t *testing.T) {
 		}
 	case early := <-result:
 		t.Fatalf("root exit and stdio EOF were mistaken for tree closure: %+v %v", early.receipt, early.err)
-	case <-time.After(10 * time.Second):
+	case <-guard:
 		t.Fatal("descendant was not observed")
 	}
 	if r, err := e.Run(context.Background(), request); !errors.Is(err, ErrBusy) || r.State != NotAdmitted || r.RunID != (Receipt{}).RunID {
@@ -367,10 +379,11 @@ func TestConcurrentRunIsBusy(t *testing.T) {
 	}
 	request := testRequest(t, "held")
 	result := make(chan runResult, 1)
+	guard := testAdmissionWait(t, request.Limits, request.Limits.Wall+request.Limits.StopGrace)
 	go func() { r, err := e.Run(context.Background(), request); result <- runResult{r, err} }()
 	select {
 	case <-ready:
-	case <-time.After(10 * time.Second):
+	case <-guard:
 		close(release)
 		t.Fatal("suspended barrier not reached")
 	}

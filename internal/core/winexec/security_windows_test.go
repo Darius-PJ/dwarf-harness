@@ -44,6 +44,9 @@ func testRequest(t *testing.T, operation ...string) Request {
 	// writes: setup reached 7.48s in the check and 11.81s in a heavier load.
 	// Wall rows use this one admission pair; the resource grace stays 10s
 	// until its loaded stop-path latency is attributed, not guessed.
+	// Admission-anchored root-exit, descendant, suspended and peer barriers
+	// also include setup: each derives Wall+StopGrace (30s), rather than the
+	// former 10s guard that failed beside loaded setups of 7.95-9.83s.
 	//
 	// Per-row overrides, each preserving its tested boundary:
 	// - natural-exit/wall: grace=shared Wall+StopGrace (30s), so natural exit
@@ -67,9 +70,21 @@ func testRequest(t *testing.T, operation ...string) Request {
 	// Loopback probes use 2s; mapped release waits 300ms after closed_fence.
 	// Other fixture guards (not request limits) remain: awaitResult=30s;
 	// supervisor parent/child=40s/35s, handshake=15s; native exit=3s/10s;
-	// other work-file, root-exit, suspended and peer barriers=10s; Git=20s/10s;
+	// other resume-anchored work-file barriers=10s; Git=20s/10s;
 	// junction creation=5s. Polls of 10ms and zero-time queries are not budgets.
 	return Request{Program: "payload.exe", Args: args, Files: []InputFile{{Path: "payload.exe", Data: image}}, Deadline: time.Now().Add(25 * time.Second), Limits: Limits{Wall: 20 * time.Second, UserCPU: 10 * time.Second, CPUPercent: 100, JobCommitBytes: 2 << 30, Processes: 4, InputBytes: uint64(len(image)) + 1<<20, OutputBytes: 16384, StopGrace: 10 * time.Second}}
+}
+
+func testAdmissionWait(t *testing.T, limits Limits, budget time.Duration) <-chan time.Time {
+	t.Helper()
+	// The fixture must not preempt the shared admission-and-stop allowance.
+	// Check the actual timer budget so an accidental literal override fails.
+	if want := limits.Wall + limits.StopGrace; budget != want {
+		t.Fatalf("admission barrier budget=%s, shared Wall+StopGrace=%s", budget, want)
+	}
+	timer := time.NewTimer(budget)
+	t.Cleanup(func() { timer.Stop() })
+	return timer.C
 }
 func testExecutor(t *testing.T) *Executor {
 	t.Helper()

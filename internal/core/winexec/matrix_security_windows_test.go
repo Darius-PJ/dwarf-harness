@@ -34,10 +34,12 @@ func TestSeparateRunsCannotReadPeerInput(t *testing.T) {
 	defer unblock()
 	var results [2]chan runResult
 	var unchanged [2]error
+	var sharedLimits Limits
 	for i := range results {
 		e := testExecutor(t)
 		nonce := fmt.Sprintf("authorized-peer-%d", i)
 		request := testRequest(t, "peer", nonce)
+		sharedLimits = request.Limits
 		request.Files = append(request.Files, InputFile{Path: "nonce", Data: []byte(nonce)})
 		e.observe = func(phase string, r *nativeRun) {
 			switch phase {
@@ -70,7 +72,7 @@ func TestSeparateRunsCannotReadPeerInput(t *testing.T) {
 		select {
 		case peer := <-ready:
 			peers[peer.index] = peer
-		case <-time.After(10 * time.Second):
+		case <-testAdmissionWait(t, sharedLimits, sharedLimits.Wall+sharedLimits.StopGrace):
 			t.Fatal("both real runs did not reach the suspended boundary")
 		}
 	}

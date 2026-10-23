@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +25,12 @@ var testGitSeedDir string
 type testGitFixture struct {
 	root, path, version, main string
 	env                       []string
+	timings                   []testGitCommandTiming
+}
+
+type testGitCommandTiming struct {
+	Args    []string
+	Elapsed time.Duration
 }
 
 func TestMain(m *testing.M) {
@@ -53,11 +61,12 @@ func testGitEnvironment(home string) []string {
 }
 
 func (f testGitFixture) command(ctx context.Context, args ...string) (string, error) {
+	started := time.Now()
 	cmd := exec.CommandContext(ctx, f.path, args...)
 	cmd.Dir, cmd.Env = f.root, f.env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %q: %w: %s", args, err, out)
+		return "", fmt.Errorf("git %q elapsed=%s: %w: %s", args, time.Since(started), errors.Join(err, ctx.Err()), out)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -83,11 +92,17 @@ var testGitSeed = sync.OnceValues(func() (testGitFixture, error) {
 	f.env = testGitEnvironment(home)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if f.version, err = f.command(ctx, "version"); err != nil {
+	command := func(args ...string) (string, error) {
+		started := time.Now()
+		out, err := f.command(ctx, args...)
+		f.timings = append(f.timings, testGitCommandTiming{Args: args, Elapsed: time.Since(started)})
+		return out, err
+	}
+	if f.version, err = command("version"); err != nil {
 		return f, err
 	}
 	for _, args := range [][]string{{"init", "--object-format=sha1", "-b", "noncanonical"}, {"config", "core.autocrlf", "false"}} {
-		if _, err := f.command(ctx, args...); err != nil {
+		if _, err := command(args...); err != nil {
 			return f, err
 		}
 	}
@@ -95,13 +110,13 @@ var testGitSeed = sync.OnceValues(func() (testGitFixture, error) {
 		return f, err
 	}
 	for _, args := range [][]string{{"add", "--", "base.txt"}, {"commit", "-m", "winexec denial fixture"}} {
-		if _, err := f.command(ctx, args...); err != nil {
+		if _, err := command(args...); err != nil {
 			return f, err
 		}
 	}
-	f.main, err = f.command(ctx, "rev-parse", "refs/heads/noncanonical")
+	f.main, err = command("rev-parse", "refs/heads/noncanonical")
 	if err == nil {
-		_, err = f.command(ctx, "update-ref", "refs/heads/main", f.main)
+		_, err = command("update-ref", "refs/heads/main", f.main)
 	}
 	return f, err
 })
@@ -109,6 +124,7 @@ var testGitSeed = sync.OnceValues(func() (testGitFixture, error) {
 func testPrivateGit(t *testing.T) testGitFixture {
 	t.Helper()
 	seed, err := testGitSeed()
+	t.Logf("GIT_SEED_EVIDENCE commands=%+v error=%v", seed.timings, err)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +144,61 @@ func testPrivateGit(t *testing.T) testGitFixture {
 		t.Fatalf("private Git copy changed main: %q %v", main, err)
 	}
 	return f
+}
+
+func TestGitCommandCancellationPreservesCause(t *testing.T) {
+	t.Parallel()
+	path, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := testGitFixture{path: path, root: t.TempDir(), env: testGitEnvironment(t.TempDir())}
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	// Use the seed's existing allowance, but cancel on an actual Git request,
+	// not a delay or an already-canceled context that never starts a process.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	if err := listener.SetDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	var commandErr error
+	done := make(chan struct{})
+	go func() {
+		_, commandErr = f.command(ctx, "ls-remote", "git://"+listener.Addr().String()+"/held")
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(conn, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	// Cancel while Git waits for the protocol reply. Release the connection
+	// before joining: a Git launcher child can retain CombinedOutput's pipe.
+	cancel()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	var exitErr *exec.ExitError
+	if !errors.Is(commandErr, context.Canceled) || !errors.As(commandErr, &exitErr) {
+		t.Fatalf("live Git cancellation lost context or native exit cause: %v", commandErr)
+	}
+	t.Logf("live Git request canceled; native exit=%d joined error=%v", exitErr.ExitCode(), commandErr)
 }
 
 // The authorized host connects first. After reset, a pinned pending native
