@@ -19,20 +19,31 @@ var (
 	ErrMaterialization = errors.New("agents: committed revision not materialized")
 )
 
-// Limits bound preparation and reads, not the validity of historical objects.
+// Limits bound producer admission, preparation and reads, not historical state.
 type Limits struct {
 	MaxObjectBytes      int64
 	MaxOperationBytes   int64
 	MaxConcurrentWrites int
 	MaxReadBytes        int64
 	MaxReadChunks       int
+	// Zero disables new admissions of the corresponding kind.
+	MaxLiveTasks        int
+	MaxLiveGrants       int
+	MaxPendingLocalWork int
 }
 
 func DefaultLimits() Limits {
-	return Limits{maxObjectBytes, maxOperationBytes, 16, maxOperationBytes, 64}
+	return Limits{
+		MaxObjectBytes: maxObjectBytes, MaxOperationBytes: maxOperationBytes,
+		MaxConcurrentWrites: 16, MaxReadBytes: maxOperationBytes, MaxReadChunks: 64,
+		MaxLiveTasks: 4096, MaxLiveGrants: 8192, MaxPendingLocalWork: 4096,
+	}
 }
 func (l Limits) validate() error {
 	if l.MaxObjectBytes <= 0 || l.MaxObjectBytes > maxObjectBytes || l.MaxOperationBytes < l.MaxObjectBytes || l.MaxOperationBytes > maxOperationBytes || l.MaxConcurrentWrites <= 0 || l.MaxReadBytes <= 0 || l.MaxReadBytes > maxOperationBytes || l.MaxReadChunks <= 0 || l.MaxReadChunks > 64 {
+		return ErrInvalid
+	}
+	if l.MaxLiveTasks < 0 || l.MaxLiveGrants < 0 || l.MaxPendingLocalWork < 0 {
 		return ErrInvalid
 	}
 	return nil
