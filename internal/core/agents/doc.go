@@ -24,8 +24,9 @@
 //
 // Open consumes complete committed groups, including intervening workspace
 // records, and reconstructs identities, private heads, scratch state, grants,
-// tasks, capacity, usage and occupied work. F3-10 and F3-11 are decoded as
-// distinct families before applying private changes to the same scope head.
+// tasks, capacity, usage, occupied work and review request slots. F3-10, F3-11
+// and F3-12 are decoded as distinct families before applying private changes
+// to the same scope head.
 // Open verifies ledger-selected objects and inspects materializations. It reads
 // no clock, appends no record and dispatches no work. Reconciliation.PendingWork
 // reports unreleased admissions as recovery_pending without inferring an
@@ -175,6 +176,162 @@
 // preflight repeats authority and state checks, then validates the whole group
 // with the same reducer used by Open. Publication, verified reads and private
 // materialization do not hold the service lock.
+//
+// # Review and failure decisions
+//
+// RequestReview, RequestFailure, ResolveReview and ResolveFailure record a
+// semantic judgment of bound inputs through the F3-12 family. They execute no
+// check: CheckSHA256 and ConfigSHA256 identify the checklist and configuration
+// judged against and are verified against nothing. An approve completes the
+// task and creates no promotion or gate state. Subjects and evidence are
+// artifact or private_revision references, verified by exact ledger source
+// identity and metadata only; every other kind is ErrDenied, and no body or
+// Markdown is read or copied. RequiredEvidence is nonempty and bounded by
+// Limits.MaxReviewEvidence (16 by default; ErrTooLarge). The producer orders a
+// copy of it by compact encoding, and a duplicate reference is ErrInvalid.
+//
+// A live task holds at most one request slot. A request names
+// ReplacesRequestID exactly when a pending or rejected slot exists, and then
+// names that slot; anything else is ErrReviewStale. A request bumps no task
+// version. It binds the task's version, assignment, generation, assignee,
+// subject and acceptance digest, the reviewer principal, the colony authority
+// version, which must be current, and a deadline. A review request needs a
+// submitted task; a failure request may name an assigned task in any
+// nonterminal state, with a submitted task's own subject. A reject keeps the
+// slot; an approve, a fail, a replacement, a cancellation, a reassignment or
+// a task version change ends it. While the current version and assignment
+// hold a pending or rejected slot, a direct TransitionTask complete or fail
+// returns ErrReviewRequired, for the owner too, live and at replay. The
+// owner's escapes are a replacement naming himself as reviewer followed by his
+// own result, a cancellation or a reassignment. A direct fail citing a
+// private_revision subject is still ErrDenied by the task-subject rule, before
+// that guard.
+//
+// A requester proves its current task.complete chain (review) or task.fail
+// chain (failure) naming the reviewer's binding as a recipient; a failure
+// requester must be the assignee. The reviewer proves its own chain for the
+// same operation on the task. Both participants need current read rights on
+// the subject and every evidence reference: an artifact through an
+// artifact.read chain or, for a task description, the task's audience and
+// task.inspect; a private_revision only within the participant's own agent,
+// and its own context for context scope, through private.read. The owner
+// needs no chain. A result rechecks the reviewer's selected chain, the
+// requester's recorded grant, the task's assignment and generation and both
+// participants' read rights. It does not require the colony authority version
+// unchanged, so an unrelated grant issue stales nothing, while a revocation in
+// either chain is ErrDenied. An agent command charges one local unit to the
+// colony, agent, context and grant scopes of its own chain; an owner command
+// charges nothing.
+//
+// A new command is judged in two passes, in this order: the caller's current
+// chain, under the service lock before any lookup; a same-ID match, which
+// answers at once; the reducer's head (the request and its slot, the named
+// reviewer, the task's version as RevisionError, its assignment and
+// generation as ErrReviewStale, its state, acceptance and submission, both
+// chains); trusted time on the first clock sample; the evidence and scope
+// bounds; the process slot and an agent's reserved unit (BusyError); the
+// source witnesses, prepared without the lock in one batch; every guard again
+// under the lock at the refreshed prefix with the second sample; the whole
+// reducer, which judges both participants' read rights and the sources, then
+// time, then the kernel transition and its charge; and one Submit. A caller
+// already past the head that lacks subject rights and is late therefore gets
+// ErrReviewExpired; the deadline is a member of its own binding, so that
+// discloses nothing.
+//
+// A result naming a replaced or terminal request is ErrReviewStale for its
+// named reviewer. Any other caller gets ErrDenied for replaced, terminal and
+// unused request IDs alike. ReviewStatus shows an Agent only a request it made
+// or was named to review, with current task.inspect and read rights;
+// ReviewCommandStatus shows an Agent only its own receipts, with the decision
+// authority. Hidden and nonexistent requests and receipts are the same
+// ErrDenied; the owner's ReviewCommandStatus returns ErrUnavailable for an
+// absent receipt.
+//
+// The review clock is the service's own UTC wall clock, never a caller's or a
+// record's time. It is sampled after the lookup and again under the lock
+// before Submit; the second sample is the record's observed_utc_ns. A request
+// needs a sample before its deadline, a result a sample at or before it;
+// otherwise ErrReviewExpired. A failed, nonpositive or regressed sample is
+// ErrReviewClock. The floor is the highest of the replayed envelope times,
+// the prior F3-12 observations and every sample this incarnation has read
+// successfully, including one read by a call a later guard refused. Neither
+// refusal consumes or poisons anything. Open, ReviewStatus,
+// ReviewCommandStatus and a matched retry read no clock. The store holds an
+// envelope time when its clock goes back, so a held envelope never extends a
+// deadline, and a backwards clock refuses new review decisions until it
+// passes the floor. A deadline bounds the final decision sample, not the
+// disk flush.
+//
+// A same-ID, same-digest retry returns the original receipt before the slot
+// and request-ID checks, the deadline and the limits, and without a clock,
+// but after the caller's current chain and read rights on every reference it
+// names; a changed digest is ErrCommandMismatch. ReviewReceipt is the same
+// value from the producer, a retry and ReviewCommandStatus: it names the
+// receipt's own sequence and its effect's, never a read prefix. A request
+// group has three records; an approve or fail has four (command, result, the
+// task description's body unpin, receipt) and a reject three. The
+// projection, the book and the receipt are installed before the
+// acknowledgement. A commit that lands at the preflighted prefix installs the
+// reducer's plan with only its envelope times read back; a duplicate or a
+// non-adjacent commit refreshes and looks up the command as F3-11 does. An
+// uncertain write poisons the service, and cancellation after Submit cannot
+// undo the commit.
+//
+// Open replays F3-12 groups through the same reducer and refuses an
+// inconsistent one, including a receipt whose outcome disagrees with its
+// effect. A pending request stays pending with its bound deadline: nothing
+// expires, resumes, dispatches or appends at Open. A crash before Submit
+// consumes no command ID and leaves no reservation; a committed result whose
+// acknowledgement was lost stays one transition, one unpin and one charge,
+// and its retry returns the original receipt. The injected-crash tests prove
+// this bookkeeping; they are not power-loss or isolation proofs.
+//
+// Task facts have one shared reading. An approve or fail review_result is a
+// task transition that advances the task's version and state exactly as a
+// task_changed complete or fail would, without a task_changed record. Task
+// loaders, history, TaskStatus and dependent readiness consume both families
+// in ledger order; a consumer of F3-11 alone cannot reconstruct the tasks of
+// a log holding F3-12. Private transcript, memory or handoff text, artifact
+// bodies, Markdown and a core/state.json file never decide a task or request:
+// the state file is ignored, and foreign Markdown fences its scope with
+// ErrIntegrity.
+//
+// Limits recorded with the ruling: (1) after a reject, F3-11's frozen task
+// table has no submitted to active transition, so the ways on are a
+// replacement and then an approve or fail, a cancellation or a reassignment;
+// revise and resubmit needs a later type version. (2) A pending failure
+// request on an active task goes stale when the assignee submits or waits,
+// since its version moves; the requester requests again. (3) A requester must
+// hold the decision authority it delegates, so an assignee without
+// task.complete cannot request its own review; the completing authority or
+// the owner does. (4) The guard binds the owner, whose escapes are those
+// above. (5) A backwards system clock refuses new review decisions until it
+// passes the floor.
+//
+// Costs, as built and as measured. Live state is one slot per live task and
+// the maxRequest and maxCommand watermarks; there is no all-request index or
+// snapshot. A fresh command or request ID above its watermark needs no
+// history scan; one at or below it scans history. A new command reads its
+// witnesses once, in one batch from the start of the segment holding the
+// earliest witness to the commit holding the latest. With 64 MiB segments
+// that start is in practice the log's, so the batch costs the witness's
+// position, where the replaced form read the whole prefix. After Submit one
+// commit's envelope times are read back. A cold receipt or request lookup
+// scans the whole history; an Agent's retry reads each task-description
+// source once under the lock; a result on a replaced or terminal request
+// loads that request from history twice. Every new decision and every
+// replayed F3-12 group rechecks both participants' read rights; for an
+// Agent's artifact reference that goes through artifactAuthority, which
+// iterates every grant the participant holds and loads each task resource's
+// task, and a terminal task is evicted from the live projection, so each such
+// load is a cold whole-history scan. A reviewer that keeps one grant per
+// reviewed task therefore pays about the history length times its grants on
+// finished tasks for each decision, and Open about that for each of its F3-12
+// groups. Measured in ticket 12's S4 on one Windows host with that workload,
+// Open's time grew superlinearly with the history and this read-rights path
+// held most of a decision's CPU; the figures are in the S4 evidence. They are
+// bookkeeping figures, not an SLA, a capacity or a population limit, and no
+// fix is implied here.
 //
 // # Materialization and integrity
 //

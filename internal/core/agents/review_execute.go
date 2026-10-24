@@ -224,8 +224,9 @@ func (s *Service) retryReviewLocked(ctx context.Context, input reviewInput, l re
 
 // reviewGuardsLocked is step 4 for a new command, in planReview's order: the
 // caller as the request's named reviewer, the reducer's head, a witness
-// failure, then trusted time. The clock is read after dedup but judged last; a
-// failed or regressed sample leaves this incarnation's floor unchanged.
+// failure, then trusted time. The clock is read after dedup and judged last,
+// but every successfully read sample raises this incarnation's floor before
+// the head, even when a later guard refuses the call; a failed sample cannot.
 func (s *Service) reviewGuardsLocked(ctx context.Context, input reviewInput, witnessErr error) (int64, error) {
 	if input.result {
 		slot, found, err := s.loadReview(ctx, input.requestID, s.p.through)
@@ -237,6 +238,9 @@ func (s *Service) reviewGuardsLocked(ctx context.Context, input reviewInput, wit
 		}
 	}
 	sample, clockErr := s.deps.reviewClock()
+	if clockErr == nil {
+		s.reviewSample = max(s.reviewSample, sample)
+	}
 	request, result := reviewRecords(input, sample)
 	if _, err := s.reviewHeadAt(ctx, request, result, s.p.through+1); err != nil {
 		return 0, err
@@ -295,8 +299,7 @@ func matchReviewReceipt(match commandMatch, input reviewInput) (ReviewReceipt, e
 	if err != nil {
 		return ReviewReceipt{}, err
 	}
-	last := g.first + uint64(g.receiptIndex)
-	return ReviewReceipt{RuntimeReviewReceipt: copy, EffectSequence: g.first + 1, Sequence: last, ThroughSequence: last}, nil
+	return ReviewReceipt{RuntimeReviewReceipt: copy, EffectSequence: g.first + 1, Sequence: g.first + uint64(g.receiptIndex)}, nil
 }
 
 func (s *Service) reviewProducerGuards(input reviewInput, usage *ledger.ReviewUsage) error {

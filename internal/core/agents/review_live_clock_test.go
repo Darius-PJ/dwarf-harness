@@ -180,6 +180,21 @@ func TestReviewDeadlineAndClock(t *testing.T) {
 		}
 		assertReviewRefusal(t, f, func() error { _, err := resolveLiveReview(f, nil, result); return err }, ErrReviewClock)
 	})
+	// A sample read on a call the head refuses still raises this incarnation's
+	// floor, so a later regressed sample cannot decide anything.
+	t.Run("refused-call-sample-raises-incarnation-floor", func(t *testing.T) {
+		t.Parallel()
+		f, q := liveReviewFixture(t)
+		q.Binding.Reviewer = reviewOwnerPrincipal()
+		ctx := context.Background()
+		entry := q.Binding.DeadlineUTCNS - 100
+		stale := q
+		stale.ReplacesRequestID = privateID(1294)
+		f.service.deps.reviewClock = func() (int64, error) { return entry, nil }
+		assertReviewRefusal(t, f, func() error { _, err := f.service.RequestReview(ctx, reviewOwner(), stale); return err }, ErrReviewStale)
+		f.service.deps.reviewClock = func() (int64, error) { return entry - 1, nil }
+		assertReviewRefusal(t, f, func() error { _, err := f.service.RequestReview(ctx, reviewOwner(), q); return err }, ErrReviewClock)
+	})
 	t.Run("lost-ack-duplicate-never-samples", func(t *testing.T) {
 		t.Parallel()
 		f, q := liveReviewFixture(t)

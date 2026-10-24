@@ -38,6 +38,10 @@ func TestReviewProseCannotDecideTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bookBefore, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertInert := func() {
 		t.Helper()
 		task, err := f.service.TaskStatus(ctx, TaskLookup{TaskID: q.Binding.TaskID})
@@ -51,6 +55,15 @@ func TestReviewProseCannotDecideTask(t *testing.T) {
 		ready, err := f.service.TaskStatus(ctx, TaskLookup{TaskID: dependent})
 		if err != nil || ready.Readiness != "waiting_blocked" || ready.Reason != "dependency" {
 			t.Fatalf("untyped text unblocked dependent: %+v %v", ready, err)
+		}
+		before := f.store.Durable()
+		if _, err := f.service.TransitionTask(ctx, reviewOwner(), reviewTaskMutation(t, f.service, "complete")); !errors.Is(err, ErrReviewRequired) || f.store.Durable() != before {
+			t.Fatalf("untyped text lifted the review guard: %v", err)
+		}
+		book, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+		book.ThroughSequence = bookBefore.ThroughSequence
+		if err != nil || !reflect.DeepEqual(book, bookBefore) {
+			t.Fatalf("untyped text changed the review charge: %+v %+v %v", book, bookBefore, err)
 		}
 	}
 	assertInert()

@@ -32,11 +32,12 @@ type ReviewView struct {
 }
 
 // ReviewReceipt reports an immutable historical decision, never current success.
+// The producer, a retry and ReviewCommandStatus return the same value for the
+// same committed receipt: it names the receipt's own sequences, not a prefix.
 type ReviewReceipt struct {
 	ledger.RuntimeReviewReceipt
-	EffectSequence  uint64
-	Sequence        uint64
-	ThroughSequence uint64
+	EffectSequence uint64
+	Sequence       uint64
 }
 
 func (s *Service) ReviewStatus(ctx context.Context, request ReviewLookup) (ReviewView, error) {
@@ -185,5 +186,5 @@ func (s *Service) reviewCommandStatus(ctx context.Context, bound *submissionIDs,
 	if err != nil {
 		return ReviewReceipt{}, err
 	}
-	return ReviewReceipt{RuntimeReviewReceipt: copy, EffectSequence: g.first + 1, Sequence: g.first + uint64(g.receiptIndex), ThroughSequence: s.p.through}, nil
+	return ReviewReceipt{RuntimeReviewReceipt: copy, EffectSequence: g.first + 1, Sequence: g.first + uint64(g.receiptIndex)}, nil
 }
