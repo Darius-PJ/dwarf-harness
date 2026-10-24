@@ -194,3 +194,77 @@ func TestScopedTaskRefusals(t *testing.T) {
 		})
 	}
 }
+
+func TestScopedTaskReviewedFailureRequiresAuthority(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name   string
+		change func(*taskState, *taskFacts, *taskExpectation)
+		refuse bool
+	}{
+		{"authorized_reviewer_waiting", func(s *taskState, f *taskFacts, e *taskExpectation) {}, false},
+		{"authorized_reviewer_active", func(s *taskState, f *taskFacts, e *taskExpectation) { s.state = "active" }, false},
+		{"authorized_reviewer_submitted", func(s *taskState, f *taskFacts, e *taskExpectation) {
+			s.state, s.submission = "submitted", taskArtifact()
+		}, false},
+		{"direct_non_assignee_still_refused", func(s *taskState, f *taskFacts, e *taskExpectation) { f.reviewedFailure = false }, true},
+		{"fact_without_authority_refused", func(s *taskState, f *taskFacts, e *taskExpectation) { f.authorized = false }, true},
+		{"fact_without_subject_authority_refused", func(s *taskState, f *taskFacts, e *taskExpectation) { f.subjectAuthorized = false }, true},
+		{"fact_without_known_principal_refused", func(s *taskState, f *taskFacts, e *taskExpectation) { f.actor = "reviewer" }, true},
+		{"fact_cannot_skip_version", func(s *taskState, f *taskFacts, e *taskExpectation) { e.version-- }, true},
+		{"fact_cannot_skip_assignment", func(s *taskState, f *taskFacts, e *taskExpectation) { e.assignment = privateID(99) }, true},
+		{"fact_cannot_fail_unassigned_task", func(s *taskState, f *taskFacts, e *taskExpectation) {
+			s.assignment, e.assignment, e.generation = taskAssignment{}, uuid.UUID{}, 0
+		}, true},
+		{"direct_assignee_preserved", func(s *taskState, f *taskFacts, e *taskExpectation) {
+			f.origin, f.reviewedFailure = s.assignment.binding, false
+		}, false},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			current, facts := taskRuleFixture()
+			current.waitReason, current.waitSubject = "review", taskArtifact()
+			facts.origin, facts.reviewedFailure = Binding{privateID(4), privateID(5)}, true
+			expected := taskExpectation{current.version, current.assignment.id, current.assignment.generation}
+			row.change(&current, &facts, &expected)
+			action := taskAction{action: "fail", task: current.id, failureCause: "tool_failed", failureEvidence: taskArtifact()}
+			next, err := transitionTask(current, facts, action, expected)
+			if row.refuse {
+				if !errors.Is(err, ErrInvalid) || !reflect.DeepEqual(next, current) {
+					t.Fatalf("review fact bypassed refusal: %+v, %v", next, err)
+				}
+				return
+			}
+			if err != nil || next.state != "failed" || next.version != current.version+1 ||
+				next.assignment != current.assignment || next.failureCause != action.failureCause ||
+				!equalSubject(next.failureEvidence, action.failureEvidence) || next.waitReason != "" ||
+				!emptySubject(next.waitSubject) || !emptySubject(next.submission) {
+				t.Fatalf("reviewed failure = %+v, %v", next, err)
+			}
+		})
+	}
+}
+
+func TestScopedTaskReviewFactCannotBypassOtherOrigins(t *testing.T) {
+	t.Parallel()
+	for _, action := range []string{"start", "wait", "resume", "submit"} {
+		t.Run(action, func(t *testing.T) {
+			t.Parallel()
+			current, facts := taskRuleFixture()
+			facts.origin, facts.reviewedFailure = Binding{privateID(4), privateID(5)}, true
+			request := taskAction{action: action, task: current.id}
+			switch action {
+			case "wait":
+				current.state, request.waitReason = "active", "review"
+			case "resume":
+				current.waitReason = "review"
+			case "submit":
+				current.state, request.submission = "active", taskArtifact()
+			}
+			next, err := transitionTask(current, facts, request, taskExpectation{current.version, current.assignment.id, current.assignment.generation})
+			if !errors.Is(err, ErrInvalid) || !reflect.DeepEqual(next, current) {
+				t.Fatalf("failure-only fact bypassed %s origin: %+v, %v", action, next, err)
+			}
+		})
+	}
+}

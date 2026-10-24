@@ -43,6 +43,9 @@ type taskFacts struct {
 	registeredContext, freshContext        bool
 	contextKind                            string
 	newAssignmentUnused, subjectAuthorized bool
+	// Set only after proving an exact live failure request and both current
+	// participant authorities. It relaxes the fail origin, not authorization.
+	reviewedFailure bool
 }
 
 type taskExpectation struct {
@@ -113,7 +116,8 @@ func transitionTask(current taskState, facts taskFacts, action taskAction, expec
 		if current.version == 0 {
 			return refuse("edge")
 		}
-		if facts.actor == "agent" && slices.Contains([]string{"start", "wait", "resume", "submit", "fail"}, action.action) && assigned && facts.origin != current.assignment.binding {
+		if facts.actor == "agent" && slices.Contains([]string{"start", "wait", "resume", "submit", "fail"}, action.action) && assigned && facts.origin != current.assignment.binding &&
+			!(action.action == "fail" && facts.reviewedFailure) {
 			return refuse("origin")
 		}
 		switch action.action {
