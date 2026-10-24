@@ -15,6 +15,7 @@ import (
 type privateStore interface {
 	Submit(context.Context, ledger.Draft, []ledger.Draft) (ledgerstore.Receipt, error)
 	PublishBody(context.Context, io.Reader) (ledger.Digest, int64, error)
+	ReadBody(context.Context, ledger.Digest) ([]byte, error)
 	LogDir() string
 	Colony() uuid.UUID
 	Durable() uint64
@@ -22,12 +23,15 @@ type privateStore interface {
 type serviceDeps struct {
 	beforePublish     func(Binding, string) error
 	afterPublish      func(Binding, string)
+	beforeRead        func(Binding, string) error
+	afterRead         func(Binding, string)
 	beforeSubmit      func([]ledger.Draft) []ledger.Draft
 	afterCommit       func(Receipt)
 	afterScopedCommit func(ScopedReceipt) error
 	beforeMaterialize func(Binding, string, string) error
 	beforeProjection  func(Binding, string)
 	beforeLookup      func()
+	beforeReplayWait  func()
 	afterCloseFence   func()
 }
 type scopeKey struct{ agent, context uuid.UUID }
@@ -76,7 +80,7 @@ func newProjection() projection {
 }
 
 // Service owns the private and scoped projections, not the shared colony store.
-// All public entry points are owner-only, under the host's trust boundary.
+// Service is the trusted owner/host entrance; BindAgent supplies scoped access.
 type Service struct {
 	mu            sync.Mutex
 	active        sync.WaitGroup

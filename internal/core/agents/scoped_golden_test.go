@@ -19,7 +19,7 @@ import (
 
 // The frozen log is copied byte-for-byte, not reconstructed by the producer
 // under test. Body publication and private object publication use real stores.
-func scopedGoldenFixture(t *testing.T, chapter string, prefix int) (*serviceFixture, []ledger.Commit) {
+func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixture, []ledger.Commit) {
 	t.Helper()
 	dir := filepath.Join("../../../contract/ledger/testdata/f3", chapter)
 	colony := uuid.MustParse("0199c000-0000-7000-8000-000000000007")
@@ -184,7 +184,7 @@ func TestScopedFrozenGoldenReplay(t *testing.T) {
 				limits.MaxLiveTasks, limits.MaxLiveGrants, limits.MaxPendingLocalWork = 1, 1, 1
 				limits.MaxDelegationDepth, limits.MaxGrantOperations, limits.MaxGrantResources = 0, 1, 1
 				limits.MaxGrantRecipients, limits.MaxTaskAudience, limits.MaxTaskDependencies = 1, 1, 0
-				limits.MaxBudgetScopes, limits.MaxTaskDescriptionBytes, limits.MaxAgentTurnSlots = 1, 1, 0
+				limits.MaxBudgetScopes, limits.MaxTaskDescriptionBytes, limits.MaxAgentTurnSlots = 1, 1, 1
 			}
 			f.service, report, err = Open(context.Background(), f.store, f.root, limits)
 			if err != nil || len(report.Issues) != 0 || len(report.PendingWork) != 0 || f.store.Durable() != before {
@@ -193,6 +193,49 @@ func TestScopedFrozenGoldenReplay(t *testing.T) {
 			ctx := context.Background()
 			general := Binding{AgentID: commits[0].Records[0].AgentID, ContextID: commits[0].Records[0].ContextID}
 			work := Binding{AgentID: general.AgentID, ContextID: commits[1].Records[0].ContextID}
+			type materializedSlot struct {
+				ReadBinding
+				slot string
+			}
+			completed := map[materializedSlot]bool{}
+			for _, item := range report.Completed {
+				binding := item.ReadBinding
+				if binding.Scope == "agent" {
+					binding.ContextID = uuid.UUID{}
+				}
+				key := materializedSlot{binding, item.Slot}
+				if completed[key] {
+					t.Fatalf("duplicate frozen completion: %+v", item)
+				}
+				completed[key] = true
+			}
+			bindings := []ReadBinding{{general, "agent"}, {general, "context"}, {work, "context"}}
+			if chapter == "11" {
+				for _, index := range []int{2, 3} {
+					bindings = append(bindings, ReadBinding{Binding{general.AgentID, commits[index].Records[0].ContextID}, "context"})
+				}
+			}
+			for _, binding := range bindings {
+				snapshot, err := f.service.Snapshot(ctx, binding)
+				slots := []string{"handoff", "memory"}
+				if binding.Scope == "agent" {
+					slots = []string{"instructions", "memory"}
+					binding.ContextID = uuid.UUID{}
+				}
+				if err != nil || len(snapshot.Materializations) != len(slots) {
+					t.Fatalf("frozen materialization snapshot: %+v %v", snapshot, err)
+				}
+				for _, slot := range slots {
+					key := materializedSlot{binding, slot}
+					if snapshot.Materializations[slot] != "current" || !completed[key] {
+						t.Fatalf("frozen Markdown not completed and current: %+v, %+v", key, snapshot)
+					}
+					delete(completed, key)
+				}
+			}
+			if len(completed) != 0 {
+				t.Fatalf("unexpected frozen completions: %+v", completed)
+			}
 			if chapter == "10" {
 				for _, row := range []struct {
 					binding     Binding

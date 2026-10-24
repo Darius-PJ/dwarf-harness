@@ -43,7 +43,7 @@ func (s *Service) workView(work scopedWorkState) (WorkView, error) {
 	if err != nil {
 		return WorkView{}, err
 	}
-	view := WorkView{Admission: admission, Origin: work.origin, Version: work.version, State: "admitted", Outcome: work.outcome, Sequence: work.sequence}
+	view := WorkView{Admission: admission, Origin: work.origin, Version: work.version, State: "admitted", Outcome: work.outcome, Sequence: work.sequence, Dispatched: work.dispatched, Ended: work.ended}
 	if work.dispatched {
 		view.State = "dispatched"
 	}

@@ -127,6 +127,9 @@ func (s *Service) deriveTask(ctx context.Context, sub ledger.ScopedSubmission, f
 	if err != nil {
 		return plan, nil, err
 	}
+	if found && creation != nil && sub.Actor == "agent" {
+		return plan, nil, ErrDenied
+	}
 	current := taskState{}
 	if found {
 		current = taskRules(previous.record)

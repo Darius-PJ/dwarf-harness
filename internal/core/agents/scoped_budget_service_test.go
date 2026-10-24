@@ -141,7 +141,7 @@ func TestScopedBudgetDurabilityAndRelease(t *testing.T) {
 		if _, err := f.service.ConfigureCapacity(ctx, origin, CapacitySpec{CommandID: privateID(901), ExpectedVersion: 1, Scope: ledger.ScopeKey{Kind: "colony"}, Limits: ledger.Capacity{}}); err != nil {
 			t.Fatal(err)
 		}
-		limits.MaxAgentTurnSlots = 0
+		limits.MaxAgentTurnSlots = 1
 		report := reopenScoped(t, f, limits)
 		if len(report.PendingWork) != 2 {
 			t.Fatalf("lower runtime/configuration limits lost occupied work: %+v", report.PendingWork)
@@ -154,7 +154,7 @@ func TestScopedBudgetDurabilityAndRelease(t *testing.T) {
 			}
 		}
 		assertExposure(Exposure{TurnSlots: 1, LocalSlots: 1, BufferBytes: 1024})
-		request.CommandID, request.ExpectedVersion, request.Limits.TurnSlots = privateID(902), 2, 1
+		request.CommandID, request.ExpectedVersion, request.Limits.TurnSlots = privateID(902), 2, 2
 		before = f.store.Durable()
 		if _, err := f.service.ConfigureCapacity(ctx, origin, request); !errors.Is(err, ErrTooLarge) || f.store.Durable() != before {
 			t.Fatalf("lower Limits ceiling was not a new-producer guard: %v", err)
@@ -179,4 +179,5 @@ func TestScopedBudgetDurabilityAndRelease(t *testing.T) {
 		}
 		assertExposure(Exposure{})
 	})
+	t.Run("producer-admission-dispatch-and-proven-release", testScopedAdmissionAccounting)
 }

@@ -19,10 +19,34 @@ type scopedCaller struct {
 	fixed   submissionIDs
 }
 type scopedInput struct {
-	id     uuid.UUID
-	sub    ledger.ScopedSubmission
-	digest ledger.Digest
-	body   []byte
+	id        uuid.UUID
+	sub       ledger.ScopedSubmission
+	digest    ledger.Digest
+	body      []byte
+	turn      uuid.UUID
+	changes   []privateChange
+	selection privateSelection
+}
+
+// Owner inputs never select authority. Check this before identity/state reads;
+// a turn control's envelope grant is derived from its immutable admission.
+func ownerGrantSelected(request any) bool {
+	var grant uuid.UUID
+	switch request := request.(type) {
+	case GrantIssue:
+		grant = request.GrantID
+	case GrantRevocation:
+		grant = request.GrantID
+	case TaskCreation:
+		grant = request.GrantID
+	case TaskAssignment:
+		grant = request.GrantID
+	case TaskMutation:
+		grant = request.GrantID
+	case TurnCancellation:
+		grant = request.GrantID
+	}
+	return grant != (uuid.UUID{})
 }
 
 // BindAgent is a trusted host entrance, not authentication of model text. The
@@ -92,7 +116,8 @@ func (a *Agent) command(ctx context.Context, operation string, request any) (Sco
 	if a == nil || a.service == nil {
 		return ScopedReceipt{}, ErrNotBound
 	}
-	return a.service.executeScoped(ctx, scopedCaller{actor: "agent", binding: Binding{a.ids.agent, a.ids.context}, fixed: a.ids}, operation, request)
+	result, err := a.service.executeScoped(ctx, scopedCaller{actor: "agent", binding: Binding{a.ids.agent, a.ids.context}, fixed: a.ids}, operation, request)
+	return result, agentError(err)
 }
 
 func expectedTask(version uint64, assignment uuid.UUID, generation int64) (ledger.ScopedExpected, error) {
@@ -215,6 +240,90 @@ func makeScopedInput(actor string, ids submissionIDs, operation string, request 
 		input.sub.Target = ledger.Resource{Kind: "task", TaskID: request.TaskID}
 		input.sub.Expected, err = expectedTask(request.ExpectedVersion, request.ExpectedAssignmentID, request.ExpectedGeneration)
 		input.sub.Arguments = ledger.TaskMutationArguments{TaskID: request.TaskID, Action: request.Action, WaitReason: request.WaitReason, WaitArtifact: request.WaitArtifact, Submission: request.Submission, FailureCause: request.FailureCause, FailureEvidence: request.FailureEvidence}
+	case TurnAdmission:
+		if operation != "turn.start" || actor != "agent" || request.ExpectedVersion != 0 {
+			return input, ErrInvalid
+		}
+		input.id, input.sub.GrantID, input.turn = request.CommandID, request.GrantID, request.TurnID
+		input.sub.Target = ledger.Resource{Kind: "context", Binding: ledger.Binding{AgentID: ids.agent, ContextID: ids.context}, Scope: "context", Slots: []string{}}
+		input.sub.Arguments = ledger.TurnStartArguments{TurnID: request.TurnID, TaskBinding: request.TaskBinding}
+	case LocalAdmission:
+		if operation != "local.admit" || actor != "agent" || request.ExpectedVersion != 0 || request.ToolSchema != 1 {
+			return input, ErrInvalid
+		}
+		input.id, input.sub.GrantID, input.turn = request.CommandID, request.GrantID, request.ParentTurnID
+		input.sub.Target = request.Target
+		input.sub.Arguments = ledger.LocalAdmissionArguments{WorkID: request.WorkID, ParentTurnID: request.ParentTurnID, LocalOperation: request.LocalOperation, ArgumentsSHA256: request.ArgumentsSHA256, ToolSchema: request.ToolSchema, MaxBytes: request.MaxBytes, TaskBinding: request.TaskBinding}
+	case LocalDispatch:
+		if operation != "local.begin" || actor != "core" || request.ExpectedVersion != 1 {
+			return input, ErrInvalid
+		}
+		input.id, input.sub.Expected.Version = request.CommandID, int64(request.ExpectedVersion)
+		input.sub.Arguments = ledger.WorkDispatchArguments{WorkID: request.WorkID, ArgumentsSHA256: request.ArgumentsSHA256}
+	case LocalEnding:
+		if operation != "local.end" || actor != "core" || request.ExpectedVersion == 0 || request.ExpectedVersion >= math.MaxInt64 || !slices.Contains([]string{"released_unsent", "succeeded", "failed", "interrupted", "unknown"}, request.Outcome) {
+			return input, ErrInvalid
+		}
+		input.id, input.sub.Expected.Version = request.CommandID, int64(request.ExpectedVersion)
+		input.sub.Arguments = ledger.WorkEndArguments{WorkID: request.WorkID, Outcome: request.Outcome}
+	case TurnEnding:
+		if operation != "turn.end" || actor != "core" || request.ExpectedVersion != 1 || !slices.Contains([]string{"released", "cancelled", "interrupted"}, request.Outcome) {
+			return input, ErrInvalid
+		}
+		input.id, input.sub.Expected.Version = request.CommandID, int64(request.ExpectedVersion)
+		input.sub.Arguments = ledger.WorkEndArguments{WorkID: request.TurnID, Outcome: request.Outcome}
+	case TurnCancellation:
+		if operation != "turn.cancel" || actor != "owner" && actor != "agent" || actor == "owner" && request.GrantID != (uuid.UUID{}) || request.ExpectedVersion != 1 {
+			return input, ErrInvalid
+		}
+		input.id, input.sub.GrantID, input.sub.Expected.Version = request.CommandID, request.GrantID, int64(request.ExpectedVersion)
+		input.sub.Arguments = ledger.WorkEndArguments{WorkID: request.TurnID, Outcome: "cancelled"}
+	case ScopedPrivateWrite:
+		if operation != "private.write" || actor != "agent" || len(request.Changes) == 0 || len(request.Changes) > 4 {
+			return input, ErrInvalid
+		}
+		input.changes = make([]privateChange, len(request.Changes))
+		for i, change := range request.Changes {
+			input.changes[i] = privateChange{slot: change.Slot, mode: change.Mode, data: change.Bytes}
+		}
+		target, canonical, err := canonicalPrivateWrite(request.Scope, request.ExpectedVersion, input.changes)
+		if err != nil {
+			return input, err
+		}
+		slices.SortFunc(input.changes, func(a, b privateChange) int {
+			if a.slot < b.slot {
+				return -1
+			}
+			if a.slot > b.slot {
+				return 1
+			}
+			return 0
+		})
+		changes := make([]ledger.PrivateChange, len(canonical.Changes))
+		for i, change := range canonical.Changes {
+			changes[i] = ledger.PrivateChange{Slot: change.Slot, Mode: change.Mode, SHA256: change.SHA256}
+			if change.Bytes != nil {
+				changes[i].Bytes = *change.Bytes
+			}
+		}
+		input.id, input.sub.GrantID = request.CommandID, request.GrantID
+		input.sub.Expected.Version = int64(request.ExpectedVersion)
+		input.sub.Target = ledger.Resource{Kind: "context", Binding: ledger.Binding{AgentID: ids.agent, ContextID: ids.context}, Scope: target.Scope, Slots: target.Slots}
+		input.sub.Arguments = ledger.PrivateWriteArguments{Changes: changes}
+	case ScopedPrivateRead:
+		if operation != "private.read" || actor != "agent" || request.Revision == 0 || request.Revision > math.MaxInt64 || request.Cursor > math.MaxInt64 {
+			return input, ErrInvalid
+		}
+		input.id, input.sub.GrantID = request.CommandID, request.GrantID
+		input.sub.Target = ledger.Resource{Kind: "context", Binding: ledger.Binding{AgentID: ids.agent, ContextID: ids.context}, Scope: request.Scope, Slots: []string{request.Slot}}
+		input.sub.Arguments = ledger.PrivateReadArguments{Read: ledger.PrivateReadRef{Scope: request.Scope, Slot: request.Slot, Revision: int64(request.Revision), Cursor: int64(request.Cursor), MaxBytes: request.MaxBytes}}
+	case ArtifactRead:
+		if operation != "artifact.read" || actor != "agent" {
+			return input, ErrInvalid
+		}
+		input.id, input.sub.GrantID = request.CommandID, request.GrantID
+		input.sub.Target = ledger.Resource{Kind: "artifact", Artifact: request.Artifact}
+		input.sub.Arguments = ledger.ArtifactReadArguments{Artifact: request.Artifact, MaxBytes: request.MaxBytes}
 	default:
 		return input, ErrInvalid
 	}
@@ -227,7 +336,8 @@ func makeScopedInput(actor string, ids submissionIDs, operation string, request 
 	return input, nil
 }
 
-func (s *Service) resolveScopedTarget(ctx context.Context, sub *ledger.ScopedSubmission) error {
+func (s *Service) resolveScopedTarget(ctx context.Context, input *scopedInput) error {
+	sub := &input.sub
 	switch args := sub.Arguments.(type) {
 	case ledger.GrantRevokeArguments:
 		if sub.Actor == "agent" {
@@ -260,6 +370,47 @@ func (s *Service) resolveScopedTarget(ctx context.Context, sub *ledger.ScopedSub
 			binding = ledger.Binding{AgentID: owner, ContextID: args.Scope.ID}
 		}
 		sub.Target = ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}}
+	case ledger.WorkDispatchArguments:
+		return s.resolveWorkTarget(ctx, input, args.WorkID)
+	case ledger.WorkEndArguments:
+		return s.resolveWorkTarget(ctx, input, args.WorkID)
 	}
+	return nil
+}
+
+func (s *Service) resolveWorkTarget(ctx context.Context, input *scopedInput, id uuid.UUID) error {
+	sub := &input.sub
+	if !validID(id) {
+		return ErrInvalid
+	}
+	if sub.Actor == "agent" {
+		chain, err := s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(chain[0].operations, "turn.cancel") {
+			return ErrDenied
+		}
+	}
+	work, found, err := s.loadWork(ctx, id, s.p.through)
+	if err != nil {
+		return err
+	}
+	if sub.Actor == "agent" && (!found || work.origin != sub.Origin) {
+		return ErrDenied
+	}
+	if !found {
+		return ErrUnavailable
+	}
+	if sub.Actor == "core" {
+		sub.Origin = work.origin
+	}
+	if sub.Origin != work.origin {
+		return ErrNotBound
+	}
+	if sub.Actor != "agent" {
+		sub.GrantID = work.admission.GrantID
+	}
+	sub.Target, input.turn = work.admission.Target, work.turn
 	return nil
 }

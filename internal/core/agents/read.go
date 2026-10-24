@@ -48,12 +48,16 @@ func (s *Service) Snapshot(ctx context.Context, b ReadBinding) (Snapshot, error)
 	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.snapshotLocked(ids, b), nil
+}
+
+func (s *Service) snapshotLocked(ids submissionIDs, b ReadBinding) Snapshot {
 	st := s.p.scopes[keyFor(ids, b.Scope)]
 	result := Snapshot{ReadBinding: b, SessionID: ids.session, Revision: st.revision, ThroughSequence: s.p.through, Heads: maps.Clone(st.heads), Materializations: maps.Clone(st.materials), Issues: slices.Clone(st.issues)}
 	if b.Scope == "context" {
 		result.Issues = append(result.Issues, s.p.scopes[keyFor(ids, "agent")].issues...)
 	}
-	return result, nil
+	return result
 }
 func (s *Service) ReadPrivate(ctx context.Context, r PrivateRead) (PrivatePage, error) {
 	if err := s.enter(ctx); err != nil {
@@ -97,11 +101,26 @@ func (s *Service) ReadPrivate(ctx context.Context, r PrivateRead) (PrivatePage, 
 	if err != nil {
 		return PrivatePage{}, err
 	}
-	page := PrivatePage{Revision: r.Revision}
+	selection, err := s.selectPrivateRead(ctx, ids, r, through, s.limits.MaxReadChunks)
+	if err != nil {
+		return PrivatePage{}, err
+	}
+	return s.readPrivateSelection(path, r, selection)
+}
+
+type privateSelection struct {
+	heads      []Head
+	present    bool
+	bytes      int64
+	nextCursor uint64
+}
+
+// Selection is metadata only. Both owner and Agent reads use these exact
+// historical occurrences; object reads begin only after the Agent reserves them.
+func (s *Service) selectPrivateRead(ctx context.Context, ids submissionIDs, r PrivateRead, through uint64, maxSelected int) (privateSelection, error) {
+	selection := privateSelection{heads: []Head{}}
 	var head Head
 	cursorFound := r.Cursor == 0
-	var selected []Head
-	used := int64(0)
 	more := false
 	var last uint64
 	revision, err := s.scopeHistory(ctx, ids, r.Scope, through, r.Revision, func(slot string, h Head, mode string) error {
@@ -115,7 +134,7 @@ func (s *Service) ReadPrivate(ctx context.Context, r PrivateRead) (PrivatePage, 
 			}
 			return nil
 		}
-		page.Present = true
+		selection.present = true
 		if !cursorFound {
 			if h.Sequence == r.Cursor {
 				cursorFound = true
@@ -125,53 +144,58 @@ func (s *Service) ReadPrivate(ctx context.Context, r PrivateRead) (PrivatePage, 
 		if more {
 			return nil
 		}
-		if h.Bytes > r.MaxBytes-used || len(selected) >= s.limits.MaxReadChunks {
-			if len(selected) == 0 {
+		if h.Bytes > r.MaxBytes-selection.bytes || len(selection.heads) >= maxSelected {
+			if len(selection.heads) == 0 {
 				return ErrTooLarge
 			}
 			more = true
 			return nil
 		}
-		selected = append(selected, h)
-		used += h.Bytes
+		selection.heads = append(selection.heads, h)
+		selection.bytes += h.Bytes
 		last = h.Sequence
 		return nil
 	})
 	if err != nil {
-		return PrivatePage{}, err
+		return privateSelection{}, err
 	}
 	if revision != r.Revision {
-		return PrivatePage{}, ErrUnavailable
+		return privateSelection{}, ErrUnavailable
 	}
 	if !cursorFound {
-		return PrivatePage{}, ErrInvalid
+		return privateSelection{}, ErrInvalid
 	}
 	if r.Slot == "transcript" {
-		for _, h := range selected {
-			data, err := readObject(path, h)
-			if err != nil {
-				return PrivatePage{}, s.objectIssue(path, r.ReadBinding, r.Slot, h)
-			}
-			page.Chunks = append(page.Chunks, Chunk{h.Revision, h.Sequence, data})
-		}
 		if more {
-			page.NextCursor = last
+			selection.nextCursor = last
 		}
-		return page, nil
+		return selection, nil
 	}
-	if head.SHA256 == (ledger.Digest{}) {
-		return page, nil
+	if head.SHA256 != (ledger.Digest{}) {
+		if head.Bytes > r.MaxBytes {
+			return privateSelection{}, ErrTooLarge
+		}
+		selection.heads, selection.bytes, selection.present = []Head{head}, head.Bytes, true
 	}
-	if head.Bytes > r.MaxBytes {
-		return PrivatePage{}, ErrTooLarge
+	return selection, nil
+}
+
+func (s *Service) readPrivateSelection(path privateScope, r PrivateRead, selection privateSelection) (PrivatePage, error) {
+	page := PrivatePage{Revision: r.Revision, Present: selection.present, NextCursor: selection.nextCursor}
+	for _, head := range selection.heads {
+		data, err := readObject(path, head)
+		if err != nil {
+			return PrivatePage{}, s.objectIssue(path, r.ReadBinding, r.Slot, head)
+		}
+		if r.Slot == "transcript" {
+			page.Chunks = append(page.Chunks, Chunk{head.Revision, head.Sequence, data})
+		} else {
+			page.Bytes = data
+		}
 	}
-	page.Bytes, err = readObject(path, head)
-	if err != nil {
-		return PrivatePage{}, s.objectIssue(path, r.ReadBinding, r.Slot, head)
-	}
-	page.Present = true
 	return page, nil
 }
+
 func (s *Service) ScratchBinding(ctx context.Context, r ScratchLookup) (ScratchBinding, error) {
 	if err := s.enter(ctx); err != nil {
 		return ScratchBinding{}, err
@@ -195,6 +219,10 @@ func (s *Service) ScratchBinding(ctx context.Context, r ScratchLookup) (ScratchB
 	if err := s.scopeIssuesLocked(ids, "context"); err != nil {
 		return ScratchBinding{}, err
 	}
+	return s.scratchBindingLocked(r), nil
+}
+
+func (s *Service) scratchBindingLocked(r ScratchLookup) ScratchBinding {
 	result := ScratchBinding{WorkspaceID: r.WorkspaceID, ContextID: r.ContextID, State: "absent"}
 	var chosen scratchState
 	found := false
@@ -202,7 +230,7 @@ func (s *Service) ScratchBinding(ctx context.Context, r ScratchLookup) (ScratchB
 		chosen, found = s.p.scratches[r.ExpectedScratchID]
 		if !found || chosen.WorkspaceID != r.WorkspaceID || chosen.ContextID != r.ContextID {
 			result.State = "mismatch"
-			return result, nil
+			return result
 		}
 	} else {
 		for _, scratch := range s.p.scratches {
@@ -216,7 +244,7 @@ func (s *Service) ScratchBinding(ctx context.Context, r ScratchLookup) (ScratchB
 		}
 	}
 	if !found {
-		return result, nil
+		return result
 	}
 	result.ScratchID = chosen.ScratchID
 	result.ParentScratchID = chosen.ParentScratchID
@@ -228,5 +256,5 @@ func (s *Service) ScratchBinding(ctx context.Context, r ScratchLookup) (ScratchB
 	if chosen.closed {
 		result.State = "closed"
 	}
-	return result, nil
+	return result
 }

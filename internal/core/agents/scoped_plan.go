@@ -35,6 +35,9 @@ func (s *Service) planScoped(ctx context.Context, g *scopedGroup, first uint64) 
 	if err != nil {
 		return scopedPlan{}, err
 	}
+	if plan.work != nil {
+		plan.work.receipt = scopedReceipt(g)
+	}
 	if g.usage != nil {
 		usage := *g.usage
 		scopes, err := chainScopes(sub.Origin, chain)

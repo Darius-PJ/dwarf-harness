@@ -3,21 +3,33 @@ package agents
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"errors"
 	"slices"
+	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
-	"github.com/Darius-PJ/dwarf-harness/contract/ledger/appender"
-	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
 func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmission) error {
 	if !s.p.registeredOrigin(sub.Origin) {
 		return ErrNotBound
 	}
-	if sub.Actor == "owner" {
+	if sub.Actor == "owner" || sub.Actor == "core" && sub.Operation != "local.begin" {
 		return nil
+	}
+	if sub.Actor == "core" {
+		args, ok := sub.Arguments.(ledger.WorkDispatchArguments)
+		if !ok {
+			return ErrInvalid
+		}
+		work, found, err := s.loadWork(ctx, args.WorkID, s.p.through)
+		if err != nil {
+			return err
+		}
+		if !found || work.admission.Kind != "local" {
+			return ErrUnavailable
+		}
+		_, err = s.authorize(ctx, work.origin, work.admission.GrantID, work.admission.Operation, []ledger.Resource{work.admission.Target}, nil, *work.admission.MaxBytes, s.p.through)
+		return err
 	}
 	if sub.Actor != "agent" {
 		return ErrDenied
@@ -50,6 +62,10 @@ func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmissi
 		}
 	case ledger.LocalAdmissionArguments:
 		operation, size = args.LocalOperation, args.MaxBytes
+	case ledger.PrivateWriteArguments:
+		for _, change := range args.Changes {
+			size += change.Bytes
+		}
 	case ledger.ArtifactReadArguments:
 		_, err := s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, s.p.through)
 		return err
@@ -64,17 +80,21 @@ func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmissi
 	return nil
 }
 
+func (s *Service) refreshScopedLocked(ctx context.Context, sub ledger.ScopedSubmission) error {
+	if err := s.usableLocked(ctx); err != nil {
+		return err
+	}
+	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+		return err
+	}
+	return s.scopedAuthority(ctx, sub)
+}
+
 // Like the owner private path, this returns with mu held. The authoritative old
 // prefix is scanned without mu; refresh and a tail scan close duplicate races.
 func (s *Service) lookupScoped(ctx context.Context, input scopedInput) (commandMatch, error) {
 	s.mu.Lock()
-	if err := s.usableLocked(ctx); err != nil {
-		return commandMatch{}, err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return commandMatch{}, err
-	}
-	if err := s.scopedAuthority(ctx, input.sub); err != nil {
+	if err := s.refreshScopedLocked(ctx, input.sub); err != nil {
 		return commandMatch{}, err
 	}
 	through := s.p.through
@@ -92,13 +112,7 @@ func (s *Service) lookupScoped(ctx context.Context, input scopedInput) (commandM
 	if err != nil {
 		return match, err
 	}
-	if err := s.usableLocked(ctx); err != nil {
-		return match, err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return match, err
-	}
-	if err := s.scopedAuthority(ctx, input.sub); err != nil {
+	if err := s.refreshScopedLocked(ctx, input.sub); err != nil {
 		return match, err
 	}
 	if !match.found && through < s.p.through {
@@ -108,10 +122,14 @@ func (s *Service) lookupScoped(ctx context.Context, input scopedInput) (commandM
 }
 
 func scopedReceipt(g *scopedGroup) ScopedReceipt {
-	p, sub := g.receipt, g.receipt.Submission
+	return scopedReceiptAt(g.receipt, g.first+uint64(g.receiptIndex))
+}
+
+func scopedReceiptAt(p ledger.RuntimeScopedReceipt, sequence uint64) ScopedReceipt {
+	sub := p.Submission
 	target := sub.Target
 	target.Slots = slices.Clone(target.Slots)
-	return ScopedReceipt{CommandID: p.CommandID, SubmissionSHA256: p.SubmissionSHA256, Actor: sub.Actor, Origin: sub.Origin, Operation: sub.Operation, Target: target, GrantID: sub.GrantID, Outcome: p.Outcome, Version: p.Version, WorkID: p.WorkID, Sequence: g.first + uint64(g.receiptIndex)}
+	return ScopedReceipt{CommandID: p.CommandID, SubmissionSHA256: p.SubmissionSHA256, Actor: sub.Actor, Origin: sub.Origin, Operation: sub.Operation, Target: target, GrantID: sub.GrantID, Outcome: p.Outcome, Version: p.Version, WorkID: p.WorkID, Sequence: sequence}
 }
 
 func matchScopedReceipt(match commandMatch, input scopedInput) (ScopedReceipt, error) {
@@ -164,6 +182,38 @@ func (s *Service) scopedProducerGuards(input scopedInput) error {
 		if args.Scope.Kind == "agent" && args.Limits.TurnSlots > s.limits.MaxAgentTurnSlots {
 			return ErrTooLarge
 		}
+	case ledger.LocalAdmissionArguments:
+		if args.MaxBytes > s.limits.MaxScopedBytes {
+			return ErrTooLarge
+		}
+		pending := 0
+		for _, work := range s.p.work {
+			if work.admission.Kind == "local" && !work.released {
+				pending++
+			}
+		}
+		if pending >= s.limits.MaxPendingLocalWork {
+			return &BusyError{Reason: "pending_local_work"}
+		}
+	case ledger.PrivateWriteArguments:
+		total := int64(0)
+		for _, change := range args.Changes {
+			if change.Bytes > s.limits.MaxObjectBytes {
+				return ErrTooLarge
+			}
+			total += change.Bytes
+		}
+		if total > s.limits.MaxOperationBytes || total > s.limits.MaxScopedBytes {
+			return ErrTooLarge
+		}
+	case ledger.PrivateReadArguments:
+		if args.Read.MaxBytes > s.limits.MaxScopedBytes || len(input.selection.heads) > s.limits.MaxSelectedObjects {
+			return ErrTooLarge
+		}
+	case ledger.ArtifactReadArguments:
+		if args.MaxBytes > s.limits.MaxScopedBytes {
+			return ErrTooLarge
+		}
 	}
 	return nil
 }
@@ -172,7 +222,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 	sub := input.sub
 	var drafts []ledger.Draft
 	appendPayload := func(typ string, actor ledger.Actor, payload []byte, refs ...ledger.Digest) {
-		drafts = append(drafts, ledger.Draft{Type: typ, TypeVersion: 1, Actor: actor, AgentID: sub.Origin.AgentID, ExecutionSessionID: sub.Origin.SessionID, ContextID: sub.Origin.ContextID, OperationID: input.id, BodyRefs: refs, Payload: payload})
+		drafts = append(drafts, ledger.Draft{Type: typ, TypeVersion: 1, Actor: actor, AgentID: sub.Origin.AgentID, ExecutionSessionID: sub.Origin.SessionID, ContextID: sub.Origin.ContextID, TurnID: input.turn, OperationID: input.id, BodyRefs: refs, Payload: payload})
 	}
 	command, err := (ledger.Command{CommandID: input.id, SubmissionSHA256: input.digest}).Encode()
 	if err != nil {
@@ -181,6 +231,10 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 	appendPayload(ledger.TypeCommand, ledger.Actor(sub.Actor), command)
 	var version, size int64
 	var chain []grantRules
+	var workID uuid.UUID
+	var usage ledger.RuntimeLocalUsed
+	outcome := "applied"
+	charge := sub.Actor == "agent" && sub.Operation != "grant.revoke"
 	switch args := sub.Arguments.(type) {
 	case ledger.GrantIssueArguments:
 		version = *sub.Expected.AuthorityVersion + 1
@@ -242,10 +296,11 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 			}
 			appendPayload(ledger.TypeBodyUnpin, ledger.ActorCore, payload)
 		}
-	default:
-		return nil, ErrInvalid
-	}
-	if sub.Actor == "agent" && sub.Operation != "grant.revoke" {
+	case ledger.TurnStartArguments, ledger.LocalAdmissionArguments:
+		chain, err = s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+		if err != nil {
+			return nil, err
+		}
 		scopes, err := chainScopes(sub.Origin, chain)
 		if err != nil {
 			return nil, err
@@ -253,13 +308,94 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 		if len(scopes) > s.limits.MaxBudgetScopes {
 			return nil, ErrTooLarge
 		}
-		payload, err := (ledger.RuntimeLocalUsed{AuthorityVersion: s.p.authority, GrantID: sub.GrantID, Scopes: scopes, Units: 1, Bytes: size}).Encode()
+		admission := ledger.RuntimeWorkAdmitted{Version: 1, AuthorityVersion: s.p.authority, GrantID: sub.GrantID, Scopes: scopes, Target: sub.Target}
+		switch args := args.(type) {
+		case ledger.TurnStartArguments:
+			admission.WorkID, admission.Kind, admission.Operation, admission.TaskBinding = args.TurnID, "turn", "turn.start", args.TaskBinding
+		case ledger.LocalAdmissionArguments:
+			admission.WorkID, admission.Kind, admission.Operation, admission.TaskBinding = args.WorkID, "local", args.LocalOperation, args.TaskBinding
+			admission.ParentTurnID, admission.ArgumentsSHA256 = args.ParentTurnID, args.ArgumentsSHA256
+			admission.ToolSchema, admission.MaxBytes = &args.ToolSchema, &args.MaxBytes
+		}
+		payload, err := admission.Encode()
+		if err != nil {
+			return nil, err
+		}
+		appendPayload(ledger.TypeRuntimeWorkAdmitted, ledger.ActorCore, payload)
+		workID, version, outcome, charge = admission.WorkID, 1, "admitted", false
+	case ledger.WorkDispatchArguments:
+		version, workID, outcome, charge = sub.Expected.Version+1, args.WorkID, "dispatched", false
+		payload, err := (ledger.RuntimeWorkDispatched{WorkID: args.WorkID, ExpectedVersion: sub.Expected.Version, Version: version, AuthorityVersion: s.p.authority, GrantID: sub.GrantID, ArgumentsSHA256: args.ArgumentsSHA256}).Encode()
+		if err != nil {
+			return nil, err
+		}
+		appendPayload(ledger.TypeRuntimeWorkDispatched, ledger.ActorCore, payload)
+	case ledger.WorkEndArguments:
+		version, workID, outcome, charge = sub.Expected.Version+1, args.WorkID, "recorded", false
+		payload, err := (ledger.RuntimeWorkEnded{WorkID: args.WorkID, ExpectedVersion: sub.Expected.Version, Version: version, Outcome: args.Outcome}).Encode()
+		if err != nil {
+			return nil, err
+		}
+		appendPayload(ledger.TypeRuntimeWorkEnded, ledger.ActorCore, payload)
+	case ledger.PrivateWriteArguments:
+		chain, err = s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+		if err != nil {
+			return nil, err
+		}
+		ids := submissionIDs{sub.Origin.AgentID, sub.Origin.SessionID, sub.Origin.ContextID}
+		state := s.p.scopes[keyFor(ids, sub.Target.Scope)]
+		if state == nil {
+			return nil, ErrNotBound
+		}
+		changes := slices.Clone(args.Changes)
+		for i := range changes {
+			size += changes[i].Bytes
+			if changes[i].Slot == "transcript" {
+				changes[i].PreviousSHA256 = state.heads["transcript"].SHA256
+			}
+		}
+		version = sub.Expected.Version + 1
+		payload, err := (ledger.PrivateScopedRevision{Scope: sub.Target.Scope, ExpectedVersion: sub.Expected.Version, Revision: version, Changes: changes}).Encode()
+		if err != nil {
+			return nil, err
+		}
+		appendPayload(ledger.TypePrivateScopedRevision, ledger.ActorCore, payload)
+	case ledger.PrivateReadArguments:
+		chain, err = s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+		if err != nil {
+			return nil, err
+		}
+		size = input.selection.bytes
+		usage.Read, usage.Selected = &args.Read, input.selection.selectedObjects()
+		if input.selection.nextCursor != 0 {
+			next := int64(input.selection.nextCursor)
+			usage.NextCursor = &next
+		}
+	case ledger.ArtifactReadArguments:
+		chain, err = s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, s.p.through)
+		if err != nil {
+			return nil, err
+		}
+		size, usage.Artifact = args.Artifact.Bytes, &args.Artifact
+	default:
+		return nil, ErrInvalid
+	}
+	if charge {
+		scopes, err := chainScopes(sub.Origin, chain)
+		if err != nil {
+			return nil, err
+		}
+		if len(scopes) > s.limits.MaxBudgetScopes {
+			return nil, ErrTooLarge
+		}
+		usage.AuthorityVersion, usage.GrantID, usage.Scopes, usage.Units, usage.Bytes = s.p.authority, sub.GrantID, scopes, 1, size
+		payload, err := usage.Encode()
 		if err != nil {
 			return nil, err
 		}
 		appendPayload(ledger.TypeRuntimeLocalUsed, ledger.ActorCore, payload)
 	}
-	payload, err := (ledger.RuntimeScopedReceipt{CommandID: input.id, SubmissionSHA256: input.digest, Submission: sub, Outcome: "applied", Version: version}).Encode()
+	payload, err := (ledger.RuntimeScopedReceipt{CommandID: input.id, SubmissionSHA256: input.digest, Submission: sub, Outcome: outcome, Version: version, WorkID: workID}).Encode()
 	if err != nil {
 		return nil, err
 	}
@@ -279,192 +415,4 @@ func (s *Service) preflightScoped(ctx context.Context, input scopedInput, drafts
 		return nil, err
 	}
 	return group, nil
-}
-
-func (s *Service) executeScoped(ctx context.Context, caller scopedCaller, operation string, request any) (ScopedReceipt, error) {
-	if s == nil {
-		return ScopedReceipt{}, ErrNotBound
-	}
-	if err := s.enter(ctx); err != nil {
-		return ScopedReceipt{}, err
-	}
-	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, caller.binding, false)
-	if err != nil {
-		return ScopedReceipt{}, err
-	}
-	if caller.actor == "agent" && caller.fixed != ids {
-		return ScopedReceipt{}, ErrNotBound
-	}
-	input, err := makeScopedInput(caller.actor, ids, operation, request)
-	if err != nil {
-		return ScopedReceipt{}, err
-	}
-	s.mu.Lock()
-	err = s.usableLocked(ctx)
-	if err == nil {
-		err = s.refreshLocked(ctx, s.store.Durable())
-	}
-	if err == nil {
-		err = s.resolveScopedTarget(ctx, &input.sub)
-	}
-	s.mu.Unlock()
-	if err != nil {
-		return ScopedReceipt{}, err
-	}
-	canonical, digest, err := encodeScopedSubmission(input.sub)
-	if err != nil {
-		return ScopedReceipt{}, err
-	}
-	input.sub, err = ledger.DecodeScopedSubmission(canonical)
-	if err != nil {
-		return ScopedReceipt{}, err
-	}
-	input.digest = digest
-	match, err := s.lookupScoped(ctx, input)
-	if err != nil {
-		s.mu.Unlock()
-		return ScopedReceipt{}, err
-	}
-	if match.found {
-		result, err := matchScopedReceipt(match, input)
-		s.mu.Unlock()
-		return result, err
-	}
-	if err := s.scopedProducerGuards(input); err != nil {
-		s.mu.Unlock()
-		return ScopedReceipt{}, err
-	}
-	drafts, err := s.scopedDrafts(ctx, input)
-	if err != nil {
-		s.mu.Unlock()
-		return ScopedReceipt{}, err
-	}
-	group, err := s.preflightScoped(ctx, input, drafts)
-	if err != nil {
-		s.mu.Unlock()
-		return ScopedReceipt{}, err
-	}
-	body := operation == "task.create"
-	if body && s.preparing >= s.limits.MaxConcurrentWrites {
-		s.mu.Unlock()
-		return ScopedReceipt{}, &BusyError{}
-	}
-	var scopes []ledger.ScopeKey
-	var size int64
-	if group.usage != nil {
-		scopes, size = group.usage.Scopes, group.usage.Bytes
-		if err := s.p.book.reservePreparation(input.sub.Origin, scopes, size); err != nil {
-			s.mu.Unlock()
-			return ScopedReceipt{}, err
-		}
-	}
-	if body {
-		s.preparing++
-	}
-	reserved := true
-	release := func() {
-		if !reserved {
-			return
-		}
-		if len(scopes) != 0 {
-			s.p.book.releasePreparation(input.sub.Origin, scopes, size)
-		}
-		if body {
-			s.preparing--
-		}
-		reserved = false
-	}
-	s.mu.Unlock()
-	defer func() { s.mu.Lock(); release(); s.mu.Unlock() }()
-	if body {
-		retained := bytes.Clone(input.body)
-		description := input.sub.Arguments.(ledger.TaskCreateArguments).Description
-		if int64(len(retained)) != description.Bytes || ledger.Digest(sha256.Sum256(retained)) != description.SHA256 {
-			return ScopedReceipt{}, ErrInvalid
-		}
-		if s.deps.beforePublish != nil {
-			if err := s.deps.beforePublish(caller.binding, "task"); err != nil {
-				return ScopedReceipt{}, err
-			}
-		}
-		digest, size, err := s.store.PublishBody(ctx, bytes.NewReader(retained))
-		if err != nil {
-			return ScopedReceipt{}, err
-		}
-		if digest != description.SHA256 || size != description.Bytes {
-			return ScopedReceipt{}, ErrInconsistent
-		}
-		if s.deps.afterPublish != nil {
-			s.deps.afterPublish(caller.binding, "task")
-		}
-	}
-	match, err = s.lookupScoped(ctx, input)
-	if err != nil {
-		s.mu.Unlock()
-		return ScopedReceipt{}, err
-	}
-	if match.found {
-		result, err := matchScopedReceipt(match, input)
-		release()
-		s.mu.Unlock()
-		return result, err
-	}
-	if err := s.scopedProducerGuards(input); err != nil {
-		s.mu.Unlock()
-		return ScopedReceipt{}, err
-	}
-	drafts, err = s.scopedDrafts(ctx, input)
-	if err == nil && s.deps.beforeSubmit != nil {
-		drafts = s.deps.beforeSubmit(drafts)
-	}
-	if err == nil {
-		_, err = s.preflightScoped(ctx, input, drafts)
-	}
-	if err == nil && len(scopes) != 0 {
-		err = s.p.book.checkPreparation(scopes, size)
-	}
-	if err == nil {
-		err = s.usableLocked(ctx)
-	}
-	if err != nil {
-		s.mu.Unlock()
-		return ScopedReceipt{}, err
-	}
-	committed, err := s.store.Submit(ctx, drafts[0], drafts[1:])
-	if err != nil {
-		if errors.Is(err, appender.ErrUncertain) || errors.Is(err, appender.ErrPoisoned) {
-			s.poisoned = true
-		}
-		s.mu.Unlock()
-		if errors.Is(err, ledgerstore.ErrCommandMismatch) {
-			return ScopedReceipt{}, ErrCommandMismatch
-		}
-		return ScopedReceipt{}, err
-	}
-	if err := s.refreshLocked(context.Background(), max(s.p.through, committed.Last)); err != nil {
-		s.mu.Unlock()
-		return ScopedReceipt{}, err
-	}
-	actual, err := s.findCommand(context.Background(), input.id, committed.First-1, committed.Last)
-	if err != nil || !actual.found {
-		s.poisoned = true
-		s.mu.Unlock()
-		if err == nil {
-			err = ErrInconsistent
-		}
-		return ScopedReceipt{}, err
-	}
-	result, err := matchScopedReceipt(actual, input)
-	release()
-	s.mu.Unlock()
-	if err != nil {
-		return ScopedReceipt{}, err
-	}
-	if !committed.Duplicate && s.deps.afterScopedCommit != nil {
-		if err := s.deps.afterScopedCommit(result); err != nil {
-			return ScopedReceipt{}, err
-		}
-	}
-	return result, nil
 }

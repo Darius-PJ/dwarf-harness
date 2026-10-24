@@ -29,6 +29,7 @@ type scopedWorkState struct {
 	dispatched, ended, released bool
 	outcome                     string
 	sequence                    uint64
+	receipt                     ScopedReceipt
 }
 
 type scopedPlan struct {
@@ -161,6 +162,14 @@ func (s *Service) loadWork(ctx context.Context, id uuid.UUID, through uint64) (s
 				if p.WorkID == id {
 					work.ended, work.version, work.outcome = true, p.Version, p.Outcome
 					work.released = releasesWork(work.admission.Kind, p.Outcome)
+				}
+			case ledger.TypeRuntimeScopedReceipt:
+				p, err := ledger.DecodeRuntimeScopedReceipt(record.Payload)
+				if err != nil {
+					return err
+				}
+				if p.WorkID == id {
+					work.receipt = scopedReceiptAt(p, record.Seq)
 				}
 			}
 		}

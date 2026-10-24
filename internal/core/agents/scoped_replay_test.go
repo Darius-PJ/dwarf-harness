@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"testing"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
 func scopedDecode[T any](t testing.TB, decode func(json.RawMessage) (T, error), payload json.RawMessage) T {
@@ -42,6 +44,11 @@ func scopedPreflightFixture(t *testing.T, f *serviceFixture, drafts []ledger.Dra
 		t.Fatalf("preflight baseline: %+v %v", report, err)
 	}
 	defer baseline.Close()
+	return scopedPreflightAgainst(t, f.service, baseline, drafts, intent)
+}
+
+func scopedPreflightAgainst(t *testing.T, service, baseline *Service, drafts []ledger.Draft, intent ledger.RuntimeScopedReceipt) (*scopedGroup, error) {
+	t.Helper()
 	for _, draft := range drafts {
 		if draft.Type == ledger.TypeRuntimeScopedReceipt {
 			if candidate, err := ledger.DecodeRuntimeScopedReceipt(draft.Payload); err == nil {
@@ -50,10 +57,10 @@ func scopedPreflightFixture(t *testing.T, f *serviceFixture, drafts []ledger.Dra
 		}
 	}
 	input := scopedInput{id: intent.CommandID, digest: intent.SubmissionSHA256, sub: intent.Submission}
-	f.service.mu.Lock()
-	defer f.service.mu.Unlock()
-	group, err := f.service.preflightScoped(context.Background(), input, drafts)
-	if !reflect.DeepEqual(f.service.p, baseline.p) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	group, err := service.preflightScoped(context.Background(), input, drafts)
+	if !reflect.DeepEqual(service.p, baseline.p) {
 		t.Fatal("preflight installed part of a group before acceptance")
 	}
 	return group, err
@@ -540,22 +547,38 @@ func FuzzScopedGroupReplay(f *testing.F) {
 	f.Add(byte(3), uint64(0xd2), []byte(nil))
 	f.Add(byte(4), uint64(0), []byte(nil))
 	f.Add(byte(4), uint64(1), []byte(nil))
+	ctx := context.Background()
+	fixture, commits := scopedGoldenFixture(f, "11", 16)
+	if err := fixture.store.Close(); err != nil {
+		f.Fatal(err)
+	}
+	prepared := testRoot(f)
+	if err := os.CopyFS(prepared, os.DirFS(fixture.root)); err != nil {
+		f.Fatal(err)
+	}
+	var err error
+	fixture.store, _, err = ledgerstore.Open(fixture.root, ledger.Defined())
+	if err != nil {
+		f.Fatal(err)
+	}
+	fixture.service, _, err = Open(ctx, fixture.store, fixture.root, DefaultLimits())
+	if err != nil {
+		f.Fatal(err)
+	}
+	baseline, report, err := Open(ctx, fixture.store, fixture.root, DefaultLimits())
+	if err != nil || len(report.Issues) != 0 {
+		f.Fatalf("fuzz baseline: %+v %v", report, err)
+	}
+	f.Cleanup(func() { _ = baseline.Close() })
+	before := fixture.store.Durable()
+	canonical := scopedGoldenDrafts(commits[16])
+	intent := scopedDecode(f, ledger.DecodeRuntimeScopedReceipt, canonical[3].Payload)
 	f.Fuzz(func(t *testing.T, mode byte, value uint64, input []byte) {
 		t.Parallel()
 		if len(input) > 64<<10 {
 			return
 		}
-		ctx := context.Background()
-		fixture, commits := scopedGoldenFixture(t, "11", 16)
-		var err error
-		fixture.service, _, err = Open(ctx, fixture.store, fixture.root, DefaultLimits())
-		if err != nil {
-			t.Fatal(err)
-		}
 		drafts := scopedGoldenDrafts(commits[16])
-		intent := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, drafts[3].Payload)
-		originalRevision := append([]byte(nil), drafts[1].Payload...)
-		originalUsage := append([]byte(nil), drafts[2].Payload...)
 		knownValid := false
 		switch mode % 5 {
 		case 0:
@@ -579,8 +602,7 @@ func FuzzScopedGroupReplay(f *testing.F) {
 			knownValid = revision.ExpectedVersion == 1
 			drafts[1].Payload = testPayload(t, revision)
 		}
-		before := fixture.store.Durable()
-		_, err = scopedPreflightFixture(t, fixture, drafts, intent)
+		_, err := scopedPreflightAgainst(t, fixture.service, baseline, drafts, intent)
 		if fixture.store.Durable() != before {
 			t.Fatal("preflight appended a fuzzed group")
 		}
@@ -596,28 +618,33 @@ func FuzzScopedGroupReplay(f *testing.F) {
 		drafts[1].Payload = testPayload(t, scopedDecode(t, ledger.DecodePrivateScopedRevision, drafts[1].Payload))
 		drafts[2].Payload = testPayload(t, scopedDecode(t, ledger.DecodeRuntimeLocalUsed, drafts[2].Payload))
 		drafts[3].Payload = testPayload(t, scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, drafts[3].Payload))
-		if !bytes.Equal(drafts[1].Payload, originalRevision) || !bytes.Equal(drafts[2].Payload, originalUsage) {
+		if !bytes.Equal(drafts[1].Payload, canonical[1].Payload) || !bytes.Equal(drafts[2].Payload, canonical[2].Payload) {
 			t.Fatal("accepted a group inconsistent with the fixed submission and pre-transition state")
 		}
-		if err := fixture.service.Close(); err != nil {
+		root := testRoot(t)
+		if err := os.CopyFS(root, os.DirFS(prepared)); err != nil {
 			t.Fatal(err)
 		}
-		fixture.service = nil
-		if _, err := fixture.store.Submit(ctx, drafts[0], drafts[1:]); err != nil {
+		store, _, err := ledgerstore.Open(root, ledger.Defined())
+		if err != nil {
 			t.Fatal(err)
 		}
-		before = fixture.store.Durable()
-		var report Reconciliation
-		fixture.service, report, err = Open(ctx, fixture.store, fixture.root, DefaultLimits())
+		t.Cleanup(func() { _ = store.Close() })
+		if _, err := store.Submit(ctx, drafts[0], drafts[1:]); err != nil {
+			t.Fatal(err)
+		}
+		committed := store.Durable()
+		service, report, err := Open(ctx, store, root, DefaultLimits())
 		if err != nil || len(report.Issues) != 0 || len(report.PendingWork) != 0 {
 			t.Fatalf("canonical accepted group failed replay: %+v %v", report, err)
 		}
-		page, err := fixture.service.ReadPrivate(ctx, PrivateRead{ReadBinding: ReadBinding{Binding: Binding{drafts[1].AgentID, drafts[1].ContextID}, Scope: "context"}, Revision: 2, Slot: "memory", MaxBytes: 1024})
+		t.Cleanup(func() { _ = service.Close() })
+		page, err := service.ReadPrivate(ctx, PrivateRead{ReadBinding: ReadBinding{Binding: Binding{drafts[1].AgentID, drafts[1].ContextID}, Scope: "context"}, Revision: 2, Slot: "memory", MaxBytes: 1024})
 		if err != nil || string(page.Bytes) != "work memory\n" {
 			t.Fatalf("accepted transition lost its shared private history: %+v %v", page, err)
 		}
-		book, err := fixture.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
-		if err != nil || book.Used.LocalUnits != 2 || book.Held != (Exposure{}) || fixture.store.Durable() != before {
+		book, err := service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+		if err != nil || book.Used.LocalUnits != 2 || book.Held != (Exposure{}) || store.Durable() != committed {
 			t.Fatalf("accepted transition lost its exact charge or replay appended: %+v %v", book, err)
 		}
 	})

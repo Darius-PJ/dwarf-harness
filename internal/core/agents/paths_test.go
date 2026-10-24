@@ -10,7 +10,7 @@ import (
 
 const testContext = "019a0700-0000-7000-8000-000000000003"
 
-func testRoot(t *testing.T) string {
+func testRoot(t testing.TB) string {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

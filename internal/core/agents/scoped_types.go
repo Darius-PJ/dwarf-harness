@@ -84,6 +84,98 @@ type TaskMutation struct {
 	FailureEvidence            *ledger.SubjectRef
 }
 
+type TurnAdmission struct {
+	CommandID, GrantID, TurnID uuid.UUID
+	ExpectedVersion            uint64
+	TaskBinding                *ledger.TaskBinding
+}
+
+type TurnCancellation struct {
+	CommandID, GrantID, TurnID uuid.UUID
+	ExpectedVersion            uint64
+}
+
+// LocalAdmission binds a file effect but neither dispatches nor executes it.
+type LocalAdmission struct {
+	CommandID, GrantID, WorkID, ParentTurnID uuid.UUID
+	ExpectedVersion                          uint64
+	LocalOperation                           string
+	Target                                   ledger.Resource
+	ArgumentsSHA256                          ledger.Digest
+	ToolSchema, MaxBytes                     int64
+	TaskBinding                              *ledger.TaskBinding
+}
+
+// Host controls select immutable admitted work, never a caller-selected origin.
+type LocalDispatch struct {
+	CommandID, WorkID uuid.UUID
+	ExpectedVersion   uint64
+	ArgumentsSHA256   ledger.Digest
+}
+
+type LocalEnding struct {
+	CommandID, WorkID uuid.UUID
+	ExpectedVersion   uint64
+	Outcome           string
+}
+
+type TurnEnding struct {
+	CommandID, TurnID uuid.UUID
+	ExpectedVersion   uint64
+	Outcome           string
+}
+
+type EndingRequest struct {
+	CommandID, WorkID uuid.UUID
+	ExpectedVersion   uint64
+}
+
+type ScopedPrivateWrite struct {
+	CommandID, GrantID uuid.UUID
+	Scope              string
+	ExpectedVersion    uint64
+	Changes            []Change
+}
+
+type ScopedPrivateRead struct {
+	CommandID, GrantID uuid.UUID
+	Scope, Slot        string
+	Revision, Cursor   uint64
+	MaxBytes           int64
+}
+
+type ScopedPrivatePage struct {
+	Receipt ScopedReceipt
+	Page    PrivatePage
+}
+
+type ArtifactRead struct {
+	CommandID, GrantID uuid.UUID
+	Artifact           ledger.ArtifactRef
+	MaxBytes           int64
+}
+
+type ArtifactPage struct {
+	Receipt ScopedReceipt
+	Bytes   []byte
+}
+
+type ArtifactLookup struct {
+	Artifact ledger.ArtifactRef
+	MaxBytes int64
+}
+
+type ScopedSnapshotLookup struct {
+	GrantID uuid.UUID
+	Scope   string
+}
+
+type ScopedScratchLookup struct {
+	GrantID, WorkspaceID, ExpectedScratchID uuid.UUID
+}
+
+type WorkLookup struct{ WorkID, GrantID uuid.UUID }
+
 type TaskLookup struct{ TaskID, GrantID uuid.UUID }
 type TaskList struct {
 	GrantID, AfterTaskID uuid.UUID
@@ -160,11 +252,12 @@ type CapacityView struct {
 // WorkView describes admission/accounting only. recovery_pending means Open
 // preserved a hold; it neither resumed work nor inferred its external outcome.
 type WorkView struct {
-	Admission      ledger.RuntimeWorkAdmitted
-	Origin         ledger.Origin
-	Version        int64
-	State, Outcome string
-	Held           Exposure
+	Admission         ledger.RuntimeWorkAdmitted
+	Origin            ledger.Origin
+	Version           int64
+	State, Outcome    string
+	Held              Exposure
+	Dispatched, Ended bool
 	// Sequence identifies the original admission record.
 	Sequence uint64
 }

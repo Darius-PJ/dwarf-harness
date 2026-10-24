@@ -4,13 +4,14 @@
 //
 // # Host trust and lifecycle
 //
-// Service methods are trusted owner entrances. BindAgent fixes a registered
-// agent, its session and context for an Agent entrance; possession of either
-// handle is not authentication. Agent operations cannot replace their origin
-// or actor, and check current authority rather than inheriting owner access.
-// Unknown or mismatched bindings return ErrNotBound. Only Service exposes
-// private-data reads and writes. This package launches no child or provider
-// and exposes no work admission, dispatch, ending, promotion or repair command.
+// Service methods are trusted owner or host entrances. BindAgent fixes a
+// registered agent, its session and context for an Agent entrance; possession
+// of either handle is not authentication. Agent operations cannot replace
+// their origin or actor, and check current authority rather than inheriting
+// owner access. Unknown or mismatched bindings return ErrNotBound. Owner
+// commands refuse a supplied authority GrantID before identity or state lookup.
+// Admission, dispatch and ending methods record decisions only: this package
+// runs no file tool, process, provider, scheduler, promotion or repair command.
 //
 // The host opens one Service for the colony store and keeps that store alive
 // until Service.Close has drained active calls. Close fences new calls with
@@ -51,14 +52,21 @@
 // per object and 4 MiB per operation. Lower runtime limits do not invalidate
 // history. The separate hard object-storage support ceiling is 1 MiB in both
 // private families; history above that ceiling remains unsupported.
+// Limits' amount ceilings are positive. MaxDelegationDepth and
+// MaxTaskDependencies alone may be zero: shape ceilings forbidding delegation
+// or dependencies. MaxScopedBytes defaults to 4 MiB and MaxSelectedObjects to
+// 64; these guard new scoped operations, not matched historical requests.
 //
 // Objects are written to an owning-directory temporary file, flushed, closed
 // and durably renamed before the single ledger commit. An existing addressed
 // object must match its size and digest and is never overwritten. Successfully
 // flushed directory identities are remembered only by the Service instance;
-// failed flushes are not remembered. Registration, creation and private writes
-// submit six-, four- and three-record groups respectively. Markdown completion
-// and its in-memory availability projection precede a successful acknowledgement.
+// failed flushes are not remembered. Owner registration, context creation and
+// private writes submit six-, four- and three-record groups respectively.
+// Agent private writes submit a four-record scoped group, with agent command
+// and receipt provenance and a core private revision on the same shared head.
+// Markdown completion and its whole availability projection precede a
+// successful acknowledgement from either entrance.
 // After Submit succeeds, caller cancellation cannot undo the commit or abandon
 // its completion. Refusals before Submit consume no command ID; published but
 // unreferenced objects remain unselected.
@@ -70,6 +78,11 @@
 // returns ErrCommandMismatch. CommandStatus requires the receipt's own binding,
 // command ID and submission digest. It returns ErrUnavailable for an absent
 // private receipt. Old receipt lookups and historical reads scan ledger history.
+// A matched private-write retry waits for the same scope's in-flight completion,
+// without holding the service lock, reserving bytes, charging, inspecting or
+// materializing again. Cancellation ends that wait, not the committed fact;
+// receipt-only status remains available. A failed completion does not erase
+// its historical receipt.
 // A new private write scans the whole ledger for preflight integrity and again
 // for committed materialization. After replay, Open scans the whole history
 // per scope to validate objects, with another scan for each scope it completes.
@@ -103,29 +116,57 @@
 // follows dependencies, current task.start and turn.start chains, and capacity
 // enrolment. Colony and agent enrolment are required; context enrolment is
 // optional. A free-slot shortage yields ready_queued, not permission denial.
+// Ready describes the assignee's own start authority. The owner's task-start
+// entrance requires only the assignee's current turn-admission chain.
 //
 // ConfigureCapacity changes ceilings without resetting usage or releasing
 // occupied work. One checked book applies charges and holds to colony, agent,
 // context and every grant in the chain. A dispatch consumes its reserved unit
 // once. Unknown work endings retain holds; proven endings release only their
 // applicable occupancy, never consumed units. Lowering capacity below occupancy,
-// revocation and restart do not erase it. Producer Limits bound new requests,
-// not historical replay.
+// revocation and restart do not erase it. Capacity fields are nonnegative and
+// may be zero; max_operation_bytes is independent of local_slots. Producer
+// Limits bound new requests, not historical replay.
+//
+// StartTurn is Agent-only. It requires current private integrity, an exact
+// active assignment when task-bound, and current turn.start authority. One
+// active turn per context is independent of configurable agent and colony
+// ceilings; the agent turn-slot Limits default is three. Busy refusals consume
+// neither a command nor a work ID. A turn slot grants no model-call authority.
+// AdmitLocal holds a local slot, bytes and one unit for a concrete file effect.
+// BeginLocal rechecks current authority, assignment and dedicated scratch at
+// dispatch and consumes that held unit once. External classes have no producer.
+//
+// Host endings bind the original work, not a replacement origin or target.
+// Agent CancelTurn selects its own current turn.cancel chain, which may differ
+// from the admission grant; the owner derives that grant and accepts no supplied
+// selection. Reassignment fences the old Agent entrance but does not prevent
+// owner or host endings. A turn may end once every child has an ending record:
+// unknown is an ending, but retains its existing local and unit accounting.
+// TurnStatus distinguishes dispatched and ended work and exposes no executor.
+// ReconcileAdmissions explicitly resolves one pending work item: proven-unsent
+// local work is released, dispatched work without an ending becomes unknown,
+// and an unmatched turn with no unended child becomes interrupted. It never
+// starts work or guesses a known outcome for an already unknown-ended child.
 //
 // Owner capacity views show aggregate accounting. An Agent's own grant and
 // capacity views show its fixed-grantee leaf and own originating usage and
-// holds, even when that grant is no longer current. They disclose neither shared
-// free capacity nor another origin's occupancy. Denial remains distinct from
-// exhaustion, and no status result authorizes a subsequent operation.
+// holds, even when that grant is no longer current. Own usage and Agent
+// TurnStatus are session-exact: agent, session and context must all match.
+// They disclose neither shared free capacity nor another origin's occupancy.
+// Denial remains distinct from exhaustion, and no status result authorizes a
+// subsequent operation.
 //
 // Scoped receipts use the frozen schema-2 semantic submission and contain no
 // task definition or subject. A same-principal, same-digest retry returns its
-// original receipt before CAS, runtime ceilings and capacity checks, but only
-// after current authorization. Cold command lookup and a second tail scan avoid
-// treating a cache or prefix miss as proof of absence. Before retaining task
-// description bytes, preparation reserves finite exposure; the retained copy is
-// rehashed before publication. Commit preflight repeats authority and state
-// checks, then validates the whole group with the same reducer used by Open.
+// original receipt before CAS, runtime ceilings and durable capacity checks,
+// but only after current authorization. Cold command lookup and a second tail
+// scan avoid treating a cache or prefix miss as proof of absence. Before
+// retaining task-description or private-write bytes, preparation reserves
+// finite exposure; the retained copy is rehashed before publication. Commit
+// preflight repeats authority and state checks, then validates the whole group
+// with the same reducer used by Open. Publication, verified reads and private
+// materialization do not hold the service lock.
 //
 // # Materialization and integrity
 //
@@ -149,20 +190,48 @@
 // to fence an intact current head, but reading that historical object fails.
 // Transcript history remains selected and its corruption fences the scope.
 // IntegrityIssue carries binding, slot, revision and expected/observed digests,
-// never private content. No authorized foreign-file or missing-object repair
-// path is provided here.
+// never private content. An authorized Agent Snapshot shows its own scope's
+// details; a context view reduces an inherited agent-scope failure to one fixed,
+// hash-free agent_integrity fence. Agent private-integrity refusals are plain
+// ErrIntegrity, with no hashes. Owner diagnostics are unchanged. No authorized
+// foreign-file or missing-object repair path is provided here.
 //
 // # Reads and scratch projection
 //
 // Snapshot returns the selected revision, heads and availability/issues, not
-// private bytes. ReadPrivate requires an explicit committed revision and byte
-// budget. It reads verified immutable objects, never Markdown. Transcript pages
+// private bytes. Agent Snapshot requires context.inspect on the scope's entire
+// declared slot set; it never reports unauthorized slots as absent. Agent
+// ReadPrivate and WritePrivate require current exact-scope authority.
+// ReadPrivate requires an explicit committed revision and byte budget.
+// It reads verified immutable objects, never Markdown. Transcript pages
 // contain whole occurrences; NextCursor is the last returned occurrence's ledger
 // sequence when more remain, or zero at the end. If the first remaining chunk
 // cannot fit, ErrTooLarge is returned rather than an empty advancing page.
 //
+// Agent read retries re-read and verify the originally selected objects or
+// artifact, and recheck authority immediately before disclosure. They consume
+// no second unit and ignore new-work Limits and max_operation_bytes, but must
+// still acquire the shared preparation slot and transient local/buffer exposure.
+// Private reads reserve selected backing allocations, including each object's
+// one-byte growth check. Artifact reads reserve ledgerstore.MaxBodyBytes plus
+// its growth-check byte, never just the caller's declared maximum. A physical
+// capacity refusal is busy and writes nothing. ScopedCommandStatus needs no
+// byte reservation or private-object/body I/O.
+//
+// ReadArtifact requires an exact recorded source body reference and verifies
+// both digest and declared size. An Agent needs an exact owner-rooted
+// artifact.read chain, or a task description's audience and current
+// task.inspect authority. Authorization precedes existence-sensitive errors.
+// Missing, corrupt and collected bodies remain distinct authorized errors;
+// no failure returns a partial body. The owner's passive ReadArtifact requires
+// no enrolment, consumes no unit and writes no group, but still shares the
+// process preparation bound and uses the store's real maximum allocation.
+//
 // ScratchBinding is a read-only projection of frozen workspace scratch-created
 // and scratch-closed records, keyed by workspace and colony-unique context. It
-// reports absent, present, closed or mismatch, and distinguishes dedicated from
-// temporary scratches. It never creates a scratch or selects another context.
+// reports absent, present, closed or mismatch to the owner, and distinguishes
+// dedicated from temporary scratches. The Agent entrance requires file.read
+// on its own workspace root (empty prefix), not merely a sub-prefix; a foreign
+// or mismatched binding is denied. Neither entrance creates a scratch or
+// selects another context.
 package agents

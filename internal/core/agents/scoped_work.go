@@ -84,7 +84,8 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 	if !found {
 		return plan, ErrUnavailable
 	}
-	if work.origin != sub.Origin || work.turn != g.turn || work.admission.GrantID != sub.GrantID || !sameScopedValue(work.admission.Target, sub.Target) {
+	agentCancel := sub.Actor == "agent" && sub.Operation == "turn.cancel"
+	if work.origin != sub.Origin || work.turn != g.turn || !agentCancel && work.admission.GrantID != sub.GrantID || !sameScopedValue(work.admission.Target, sub.Target) {
 		return plan, ErrDenied
 	}
 	if sub.Expected.Version != work.version {
@@ -138,6 +139,9 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 					return plan, ErrInvalid
 				}
 				if sub.Actor == "agent" {
+					if work.version != 1 {
+						return plan, ErrDenied
+					}
 					if _, err := s.authorize(ctx, work.origin, sub.GrantID, "turn.cancel", []ledger.Resource{sub.Target}, nil, 0, through); err != nil {
 						return plan, err
 					}

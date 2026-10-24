@@ -100,4 +100,13 @@ func TestScopedLiveLimits(t *testing.T) {
 	if err := limits.validate(); err != nil {
 		t.Fatalf("small positive live limits refused: %v", err)
 	}
+	limits.MaxAgentTurnSlots = 0
+	if err := limits.validate(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero agent turn ceiling accepted: %v", err)
+	}
+	limits.MaxAgentTurnSlots = 1
+	limits.MaxDelegationDepth, limits.MaxTaskDependencies = 0, 0
+	if err := limits.validate(); err != nil {
+		t.Fatalf("positive amount and zero shape ceilings refused: %v", err)
+	}
 }

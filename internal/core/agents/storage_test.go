@@ -12,14 +12,14 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-func writeTestFile(t *testing.T, path string, data []byte) {
+func writeTestFile(t testing.TB, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func readTestFile(t *testing.T, path string) []byte {
+func readTestFile(t testing.TB, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)
 	if err != nil {

@@ -118,6 +118,18 @@ func TestScopedIdentityAndDefaultDeny(t *testing.T) {
 	if err != nil || receipt.Actor != "agent" || receipt.Origin != (ledger.Origin{AgentID: origin.AgentID, SessionID: privateID(101), ContextID: origin.ContextID}) || receipt.Version != 2 {
 		t.Fatalf("non-audience assigner or bound origin: %+v %v", receipt, err)
 	}
+	creator := borrowed
+	creator.GrantID, creator.Grantee = privateID(520), origin
+	scopedRoot(t, f.service, origin, 2, 521, creator)
+	collision := TaskCreation{CommandID: privateID(620), GrantID: creator.GrantID, TaskID: privateID(400), Description: []byte("creator cannot inspect the existing task"), AcceptanceSHA256: ledger.Digest(sha256.Sum256([]byte("accept"))), Audience: []uuid.UUID{other.AgentID}}
+	before = f.store.Durable()
+	if _, err := agent.CreateTask(ctx, collision); err != ErrDenied || f.store.Durable() != before {
+		t.Fatalf("unnamed creation authority disclosed an existing task's version: %v", err)
+	}
+	collision.TaskID = privateID(630)
+	if _, err := agent.CreateTask(ctx, collision); err != nil {
+		t.Fatalf("creation refusal consumed its command ID: %v", err)
+	}
 	for _, unbound := range []*Agent{nil, {}} {
 		if _, err := unbound.AssignTask(ctx, request); !errors.Is(err, ErrNotBound) {
 			t.Fatalf("unbound entrance: %v", err)

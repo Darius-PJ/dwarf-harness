@@ -85,37 +85,49 @@ func encodeCreation(ids submissionIDs, kind string) ([]byte, ledger.Digest, erro
 }
 
 func encodePrivateWrite(ids submissionIDs, scope string, expected uint64, changes []privateChange) ([]byte, ledger.Digest, error) {
+	target, args, err := canonicalPrivateWrite(scope, expected, changes)
+	if err != nil {
+		return nil, ledger.Digest{}, err
+	}
+	return encodeSubmission(ids, "private_write", target, expected, args)
+}
+
+// Both submission families hash the same borrowed changes before reserving a
+// retained byte copy. Only their envelopes differ.
+func canonicalPrivateWrite(scope string, expected uint64, changes []privateChange) (canonicalTarget, writeArguments, error) {
+	var target canonicalTarget
+	var args writeArguments
 	if scope != "agent" && scope != "context" || expected == 0 || expected >= math.MaxInt64 {
-		return nil, ledger.Digest{}, fmt.Errorf("%w: scope or expected version", ErrInvalid)
+		return target, args, fmt.Errorf("%w: scope or expected version", ErrInvalid)
 	}
 	limit := 4
 	if scope == "agent" {
 		limit = 2
 	}
 	if len(changes) == 0 || len(changes) > limit {
-		return nil, ledger.Digest{}, fmt.Errorf("%w: change count", ErrInvalid)
+		return target, args, fmt.Errorf("%w: change count", ErrInvalid)
 	}
 	ordered := slices.Clone(changes)
 	slices.SortFunc(ordered, func(a, b privateChange) int { return cmp.Compare(a.slot, b.slot) })
-	args := writeArguments{Changes: make([]canonicalChange, 0, len(ordered))}
-	target := canonicalTarget{Scope: scope, Slots: make([]string, 0, len(ordered))}
+	args.Changes = make([]canonicalChange, 0, len(ordered))
+	target = canonicalTarget{Scope: scope, Slots: make([]string, 0, len(ordered))}
 	total := 0
 	for i, change := range ordered {
 		if i > 0 && change.slot == ordered[i-1].slot {
-			return nil, ledger.Digest{}, fmt.Errorf("%w: duplicate slot", ErrInvalid)
+			return target, args, fmt.Errorf("%w: duplicate slot", ErrInvalid)
 		}
 		if err := validateChange(scope, change); err != nil {
-			return nil, ledger.Digest{}, err
+			return target, args, err
 		}
 		if len(change.data) > maxObjectBytes || len(change.data) > maxOperationBytes-total {
-			return nil, ledger.Digest{}, ErrTooLarge
+			return target, args, ErrTooLarge
 		}
 		total += len(change.data)
 		entry := canonicalChange{Slot: change.slot, Mode: change.mode}
 		if change.mode != "clear" {
 			digest, err := hashObject(change.data)
 			if err != nil {
-				return nil, ledger.Digest{}, err
+				return target, args, err
 			}
 			n := int64(len(change.data))
 			entry.SHA256, entry.Bytes = digest, &n
@@ -123,7 +135,7 @@ func encodePrivateWrite(ids submissionIDs, scope string, expected uint64, change
 		args.Changes = append(args.Changes, entry)
 		target.Slots = append(target.Slots, change.slot)
 	}
-	return encodeSubmission(ids, "private_write", target, expected, args)
+	return target, args, nil
 }
 
 func validateChange(scope string, change privateChange) error {

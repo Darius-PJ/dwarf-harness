@@ -158,6 +158,39 @@ func (s *Service) lookupOperation(ctx context.Context, op privateOperation) (com
 	}
 	return m, err
 }
+
+// A historical receipt does not revalidate availability, but it must not race
+// ahead of an in-flight completion of the same private head. Both entrances use
+// this wait, without holding mu or taking a new byte/unit reservation.
+func (s *Service) awaitPrivateReplay(ctx context.Context, ids submissionIDs, scope string, sub *ledger.ScopedSubmission) error {
+	if s.deps.beforeReplayWait != nil {
+		s.deps.beforeReplayWait()
+	}
+	unlock, err := s.acquireScope(ctx, keyFor(ids, scope))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.usableLocked(ctx); err != nil {
+		return err
+	}
+	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+		return err
+	}
+	if sub != nil {
+		return s.scopedAuthority(ctx, *sub)
+	}
+	current, err := s.bindingLocked(Binding{ids.agent, ids.context}, false)
+	if err != nil {
+		return err
+	}
+	if current != ids {
+		return ErrNotBound
+	}
+	return nil
+}
 func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, error) {
 	m, err := s.lookupOperation(ctx, op)
 	if err != nil {
@@ -166,7 +199,14 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, er
 	}
 	if m.found {
 		s.mu.Unlock()
-		return matchReceipt(m, op.ids, op.digest)
+		result, err := matchReceipt(m, op.ids, op.digest)
+		if err == nil && op.operation == "private_write" {
+			err = s.awaitPrivateReplay(ctx, op.ids, op.scope, nil)
+		}
+		if err != nil {
+			return Receipt{}, err
+		}
+		return result, nil
 	}
 	total := int64(0)
 	for _, c := range op.changes {

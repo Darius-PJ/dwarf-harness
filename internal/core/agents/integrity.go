@@ -32,8 +32,15 @@ func readObject(path privateScope, h Head) (data []byte, err error) {
 	if err != nil {
 		return nil, errors.Join(ErrIntegrity, err)
 	}
-	data, err = io.ReadAll(io.LimitReader(f, maxObjectBytes+1))
-	err = errors.Join(err, f.Close())
+	// A selected object reserves exactly its declared bytes plus this one
+	// growth-detection byte, rather than ReadAll's growing backing arrays.
+	buffer := make([]byte, h.Bytes+1)
+	n, readErr := io.ReadFull(f, buffer)
+	err = f.Close()
+	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+		err = errors.Join(readErr, err)
+	}
+	data = buffer[:n]
 	if err != nil {
 		return nil, errors.Join(ErrIntegrity, err)
 	}
