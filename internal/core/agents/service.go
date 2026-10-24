@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -29,6 +30,8 @@ type serviceDeps struct {
 	afterCommit       func(Receipt)
 	afterScopedSubmit func()
 	afterScopedCommit func(ScopedReceipt) error
+	afterReviewCommit func(ReviewReceipt) error
+	reviewClock       func() (int64, error)
 	beforeMaterialize func(Binding, string, string) error
 	beforeProjection  func(Binding, string)
 	beforeLookup      func()
@@ -100,6 +103,7 @@ type Service struct {
 	gates         map[scopeKey]*scopeGate
 	preparing     int
 	openedThrough uint64
+	reviewSample  int64
 }
 
 func Open(ctx context.Context, store privateStore, colonyDir string, limits Limits) (*Service, Reconciliation, error) {
@@ -124,6 +128,9 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 	actual, err := os.Stat(store.LogDir())
 	if err != nil || !os.SameFile(want, actual) {
 		return nil, report, ErrNotBound
+	}
+	if deps.reviewClock == nil {
+		deps.reviewClock = func() (int64, error) { return time.Now().UTC().UnixNano(), nil }
 	}
 	s := &Service{store: store, colony: colony, limits: limits, deps: deps, p: newProjection(), gates: map[scopeKey]*scopeGate{}}
 	if err := s.refreshLocked(ctx, store.Durable()); err != nil {

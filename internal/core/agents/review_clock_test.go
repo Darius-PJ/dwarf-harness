@@ -60,32 +60,3 @@ func TestReviewClockExpiryCannotLowerIncarnationFloor(t *testing.T) {
 		t.Fatalf("clock recovery at floor = %d, %v", floor, err)
 	}
 }
-
-func TestReviewClockConversionRejectsOverflowBeforeMultiplication(t *testing.T) {
-	t.Parallel()
-	for _, row := range []struct {
-		name                 string
-		seconds, nanos, want int64
-		wantErr              error
-	}{
-		{"first_positive_instant", 0, 1, 1, nil},
-		{"seconds_and_fraction", 12, 345, 12000000345, nil},
-		{"last_representable_instant", 9223372036, 854775807, math.MaxInt64, nil},
-		{"one_nanosecond_overflow", 9223372036, 854775808, 0, ErrReviewClock},
-		{"seconds_overflow", 9223372037, 0, 0, ErrReviewClock},
-		{"positive_wrapped_overflow", 18446744074, 0, 0, ErrReviewClock},
-		{"maximum_seconds_overflow", math.MaxInt64, 0, 0, ErrReviewClock},
-		{"epoch_is_nonpositive", 0, 0, 0, ErrReviewClock},
-		{"before_epoch", -1, 999999999, 0, ErrReviewClock},
-		{"negative_fraction", 1, -1, 0, ErrReviewClock},
-		{"unnormalized_fraction", 1, 1000000000, 0, ErrReviewClock},
-	} {
-		t.Run(row.name, func(t *testing.T) {
-			t.Parallel()
-			sample, err := reviewUnixNano(row.seconds, row.nanos)
-			if sample != row.want || !errors.Is(err, row.wantErr) {
-				t.Fatalf("sample = %d, %v; want %d, %v", sample, err, row.want, row.wantErr)
-			}
-		})
-	}
-}

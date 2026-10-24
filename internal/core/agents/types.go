@@ -40,6 +40,7 @@ type Limits struct {
 	MaxAgentTurnSlots       int64
 	MaxScopedBytes          int64
 	MaxSelectedObjects      int
+	MaxReviewEvidence       int
 }
 
 func DefaultLimits() Limits {
@@ -51,6 +52,7 @@ func DefaultLimits() Limits {
 		MaxGrantRecipients: 64, MaxTaskAudience: 64, MaxTaskDependencies: 32,
 		MaxBudgetScopes: 12, MaxTaskDescriptionBytes: 1 << 20,
 		MaxAgentTurnSlots: 3, MaxScopedBytes: 4 << 20, MaxSelectedObjects: 64,
+		MaxReviewEvidence: 16,
 	}
 }
 func (l Limits) validate() error {
@@ -61,7 +63,7 @@ func (l Limits) validate() error {
 		l.MaxDelegationDepth < 0 || l.MaxGrantOperations <= 0 || l.MaxGrantResources <= 0 ||
 		l.MaxGrantRecipients <= 0 || l.MaxTaskAudience <= 0 || l.MaxTaskDependencies < 0 ||
 		l.MaxBudgetScopes <= 0 || l.MaxTaskDescriptionBytes <= 0 || l.MaxAgentTurnSlots <= 0 ||
-		l.MaxScopedBytes <= 0 || l.MaxSelectedObjects <= 0 {
+		l.MaxScopedBytes <= 0 || l.MaxSelectedObjects <= 0 || l.MaxReviewEvidence <= 0 {
 		return ErrInvalid
 	}
 	return nil

@@ -107,20 +107,28 @@ func (s *Service) loadTask(ctx context.Context, id uuid.UUID, through uint64) (s
 	var task scopedTaskState
 	found := false
 	err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-		_, scoped, review, err := decodeFamily(draftsOf(commit), commit.First)
-		if err != nil {
-			return err
-		}
-		if scoped != nil && scoped.task != nil && scoped.task.TaskID == id {
-			p := *scoped.task
-			sequence := commit.First + uint64(scoped.effectIndex)
-			if p.Action == "create" {
-				task.descriptionSequence = sequence
+		for _, record := range commit.Records {
+			switch record.Type {
+			case ledger.TypeRuntimeTaskChanged:
+				p, err := ledger.DecodeRuntimeTaskChanged(record.Payload)
+				if err != nil {
+					return err
+				}
+				if p.TaskID == id {
+					if p.Action == "create" {
+						task.descriptionSequence = record.Seq
+					}
+					task.record, task.sequence, found = p, record.Seq, true
+				}
+			case ledger.TypeRuntimeReviewResult:
+				p, err := ledger.DecodeRuntimeReviewResult(record.Payload)
+				if err != nil {
+					return err
+				}
+				if p.Binding.TaskID == id && p.Verdict != "reject" {
+					task = taskAfterReview(task, p, record.Seq)
+				}
 			}
-			task.record, task.sequence, found = p, sequence, true
-		}
-		if review != nil && review.result != nil && review.result.Binding.TaskID == id && review.result.Verdict != "reject" {
-			task = taskAfterReview(task, *review.result, commit.First+1)
 		}
 		return nil
 	})

@@ -1,9 +1,6 @@
 package agents
 
-import (
-	"errors"
-	"math"
-)
+import "errors"
 
 var (
 	// ErrReviewClock refuses a failed, nonpositive, overflowing or regressed
@@ -13,21 +10,6 @@ var (
 	// request deadline, or strictly beyond a result deadline.
 	ErrReviewExpired = errors.New("agents: review expired")
 )
-
-// reviewUnixNano checks normalized Unix seconds and nanoseconds before their
-// conversion can wrap, including overflow that would wrap to a positive value.
-// It samples no clock; the eventual clock adapter supplies these plain values.
-func reviewUnixNano(seconds, nanos int64) (int64, error) {
-	const billion = int64(1000000000)
-	if seconds < 0 || nanos < 0 || nanos >= billion || seconds > (math.MaxInt64-nanos)/billion {
-		return 0, ErrReviewClock
-	}
-	sample := seconds*billion + nanos
-	if sample <= 0 {
-		return 0, ErrReviewClock
-	}
-	return sample, nil
-}
 
 // reviewObservation consumes nothing. It returns the incarnation's new floor
 // even when a valid sample is expired; an unsuccessful sample cannot raise it.

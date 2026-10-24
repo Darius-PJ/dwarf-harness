@@ -13,6 +13,7 @@ type reviewGroup struct {
 	result       *ledger.RuntimeReviewResult
 	first        uint64
 	receiptIndex int
+	sources      map[int64]ledger.Record // prepared immutable witnesses; nil during replay
 }
 
 func isReviewType(typ string) bool {

@@ -31,7 +31,7 @@ func TestReviewDirectGuard(t *testing.T) {
 	for _, prefix := range []int{18, 19} {
 		for _, actor := range []string{"owner", "agent"} {
 			for _, action := range []string{"complete", "fail"} {
-				t.Run(string(rune('a'+prefix-18))+"/"+actor+"/"+action, func(t *testing.T) {
+				t.Run([]string{"pending", "rejected"}[prefix-18]+"/"+actor+"/"+action, func(t *testing.T) {
 					t.Parallel()
 					f, _ := openReviewFixture(t, prefix)
 					ctx := context.Background()
@@ -146,8 +146,8 @@ func TestReviewDirectGuard(t *testing.T) {
 		q := scopedDecode(t, ledger.DecodeRuntimeReviewRequested, commits[21].Records[1].Payload)
 		r.FailureEvidence = q.FailingEvidence
 		before := f.store.Durable()
-		if _, err := f.service.TransitionTask(context.Background(), reviewOwner(), r); err == nil {
-			t.Fatal("direct fail adopted reviewed private evidence")
+		if _, err := f.service.TransitionTask(context.Background(), reviewOwner(), r); !errors.Is(err, ErrDenied) || errors.Is(err, ErrReviewRequired) {
+			t.Fatalf("direct fail adopted reviewed private evidence or guard: %v", err)
 		}
 		if f.store.Durable() != before {
 			t.Fatal("direct private failure committed")

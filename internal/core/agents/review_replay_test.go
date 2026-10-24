@@ -193,12 +193,19 @@ func TestReviewFrozenGoldenReplay(t *testing.T) {
 			if err != nil || book.Used.LocalUnits != 4 || book.Held != (Exposure{}) || len(f.service.p.reviews) != 0 {
 				t.Fatalf("review book or eviction: %+v %v", book, err)
 			}
+			for _, id := range []int{0xa1, 0xa2} {
+				book, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "agent", ID: reviewGoldenID(id)}})
+				if err != nil || book.Used.LocalUnits != 2 || book.Held != (Exposure{}) {
+					t.Fatalf("agent review charge lost: %+v %v", book, err)
+				}
+			}
 		})
 	}
 }
 
 func TestReviewLedgerRecovery(t *testing.T) {
 	t.Parallel()
+	t.Run("producer-recovery", testReviewProducerRecovery)
 	for _, row := range []struct {
 		name        string
 		prefix, id  int

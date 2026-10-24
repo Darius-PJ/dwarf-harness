@@ -56,22 +56,22 @@ func FuzzReviewGroupReplay(f *testing.F) {
 		switch mode % 6 {
 		case 0:
 			v := scopedDecode(t, ledger.DecodeRuntimeReviewResult, d[1].Payload)
-			v.ObservedUTCNS = fixture.service.p.reviewFloor + int64(value%3)
+			v.ObservedUTCNS = fixture.service.p.reviewFloor - int64(value%256)
 			d[1].Payload = testPayload(t, v)
-			valid = true
+			valid = value%256 == 0
 		case 1:
 			d[1].Payload = append([]byte(nil), input...)
 		case 2:
 			d[2].Payload = append([]byte(nil), input...)
 		case 3:
-			d[1].TypeVersion = int(value%3) + 1
+			d[1].TypeVersion = int(value%256) + 1
 			valid = d[1].TypeVersion == 1
 		case 4:
 			v := scopedDecode(t, ledger.DecodeRuntimeReviewResult, d[1].Payload)
-			v.RequestSequence += int64(value % 3)
+			v.RequestSequence += int64(value % 256)
 			d[1].Payload = testPayload(t, v)
 			rewriteReviewEffect(t, d)
-			valid = value%3 == 0
+			valid = value%256 == 0
 		case 5:
 			d[1].ContextID[15] ^= byte(value)
 			valid = byte(value) == 0
