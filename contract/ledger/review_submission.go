@@ -6,8 +6,8 @@ import (
 	"uuid"
 )
 
-// ReviewSubmission is schema 3's canonical producer encoding, proposed for freeze
-// (D125). Arguments is the matching concrete value below, not arbitrary JSON.
+// ReviewSubmission is schema 3's canonical producer encoding, frozen
+// (D144). Arguments is the matching concrete value below, not arbitrary JSON.
 // Host observations, command IDs, derived versions and usage are not inputs.
 type ReviewSubmission struct {
 	Schema    int64     `json:"schema"`

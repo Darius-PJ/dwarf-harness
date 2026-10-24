@@ -158,8 +158,9 @@
 // A Catalogue lists the record type versions a writer may append. Defined
 // returns those this contract version defines: the four F0 record types,
 // the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
-// F2-08 types, the four F2-09 types, the four F-U3-61 types and the four
-// F3-10 types below, twenty-eight in all, each at version 1.
+// F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
+// F3-10 types, the ten F3-11 types and the three F3-12 types below,
+// forty-one in all, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -172,6 +173,10 @@
 // F-U3-61 is ticket 61's part, U3's first producer family, frozen (D130),
 // also by addition to format version 1.
 // F3-10 is ticket 10's part of F3, frozen (D139),
+// also by addition to format version 1.
+// F3-11 is ticket 11's part of F3, frozen (D140),
+// also by addition to format version 1.
+// F3-12 is ticket 12's part of F3, frozen (144),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -2056,7 +2061,7 @@
 //
 // # Review and failure decisions (F3-12)
 //
-// F3-12 is proposed for freeze (D125). It adds three version-1 types:
+// F3-12 is frozen (D144). It adds three version-1 types:
 // runtime.review_requested, runtime.review_result and runtime.review_receipt.
 // Defined contains forty-one types. Only internal/core/agents produces this
 // family through Submit. Its access-filtered metadata identifies tasks,
@@ -2084,7 +2089,7 @@
 // plain unsigned JSON decimals in 0..MaxInt64, never floats, exponent notation,
 // strings or negative numbers. Errors wrap ErrInvalid.
 //
-// The payload cap and structure are proposed for freeze (D125); producer Limits
+// The payload cap and structure are frozen (D144); producer Limits
 // ceilings are not. Required evidence has no decoder count ceiling beyond the
 // payload cap; MaxReviewEvidence (default 16), object-byte and preparation
 // ceilings constrain producers only. Historical larger values remain readable.

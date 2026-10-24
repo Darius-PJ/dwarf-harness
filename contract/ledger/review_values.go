@@ -9,11 +9,11 @@ import (
 	"uuid"
 )
 
-// MaxReviewPayloadBytes is F3-12's complete payload cap, proposed for freeze (D125).
+// MaxReviewPayloadBytes is F3-12's complete payload cap, frozen (D144).
 const MaxReviewPayloadBytes = 64 << 10
 
 // PrivateRevisionRef identifies one changed private object or transcript chunk,
-// not a mutable head or all transcript bytes. It is proposed for freeze (D125).
+// not a mutable head or all transcript bytes. It is frozen (D144).
 // The service verifies the exact source revision, change and current read rights.
 type PrivateRevisionRef struct {
 	Binding        Binding `json:"binding"`

@@ -54,8 +54,8 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // (D140): TypeRuntimeGrantIssued, TypeRuntimeGrantRevoked,
 // TypeRuntimeTaskChanged, TypeRuntimeCapacityConfigured, TypeRuntimeWorkAdmitted,
 // TypeRuntimeWorkDispatched, TypeRuntimeWorkEnded, TypeRuntimeLocalUsed,
-// TypePrivateScopedRevision and TypeRuntimeScopedReceipt; and F3-12, proposed
-// for freeze (D125): TypeRuntimeReviewRequested, TypeRuntimeReviewResult and
+// TypePrivateScopedRevision and TypeRuntimeScopedReceipt; and F3-12, frozen
+// (D144): TypeRuntimeReviewRequested, TypeRuntimeReviewResult and
 // TypeRuntimeReviewReceipt. All forty-one are at version 1. It never contains a
 // type in the reserved fixture namespace.
 func Defined() Catalogue {

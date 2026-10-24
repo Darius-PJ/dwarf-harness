@@ -7,7 +7,7 @@ import (
 	"uuid"
 )
 
-// F3-12's version-1 record types are proposed for freeze (D125).
+// F3-12's version-1 record types are frozen (D144).
 const (
 	TypeRuntimeReviewRequested = "runtime.review_requested"
 	TypeRuntimeReviewResult    = "runtime.review_result"
