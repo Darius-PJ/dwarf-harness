@@ -58,7 +58,7 @@ func (s *Service) planScopedPrivate(ctx context.Context, g *scopedGroup, first u
 			return plan, nil, 0, ErrInvalid
 		}
 		size = args.Artifact.Bytes
-		chain, err = s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, through)
+		chain, err = s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, through, nil)
 		if err != nil {
 			return plan, nil, 0, err
 		}

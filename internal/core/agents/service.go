@@ -57,18 +57,21 @@ type scratchState struct {
 	sequence uint64
 }
 type projection struct {
-	agents     map[uuid.UUID]agentState
-	contexts   map[uuid.UUID]uuid.UUID
-	sessions   map[uuid.UUID]uuid.UUID
-	scopes     map[scopeKey]*scopeState
-	scratches  map[uuid.UUID]scratchState
-	authority  int64
-	grants     map[uuid.UUID]grantState
-	tasks      map[uuid.UUID]scopedTaskState
-	work       map[uuid.UUID]scopedWorkState
-	book       budgetBook
-	maxCommand uuid.UUID
-	through    uint64
+	agents      map[uuid.UUID]agentState
+	contexts    map[uuid.UUID]uuid.UUID
+	sessions    map[uuid.UUID]uuid.UUID
+	scopes      map[scopeKey]*scopeState
+	scratches   map[uuid.UUID]scratchState
+	authority   int64
+	grants      map[uuid.UUID]grantState
+	tasks       map[uuid.UUID]scopedTaskState
+	work        map[uuid.UUID]scopedWorkState
+	reviews     map[uuid.UUID]reviewSlot
+	maxRequest  uuid.UUID
+	reviewFloor int64
+	book        budgetBook
+	maxCommand  uuid.UUID
+	through     uint64
 }
 
 func newProjection() projection {
@@ -76,7 +79,8 @@ func newProjection() projection {
 		agents: map[uuid.UUID]agentState{}, contexts: map[uuid.UUID]uuid.UUID{}, sessions: map[uuid.UUID]uuid.UUID{},
 		scopes: map[scopeKey]*scopeState{}, scratches: map[uuid.UUID]scratchState{},
 		grants: map[uuid.UUID]grantState{}, tasks: map[uuid.UUID]scopedTaskState{}, work: map[uuid.UUID]scopedWorkState{},
-		book: budgetBook{accounts: map[ledger.ScopeKey]budgetAccount{}, preparing: map[ledger.ScopeKey][4]int64{}},
+		reviews: map[uuid.UUID]reviewSlot{},
+		book:    budgetBook{accounts: map[ledger.ScopeKey]budgetAccount{}, preparing: map[ledger.ScopeKey][4]int64{}},
 	}
 }
 
@@ -250,6 +254,7 @@ func privateConsumption() ledger.Consumption {
 		ledger.TypeRuntimeGrantIssued: {1}, ledger.TypeRuntimeGrantRevoked: {1}, ledger.TypeRuntimeTaskChanged: {1}, ledger.TypeRuntimeCapacityConfigured: {1},
 		ledger.TypeRuntimeWorkAdmitted: {1}, ledger.TypeRuntimeWorkDispatched: {1}, ledger.TypeRuntimeWorkEnded: {1}, ledger.TypeRuntimeLocalUsed: {1},
 		ledger.TypePrivateScopedRevision: {1}, ledger.TypeRuntimeScopedReceipt: {1},
+		ledger.TypeRuntimeReviewRequested: {1}, ledger.TypeRuntimeReviewResult: {1}, ledger.TypeRuntimeReviewReceipt: {1},
 	}
 }
 func isPrivateType(t string) bool {

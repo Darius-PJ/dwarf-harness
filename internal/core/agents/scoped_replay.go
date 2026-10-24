@@ -38,23 +38,28 @@ func isScopedType(typ string) bool {
 	}
 }
 
-// Dispatch before either validator: the unchanged F3-10 decoder must never see
-// a scoped record, even when a malformed commit tries to mix the two families.
-func decodeFamily(drafts []ledger.Draft, first uint64) (*privateGroup, *scopedGroup, error) {
-	var private, scoped bool
+// Dispatch complete groups before any family validator. F0 command and unpin
+// records do not select a family; mixed private/scoped/review groups refuse.
+func decodeFamily(drafts []ledger.Draft, first uint64) (*privateGroup, *scopedGroup, *reviewGroup, error) {
+	var private, scoped, review bool
 	for _, draft := range drafts {
 		private = private || isPrivateType(draft.Type)
 		scoped = scoped || isScopedType(draft.Type)
+		review = review || isReviewType(draft.Type)
 	}
-	if private && scoped {
-		return nil, nil, inconsistent(first, "mixed private families")
+	if private && scoped || review && (private || scoped) {
+		return nil, nil, nil, inconsistent(first, "mixed record families")
+	}
+	if review {
+		g, err := decodeReviewGroup(drafts, first)
+		return nil, nil, g, err
 	}
 	if scoped {
 		g, err := decodeScopedGroup(drafts, first)
-		return nil, g, err
+		return nil, g, nil, err
 	}
 	g, err := decodeGroup(drafts, first)
-	return g, nil, err
+	return g, nil, nil, err
 }
 
 func decodeScopedGroup(drafts []ledger.Draft, first uint64) (*scopedGroup, error) {

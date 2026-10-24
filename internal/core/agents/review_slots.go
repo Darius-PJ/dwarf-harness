@@ -3,22 +3,27 @@ package agents
 import (
 	"bytes"
 	"errors"
-	"slices"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
 // ErrReviewRequired refuses a direct terminal transition while an exact-task
 // review obligation remains pending or rejected, including for the owner.
 var ErrReviewRequired = errors.New("agents: review required")
 
-// A live task retains at most one slot. The caller creates its pending value
-// from a validated request; these rules do not install a slot in the service.
-// Binding metadata is immutable throughout the slot's lifecycle.
+// A live task retains at most one immutable request and its latest judgment.
+// Terminal, replaced and invalidated slots are evicted with their task change;
+// historical identities and outcomes are read from the ledger on a miss.
 type reviewSlot struct {
-	id           uuid.UUID
-	binding      reviewBinding
-	kind, state  string
-	supersededBy uuid.UUID
+	id             uuid.UUID
+	binding        ledger.ReviewBinding
+	kind, state    string
+	supersededBy   uuid.UUID
+	request        ledger.RuntimeReviewRequested
+	sequence       uint64
+	result         *ledger.RuntimeReviewResult
+	resultSequence uint64
 }
 
 // transitionReviewSlot changes no input, and every refusal returns the input.
@@ -64,15 +69,15 @@ func transitionReviewSlot(current reviewSlot, request uuid.UUID, action string, 
 
 // guardReviewTask is the pure predicate for planTask's pre-kernel seam. No
 // caller principal or wall clock can exempt a pending or rejected obligation.
-// S3a will connect it when the reducer can actually consume review slots.
 func guardReviewTask(slot reviewSlot, current taskState, action string) error {
 	if action != "complete" && action != "fail" {
 		return nil
 	}
 	if (slot.state == "pending" || slot.state == "rejected") &&
-		slot.binding.task == current.id && slot.binding.version == current.version &&
-		slot.binding.assignment == current.assignment &&
-		!slices.Contains([]string{"completed", "failed", "cancelled"}, current.state) {
+		slot.binding.TaskID == current.id && uint64(slot.binding.TaskVersion) == current.version &&
+		slot.binding.AssignmentID == current.assignment.id &&
+		slot.binding.Generation == current.assignment.generation &&
+		slot.binding.Assignee == ledger.Binding(current.assignment.binding) {
 		return ErrReviewRequired
 	}
 	return nil

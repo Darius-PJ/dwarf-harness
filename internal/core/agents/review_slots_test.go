@@ -143,9 +143,6 @@ func TestReviewGuardNeverTransfersToDifferentTaskBinding(t *testing.T) {
 		{"generation", func(s *taskState) { s.assignment.generation++ }},
 		{"assignee_agent", func(s *taskState) { s.assignment.binding.AgentID = privateID(99) }},
 		{"assignee_context", func(s *taskState) { s.assignment.binding.ContextID = privateID(99) }},
-		{"cancelled", func(s *taskState) { s.state = "cancelled" }},
-		{"completed", func(s *taskState) { s.state = "completed" }},
-		{"failed", func(s *taskState) { s.state = "failed" }},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()

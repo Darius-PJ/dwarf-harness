@@ -265,7 +265,7 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 	}
 	err := s.scan(ctx, s.p.through, through, func(c ledger.Commit) error {
 		d := draftsOf(c)
-		g, scoped, err := decodeFamily(d, c.First)
+		g, scoped, review, err := decodeFamily(d, c.First)
 		if err != nil {
 			return err
 		}
@@ -275,6 +275,9 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 		}
 		if scoped != nil {
 			command = &scoped.command
+		}
+		if review != nil {
+			command = &review.command
 		}
 		if command != nil {
 			if bytes.Compare(command.CommandID[:], s.p.maxCommand[:]) <= 0 {
@@ -303,6 +306,16 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 				return inconsistent(c.First, "invalid scoped transition: "+err.Error())
 			}
 			s.p.installScoped(next)
+		}
+		if review != nil {
+			next, err := s.planReview(ctx, review, c.First)
+			if err != nil {
+				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+					return err
+				}
+				return inconsistent(c.First, "invalid review transition: "+err.Error())
+			}
+			s.p.installReview(next)
 		}
 		for _, r := range d {
 			switch r.Type {
@@ -336,6 +349,9 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 				s.p.scratches[p.ScratchID] = old
 			}
 		}
+		for _, record := range c.Records {
+			s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
+		}
 		s.p.through = c.Last
 		return nil
 	})
@@ -350,6 +366,7 @@ type commandMatch struct {
 	command ledger.Command
 	group   *privateGroup
 	scoped  *scopedGroup
+	review  *reviewGroup
 }
 
 func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
@@ -369,11 +386,11 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 			if found.found {
 				return inconsistent(c.First, "duplicate command")
 			}
-			g, scoped, err := decodeFamily(draftsOf(c), c.First)
+			g, scoped, review, err := decodeFamily(draftsOf(c), c.First)
 			if err != nil {
 				return err
 			}
-			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped}
+			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review}
 		}
 		return nil
 	})

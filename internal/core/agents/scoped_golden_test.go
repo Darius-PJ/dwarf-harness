@@ -26,6 +26,9 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 	if chapter == "11" {
 		colony = uuid.MustParse("019a1100-0000-7000-8000-000000000001")
 	}
+	if chapter == "12" {
+		colony = uuid.MustParse("019a1200-0000-7000-8000-000000000001")
+	}
 	r, err := ledger.OpenReader(filepath.Join(dir, "log"), ledger.ReadOptions{Colony: colony, Through: ledger.ToEnd, AllTypes: true, Consume: ledger.Consumption{}})
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +75,7 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 	for _, text := range []string{"# Ada\n", "", "general lesson\n", "opaque chunk\n", "opaque continuation", "retained lesson\n", "next step\n", "local lesson\n", "another chunk\n", "# Ada\nRevised instructions\n"} {
 		objects[ledger.Digest(sha256.Sum256([]byte(text)))] = []byte(text)
 	}
-	if chapter == "11" {
+	if chapter != "10" {
 		for _, kind := range []string{"objects", "bodies"} {
 			entries, err := os.ReadDir(filepath.Join(dir, kind))
 			if err != nil {

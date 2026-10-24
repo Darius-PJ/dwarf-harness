@@ -107,7 +107,7 @@ func (s *Service) canInspectTask(ctx context.Context, origin ledger.Origin, id u
 
 // A subject check is an intersection with mutation authority, never a union of
 // partial grants. Each candidate independently authorizes the complete read.
-func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, artifact ledger.ArtifactRef, selected uuid.UUID, through uint64) ([]grantRules, error) {
+func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, artifact ledger.ArtifactRef, selected uuid.UUID, through uint64, sources map[int64]ledger.Record) ([]grantRules, error) {
 	for grantID, grant := range s.p.grants {
 		if selected != (uuid.UUID{}) && grantID != selected || grant.definition.Grantee != ledger.Binding(bindingOf(origin)) {
 			continue
@@ -142,9 +142,12 @@ func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, a
 			if !found || !slices.Contains(task.record.Audience, origin.AgentID) || task.record.Description.SHA256 != artifact.SHA256 || task.record.Description.Bytes != artifact.Bytes {
 				continue
 			}
-			source, found, err := s.sourceRecord(ctx, artifact.SourceSequence, through)
-			if err != nil {
-				return nil, err
+			source, found := sources[artifact.SourceSequence]
+			if sources == nil {
+				source, found, err = s.sourceRecord(ctx, artifact.SourceSequence, through)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if !found || source.Type != ledger.TypeRuntimeTaskChanged {
 				continue
@@ -169,7 +172,7 @@ func (s *Service) subjectAuthorized(ctx context.Context, actor string, origin le
 		return ErrDenied
 	}
 	if actor != "owner" {
-		if _, err := s.artifactAuthority(ctx, origin, subject.Artifact, uuid.UUID{}, through); err != nil {
+		if _, err := s.artifactAuthority(ctx, origin, subject.Artifact, uuid.UUID{}, through, nil); err != nil {
 			return err
 		}
 	}

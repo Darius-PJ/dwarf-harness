@@ -107,21 +107,20 @@ func (s *Service) loadTask(ctx context.Context, id uuid.UUID, through uint64) (s
 	var task scopedTaskState
 	found := false
 	err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-		for _, record := range commit.Records {
-			if record.Type != ledger.TypeRuntimeTaskChanged {
-				continue
+		_, scoped, review, err := decodeFamily(draftsOf(commit), commit.First)
+		if err != nil {
+			return err
+		}
+		if scoped != nil && scoped.task != nil && scoped.task.TaskID == id {
+			p := *scoped.task
+			sequence := commit.First + uint64(scoped.effectIndex)
+			if p.Action == "create" {
+				task.descriptionSequence = sequence
 			}
-			p, err := ledger.DecodeRuntimeTaskChanged(record.Payload)
-			if err != nil {
-				return err
-			}
-			if p.TaskID == id {
-				if p.Action == "create" {
-					task.descriptionSequence = record.Seq
-				}
-				task.record, task.sequence = p, record.Seq
-				found = true
-			}
+			task.record, task.sequence, found = p, sequence, true
+		}
+		if review != nil && review.result != nil && review.result.Binding.TaskID == id && review.result.Verdict != "reject" {
+			task = taskAfterReview(task, *review.result, commit.First+1)
 		}
 		return nil
 	})
@@ -207,22 +206,11 @@ func (s *Service) assignmentUnused(ctx context.Context, assignment ledger.Assign
 }
 
 func (s *Service) sourceRecord(ctx context.Context, sequence int64, through uint64) (ledger.Record, bool, error) {
-	var source ledger.Record
 	if sequence <= 0 || uint64(sequence) > through {
-		return source, false, nil
+		return ledger.Record{}, false, nil
 	}
-	found := false
-	err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-		if uint64(sequence) < commit.First || uint64(sequence) > commit.Last {
-			return nil
-		}
-		for _, record := range commit.Records {
-			if record.Seq == uint64(sequence) {
-				source, found = record, true
-			}
-		}
-		return nil
-	})
+	sources, err := s.sourceRecords(ctx, []int64{sequence}, through)
+	source, found := sources[sequence]
 	return source, found, err
 }
 

@@ -67,7 +67,7 @@ func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmissi
 			size += change.Bytes
 		}
 	case ledger.ArtifactReadArguments:
-		_, err := s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, s.p.through)
+		_, err := s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, s.p.through, nil)
 		return err
 	}
 	chain, err := s.authorize(ctx, sub.Origin, sub.GrantID, operation, targets, recipients, size, s.p.through)
@@ -372,7 +372,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 			usage.NextCursor = &next
 		}
 	case ledger.ArtifactReadArguments:
-		chain, err = s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, s.p.through)
+		chain, err = s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, s.p.through, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -404,11 +404,11 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 }
 
 func (s *Service) preflightScoped(ctx context.Context, input scopedInput, drafts []ledger.Draft) (*scopedGroup, error) {
-	private, group, err := decodeFamily(drafts, s.p.through+1)
+	private, group, review, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil {
 		return nil, err
 	}
-	if private != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin {
+	if private != nil || review != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin {
 		return nil, ErrInvalid
 	}
 	if _, err := s.planScoped(ctx, group, s.p.through+1); err != nil {

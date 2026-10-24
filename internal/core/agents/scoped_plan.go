@@ -72,6 +72,9 @@ func (p *projection) installScoped(plan scopedPlan) {
 	}
 	if plan.task != nil {
 		p.tasks[plan.task.record.TaskID] = *plan.task
+		// Every direct task transition advances the version. A previous review
+		// obligation can never transfer to that new version or assignment.
+		delete(p.reviews, plan.task.record.TaskID)
 	}
 	for _, task := range plan.dependencies {
 		p.tasks[task.record.TaskID] = task

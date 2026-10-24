@@ -72,7 +72,7 @@ func (e *taskRefusal) Unwrap() error { return ErrInvalid }
 
 // transitionTask changes no input and returns the original state on refusal.
 // It declares task state only; it starts no turn, performs no review and releases
-// no work reservation. Future review guards must precede this same completion.
+// no work reservation. Review guards precede this same completion kernel.
 func transitionTask(current taskState, facts taskFacts, action taskAction, expected taskExpectation) (taskState, error) {
 	refuse := func(reason string) (taskState, error) { return current, &taskRefusal{reason} }
 	if expected.version != current.version || current.version >= math.MaxInt64 {
@@ -201,8 +201,13 @@ func transitionTask(current taskState, facts taskFacts, action taskAction, expec
 		}
 		next.assignment = taskAssignment{id: action.assignment.AssignmentID, generation: current.assignment.generation + 1, binding: binding}
 	}
-	for _, subject := range []ledger.SubjectRef{action.waitSubject, action.submission, action.failureEvidence} {
-		if !emptySubject(subject) && (!validTaskSubject(subject) || !facts.subjectAuthorized) {
+	for i, subject := range []ledger.SubjectRef{action.waitSubject, action.submission, action.failureEvidence} {
+		valid := validTaskSubject(subject)
+		if i == 2 && action.action == "fail" && facts.reviewedFailure && subject.Kind == "private_revision" {
+			_, err := subject.MarshalJSON()
+			valid = err == nil
+		}
+		if !emptySubject(subject) && (!valid || !facts.subjectAuthorized) {
 			return refuse("subject")
 		}
 	}
@@ -251,11 +256,13 @@ func validTaskArguments(a taskAction) bool {
 }
 
 func validTaskSubject(subject ledger.SubjectRef) bool {
-	return subject.Kind == "artifact" && subject.Members == nil && validResource(ledger.Resource{Kind: "artifact", Artifact: subject.Artifact})
+	return subject.Kind == "artifact" && subject.PrivateRevision == nil && subject.Members == nil && validResource(ledger.Resource{Kind: "artifact", Artifact: subject.Artifact})
 }
 
 func equalSubject(a, b ledger.SubjectRef) bool {
-	return a.Kind == b.Kind && a.Artifact == b.Artifact && bytes.Equal(a.Members, b.Members)
+	privateEqual := a.PrivateRevision == nil && b.PrivateRevision == nil ||
+		a.PrivateRevision != nil && b.PrivateRevision != nil && *a.PrivateRevision == *b.PrivateRevision
+	return a.Kind == b.Kind && a.Artifact == b.Artifact && privateEqual && bytes.Equal(a.Members, b.Members)
 }
 
 func emptySubject(subject ledger.SubjectRef) bool {

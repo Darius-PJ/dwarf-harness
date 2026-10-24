@@ -178,6 +178,9 @@ func (s *Service) deriveTask(ctx context.Context, sub ledger.ScopedSubmission, f
 	if sub.Expected.Generation != nil {
 		expected.generation = *sub.Expected.Generation
 	}
+	if err := guardReviewTask(s.p.reviews[action.task], current, action.action); err != nil {
+		return plan, nil, err
+	}
 	next, err := transitionTask(current, facts, action, expected)
 	if err != nil {
 		var refusal *taskRefusal
