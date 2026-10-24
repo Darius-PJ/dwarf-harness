@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: U3 graph foundation, causal capability
-Blocked by: 07, 09, 11, 15, 17
+Blocked by: 07, 09, 11, 15, 17, 139
 
 ## What to build
 
@@ -91,3 +91,5 @@ Two items remain for a later slice of this ticket, S6, besides the producer free
 2026-10-20 — The first three-OS CI run found a defect in S5: when the temporary folder has a second name, an 8.3 short name on Windows or `/var` on macOS, the Go analyzer compared the root it created, in that form, with the canonical paths `go list` reports, and left in-tree files unknown. [Ticket 138](138-repair-the-first-three-os-ci-run.md) resolves the root once when it is created, with regression rows for both kinds of alias.
 
 2026-10-24 — Resource and work-domain registration, which this ticket's comment of 2026-10-18 left without a producer, is assigned to C3. [B32](../../../docs/DECISIONS.md#b32-c3-scoped-grants-and-atomic-task-ownership-ticket-11), ticket 11's close, adds registered shared resources and owner-registered work domains to C3's row in [`CONTRACTS.md`](../../../docs/CONTRACTS.md) as a later family, added only when specified, as this ticket's ruling asked of ticket 11's design brief. No producer ticket exists yet; the project manager asks the owner whether to publish one. This ticket's resource and work-domain nodes (its first criterion) and its positive resource→consumer usage (its third, with ticket 15's action facts) wait for that family. Ticket 11, one of this ticket's blockers, is resolved; tickets 15 and 17 still block it.
+
+2026-10-24 — [D142](../../../docs/DECISIONS.md#d142-tickets-139-and-140-published-with-three-blocker-changes) rework: the blockers were 07, 09, 11, 15, 17 and are now 07, 09, 11, 15, 17, 139. Ticket [139](139-register-shared-resources-and-work-domains-through-core.md) produces the registered shared resources and owner-registered work domains that this ticket's resource and work-domain nodes (its first criterion) and its positive resource→consumer usage (its third, with ticket 15's action facts) wait for, as the comment above records. The number and criteria are unchanged; this grants no separate implementation, contract-freeze or release approval.

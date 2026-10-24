@@ -58,3 +58,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-24 — Consolidation cross-link: Ticket [139](139-register-shared-resources-and-work-domains-through-core.md) produces registered shared resources, and Undercurrent §8.2 admits co-access from host-observed use of two registered resources by one task context. It reaches this ticket through ticket [61](61-turn-bounded-artifact-and-usage-evidence-into-atomic-causal-graphs.md), which it now blocks ([D142](../../../docs/DECISIONS.md#d142-tickets-139-and-140-published-with-three-blocker-changes)). These extensions add no blocker or criterion to this ticket.

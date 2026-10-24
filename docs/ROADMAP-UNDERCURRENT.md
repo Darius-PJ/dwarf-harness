@@ -214,7 +214,7 @@ C1 must formally freeze the `ledger-format` and `ledger-reader` contracts before
 
 **Exit criterion.** U1.L passes C1-frozen golden vectors for strict JSON v1, exact-byte hash/activation separation, the selected compact-v1 and standard-v1 parser boundaries, and all duplicate-key, schema, enum, kernel, edge-type, numeric-bound and configured size/count rejections. U1.E passes every applicable Undercurrent §14.1 property: deterministic typed routes and identities; lifecycle/no-echo; conservative lineage; scoped accounting; atomic graphs and honest coverage; exact source removal; checked signed-`int64` arrival-delta/due-time arithmetic with whole-generation invalidation on negative/overflowing conversion and no partial arrival/reach publication; delayed-arrival cancellation; replay/cache invalidation; mixed numeric comparison; unknown-not-zero; projection-before-selection; ambient/federation boundaries; prompt bounds; read neutrality; and explicit capacity exhaustion. Verify per-source-search and logical-task counters survive quantum yields, retries, restart, replay and cache rebuild; hard-cap exhaustion stays incomplete/unknown and is not automatically restarted under the same key. Compare FIFO route results with exhaustive simple-path enumeration on small integer graphs, including a flooring case where a stronger three-hop prefix and a weaker two-hop prefix tie at the destination; verify queued descendants survive intermediate-winner changes and cap/revision aborts publish no partial reach. Route candidates and immutable prefix bytes count against existing work and temporary-state caps.
 
-**Status.** In progress (2026-10-12: U1.L is Done, D114; 2026-10-13: U1.E is blocked on producer freezes, tickets 07, 08, 09, 17 and 61, through ticket 59).
+**Status.** In progress (2026-10-12: U1.L is Done, D114; 2026-10-24: U1.E is blocked, through ticket 59, on one producer freeze, ticket 17's; the other four are frozen: D124 activation, D130 graph, D119 scratch and D123 promotion).
 
 ### U2. Synthetic ledgers, simulation, adversarial suite
 
@@ -306,7 +306,7 @@ Formerly step 5.
 
 **Exit criterion.** Foundation: replay at every cursor reconstructs whole logical graph versions; incremental deltas equal deterministic full rebuilds; approved directions/edge classes hold; co-access never transports; unsupported/over-budget coverage remains unknown; analyzer helpers are bounded and cannot block Core. Accepted-promotion integration, only after C4 Done, connects actual durable predecessor-to-integrated-target acceptance and proves replay/update agreement without duplicate attribution. U3 is Done only when both stages pass; record foundation completion separately so U5 need not wait for promotion integration (D52).
 
-**Status.** In progress (foundation partial: ticket 61 S1–S5 landed, F-U3-61 frozen D130; 61's remaining criteria and ticket 62 wait for producer freezes: tickets 11, 15, 17; promotion integration: C4).
+**Status.** In progress (foundation partial: ticket 61 S1–S5 landed, F-U3-61 frozen D130; 61's remaining criteria and ticket 62 wait for producer freezes: tickets 15, 17, 139; promotion integration: C4).
 
 ### U4. Promotion-pipeline field kinds
 

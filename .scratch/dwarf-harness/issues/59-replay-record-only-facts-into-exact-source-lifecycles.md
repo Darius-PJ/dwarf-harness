@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: U1.E local source/replay capability
-Blocked by: 04, 07, 08, 09, 17, 61
+Blocked by: 04, 07, 08, 09, 17
 
 ## What to build
 
@@ -51,3 +51,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-13 — Blocked on producer freezes. The project manager took this ticket up after ticket 06 closed. The design's gate analysis, which the ticket's build advisor confirmed, found that none of the record families it replays is frozen. No frozen record feeds a rule of the frozen law registry, so a synthetic ledger of frozen types produces no reading, and D41 allows stand-in data only against a frozen contract. It waits for five producer freezes, each asked of the owner by its producer under D40: law activation (ticket 09), graph deltas (ticket 61), scratch changed paths (ticket 07), accepted promotion (ticket 08) and validation evidence (ticket 17). `Blocked by` now lists them. The gate analysis and its ruling are kept by the project manager and land with this ticket's documents when it closes.
+
+2026-10-24 — [D142](../../../docs/DECISIONS.md#d142-tickets-139-and-140-published-with-three-blocker-changes) rework: the blockers were 04, 07, 08, 09, 17, 61 and are now 04, 07, 08, 09, 17. The comment above lists ticket 61 only for the graph-delta family, one of the five producer freezes the gate ruling requires. That family is F-U3-61, frozen by [D130](../../../docs/DECISIONS.md#d130-f-u3-61-graph-analysis-records-frozen), and later node and edge kinds join it by addition. Keeping 61 would make this ticket wait for 61's remaining criteria and, through them, for ticket [139](139-register-shared-resources-and-work-domains-through-core.md). It still waits for ticket 17, the validation-evidence freeze. The number and criteria are unchanged; this grants no separate implementation, contract-freeze or release approval.

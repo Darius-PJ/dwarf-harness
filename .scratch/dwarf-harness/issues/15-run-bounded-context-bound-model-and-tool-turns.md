@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: C3
-Blocked by: 14
+Blocked by: 14, 140
 
 ## What to build
 
@@ -52,3 +52,5 @@ Canonical sections: Core roadmap C3; its cited controlling Core design and lates
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — D88 rework: the owner chose to include the deferred D88 rework in this consolidation and approved the plan. Criteria now cover the small stable tool surface, model-only argument normalization and the single continuation owner. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.
+
+2026-10-24 — [D142](../../../docs/DECISIONS.md#d142-tickets-139-and-140-published-with-three-blocker-changes) rework: the blockers were 14 and are now 14, 140. Ticket [140](140-bound-the-private-state-services-replay-and-lookup-cost.md) bounds the cost of opening the private-state service and of its turn start, local admission and local dispatch, which this ticket makes production paths; ticket 11's S4 review asked for that fix to land first ([B32](../../../docs/DECISIONS.md#b32-c3-scoped-grants-and-atomic-task-ownership-ticket-11), Limits). The number and criteria are unchanged; this grants no separate implementation, contract-freeze or release approval.
