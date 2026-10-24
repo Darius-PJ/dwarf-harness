@@ -1825,6 +1825,7 @@ func TestGoldenDecodes(t *testing.T) {
 		{mustGraph(t), nil},
 		{mustPrivate(t), nil},
 		{mustScoped(t), nil},
+		{mustReview(t), nil},
 	} {
 		g := tc.g
 		commits, cursor, err := readAll(g.dir, ReadOptions{Colony: g.colony, Through: ToEnd, Consume: g.consume})

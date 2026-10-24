@@ -78,6 +78,9 @@ func TestNewCatalogue(t *testing.T) {
 		{"runtime.local_used", 1}:                       true,
 		{"private.scoped_revision", 1}:                  true,
 		{"runtime.scoped_receipt", 1}:                   true,
+		{"runtime.review_requested", 1}:                 true,
+		{"runtime.review_result", 1}:                    true,
+		{"runtime.review_receipt", 1}:                   true,
 	}
 	if !maps.Equal(def.set, want) || def.Contains(TypeVersion{"fixture.sample", 1}) {
 		t.Errorf("Defined() holds %v, want %v", def.set, want)

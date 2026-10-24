@@ -2053,4 +2053,204 @@
 // the log contain all private/task/capture-input fixture bytes. TestGoldenF3_11
 // generates every file with -update, with fixed UUIDv7s/times, real content and
 // submission hashes, and EncodeCommit's actual chain. It claims no execution.
+//
+// # Review and failure decisions (F3-12)
+//
+// F3-12 is proposed for freeze (D125). It adds three version-1 types:
+// runtime.review_requested, runtime.review_result and runtime.review_receipt.
+// Defined contains forty-one types. Only internal/core/agents produces this
+// family through Submit. Its access-filtered metadata identifies tasks,
+// assignments, principals, authority and immutable subjects, never private
+// content, credentials, capability handles or an unfiltered agent stream.
+//
+// An approve or fail review_result is a task transition that advances the
+// task's version and state exactly as a task_changed complete/fail would,
+// without a task_changed record; a consumer of tasks consumes both families in
+// ledger order; a consumer of F3-11 alone cannot reconstruct the tasks of a log
+// that holds F3-12 and must not be used on one: it keeps the task submitted and
+// live and could accept a direct transition the result already closed.
+// F3-11's text, bytes and golden are unchanged, and F3-12 groups embed no
+// F3-11 record. Services dispatch F3-12 before the F3-10/F3-11 validators.
+//
+// # Codec rules and nested values
+//
+// Complete input (including whitespace and ignored extensions) and compact
+// output must each fit MaxReviewPayloadBytes, 65536 bytes. The input bound is
+// checked before parsing. Strict complete UTF-8 JSON, recursive duplicate-key
+// rejection even inside ignored extensions, canonical lowercase UUIDv7s and
+// nonzero lowercase SHA-256 digests apply. Required members cannot be absent;
+// every known member forbids null. Unknown optional members are ignored, except
+// that unfamiliar SubjectRef members are preserved as below. Integers use
+// plain unsigned JSON decimals in 0..MaxInt64, never floats, exponent notation,
+// strings or negative numbers. Errors wrap ErrInvalid.
+//
+// The payload cap and structure are proposed for freeze (D125); producer Limits
+// ceilings are not. Required evidence has no decoder count ceiling beyond the
+// payload cap; MaxReviewEvidence (default 16), object-byte and preparation
+// ceilings constrain producers only. Historical larger values remain readable.
+// The following lists give compact encoder key order; ? means absent or present,
+// never null:
+//
+//	ReviewPrincipal: actor, origin, grant_id?
+//	ReviewBinding: task_id, task_version, assignment_id, generation, assignee,
+//	  reviewer, subject, acceptance_sha256, check_sha256, config_sha256,
+//	  required_evidence, authorization_revision, deadline_utc_ns
+//	PrivateRevisionRef: binding, scope, slot, revision, source_sequence,
+//	  sha256, bytes
+//	ReviewUsage: authority_version, grant_id, scopes, units, bytes
+//
+// Reviewer actor is the closed set owner/agent; origin is Origin, and grant_id
+// is required exactly for agent. Requester and submission principals have the
+// same rule. Assignee is Binding (agent_id, context_id), NOT Origin: assignment
+// has no session. The service checks every registered binding and sole session.
+// Binding task_version is positive and below MaxInt64; generation is positive,
+// authorization_revision nonnegative, deadline_utc_ns positive. The three
+// digests are required and nonzero. acceptance_sha256 equals the task's immutable
+// acceptance digest. check_sha256 and config_sha256 identify the checklist and
+// configuration the reviewer judged against; the service verifies neither, and
+// no record here asserts a check ran.
+//
+// SubjectRef additionally recognizes kind private_revision, encoded as kind,
+// private_revision (PrivateRevisionRef). Its binding is required; scope is the
+// closed agent/context set. Agent slots are instructions/memory; context slots
+// are continuation/handoff/memory/transcript. Revision and source_sequence are
+// positive and bytes nonnegative. The value identifies one changed object or
+// transcript chunk in a validated private.revision/private.scoped_revision:
+// not a clear, absent object, mutable head or concatenated transcript. The
+// service proves the exact binding/scope/slot/revision/sequence/digest/size
+// occurrence; an equal hash elsewhere or a later head is not a substitute.
+// PrivateRevisionRef is a comparable value. SubjectRef uses its typed pointer
+// only for this kind and forbids Artifact/Members there. Artifact's historical
+// encoding and ignored-extension behavior remain unchanged.
+//
+// SubjectRef.kind remains an open token. Unfamiliar Members retains object
+// member order, values and number spelling without map sorting or float
+// conversion; Members excludes kind and cannot accompany typed values.
+// Direct MarshalJSON canonicalizes it with json.Marshal(json.RawMessage(raw)),
+// so outer and direct encodings agree on <, >, &, U+2028 and U+2029 escaping.
+// This correction rewrites no historical stored bytes or hashes. Services
+// refuse unsupported kinds rather than interpreting them as artifacts.
+//
+// RequiredEvidence is nonempty and strictly ascending by each SubjectRef's
+// compact encoded UTF-8 bytes. Duplicates and unsorted lists refuse; codecs
+// never sort or deduplicate them. Source sequence, and private revision, are
+// part of identity. Failure evidence must equal one of these exact references.
+// Failure cause and receipt outcome are open tokens: ^[a-z][a-z0-9_]*$, at most
+// 64 ASCII bytes. Unknown outcomes never imply applied state.
+//
+// Payloads (version 1)
+//
+//	runtime.review_requested:
+//	  request_id, kind, version, requester_actor, requester,
+//	  requester_grant_id?, binding, replaces_request_id?, failure_cause?,
+//	  failing_evidence?, observed_utc_ns
+//	runtime.review_result:
+//	  request_id, request_sequence, expected_version, version, binding,
+//	  verdict, cause?, failing_evidence?, task_version, observed_utc_ns
+//	runtime.review_receipt:
+//	  command_id, submission_sha256, submission, outcome, version,
+//	  request_id, task_version, usage?
+//
+// Request kind is closed review/failure and version is exactly 1. Replacement
+// cannot equal request_id; the service proves it names the current predecessor
+// and that the new request ID has never been used. failure_cause and
+// failing_evidence occur exactly when kind=failure.
+// Result request_sequence is positive, expected_version=1 and version=2.
+// Verdict is closed approve/reject/fail; cause and failing_evidence occur
+// exactly when fail. Task_version equals binding.task_version+1 for approve/fail
+// (checked arithmetic), and equals binding.task_version for reject.
+// Observation and deadline codecs check positivity only, not their ordering.
+// Receipt version is 1 or 2 and task_version positive; its submission digest
+// equals SHA-256 of the decoded/re-encoded canonical submission. Usage occurs
+// exactly for agent, with nonnegative authority_version, the submission's
+// selected grant_id, sorted ScopeKeys (at least four), units=1 and bytes=0.
+// The service recomputes the exact scopes and pre-operation authority version.
+//
+// Record and group rules (service-enforced)
+//
+// One Submit has one complete ordered shape, with C=F0 command, Q=request,
+// V=result, U=F0 body_unpin(task ID), R=review receipt:
+//
+//	review.request / failure.request (including replacement): C,Q,R
+//	review.resolve reject:                                  C,V,R
+//	review.resolve approve / failure.resolve fail:            C,V,U,R
+//
+// Mixed families, detached effects, extra/missing/reordered records refuse both
+// before publication and at Open. Every record has the same operation_id
+// (command ID), agent/session/context of the actual principal, no turn_id or
+// measurement_path, and absent body_refs. C/Q/V/R use the actual owner/agent
+// actor; U uses core. Terminal results release only the existing task-description
+// pin, exactly once. References add no pin or retention promise; collected bytes
+// remain unavailable. Nothing here changes a work hold, turn or provider budget.
+//
+// Binding repeats the request's exact values, never a current substitute.
+// Request_sequence names that committed request, and kind matches verdict:
+// review.resolve writes approve/reject; failure.resolve writes fail with the
+// request's exact cause/evidence. Receipt command/digest, request/task version
+// and outcome agree with the effect. Producers write requested/approved/rejected/
+// failed. Actual effect/receipt sequences are envelope data, never predicted
+// payload self-sequences. A semantic judgment is an authorized reviewer's
+// decision, not host evidence of a check or tool execution.
+//
+// Requests and callbacks require task.complete authority for review and
+// task.fail for failure. An agent failure requester is the current assignee.
+// The reviewer is a permitted recipient, and both participants need current
+// read rights on the subject and every evidence occurrence. Private read rights
+// are one current private.read chain per participant, never a cross-context
+// share. Authorization_revision is the colony authority_version at request
+// validation, bound and repeated; replay checks it against the prefix. A
+// callback rechecks the exact selected reviewer chain and ancestors, the
+// requester's recorded chain, assignment/generation and all read rights, but
+// does not require the colony authority_version to remain unchanged.
+//
+// A request does not advance task version. One current slot guards a nonterminal
+// task/version/assignment: pending, rejected and expired slots refuse direct
+// complete/fail, owner included. Replacement names the current slot; cancellation,
+// reassignment or re-versioning invalidates it. There is no timer or implicit
+// retry. Approve/fail enter the task transition kernel atomically with the unpin
+// and charge. Reject retains the guard. Each agent decision, including reject,
+// charges one local unit in the existing colony/agent/optional-context/grant-
+// and-ancestors book; owner administration and matched retries charge nothing.
+//
+// Deadline measures the final decision-eligibility observation immediately
+// before Submit, not arrival or flush completion. New requests require
+// observed_utc_ns < deadline; results allow equality. Recorded observations
+// cannot precede the prior committed floor (all envelope event_time_ns and
+// review observations). Live eligibility also respects the incarnation's
+// highest sample, including refused operations. Replay, queries and matched
+// retries read no clock; replay does not require observation <= this commit's
+// later envelope time. A delayed flush cannot undo an admitted durable result.
+//
+// Schema-3 canonical submission (producer rule)
+//
+// SHA-256 covers compact JSON in order: schema (3), actor, origin, operation,
+// grant_id?, arguments. The actor/origin derive from the authenticated entrance;
+// an owner omits grant_id. Schema 2's closed operation table is unchanged.
+// Schema 3's closed operations and ordered argument objects are:
+//
+//	review.request / failure.request:
+//	  request_id, binding, replaces_request_id?, failure_cause?, failing_evidence?
+//	review.resolve: request_id, request_sequence, binding, verdict
+//	failure.resolve: request_id, request_sequence, binding, cause, failing_evidence
+//
+// Conditional failure fields follow the request/result rules above. Known
+// argument members of another operation are forbidden, not authority-bearing
+// extensions. Concrete ReviewRequestArguments, ReviewResolveArguments and
+// FailureResolveArguments supply arguments; arbitrary maps/pointers do not.
+// The binding supplies task/assignment/authority/deadline expectations once.
+// There is no redundant task target, requester origin or request_sha256.
+// Command ID, host observation, derived request/result/task versions, usage
+// scopes/charges and envelope sequences are excluded; the already-observed
+// request_sequence is included. Producer APIs sort caller evidence sets before
+// fingerprinting. Unknown optional extensions confer no authority.
+//
+// The F3-12 golden at testdata/f3/12/log/00000000000000000001.jsonl contains
+// twenty-five commits and ninety records: two registrations, three work contexts,
+// three capacities, three assigned tasks, four owner roots, start/submit of A,
+// agent request/reject, owner replacement/approve, owner private-memory failure
+// request/fail and agent artifact failure request/fail. Hash-named objects and
+// bodies contain the actual initial private bytes and task descriptions; no
+// checklist/config surrogate tasks exist. Fixed UUIDv7s/times, actual encoded
+// submissions and EncodeCommit generate every fixture only with
+// TestGoldenF3_12 -update. The history records judgments, not executed checks.
 package ledger

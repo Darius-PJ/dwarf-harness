@@ -77,14 +77,15 @@ type ArtifactRef struct {
 	Bytes          int64  `json:"bytes"`
 }
 
-// SubjectRef is an open, fail-closed task subject. Artifact is used only for kind
-// artifact. For unfamiliar kinds, Members holds a JSON object of the kind's
-// members (excluding kind), preserving member order and values. The service must
-// refuse to apply an unfamiliar kind, rather than interpreting it as an artifact.
+// SubjectRef is an open, fail-closed task subject. Artifact and PrivateRevision
+// are used only for their matching kinds. For unfamiliar kinds, Members holds a
+// JSON object excluding kind, preserving member order and values. A service must
+// refuse a kind it does not support, rather than interpreting it as an artifact.
 type SubjectRef struct {
-	Kind     string
-	Artifact ArtifactRef
-	Members  json.RawMessage
+	Kind            string
+	Artifact        ArtifactRef
+	PrivateRevision *PrivateRevisionRef
+	Members         json.RawMessage
 }
 
 func (s SubjectRef) MarshalJSON() ([]byte, error) {
@@ -92,7 +93,7 @@ func (s SubjectRef) MarshalJSON() ([]byte, error) {
 		return nil, errors.New("invalid subject kind")
 	}
 	if s.Kind == "artifact" {
-		if s.Members != nil || !validArtifact(s.Artifact) {
+		if s.Members != nil || s.PrivateRevision != nil || !validArtifact(s.Artifact) {
 			return nil, errors.New("invalid artifact subject")
 		}
 		return json.Marshal(struct {
@@ -100,8 +101,17 @@ func (s SubjectRef) MarshalJSON() ([]byte, error) {
 			Artifact ArtifactRef `json:"artifact"`
 		}{s.Kind, s.Artifact})
 	}
-	if s.Artifact != (ArtifactRef{}) {
-		return nil, errors.New("unknown subject has typed artifact")
+	if s.Kind == "private_revision" {
+		if s.Members != nil || s.Artifact != (ArtifactRef{}) || s.PrivateRevision == nil || !validPrivateRevisionRef(*s.PrivateRevision) {
+			return nil, errors.New("invalid private revision subject")
+		}
+		return json.Marshal(struct {
+			Kind            string              `json:"kind"`
+			PrivateRevision *PrivateRevisionRef `json:"private_revision"`
+		}{s.Kind, s.PrivateRevision})
+	}
+	if s.Artifact != (ArtifactRef{}) || s.PrivateRevision != nil {
+		return nil, errors.New("unknown subject has typed value")
 	}
 	raw := s.Members
 	if raw == nil {
@@ -117,15 +127,15 @@ func (s SubjectRef) MarshalJSON() ([]byte, error) {
 	if _, ok := fields["kind"]; ok {
 		return nil, errors.New("subject members repeat kind")
 	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, raw); err != nil {
+	compact, err := json.Marshal(json.RawMessage(raw))
+	if err != nil {
 		return nil, err
 	}
 	kind, _ := json.Marshal(s.Kind)
 	out := append([]byte(`{"kind":`), kind...)
-	if compact.Len() > 2 {
+	if len(compact) > 2 {
 		out = append(out, ',')
-		out = append(out, compact.Bytes()[1:compact.Len()-1]...)
+		out = append(out, compact[1:len(compact)-1]...)
 	}
 	return append(out, '}'), nil
 }
@@ -143,6 +153,10 @@ func subjectAt(m *members, key string) *SubjectRef {
 	s := &SubjectRef{Kind: b.text("kind")}
 	if s.Kind == "artifact" {
 		s.Artifact = graphObject(&b, "artifact", readArtifact)
+	} else if s.Kind == "private_revision" {
+		ref := graphObject(&b, "private_revision", readPrivateRevisionRef)
+		s.PrivateRevision = &ref
+		forbidScoped(&b, "artifact")
 	} else {
 		// Decode values as RawMessage, not interface{}, so integers, ordering and
 		// unfamiliar members survive without float conversion or map sorting.
