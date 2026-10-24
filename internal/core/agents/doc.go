@@ -127,6 +127,10 @@
 // revocation and restart do not erase it. Capacity fields are nonnegative and
 // may be zero; max_operation_bytes is independent of local_slots. Producer
 // Limits bound new requests, not historical replay.
+// A grant's max_operation_bytes excess is ErrDenied for new local admissions
+// and private writes through authority checking, but BusyError for private and
+// artifact reads through the preparation book. Retry reads skip that new-work
+// ceiling, not the physical reservation.
 //
 // StartTurn is Agent-only. It requires current private integrity, an exact
 // active assignment when task-bound, and current turn.start authority. One
@@ -136,6 +140,8 @@
 // AdmitLocal holds a local slot, bytes and one unit for a concrete file effect.
 // BeginLocal rechecks current authority, assignment and dedicated scratch at
 // dispatch and consumes that held unit once. External classes have no producer.
+// BeginLocal, EndLocal and EndTurn have no production caller yet; ticket 15's
+// executor will supply dispatch and proven effect endings.
 //
 // Host endings bind the original work, not a replacement origin or target.
 // Agent CancelTurn selects its own current turn.cancel chain, which may differ
@@ -143,7 +149,9 @@
 // selection. Reassignment fences the old Agent entrance but does not prevent
 // owner or host endings. A turn may end once every child has an ending record:
 // unknown is an ending, but retains its existing local and unit accounting.
+// Unknown may also end undispatched local work; it releases nothing.
 // TurnStatus distinguishes dispatched and ended work and exposes no executor.
+// The owner's TurnStatus refuses a supplied GrantID before looking up work.
 // ReconcileAdmissions explicitly resolves one pending work item: proven-unsent
 // local work is released, dispatched work without an ending becomes unknown,
 // and an unmatched turn with no unended child becomes interrupted. It never
@@ -217,15 +225,23 @@
 // its growth-check byte, never just the caller's declared maximum. A physical
 // capacity refusal is busy and writes nothing. ScopedCommandStatus needs no
 // byte reservation or private-object/body I/O.
+// Every accounting scope must have that buffer headroom: colony, agent, context
+// if configured, and the leaf and each ancestor grant, including their own
+// Limits.BufferBytes. Even a tiny artifact is busy when any such ceiling or
+// remaining capacity cannot reserve ledgerstore.MaxBodyBytes+1.
 //
 // ReadArtifact requires an exact recorded source body reference and verifies
 // both digest and declared size. An Agent needs an exact owner-rooted
 // artifact.read chain, or a task description's audience and current
 // task.inspect authority. Authorization precedes existence-sensitive errors.
 // Missing, corrupt and collected bodies remain distinct authorized errors;
-// no failure returns a partial body. The owner's passive ReadArtifact requires
-// no enrolment, consumes no unit and writes no group, but still shares the
-// process preparation bound and uses the store's real maximum allocation.
+// no failure returns a partial body. ErrBodyCorrupt also reports a reference
+// whose declared size disagrees with the digest-verified body's length; that
+// case is an inconsistent reference, not evidence of damaged stored bytes.
+// The owner's passive ReadArtifact requires no enrolment, consumes no unit and
+// writes no group, but still shares the process preparation bound and uses the
+// store's real maximum allocation. Its MaxBytes is bounded by
+// Limits.MaxScopedBytes (4 MiB by default), so it cannot read a larger body.
 //
 // ScratchBinding is a read-only projection of frozen workspace scratch-created
 // and scratch-closed records, keyed by workspace and colony-unique context. It

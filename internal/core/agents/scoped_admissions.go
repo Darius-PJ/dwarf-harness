@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
@@ -104,7 +105,7 @@ func (s *Service) TurnStatus(ctx context.Context, request WorkLookup) (WorkView,
 		return WorkView{}, err
 	}
 	defer done()
-	if !validID(request.WorkID) {
+	if !validID(request.WorkID) || request.GrantID != (uuid.UUID{}) {
 		return WorkView{}, ErrInvalid
 	}
 	work, found, err := s.loadWork(ctx, request.WorkID, s.p.through)

@@ -27,6 +27,7 @@ type serviceDeps struct {
 	afterRead         func(Binding, string)
 	beforeSubmit      func([]ledger.Draft) []ledger.Draft
 	afterCommit       func(Receipt)
+	afterScopedSubmit func()
 	afterScopedCommit func(ScopedReceipt) error
 	beforeMaterialize func(Binding, string, string) error
 	beforeProjection  func(Binding, string)

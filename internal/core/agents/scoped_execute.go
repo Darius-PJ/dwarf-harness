@@ -334,6 +334,9 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 		}
 		return scopedResult{}, err
 	}
+	if s.deps.afterScopedSubmit != nil {
+		s.deps.afterScopedSubmit()
+	}
 	if err := s.refreshLocked(context.Background(), max(s.p.through, committed.Last)); err != nil {
 		s.mu.Unlock()
 		return scopedResult{}, err

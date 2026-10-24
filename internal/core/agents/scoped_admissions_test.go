@@ -208,4 +208,10 @@ func TestScopedOwnerGrantSelectionShape(t *testing.T) {
 			}
 		})
 	}
+	t.Run("turn_status", func(t *testing.T) {
+		before := f.store.Durable()
+		if _, err := f.service.TurnStatus(ctx, WorkLookup{WorkID: privateID(704), GrantID: grant}); err != ErrInvalid || f.store.Durable() != before {
+			t.Fatalf("owner turn status accepted a grant or looked up absent work before refusing its shape: %v", err)
+		}
+	})
 }
