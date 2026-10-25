@@ -1,11 +1,11 @@
 name: Check
 
 on:
-  # D143: CI is paused at the owner's word, so a push to main starts no run;
-  # only a manual dispatch does. To resume, restore the push trigger:
-  #   push:
-  #     branches: [main]
-  #     paths-ignore: ['**.md']
+  # A push to main that changes more than Markdown starts a run. Pushes go once
+  # per ticket, after its close, so CI runs once per ticket (D141, D146).
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
   workflow_dispatch:
 
 permissions:

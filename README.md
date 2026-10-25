@@ -62,7 +62,7 @@ GOTOOLCHAIN=local CGO_ENABLED=0 go test ./contract/ledger/...
 
 Some tests need native tools. Tests of the Go dependency resolver skip, with their reason, unless `DWARF_GRAPH_GO_HELPER`, `DWARF_GRAPH_GO` and `DWARF_GRAPH_GOROOT` are set; the check's tests step builds `helpers/go-analyzer` and sets them itself. Tests of installed language tools skip unless `DWARF_GRAPH_PYTHON` (Python 3.13.15), `DWARF_GRAPH_NODE` (Node v24.18.0) and `DWARF_GRAPH_TYPESCRIPT` (the `lib/typescript.js` of TypeScript 6.0.3) hold absolute paths.
 
-The workflow [`.github/workflows/check.yml`](.github/workflows/check.yml) runs the full check on Windows, Linux and macOS runners, with Go archives and, on Windows, the llvm-mingw compiler verified against pinned SHA-256 digests. It starts only on manual dispatch.
+The workflow [`.github/workflows/check.yml`](.github/workflows/check.yml) runs the full check on Windows, Linux and macOS runners, with Go archives and, on Windows, the llvm-mingw compiler verified against pinned SHA-256 digests. It runs when a push to `main` changes more than Markdown, and on manual dispatch.
 
 ## Repository map
 
