@@ -107,7 +107,12 @@ func (s *Service) canInspectTask(ctx context.Context, origin ledger.Origin, id u
 
 // A subject check is an intersection with mutation authority, never a union of
 // partial grants. Each candidate independently authorizes the complete read.
+// The artifact's source names its task: the source is resolved once, at the
+// first task resource the caller may inspect, and only a resource naming that
+// task loads the task.
 func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, artifact ledger.ArtifactRef, selected uuid.UUID, through uint64, sources map[int64]ledger.Record) ([]grantRules, error) {
+	var definition ledger.RuntimeTaskChanged // zero TaskID: the source names no task
+	resolved := false
 	for grantID, grant := range s.p.grants {
 		if selected != (uuid.UUID{}) && grantID != selected || grant.definition.Grantee != ledger.Binding(bindingOf(origin)) {
 			continue
@@ -135,6 +140,23 @@ func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, a
 			if err != nil {
 				return nil, err
 			}
+			if !resolved {
+				resolved = true
+				source, found := sources[artifact.SourceSequence]
+				if sources == nil {
+					if source, found, err = s.sourceRecord(ctx, artifact.SourceSequence, through); err != nil {
+						return nil, err
+					}
+				}
+				if found && source.Type == ledger.TypeRuntimeTaskChanged {
+					if definition, err = ledger.DecodeRuntimeTaskChanged(source.Payload); err != nil {
+						return nil, err
+					}
+				}
+			}
+			if definition.TaskID != resource.TaskID {
+				continue
+			}
 			task, found, err := s.loadTask(ctx, resource.TaskID, through)
 			if err != nil {
 				return nil, err
@@ -142,21 +164,7 @@ func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, a
 			if !found || !slices.Contains(task.record.Audience, origin.AgentID) || task.record.Description.SHA256 != artifact.SHA256 || task.record.Description.Bytes != artifact.Bytes {
 				continue
 			}
-			source, found := sources[artifact.SourceSequence]
-			if sources == nil {
-				source, found, err = s.sourceRecord(ctx, artifact.SourceSequence, through)
-				if err != nil {
-					return nil, err
-				}
-			}
-			if !found || source.Type != ledger.TypeRuntimeTaskChanged {
-				continue
-			}
-			definition, err := ledger.DecodeRuntimeTaskChanged(source.Payload)
-			if err != nil {
-				return nil, err
-			}
-			if definition.TaskID == resource.TaskID && definition.Description == task.record.Description {
+			if definition.Description == task.record.Description {
 				return chain, nil
 			}
 		}

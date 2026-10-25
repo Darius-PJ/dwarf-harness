@@ -308,30 +308,33 @@
 // above. (5) A backwards system clock refuses new review decisions until it
 // passes the floor.
 //
-// Costs, as built and as measured. Live state is one slot per live task and
-// the maxRequest and maxCommand watermarks; there is no all-request index or
-// snapshot. A fresh command or request ID above its watermark needs no
-// history scan; one at or below it scans history. A new command reads its
-// witnesses once, in one batch from the start of the segment holding the
-// earliest witness to the commit holding the latest. With 64 MiB segments
-// that start is in practice the log's, so the batch costs the witness's
-// position, where the replaced form read the whole prefix. After Submit one
-// commit's envelope times are read back. A cold receipt or request lookup
-// scans the whole history; an Agent's retry reads each task-description
-// source once under the lock; a result on a replaced or terminal request
-// loads that request from history twice. Every new decision and every
-// replayed F3-12 group rechecks both participants' read rights; for an
-// Agent's artifact reference that goes through artifactAuthority, which
-// iterates every grant the participant holds and loads each task resource's
-// task, and a terminal task is evicted from the live projection, so each such
-// load is a cold whole-history scan. A reviewer that keeps one grant per
-// reviewed task therefore pays about the history length times its grants on
-// finished tasks for each decision, and Open about that for each of its F3-12
-// groups. Measured in ticket 12's S4 on one Windows host with that workload,
-// Open's time grew superlinearly with the history and this read-rights path
-// held most of a decision's CPU; the figures are in the S4 evidence. They are
-// bookkeeping figures, not an SLA, a capacity or a population limit, and no
-// fix is implied here.
+// Costs, as built. Live state is one slot per live task and the request-ID
+// and command-ID watermarks; there is no all-request index or snapshot. A
+// fresh command or request ID above its watermark needs no history scan; one
+// at or below it scans history. A new command reads its witnesses once, in
+// one batch from the start of the segment holding the earliest witness to the
+// commit holding the latest. With 64 MiB segments that start is in practice
+// the log's, so the batch costs the witness's position, where the replaced
+// form read the whole prefix. After Submit one commit's envelope times are
+// read back. A cold receipt or request lookup scans the whole history; a
+// result on a replaced or terminal request loads that request from history
+// twice. Every new decision and every replayed F3-12 group rechecks both
+// participants' read rights. For an Agent's artifact reference the
+// artifact-read authority check takes the reference's source from the
+// witness batch, checks the current chain of each of the Agent's grants, and
+// loads only the task that the source names. These checks read the live
+// projection; a task one of them needs that is terminal, and so evicted from
+// it, is read by scanning the whole history. On the ordinary path the source
+// names the task under review, which is live, so a decision costs about the
+// participants' grants plus its witness batch, and Open adds that for each
+// F3-12 group. An Agent's retry rechecks its own read rights under the lock
+// the same way, except that a retry matched before the witness batch is read
+// has none: each artifact reference then reads its source, from the start of
+// the source's segment to its commit, and after an approve or a fail the
+// reviewed task is terminal, so a reference naming it also costs at least one
+// whole-history scan. Ticket 12 measured these costs with a throwaway driver
+// on one Windows host; the figures are in its evidence. They are bookkeeping
+// figures, not an SLA, a capacity or a population limit.
 //
 // # Materialization and integrity
 //
