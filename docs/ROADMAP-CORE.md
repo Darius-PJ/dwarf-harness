@@ -513,7 +513,7 @@ Capture/materialization/integration and disk costs must be recorded against the 
 - a promotion request surfaces unavailable validation, leaves canonical unchanged and is never reported as successful delivery;
 - the check is green on Windows, Linux and macOS in CI.
 
-**Status.** In progress (2026-10-24: tickets 10 and 11 are resolved, B31 and B32; CI run 13, on 6e11d49 with ticket 11's S1 and S2, passed on Windows, Linux and macOS; C3's other tickets remain open).
+**Status.** In progress (2026-10-24: tickets 10, 11 and 12 are resolved, B31–B33; CI is paused (D143), and C3 cannot exit until CI resumes and passes on Windows, Linux and macOS; the latest CI result recorded is run 13, on 6e11d49 with ticket 11's S1 and S2, which passed on all three; C3's other tickets remain open).
 
 ### C4. Validation runner and promotion gate
 
