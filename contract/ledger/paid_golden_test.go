@@ -158,8 +158,6 @@ func paidInputs() ([]goldenCommit, map[string][]byte) {
 	files["bodies/"+desc.SHA256.String()] = []byte(description)
 	task := RuntimeTaskChanged{TaskID: taskID, Action: "create", Version: 1, CreatorActor: "owner", Creator: general, Description: desc, AcceptanceSHA256: scopedHash("Synthetic settlement evidence."), Dependencies: []uuid.UUID{}, Audience: []uuid.UUID{general.AgentID}, Assignment: &Assignment{assignment, 1, binding(work), "owner", general}, State: "waiting"}
 	addScoped(ScopedSubmission{Schema: 2, Actor: "owner", Origin: general, Operation: "task.create", Target: Resource{Kind: "task", TaskID: taskID}, Arguments: TaskCreateArguments{taskID, desc, task.AcceptanceSHA256, task.Dependencies, task.Audience, &AssignmentInput{assignment, binding(work)}}}, 1, "applied", uuid.UUID{}, uuid.UUID{}, BodyPin{PinID: taskID}, task)
-	task.Action, task.ExpectedVersion, task.Version, task.State = "start", 1, 2, "active"
-	addScoped(ScopedSubmission{Schema: 2, Actor: "owner", Origin: general, Operation: "task.start", Target: Resource{Kind: "task", TaskID: taskID}, Expected: ScopedExpected{Version: 1, AssignmentID: assignment, Generation: new(int64(1))}, Arguments: TaskMutationArguments{TaskID: taskID, Action: "start"}}, 2, "applied", uuid.UUID{}, uuid.UUID{}, task)
 	taskBinding := &TaskBinding{taskID, assignment, 1}
 	routeID, credentialScope, credentialVersion := paidID(0x400), paidID(0x401), paidID(0x402)
 	rootID, childID, generalTurnGrant, workTurnGrant := paidID(0x410), paidID(0x411), paidID(0x412), paidID(0x413)
@@ -195,6 +193,8 @@ func paidInputs() ([]goldenCommit, map[string][]byte) {
 	}{{general, generalTurnGrant, nil}, {work, workTurnGrant, taskBinding}} {
 		issue(RuntimeGrantIssued{GrantID: row.id, Grantee: binding(row.o), Operations: []string{"turn.start"}, Resources: []Resource{contextTarget(row.o)}, DataClass: "private", Recipients: []Binding{binding(row.o)}, Limits: limits, Lifetime: "until_revoked", TaskBinding: row.binding}, "owner", general, uuid.UUID{})
 	}
+	task.Action, task.ExpectedVersion, task.Version, task.State = "start", 1, 2, "active"
+	addScoped(ScopedSubmission{Schema: 2, Actor: "owner", Origin: general, Operation: "task.start", Target: Resource{Kind: "task", TaskID: taskID}, Expected: ScopedExpected{Version: 1, AssignmentID: assignment, Generation: new(int64(1))}, Arguments: TaskMutationArguments{TaskID: taskID, Action: "start"}}, 2, "applied", uuid.UUID{}, uuid.UUID{}, task)
 	owner := func(op string, args any) PaidSubmission {
 		return PaidSubmission{Schema: 4, Actor: "owner", Origin: general, Operation: op, Arguments: args}
 	}
