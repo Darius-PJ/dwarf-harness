@@ -206,6 +206,19 @@ func PriceUsage(p Profile, units []Units) (int64, error) {
 	if e := p.Validate(); e != nil {
 		return 0, e
 	}
+	return priceUsage(p, units)
+}
+
+// PriceHistoricalUsage uses the same exact tariff arithmetic as PriceUsage,
+// without making today's installation limits a restriction on historical facts.
+func PriceHistoricalUsage(p Profile, units []Units) (int64, error) {
+	if err := p.ValidateHistorical(); err != nil {
+		return 0, err
+	}
+	return priceUsage(p, units)
+}
+
+func priceUsage(p Profile, units []Units) (int64, error) {
 	if len(units) != len(allClasses) {
 		return 0, ErrUsage
 	}

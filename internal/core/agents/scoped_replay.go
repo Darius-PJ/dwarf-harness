@@ -38,28 +38,33 @@ func isScopedType(typ string) bool {
 	}
 }
 
-// Dispatch complete groups before any family validator. F0 command and unpin
-// records do not select a family; mixed private/scoped/review groups refuse.
-func decodeFamily(drafts []ledger.Draft, first uint64) (*privateGroup, *scopedGroup, *reviewGroup, error) {
-	var private, scoped, review bool
+// Dispatch complete groups before any family validator. Shared F0 records do
+// not select a family; no group may embed two F3 families.
+func decodeFamily(drafts []ledger.Draft, first uint64) (*privateGroup, *scopedGroup, *reviewGroup, *paidGroup, error) {
+	var private, scoped, review, paid bool
 	for _, draft := range drafts {
 		private = private || isPrivateType(draft.Type)
 		scoped = scoped || isScopedType(draft.Type)
 		review = review || isReviewType(draft.Type)
+		paid = paid || isPaidType(draft.Type)
 	}
-	if private && scoped || review && (private || scoped) {
-		return nil, nil, nil, inconsistent(first, "mixed record families")
+	if private && scoped || review && (private || scoped) || paid && (private || scoped || review) {
+		return nil, nil, nil, nil, inconsistent(first, "mixed record families")
+	}
+	if paid {
+		g, err := decodePaidGroup(drafts, first)
+		return nil, nil, nil, g, err
 	}
 	if review {
 		g, err := decodeReviewGroup(drafts, first)
-		return nil, nil, g, err
+		return nil, nil, g, nil, err
 	}
 	if scoped {
 		g, err := decodeScopedGroup(drafts, first)
-		return nil, g, nil, err
+		return nil, g, nil, nil, err
 	}
 	g, err := decodeGroup(drafts, first)
-	return g, nil, nil, err
+	return g, nil, nil, nil, err
 }
 
 func decodeScopedGroup(drafts []ledger.Draft, first uint64) (*scopedGroup, error) {

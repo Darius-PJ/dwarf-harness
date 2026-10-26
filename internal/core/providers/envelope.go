@@ -111,6 +111,12 @@ func requestPreimage(d Descriptor, body []byte) []byte {
 	return b.Bytes()
 }
 
+// RequestSHA256 hashes an already-validated descriptor and its exact recorded
+// body. It never recompiles JSON or grants permission to dispatch.
+func RequestSHA256(d Descriptor, body []byte) [32]byte {
+	return sha256.Sum256(requestPreimage(d, body))
+}
+
 // QuoteSHA256 uses raw request hash bytes but lowercase hexadecimal tariff
 // digest text. Components are sorted by their complete framed encodings.
 func QuoteSHA256(request [32]byte, capability, tariff string, tariffDigest [32]byte, maximum int64, components []Component) ([32]byte, error) {

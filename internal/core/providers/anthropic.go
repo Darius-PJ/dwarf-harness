@@ -117,7 +117,7 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 	if e := p.Validate(); e != nil {
 		return c, e
 	}
-	if r.MaxTokens <= 0 || r.MaxTokens > p.OutputMax || len(r.Messages) == 0 || len(r.Messages) > 100000 || r.Messages[len(r.Messages)-1].Role != "user" {
+	if r.MaxTokens <= 0 || r.MaxTokens > p.OutputMax || len(r.Messages) == 0 || r.Messages[len(r.Messages)-1].Role != "user" {
 		return c, ErrUnsupported
 	}
 	// encoding/json replaces invalid UTF-8 in Go strings. Refuse it before the

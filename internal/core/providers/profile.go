@@ -107,6 +107,17 @@ func endpoint(authority, path string) (*url.URL, error) {
 // Validate checks supported semantics and bounded, complete source evidence.
 // It cannot authenticate the supplied quotes; the trusted installer does that.
 func (p Profile) Validate() error {
+	return p.validate(false)
+}
+
+// ValidateHistorical checks the semantics needed to interpret recorded money.
+// It is not permission to install or dispatch: source completeness, installation
+// size and verification lifetime are intentionally left to the live boundary.
+func (p Profile) ValidateHistorical() error {
+	return p.validate(true)
+}
+
+func (p Profile) validate(historical bool) error {
 	if p.Schema != 1 || !visible(p.CapabilityVersion, 128) || !visible(p.TariffVersion, 128) || p.Provider != "anthropic" || p.Method != "POST" || p.APIVersion != APIVersion || p.UsageSchema != "anthropic-messages-text/v1" {
 		return ErrUnsupported
 	}
@@ -126,7 +137,7 @@ func (p Profile) Validate() error {
 	} else if p.RequestedTier != "auto" {
 		return ErrUnsupported
 	}
-	if p.ContextMax <= 0 || p.InputMax <= 0 || p.OutputMax <= 0 || p.VerifiedUTCNS <= 0 || p.ExpiresUTCNS <= p.VerifiedUTCNS {
+	if p.ContextMax <= 0 || p.InputMax <= 0 || p.OutputMax <= 0 || !historical && (p.VerifiedUTCNS <= 0 || p.ExpiresUTCNS <= p.VerifiedUTCNS) {
 		return ErrInvalid
 	}
 	if !slices.Equal(p.CacheClasses, []string{CacheRead, CacheWrite1h, CacheWrite5m}) || !slices.Equal(p.ToolChoices, []string{"auto", "none"}) || !sortedSet(p.NoChargeRules) {
@@ -147,6 +158,9 @@ func (p Profile) Validate() error {
 		if _, err := rational(r.Numerator, r.Denominator); err != nil {
 			return err
 		}
+	}
+	if historical {
+		return nil
 	}
 	topics := make(map[string]bool)
 	prev := ""

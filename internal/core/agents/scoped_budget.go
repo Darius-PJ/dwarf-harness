@@ -26,6 +26,10 @@ type budgetBook struct {
 	accounts        map[ledger.ScopeKey]budgetAccount
 	preparing       map[ledger.ScopeKey][4]int64
 	originPreparing map[ledger.Origin]map[ledger.ScopeKey][4]int64
+	paid            map[ledger.PaidScope]paidAccount
+	paidPeriodKind  string
+	paidPeriod      string
+	paidObserved    int64
 }
 
 type budgetDelta struct{ hold, release, charge [4]int64 }

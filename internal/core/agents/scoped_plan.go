@@ -124,7 +124,7 @@ func (p *projection) pruneScoped() {
 		current(id)
 	}
 	for id := range p.grants {
-		if !live[id] {
+		if !live[id] && p.book.paid[ledger.PaidScope{Kind: "grant", ID: id}].version == 0 {
 			delete(p.grants, id)
 		}
 	}
@@ -160,7 +160,7 @@ func (p *projection) pruneScoped() {
 		}
 	}
 	for scope := range p.book.accounts {
-		if scope.Kind == "grant" && !live[scope.ID] && !neededScopes[scope] {
+		if scope.Kind == "grant" && !live[scope.ID] && !neededScopes[scope] && p.book.paid[ledger.PaidScope{Kind: "grant", ID: scope.ID}].version == 0 {
 			delete(p.book.accounts, scope)
 		}
 	}

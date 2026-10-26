@@ -265,7 +265,7 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 	}
 	err := s.scan(ctx, s.p.through, through, func(c ledger.Commit) error {
 		d := draftsOf(c)
-		g, scoped, review, err := decodeFamily(d, c.First)
+		g, scoped, review, paid, err := decodeFamily(d, c.First)
 		if err != nil {
 			return err
 		}
@@ -278,6 +278,9 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 		}
 		if review != nil {
 			command = &review.command
+		}
+		if paid != nil {
+			command = &paid.command
 		}
 		if command != nil {
 			if bytes.Compare(command.CommandID[:], s.p.maxCommand[:]) <= 0 {
@@ -316,6 +319,16 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 				return inconsistent(c.First, "invalid review transition: "+err.Error())
 			}
 			s.p.installReview(next)
+		}
+		if paid != nil {
+			next, err := s.planPaid(ctx, paid, c.First)
+			if err != nil {
+				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+					return err
+				}
+				return inconsistent(c.First, "invalid paid transition: "+err.Error())
+			}
+			s.p.installPaid(next)
 		}
 		for _, r := range d {
 			switch r.Type {
@@ -367,6 +380,7 @@ type commandMatch struct {
 	group   *privateGroup
 	scoped  *scopedGroup
 	review  *reviewGroup
+	paid    *paidGroup
 }
 
 func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
@@ -386,11 +400,11 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 			if found.found {
 				return inconsistent(c.First, "duplicate command")
 			}
-			g, scoped, review, err := decodeFamily(draftsOf(c), c.First)
+			g, scoped, review, paid, err := decodeFamily(draftsOf(c), c.First)
 			if err != nil {
 				return err
 			}
-			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review}
+			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid}
 		}
 		return nil
 	})

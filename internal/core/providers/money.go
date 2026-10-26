@@ -142,6 +142,19 @@ func Bound(p Profile, requestedOutput int64, eligible []string) ([]Component, in
 	if err := p.Validate(); err != nil {
 		return nil, 0, err
 	}
+	return bound(p, requestedOutput, eligible)
+}
+
+// BoundHistorical recomputes a recorded quote without applying installation
+// limits to a historical profile. It grants no authority to send a request.
+func BoundHistorical(p Profile, requestedOutput int64, eligible []string) ([]Component, int64, error) {
+	if err := p.ValidateHistorical(); err != nil {
+		return nil, 0, err
+	}
+	return bound(p, requestedOutput, eligible)
+}
+
+func bound(p Profile, requestedOutput int64, eligible []string) ([]Component, int64, error) {
 	if requestedOutput <= 0 || requestedOutput > p.OutputMax || len(eligible) == 0 {
 		return nil, 0, ErrInvalid
 	}

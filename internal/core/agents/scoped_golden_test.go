@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,6 +29,9 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 	}
 	if chapter == "12" {
 		colony = uuid.MustParse("019a1200-0000-7000-8000-000000000001")
+	}
+	if chapter == "13" {
+		colony = uuid.MustParse("019a1300-0000-7000-8000-000000000001")
 	}
 	r, err := ledger.OpenReader(filepath.Join(dir, "log"), ledger.ReadOptions{Colony: colony, Through: ledger.ToEnd, AllTypes: true, Consume: ledger.Consumption{}})
 	if err != nil {
@@ -77,21 +81,39 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 	}
 	if chapter != "10" {
 		for _, kind := range []string{"objects", "bodies"} {
-			entries, err := os.ReadDir(filepath.Join(dir, kind))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, entry := range entries {
-				data := readTestFile(t, filepath.Join(dir, kind, entry.Name()))
+			base := filepath.Join(dir, kind)
+			err := filepath.WalkDir(base, func(name string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					return nil
+				}
+				data := readTestFile(t, name)
 				digest := ledger.Digest(sha256.Sum256(data))
 				if digest.String() != entry.Name() {
 					t.Fatalf("fixture content address: %s", entry.Name())
 				}
 				if kind == "objects" {
 					objects[digest] = data
+					rel, err := filepath.Rel(base, name)
+					if err != nil {
+						return err
+					}
+					if filepath.Dir(rel) != "." {
+						destination := filepath.Join(root, rel)
+						if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+							return err
+						}
+						writeTestFile(t, destination, data)
+					}
 				} else if got, size, err := store.PublishBody(context.Background(), bytes.NewReader(data)); err != nil || got != digest || size != int64(len(data)) {
 					t.Fatalf("publish golden body: %s %d %v", got, size, err)
 				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
 		}
 	}

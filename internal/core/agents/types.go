@@ -158,8 +158,10 @@ func (e IntegrityIssue) Error() string {
 func (e IntegrityIssue) Unwrap() error { return ErrIntegrity }
 
 type Reconciliation struct {
-	Issues, Completed []IntegrityIssue
-	PendingWork       []WorkView
+	Issues, Completed  []IntegrityIssue
+	PendingWork        []WorkView
+	PendingPaid        []PaidAttemptView
+	UnboundCredentials []UnboundCredential
 }
 type RevisionError struct{ Expected, Current uint64 }
 

@@ -410,4 +410,30 @@
 // on its own workspace root (empty prefix), not merely a sub-prefix; a foreign
 // or mismatched binding is denied. Neither entrance creates a scratch or
 // selects another context.
+//
+// # Paid history and passive views
+//
+// Open consumes F3-13 without dispatching, sampling a clock, reading credential
+// sources, or opening paid inputs, outputs or observations. The shared budget
+// book retains exact current-period settlements, full unresolved holds across
+// periods, and per-attempt violation fences. Late settlements and corrections
+// remain in the admission period and use the admission profile. A cap change
+// cannot release a hold or clear a violation. Acknowledgement retires the pinned
+// profile for the colony's lifetime without refunding actual cost.
+//
+// Every paid child needs an ending before its turn can end. An unknown result
+// ends that child but keeps its hold. Reconciliation lists held attempts and all
+// credential versions still authorized without in-memory bytes, including their
+// nonsecret source locators. An unfamiliar financial interpretation preserves
+// exposure instead of inventing a zero charge or making historical Open fail.
+//
+// PaidAttemptStatus, PaidCommandStatus and PaidBudgetStatus return owned
+// snapshots through a declared ledger sequence, never a permit to send. Agent
+// views require current turn.inspect and disclose only the exact originating
+// agent, session and context; shared budget terms remain opaque. Historical
+// lookups use a cold ledger scan, not an indefinitely retained attempt index.
+// VerifyInput explicitly checks the recorded body and request digest with the
+// private object read bound; InputIntegrity reports availability independently
+// of money. A missing input cannot erase a hold, settlement or fence. No paid
+// mutation or dispatch entrance is provided by this consumer.
 package agents

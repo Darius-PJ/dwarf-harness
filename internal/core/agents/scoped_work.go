@@ -148,6 +148,9 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 				}
 			}
 			if releasesWork("turn", p.Outcome) {
+				if s.p.paidChildren[id] != 0 {
+					return plan, &BusyError{Reason: "child_unended"}
+				}
 				for _, child := range s.p.work {
 					if child.admission.ParentTurnID == id && !child.ended {
 						return plan, &BusyError{Reason: "child_unended"}
