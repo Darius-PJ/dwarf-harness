@@ -128,8 +128,8 @@ func (p *projection) prunePaid() {
 		}
 		return bytes.Compare(a[:], b[:])
 	})
-	if len(hot) > 128 {
-		for _, id := range hot[:len(hot)-128] {
+	if len(hot) > p.paidHotLimit {
+		for _, id := range hot[:len(hot)-p.paidHotLimit] {
 			delete(p.paidAttempts, id)
 		}
 	}
@@ -165,6 +165,9 @@ func (s *Service) credentialVersionExists(ctx context.Context, id uuid.UUID, thr
 // attempt and its admission tariff. It does not read an object or re-authorize
 // a fact which was validated at its original ledger position.
 func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, evidence ledger.Digest) (paidAttempt, bool, error) {
+	if bytes.Compare(id[:], s.p.maxAttempt[:]) > 0 {
+		return paidAttempt{}, false, nil
+	}
 	if a, ok := s.p.paidAttempts[id]; ok && (evidence == (ledger.Digest{}) || a.result == nil) {
 		return a, true, nil
 	}

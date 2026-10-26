@@ -1,5 +1,5 @@
 // Package agents owns Core's identities, private state, scoped authority, tasks
-// and non-paid work projections. The ledger selects state; directory contents
+// and work projections. The ledger selects state; directory contents
 // and mutable Markdown never select a revision or confer authority.
 //
 // # Host trust and lifecycle
@@ -434,6 +434,42 @@
 // lookups use a cold ledger scan, not an indefinitely retained attempt index.
 // VerifyInput explicitly checks the recorded body and request digest with the
 // private object read bound; InputIntegrity reports availability independently
-// of money. A missing input cannot erase a hold, settlement or fence. No paid
-// mutation or dispatch entrance is provided by this consumer.
+// of money. A missing input cannot erase a hold, settlement or fence. This
+// integrity-only probe returns no private bytes and deliberately uses the same
+// exact-origin turn.inspect authority as the snapshot, not private.read.
+//
+// # Paid preparation and admission
+//
+// OpenPaid explicitly enables live paid producers with bounded PaidLimits.
+// ConfigurePaidRoute installs a complete, current supported profile using CAS;
+// ConfigureSpend changes terms without resetting usage. The first colony terms,
+// even disabled terms, fix the period kind. An agent may DelegateSpend only on
+// its own issued child, within every ancestor's terms, for one local unit; later
+// it may disable that child but never expand or re-enable its spend authority.
+//
+// BindCredential reads one environment or Windows Credential Manager source
+// into bounded private memory and records only provider, scope, version, source
+// kind and visible-ASCII locator. No value, digest or size enters the ledger.
+// RevokeCredential and rotation revoke the old authorization and release its
+// bytes. After every Core start the owner must bind a fresh version per scope;
+// replay never rehydrates a source. Repeated rotations in one start are allowed.
+//
+// PrepareAnthropic takes an explicit route, credential version, parent turn and
+// task binding. It reserves physical buffers before serializing, then seals and
+// quotes the owned request once. PreparedPaidCall is opaque and belongs to that
+// Service incarnation; Close releases unused preparation. AdmitPaid rechecks
+// current model authority, task generation, every enabled spend ancestor and
+// all finite ceilings. It publishes the raw sealed body as a private object,
+// commits one schema-4 command/effect/receipt group and the full atomic hold,
+// then returns an owned receipt and immutable BoundCall. Refusal consumes no
+// command or financial exposure; the preparation can be retried until closed.
+//
+// Paid and review decisions share reviewClock and the same effective floor:
+// committed envelope/observation times plus the incarnation's highest successful
+// sample, including samples from refused calls. Historical replay uses only its
+// prefix's committed floor and never consults a later live sample.
+//
+// ReconcilePaid works even with plain Open. It releases a reserved, never-sent
+// attempt exactly once; an intended attempt returns ErrPaidSent. No dispatch,
+// network, observation, correction or acknowledgement producer is exported.
 package agents

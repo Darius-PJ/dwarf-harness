@@ -151,6 +151,20 @@ func (s *Service) planPaidSpend(ctx context.Context, g *paidGroup, through uint6
 			return plan, ErrDenied
 		}
 		plan.grants = append(plan.grants, grant)
+		if p.Terms.Enabled {
+			grantee := grant.definition.Grantee
+			origin := ledger.Origin{AgentID: grantee.AgentID, ContextID: grantee.ContextID, SessionID: s.p.agents[grantee.AgentID].session}
+			chain, err := s.currentChain(ctx, origin, p.Scope.ID, through)
+			if err != nil {
+				return plan, err
+			}
+			for _, link := range chain[1:] {
+				parent := s.p.book.paid[ledger.PaidScope{Kind: "grant", ID: link.id}]
+				if parent.version == 0 || !paidTermsAttenuate(parent.terms, p.Terms) {
+					return plan, ErrDenied
+				}
+			}
+		}
 		if p.ParentGrantID != (uuid.UUID{}) {
 			parent := s.p.book.paid[ledger.PaidScope{Kind: "grant", ID: p.ParentGrantID}]
 			if parent.version == 0 || !paidTermsAttenuate(parent.terms, p.Terms) {
@@ -158,6 +172,9 @@ func (s *Service) planPaidSpend(ctx context.Context, g *paidGroup, through uint6
 			}
 		}
 		if sub.Actor == "agent" {
+			if a.version != 0 && (p.Terms.Enabled || !a.terms.Enabled || !paidTermsAttenuate(a.terms, p.Terms)) {
+				return plan, ErrDenied
+			}
 			if grant.issuer != "agent" || grant.origin != sub.Origin || sub.GrantID != p.ParentGrantID {
 				return plan, ErrDenied
 			}

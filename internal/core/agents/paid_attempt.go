@@ -67,11 +67,11 @@ func checkPaidQuote(p ledger.RuntimePaidReserved, profile ledger.Profile) error 
 	return nil
 }
 
-func (s *Service) paidCurrent(ctx context.Context, a paidAttempt, observed int64, through uint64, extra int64) ([]grantRules, *scopedTaskState, error) {
+func (s *Service) paidAuthority(ctx context.Context, a paidAttempt, through uint64) ([]grantRules, *scopedTaskState, error) {
 	p := a.admission
 	route, found := s.p.paidRoutes[p.RouteID]
 	digest, _ := route.Profile.SHA256()
-	if !found || !route.Enabled || route.Version != p.RouteVersion || digest != p.ProfileSHA256 || s.p.retiredProfiles[digest] || route.CredentialScopeID != p.Request.Credential.ScopeID || observed < s.p.reviewFloor || observed < route.Profile.VerifiedUTCNS || observed >= route.Profile.ExpiresUTCNS {
+	if !found || !route.Enabled || route.Version != p.RouteVersion || digest != p.ProfileSHA256 || s.p.retiredProfiles[digest] || route.CredentialScopeID != p.Request.Credential.ScopeID {
 		return nil, nil, ErrDenied
 	}
 	credential, found := s.p.paidCredentials[p.Request.Credential.Version]
@@ -99,11 +99,26 @@ func (s *Service) paidCurrent(ctx context.Context, a paidAttempt, observed int64
 	if !slices.Equal(p.Scopes, paidScopes(a.origin, credential.ScopeID, p.TaskBinding, chain)) {
 		return nil, nil, ErrInvalid
 	}
+	if err := s.p.book.paidAuthority(p.Scopes); err != nil {
+		return nil, nil, err
+	}
+	return chain, task, nil
+}
+
+func (s *Service) paidCurrent(ctx context.Context, a paidAttempt, observed int64, through uint64, extra int64) ([]grantRules, *scopedTaskState, error) {
+	chain, task, err := s.paidAuthority(ctx, a, through)
+	if err != nil {
+		return nil, nil, err
+	}
+	profile := s.p.paidRoutes[a.admission.RouteID].Profile
+	if observed < s.p.reviewFloor || observed < profile.VerifiedUTCNS || observed >= profile.ExpiresUTCNS {
+		return nil, nil, ErrDenied
+	}
 	period := paidPeriod(s.p.book.paidPeriodKind, observed)
 	if period == "" {
 		return nil, nil, ErrDenied
 	}
-	if err := s.p.book.checkPaid(p.Scopes, period, extra); err != nil {
+	if err := s.p.book.checkPaid(a.admission.Scopes, period, extra); err != nil {
 		return nil, nil, err
 	}
 	return chain, task, nil

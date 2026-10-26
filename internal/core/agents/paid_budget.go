@@ -85,7 +85,7 @@ func paidWarning(a paidAccount, period string) bool {
 	threshold.Add(threshold, big.NewInt(999999)).Quo(threshold, big.NewInt(1000000))
 	return paidOccupied(a, period).Cmp(threshold) >= 0
 }
-func (b *budgetBook) checkPaid(scopes []ledger.PaidScope, period string, extra int64) error {
+func (b *budgetBook) paidAuthority(scopes []ledger.PaidScope) error {
 	for _, scope := range scopes {
 		a := b.paid[scope]
 		if a.version == 0 && scope.Kind == "task" {
@@ -93,6 +93,18 @@ func (b *budgetBook) checkPaid(scopes []ledger.PaidScope, period string, extra i
 		}
 		if a.version == 0 || !a.terms.Enabled {
 			return ErrDenied
+		}
+	}
+	return nil
+}
+func (b *budgetBook) checkPaid(scopes []ledger.PaidScope, period string, extra int64) error {
+	if err := b.paidAuthority(scopes); err != nil {
+		return err
+	}
+	for _, scope := range scopes {
+		a := b.paid[scope]
+		if a.version == 0 && scope.Kind == "task" {
+			continue
 		}
 		if a.fences != 0 {
 			return &BusyError{Reason: "paid_violation"}

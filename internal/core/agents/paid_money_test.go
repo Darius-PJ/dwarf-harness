@@ -34,7 +34,7 @@ func TestPaidSettlementAndCorrection(t *testing.T) {
 		}
 		c := paidCorrection(f, t, p, r, 19, 2)
 		f.append(t, c)
-		if v := f.budget(t, ""); v.SettledMicros != "21" || v.HeldMicros != "0" {
+		if v := f.budget(t, p.AdmissionPeriod); v.SettledMicros != "21" || v.HeldMicros != "0" {
 			t.Fatalf("correction did not replace the hot-book cost once: %+v", v)
 		}
 		// Compute the next correction under the admission tariff before replacing
@@ -130,22 +130,23 @@ func TestPaidSettlementAndCorrection(t *testing.T) {
 
 func TestPaidPeriodsWarningsAndOverrun(t *testing.T) {
 	t.Parallel()
+	t.Run("live-controls-preserve-exposure", paidLivePeriodRows)
 	t.Run("holds-warning-ceiling-and-rollover", func(t *testing.T) {
 		t.Parallel()
 		f := newPaidFixture(t)
 		terms := ledger.SpendTerms{Enabled: true, PeriodKind: "utc_day", Mode: "finite", CeilingMicros: new(int64(241)), WarningPPM: new(int64(500000))}
 		f.spend(t, ledger.PaidScope{Kind: "colony"}, terms)
 		p := f.reserve(t)
-		if v := f.budget(t, ""); v.Warning {
+		if v := f.budget(t, p.AdmissionPeriod); v.Warning {
 			t.Fatalf("warning rounded down instead of ceil(120.5): %+v", v)
 		}
 		other := f.reserve(t)
-		if v := f.budget(t, ""); !v.Warning || v.HeldMicros != "240" {
+		if v := f.budget(t, p.AdmissionPeriod); !v.Warning || v.HeldMicros != "240" {
 			t.Fatalf("overlap/warning lost: %+v", v)
 		}
 		terms.CeilingMicros = new(int64(119))
 		f.spend(t, ledger.PaidScope{Kind: "colony"}, terms)
-		if v := f.budget(t, ""); v.Available || v.HeldMicros != "240" {
+		if v := f.budget(t, p.AdmissionPeriod); v.Available || v.HeldMicros != "240" {
 			t.Fatalf("cap cut refunded or allowed exposure: %+v", v)
 		}
 		f.append(t, ledger.RuntimePaidResult{AttemptID: other.AttemptID, ExpectedVersion: 1, Version: 2, Kind: "released_unsent"})
@@ -182,17 +183,17 @@ func TestPaidPeriodsWarningsAndOverrun(t *testing.T) {
 			r := f.result(t, a, math.MaxInt64, 0)
 			f.append(t, r)
 		}
-		if got := f.budget(t, ""); got.SettledMicros != "18446744073709551614" || !got.Fenced || got.HeldMicros != "0" || got.Available {
+		if got := f.budget(t, p.AdmissionPeriod); got.SettledMicros != "18446744073709551614" || !got.Fenced || got.HeldMicros != "0" || got.Available {
 			t.Fatalf("aggregate overflow or unlimited bypassed fence: %+v", got)
 		}
 		f.spend(t, ledger.PaidScope{Kind: "colony"}, ledger.SpendTerms{Enabled: true, Mode: "finite", PeriodKind: "utc_day", CeilingMicros: new(int64(math.MaxInt64))})
-		if !f.budget(t, "").Fenced {
+		if !f.budget(t, p.AdmissionPeriod).Fenced {
 			t.Fatal("cap change erased violation")
 		}
 		for i, a := range []ledger.RuntimePaidReserved{p, q} {
 			view := f.view(t, a.AttemptID)
 			f.append(t, ledger.RuntimePaidOverrunAcknowledged{AttemptID: a.AttemptID, ExpectedVersion: view.Version, Version: view.Version + 1, ResultSequence: int64(view.ResultSequence), EvidenceSHA256: view.Result.EvidenceSHA256, RetiredProfileSHA256: a.ProfileSHA256})
-			if got := f.budget(t, ""); got.Fenced != (i == 0) || got.SettledMicros != "18446744073709551614" {
+			if got := f.budget(t, p.AdmissionPeriod); got.Fenced != (i == 0) || got.SettledMicros != "18446744073709551614" {
 				t.Fatalf("acknowledgement cleared other fence or money: %+v", got)
 			}
 		}
@@ -209,12 +210,12 @@ func TestPaidPeriodsWarningsAndOverrun(t *testing.T) {
 		r := f.result(t, p, 0, 0)
 		r.Kind, r.Usage, r.CostMicros, r.ErrorClass, r.BoundViolation = "unknown", nil, nil, "protocol_error", true
 		f.append(t, r)
-		if got := f.budget(t, ""); got.HeldMicros != "120" || !got.Fenced {
+		if got := f.budget(t, p.AdmissionPeriod); got.HeldMicros != "120" || !got.Fenced {
 			t.Fatalf("unknown violation lost fence/hold: %+v", got)
 		}
 		c := paidCorrection(f, t, p, r, 1, 0)
 		f.append(t, c)
-		if got := f.budget(t, ""); got.HeldMicros != "0" || got.Fenced || got.SettledMicros != strconv.Itoa(1) {
+		if got := f.budget(t, p.AdmissionPeriod); got.HeldMicros != "0" || got.Fenced || got.SettledMicros != strconv.Itoa(1) {
 			t.Fatalf("correction failed to replace unknown: %+v", got)
 		}
 	})
@@ -228,7 +229,7 @@ func TestPaidPeriodsWarningsAndOverrun(t *testing.T) {
 		r.EvidenceSHA256 = ledger.Digest(sha256.Sum256([]byte("component-overrun")))
 		r.EvidenceObject.SHA256 = r.EvidenceSHA256
 		f.append(t, r)
-		if got := f.budget(t, ""); !got.Fenced || got.SettledMicros != "101" {
+		if got := f.budget(t, p.AdmissionPeriod); !got.Fenced || got.SettledMicros != "101" {
 			t.Fatalf("dimension excess under total bound escaped: %+v", got)
 		}
 	})

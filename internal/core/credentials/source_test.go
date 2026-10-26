@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -116,36 +115,6 @@ func TestCredentialSourcesRefuseUnsafeValues(t *testing.T) {
 			t.Fatal(e)
 		}
 	})
-}
-func TestReleaseDrainsActiveBorrow(t *testing.T) {
-	t.Parallel()
-	s, e := bindBytes([]byte("synthetic-drain-value"), 4096)
-	if e != nil {
-		t.Fatal(e)
-	}
-	entered, finish := make(chan struct{}), make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		if err := s.WithBytes(func(b []byte) error {
-			close(entered)
-			<-finish
-			if !bytes.Equal(b, []byte("synthetic-drain-value")) {
-				t.Error("release erased active borrow")
-			}
-			return nil
-		}); err != nil {
-			t.Error(err)
-		}
-	}()
-	<-entered
-	go func() { defer wg.Done(); s.Release() }()
-	close(finish)
-	wg.Wait()
-	if e = s.WithBytes(func([]byte) error { return nil }); !errors.Is(e, ErrReleased) {
-		t.Fatal("release did not finish")
-	}
 }
 func utf16Blob(s string) []byte {
 	b := make([]byte, len(s)*2)

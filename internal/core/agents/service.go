@@ -32,6 +32,7 @@ type serviceDeps struct {
 	afterScopedCommit func(ScopedReceipt) error
 	afterReviewCommit func(ReviewReceipt) error
 	reviewClock       func() (int64, error)
+	paidTestAuthority string
 	beforeMaterialize func(Binding, string, string) error
 	beforeProjection  func(Binding, string)
 	beforeLookup      func()
@@ -76,6 +77,7 @@ type projection struct {
 	paidCredentialScopes map[uuid.UUID]paidCredentialScope
 	paidCredentials      map[uuid.UUID]ledger.RuntimeCredentialChanged
 	paidAttempts         map[uuid.UUID]paidAttempt
+	paidHotLimit         int
 	paidChildren         map[uuid.UUID]int
 	paidCapabilities     map[string]ledger.Digest
 	paidTariffs          map[string]ledger.Digest
@@ -97,6 +99,7 @@ func newProjection() projection {
 		paidRoutes: map[uuid.UUID]ledger.RuntimePaidRouteConfigured{}, paidCredentialScopes: map[uuid.UUID]paidCredentialScope{},
 		paidCredentials: map[uuid.UUID]ledger.RuntimeCredentialChanged{},
 		paidAttempts:    map[uuid.UUID]paidAttempt{}, paidChildren: map[uuid.UUID]int{},
+		paidHotLimit:     128,
 		paidCapabilities: map[string]ledger.Digest{}, paidTariffs: map[string]ledger.Digest{}, retiredProfiles: map[ledger.Digest]bool{},
 	}
 }
@@ -118,6 +121,7 @@ type Service struct {
 	preparing     int
 	openedThrough uint64
 	reviewSample  int64
+	paid          *paidRuntime
 }
 
 func Open(ctx context.Context, store privateStore, colonyDir string, limits Limits) (*Service, Reconciliation, error) {
@@ -175,6 +179,9 @@ func (s *Service) Close() error {
 		s.deps.afterCloseFence()
 	}
 	s.active.Wait()
+	s.mu.Lock()
+	s.closePaidLocked()
+	s.mu.Unlock()
 	return nil
 }
 func (s *Service) enter(ctx context.Context) error {

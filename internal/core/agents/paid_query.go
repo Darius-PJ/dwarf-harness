@@ -193,6 +193,9 @@ func (s *Service) paidCommandStatus(ctx context.Context, bound *submissionIDs, r
 		return PaidReceipt{}, err
 	}
 	g := match.paid
+	if g == nil && bound == nil {
+		return PaidReceipt{}, ErrUnavailable
+	}
 	if g == nil || bound != nil && (g.receipt.Submission.Origin != originOf(*bound) || g.receipt.Submission.Actor == "owner") {
 		return PaidReceipt{}, ErrDenied
 	}
