@@ -11,7 +11,7 @@ import (
 	"uuid"
 )
 
-// F3-13's version-1 record types are proposed for freeze (D125).
+// F3-13's version-1 record types are frozen (D148).
 const (
 	TypeRuntimePaidRouteConfigured     = "runtime.paid_route_configured"
 	TypeRuntimeCredentialChanged       = "runtime.credential_changed"

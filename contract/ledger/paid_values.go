@@ -13,7 +13,7 @@ import (
 	"uuid"
 )
 
-// MaxPaidPayloadBytes is F3-13's complete payload cap, proposed for freeze (D125).
+// MaxPaidPayloadBytes is F3-13's complete payload cap, frozen (D148).
 const MaxPaidPayloadBytes = 64 << 10
 
 // PaidScope adds paid scope kinds without changing F3-11's ScopeKey.

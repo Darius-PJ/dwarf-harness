@@ -159,8 +159,8 @@
 // returns those this contract version defines: the four F0 record types,
 // the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
-// F3-10 types, the ten F3-11 types and the three F3-12 types below,
-// forty-one in all, each at version 1.
+// F3-10 types, the ten F3-11 types, the three F3-12 types and the eight
+// F3-13 types below, forty-nine in all, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -176,7 +176,9 @@
 // also by addition to format version 1.
 // F3-11 is ticket 11's part of F3, frozen (D140),
 // also by addition to format version 1.
-// F3-12 is ticket 12's part of F3, frozen (144),
+// F3-12 is ticket 12's part of F3, frozen (D144),
+// also by addition to format version 1.
+// F3-13 is ticket 13's part of F3, frozen (D148),
 // also by addition to format version 1.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
@@ -2259,7 +2261,7 @@
 // submissions and EncodeCommit generate every fixture only with
 // TestGoldenF3_12 -update. The history records judgments, not executed checks.
 //
-// # F3-13: paid attempts and accounting (proposed for freeze (D125))
+// # F3-13: paid attempts and accounting (frozen (D148))
 //
 // C3 owns eight additional version-1 payloads: runtime.paid_route_configured,
 // runtime.credential_changed, runtime.spend_configured, runtime.paid_reserved,
@@ -2541,6 +2543,8 @@
 // Top-level grant_id occurs exactly for Agent admit/delegate and Core dispatch/
 // observe/release/correct. Other operations are owner-only. Admit's argument
 // grant matches the top-level grant. Observe kind is unknown/usage/no_charge.
+// An arguments object carrying a member of another operation's argument set is
+// refused.
 // Derived scopes, period, observations, authority, usage, cost and new versions,
 // command ID, secrets and handles are not caller inputs. A completion command ID
 // is supplied freshly after the network, never reserved during intent.

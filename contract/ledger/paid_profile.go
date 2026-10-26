@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 )
 
-// Profile is F3-13's source-quoted snapshot, proposed for freeze (D125).
+// Profile is F3-13's source-quoted snapshot, frozen (D148).
 // Its known-field encoding, not its source JSON, is the digest preimage.
 // Installation limits and supported provider semantics belong to the producer.
 type Profile struct {

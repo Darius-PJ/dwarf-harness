@@ -8,8 +8,8 @@ import (
 	"uuid"
 )
 
-// PaidSubmission is schema 4's canonical producer encoding, proposed for freeze
-// (D125). Arguments is the matching concrete value, never arbitrary JSON.
+// PaidSubmission is schema 4's canonical producer encoding, frozen
+// (D148). Arguments is the matching concrete value, never arbitrary JSON.
 type PaidSubmission struct {
 	Schema    int64     `json:"schema"`
 	Actor     string    `json:"actor"`

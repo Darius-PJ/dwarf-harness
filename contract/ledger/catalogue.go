@@ -56,7 +56,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeRuntimeWorkDispatched, TypeRuntimeWorkEnded, TypeRuntimeLocalUsed,
 // TypePrivateScopedRevision and TypeRuntimeScopedReceipt; and F3-12, frozen
 // (D144): TypeRuntimeReviewRequested, TypeRuntimeReviewResult and
-// TypeRuntimeReviewReceipt; and F3-13, proposed for freeze (D125):
+// TypeRuntimeReviewReceipt; and F3-13, frozen (D148):
 // TypeRuntimePaidRouteConfigured, TypeRuntimeCredentialChanged,
 // TypeRuntimeSpendConfigured, TypeRuntimePaidReserved,
 // TypeRuntimePaidDispatchIntent, TypeRuntimePaidResult,
