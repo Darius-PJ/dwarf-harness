@@ -666,5 +666,5 @@ func foundationGoConfig(t *testing.T) graph.GoToolConfig {
 		}
 		return graph.Tool{Path: path, Version: version, SHA256: ledger.Digest(sha256.Sum256(body))}
 	}
-	return graph.GoToolConfig{Helper: identity(helper, "go-analyzer/v1"), Toolchain: identity(tool, "go1.27.2"), GOROOT: root, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
+	return graph.GoToolConfig{Helper: identity(helper, "go-analyzer/v1"), Toolchain: identity(tool, "go1.27.3"), GOROOT: root, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
 }

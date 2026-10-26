@@ -42,7 +42,7 @@ func foundationDerivedGoFiles(t *testing.T) map[string]string {
 	}
 	commit := strings.TrimSpace(string(git("rev-parse", "HEAD")))
 	files := map[string]string{
-		"go.mod":        "module github.com/Darius-PJ/dwarf-harness\n\ngo 1.27\n\ntoolchain go1.27.2\n",
+		"go.mod":        "module github.com/Darius-PJ/dwarf-harness\n\ngo 1.27\n\ntoolchain go1.27.3\n",
 		"probe/main.go": "package main\nimport _ \"github.com/Darius-PJ/dwarf-harness/internal/undercurrent/graph\"\nfunc init() { panic(\"analyzed target executed\") }\nfunc main() {}\n",
 	}
 	for _, path := range []string{"internal/undercurrent/graph/model.go", "contract/ledger/digest.go", "internal/undercurrent/graph/helper_test.go"} {

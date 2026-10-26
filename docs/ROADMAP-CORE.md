@@ -154,13 +154,13 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 **Delivers.**
 
-- `go.mod` with module path `github.com/Darius-PJ/dwarf-harness` (D43), `go 1.27` and `toolchain go1.27.2` (D28, D45, D106). Its `tool` lines pin staticcheck 2026.2.1 and govulncheck v1.8.0 (D42, B17).
+- `go.mod` with module path `github.com/Darius-PJ/dwarf-harness` (D43), `go 1.27` and `toolchain go1.27.3` (D28, D45, D106, D147). Its `tool` lines pin staticcheck 2026.2.1 and govulncheck v1.8.0 (D42, B17).
 - The package layout in D45: `cmd/dwarf-harness/`, `contract/{ledger,launcher,module,law}/`, `internal/{core,router,undercurrent}/`, `tools/check/`, `docs/`. C0 creates only `tools/check`, the one directory with content at C0; `cmd/dwarf-harness` and every other package are created by the first step that gives them real content (D41: no placeholders; B17). The nested `gui/` module and `go.work` arrive with the GUI roadmap (D44).
 - The import-boundary test, which runs `go list -deps` for every package and fails on any import outside D45's table.
 - `tools/check`, run as `go run ./tools/check` (D42): gofmt; `go vet`, staticcheck and govulncheck for every supported target (D137); the import-boundary test; tests with `CGO_ENABLED=0`; the tests again with `-race`, with `CC` set explicitly to the pinned compiler (D28); Linux and macOS builds with `CGO_ENABLED=0`.
 - Test conventions (D42): `testing/synctest`, Go's native fuzzing, rapid v1.3.0 as a test-only dependency, added to `go.mod` with the first test that imports it (B17), and golden samples for contracts. D42 records staticcheck, govulncheck and rapid under D29.
 - `AGENTS.md`, the canonical agent instructions, which `CLAUDE.md` imports (B17), written following `skill://writing-for-agents`. It states the workspace, check, commit, sign-off, layer, dependency and Go-command rules every coding turn needs, and points to the reading order and working rules in `ROADMAPS.md` (D41, D42, D46), the working principles at the top of this roadmap, D45's import table as encoded in `tools/check`, and D29's rule on when to write code ourselves and when to use a recorded library.
-- The toolchain on the owner's machine (D28, D106): go1.27.2 from the official installer, and llvm-mingw 20260922 (clang 23.1.2, UCRT, x86_64 host), pinned and installed outside `PATH`.
+- The toolchain on the owner's machine (D28, D106, D147): go1.27.3 from the official installer, and llvm-mingw 20260922 (clang 23.1.2, UCRT, x86_64 host), pinned and installed outside `PATH`.
 - Already in place since 2026-10-02: the repository, `docs/` with the design documents and `DECISIONS.md` (D30, D31), and `.gitattributes` (B1).
 
 | Definition | Meaning |
@@ -180,7 +180,7 @@ Every step uses the format in `ROADMAPS.md`. Definitions tables are kept from th
 
 | Decided | Source |
 |---|---|
-| Go version and minimum toolchain: go1.27.2 from the official installer; `go 1.27` in `go.mod` | D28, D106 |
+| Go version and minimum toolchain: go1.27.3 from the official installer; `go 1.27` in `go.mod` | D28, D106, D147 |
 | The core and the terminal program never use cgo. Every build states `CGO_ENABLED`, because Go's default switches cgo on when a C compiler is on `PATH` | D28; core Appendix A.9 |
 | C compiler: llvm-mingw 20260922 outside `PATH`, reached through `CC` only for race-detector test builds and the GUI build. Not TDM-GCC or Microsoft's compiler | D28; core Appendix A.9 |
 | Import boundaries are enforced by the import-boundary test, against the per-layer allowlist | D29 |

@@ -10,7 +10,7 @@
     "sourceSha256": "f36c553a0a8fa7910e87cf9d187dcf9d72e8b947d0660ae1266812cecb275912",
     "command": "GOTOOLCHAIN=local CGO_ENABLED=0 go run ./tools/artgen"
   },
-  "toolchain": "go1.27.2",
+  "toolchain": "go1.27.3",
   "modules": [],
   "seeds": [
     {

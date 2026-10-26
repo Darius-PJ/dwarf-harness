@@ -584,7 +584,7 @@ Windows is the first target; the goal is portability across Windows, macOS and L
 
 ### 8.1 C toolchain policy
 
-Go remains the core language: go1.27.2, installed permanently with the official installer, with `go 1.27` and `toolchain go1.27.2` in `go.mod` (D28, D106). The former universal `CGO_ENABLED=0` requirement is retired, and D28 sets where cgo may be used:
+Go remains the core language: go1.27.3, installed permanently with the official installer, with `go 1.27` and `toolchain go1.27.3` in `go.mod` (D28, D106, D147). The former universal `CGO_ENABLED=0` requirement is retired, and D28 sets where cgo may be used:
 
 - **The core and terminal program never uses cgo** (D28; `dwarf-harness` in D39). This replaces the earlier target of "cgo-free where practical". Keep that program's build independent of the GUI framework.
 - **Every build states `CGO_ENABLED` explicitly,** because Go's default switches cgo on when a C compiler is on `PATH` (A.9).

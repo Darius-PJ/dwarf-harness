@@ -33,23 +33,23 @@ jobs:
             runner: windows-2022
             goos: windows
             goarch: amd64
-            archive: go1.27.2.windows-amd64.zip
-            sha256: 1314008898bd40df77af4b014f777f08873dbdfbcd3d92308728ee03304fe04f
-            bytes: 79008081
+            archive: go1.27.3.windows-amd64.zip
+            sha256: f26081f438319757f8a1b46d7d0b2c5ec7583d4038e485e0aa725cfde7885fff
+            bytes: 79010309
           - name: linux-amd64
             runner: ubuntu-24.04
             goos: linux
             goarch: amd64
-            archive: go1.27.2.linux-amd64.tar.gz
-            sha256: ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
-            bytes: 70590635
+            archive: go1.27.3.linux-amd64.tar.gz
+            sha256: 65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+            bytes: 70588678
           - name: macos-arm64
             runner: macos-15
             goos: darwin
             goarch: arm64
-            archive: go1.27.2.darwin-arm64.tar.gz
-            sha256: 76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5
-            bytes: 68195916
+            archive: go1.27.3.darwin-arm64.tar.gz
+            sha256: dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2
+            bytes: 68196737
     env:
       CHECKED_SHA: ${{ github.sha }}
       EXPECTED_GOOS: ${{ matrix.goos }}
@@ -120,7 +120,7 @@ jobs:
           $goVersion = go version
           if ($LASTEXITCODE -ne 0) { throw "Go version exited $LASTEXITCODE" }
           Write-Output $goVersion
-          if ($goVersion -cne "go version go1.27.2 $env:EXPECTED_GOOS/$env:EXPECTED_GOARCH") {
+          if ($goVersion -cne "go version go1.27.3 $env:EXPECTED_GOOS/$env:EXPECTED_GOARCH") {
             throw 'Unexpected Go version or native target'
           }
           $goEnv = @(go env GOOS GOARCH GOTOOLCHAIN GOROOT)
@@ -172,7 +172,7 @@ jobs:
           printf 'github.sha=%s RUNNER_OS=%s RUNNER_ARCH=%s ImageOS=%s ImageVersion=%s\n' "$CHECKED_SHA" "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:-}" "${ImageVersion:-}"
           go_version=$(go version)
           printf '%s\n' "$go_version"
-          [[ "$go_version" == "go version go1.27.2 $EXPECTED_GOOS/$EXPECTED_GOARCH" ]]
+          [[ "$go_version" == "go version go1.27.3 $EXPECTED_GOOS/$EXPECTED_GOARCH" ]]
           go env GOOS GOARCH GOTOOLCHAIN GOROOT
           [[ "$(go env GOOS)" == "$EXPECTED_GOOS" ]]
           [[ "$(go env GOARCH)" == "$EXPECTED_GOARCH" ]]

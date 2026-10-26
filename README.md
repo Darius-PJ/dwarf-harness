@@ -20,7 +20,7 @@ The first release needs only Windows. The code stays portable, and the check als
 
 You need:
 
-- Go 1.27.2, the toolchain that `go.mod` pins, on `PATH`. Run every Go command with `GOTOOLCHAIN=local`, so that no toolchain is downloaded, and with `CGO_ENABLED` set explicitly. Core and the terminal program never use cgo.
+- Go 1.27.3, the toolchain that `go.mod` pins, on `PATH`. Run every Go command with `GOTOOLCHAIN=local`, so that no toolchain is downloaded, and with `CGO_ENABLED` set explicitly. Core and the terminal program never use cgo.
 - Git 2.45 or later, which the workspace package requires.
 - Network access, for Go modules and for govulncheck's database at `https://vuln.go.dev`.
 - For the race step only, a C compiler. On Windows, set `DWARF_CC` to the absolute path of the pinned llvm-mingw 20260922 clang, whose `--version` reports `clang version 23.1.2` and `Target: x86_64-w64-windows-gnu`. On Linux the step uses `/usr/bin/gcc`, and on macOS the clang that `xcrun --find clang` reports.

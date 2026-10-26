@@ -51,7 +51,7 @@ func installedGoTools(t *testing.T) *GoTools {
 	if !filepath.IsAbs(helper) || !filepath.IsAbs(tool) || !filepath.IsAbs(goroot) {
 		t.Fatal("partial or non-absolute native Go profile")
 	}
-	g := &GoTools{Helper: verifyGoFixtureTool(t, helper, goHelperVersion), Toolchain: verifyGoFixtureTool(t, tool, "go1.27.2"), GOROOT: goroot, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
+	g := &GoTools{Helper: verifyGoFixtureTool(t, helper, goHelperVersion), Toolchain: verifyGoFixtureTool(t, tool, "go1.27.3"), GOROOT: goroot, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
 	if !validGoConfig(*g.config()) {
 		t.Fatal("native Go profile violates its root/bin relation")
 	}

@@ -386,7 +386,7 @@ Make the ordinary path easy to use correctly: authoritative mutations carry thei
 
 ### Core runtime and authority
 
-5. **Portable development boundary.** Use Go 1.27 with the pinned Go 1.27.2 toolchain (D106); keep Core and terminal cgo-free and state CGO_ENABLED for every build. Enforce the package import allowlist from the first owned package, use one check command for formatting, static analysis, vulnerability checks, import-boundary validation, tests and supported builds, and add dependencies only through the recorded approval process. C0 is configuration and proof, not placeholder packages.
+5. **Portable development boundary.** Use Go 1.27 with the pinned Go 1.27.3 toolchain (D106, D147); keep Core and terminal cgo-free and state CGO_ENABLED for every build. Enforce the package import allowlist from the first owned package, use one check command for formatting, static analysis, vulnerability checks, import-boundary validation, tests and supported builds, and add dependencies only through the recorded approval process. C0 is configuration and proof, not placeholder packages.
 
 6. **One durable operational colony ledger.** Use one append-only, typed, versioned colony ledger and one Core-owned serialized appender; operational records receive a gapless colony sequence, hash-chain identity and committed durability before acknowledgment. Store large bodies by content hash, preserve operational replay facts and command deduplication in authoritative segments, rebuild indexes, and make body collection explicit without deleting or compacting operational event history. Separate durable ledger cursors from ephemeral per-turn text deltas. Freeze only producer-ready families as each owner approves them. D90–D96 instead require bounded/replaceable presentation state and per-run cosmetic undo under decision 60, not immortal cosmetic-edit history or a second GUI store.
 
@@ -774,3 +774,7 @@ The first release needs only Windows hosts ([D138](../../docs/DECISIONS.md#d138-
 - The code stays portable.
 
 Numbers, blockers and criteria are unchanged. No D52 approval, contract freeze, readiness status or unrun gate is advanced.
+
+### 2026-10-25 — Toolchain go1.27.3 (D147)
+
+Implementation decision 5 now names the go1.27.3 toolchain the owner approved after the check's vulnerability scan found GO-2026-6809 in go1.27.2's `crypto/x509`, which ticket 13's TLS client reaches ([D147](../../docs/DECISIONS.md#d147-toolchain-go1273)). No other decision changes.
