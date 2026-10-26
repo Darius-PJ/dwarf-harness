@@ -21,10 +21,11 @@ var (
 // Source is resolved only at bind. A bound Secret has no source reference.
 type Source interface{ Bind() (*Secret, error) }
 
-// Secret must not be copied. WithBytes borrows a temporary copy while preventing
-// Release from completing. Callbacks must not retain it or call Release.
+// Secret must not be copied. Concurrent WithBytes callbacks each borrow an owned
+// temporary copy while preventing Release from completing. Callbacks must not
+// retain it or call Release.
 type Secret struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	value []byte
 }
 
@@ -32,8 +33,8 @@ func (*Secret) String() string               { return "<credential>" }
 func (*Secret) GoString() string             { return "<credential>" }
 func (*Secret) MarshalJSON() ([]byte, error) { return nil, ErrInvalid }
 func (s *Secret) WithBytes(use func([]byte) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if len(s.value) == 0 {
 		return ErrReleased
 	}

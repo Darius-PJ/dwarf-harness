@@ -58,7 +58,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 	if !validID(request.AttemptID) || bound == nil && request.GrantID != (uuid.UUID{}) {
 		return nil, ErrInvalid
 	}
-	if request.MaxBytes < 0 || request.MaxBytes > paidOutputLimit || request.Object.Bytes > request.MaxBytes {
+	if request.MaxBytes < 0 || request.MaxBytes > maxObjectBytes || request.Object.Bytes > request.MaxBytes {
 		return nil, ErrTooLarge
 	}
 	if err := s.enter(ctx); err != nil {

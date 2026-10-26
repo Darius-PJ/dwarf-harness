@@ -227,7 +227,7 @@ func paidCaptureAllowed(o paidObservationObject, blocks []providers.OutputBlock,
 		text(o.Error.RequestID)
 		raw(o.Error.Details)
 	}
-	if !safe || size > paidOutputLimit {
+	if !safe || size > maxObjectBytes {
 		return false
 	}
 	// Output objects are chunk-bounded separately; these checks cover even
@@ -275,7 +275,7 @@ func (s *Service) publishPaidObservation(ctx context.Context, a paidAttempt, evi
 		}
 	}
 	raw, err := json.Marshal(o)
-	if err != nil || len(raw) > paidOutputLimit {
+	if err != nil || len(raw) > maxObjectBytes {
 		o = paidCaptureFailure(a, o.OutputStarted, "observation_capture_failed")
 		raw, err = json.Marshal(o)
 	}

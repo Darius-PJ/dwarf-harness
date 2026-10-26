@@ -36,7 +36,7 @@ func paidArtifactDisclosureRows(t *testing.T) {
 			}
 			issueScopedRoot(t, f.service, bindingOf(f.origin), 0xf03, reader)
 			a := scopedBound(t, f.service, binding)
-			request := PaidObjectLookup{AttemptID: d.AttemptID, GrantID: reader.GrantID, Object: *v.Result.EvidenceObject, MaxBytes: paidOutputLimit}
+			request := PaidObjectLookup{AttemptID: d.AttemptID, GrantID: reader.GrantID, Object: *v.Result.EvidenceObject, MaxBytes: maxObjectBytes}
 			if name == "unrelated-denied" {
 				scope, err := newPrivateScope(f.root, f.service.p.agents[f.origin.AgentID].directory, f.origin.ContextID.String(), &f.service.dirs)
 				if err != nil {

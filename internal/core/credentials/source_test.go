@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,93 @@ func TestEnvironmentBindsOnceAndReleasesOwnedMemory(t *testing.T) {
 		t.Fatal("released version still available")
 	}
 	secret.Release()
+}
+func TestSecretConcurrentBorrowersAndRelease(t *testing.T) {
+	t.Parallel()
+	want := []byte("synthetic-concurrent-value")
+	secret, err := bindBytes(want, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := secret.value
+	gates := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	entered := [2]chan []byte{make(chan []byte, 1), make(chan []byte, 1)}
+	exited := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	done := [2]chan error{make(chan error, 1), make(chan error, 1)}
+	defer func() {
+		for _, gate := range gates {
+			select {
+			case <-gate:
+			default:
+				close(gate)
+			}
+		}
+		secret.Release()
+	}()
+	for i := range gates {
+		go func() {
+			done[i] <- secret.WithBytes(func(value []byte) error {
+				defer close(exited[i])
+				entered[i] <- value
+				<-gates[i]
+				return nil
+			})
+		}()
+	}
+	first, second := <-entered[0], <-entered[1]
+	if !bytes.Equal(first, want) || !bytes.Equal(second, want) {
+		t.Fatal("concurrent borrowers did not receive the pinned value")
+	}
+	first[0] = 'x'
+	if !bytes.Equal(second, want) || !bytes.Equal(owned, want) {
+		t.Fatal("borrowers shared writable credential memory")
+	}
+	released := make(chan struct{})
+	go func() {
+		secret.Release()
+		for _, exit := range exited {
+			select {
+			case <-exit:
+			default:
+				t.Error("Release returned while a borrower was active")
+			}
+		}
+		close(released)
+	}()
+	// Synchronize with the pending writer, without a timing assumption. The
+	// assertions below concern Release and owned bytes, not the lock layout.
+	for secret.mu.TryRLock() {
+		secret.mu.RUnlock()
+		select {
+		case <-released:
+			t.Fatal("Release returned before either borrower finished")
+		default:
+			runtime.Gosched()
+		}
+	}
+	close(gates[0])
+	if err := <-done[0]; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, make([]byte, len(first))) || !bytes.Equal(second, want) {
+		t.Fatal("finishing one borrower did not clear only its copy")
+	}
+	select {
+	case <-released:
+		t.Fatal("Release did not wait for the remaining borrower")
+	default:
+	}
+	close(gates[1])
+	if err := <-done[1]; err != nil {
+		t.Fatal(err)
+	}
+	<-released
+	if !bytes.Equal(second, make([]byte, len(second))) || !bytes.Equal(owned, make([]byte, len(owned))) {
+		t.Fatal("Release left credential bytes behind")
+	}
+	if err := secret.WithBytes(func([]byte) error { t.Error("released callback ran"); return nil }); !errors.Is(err, ErrReleased) {
+		t.Fatal("released credential remained borrowable")
+	}
 }
 func TestEnvironmentDefaultLookupIsPinned(t *testing.T) {
 	// t.Setenv changes process state; this is deliberately the one sequential row.

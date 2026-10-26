@@ -197,6 +197,37 @@ func TestPaidIntentBeforeBytes(t *testing.T) {
 
 func TestAnthropicStreamAndUsage(t *testing.T) {
 	t.Parallel()
+	t.Run("oversize-stop-details", func(t *testing.T) {
+		t.Parallel()
+		server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+			model := paidRequestModel(t, r)
+			// The delta fits one SSE event. Retaining its 900 KiB stop_details
+			// plus both final and merged 80 KiB usage exceeds one private object.
+			details := `{"padding":"` + strings.Repeat("x", 900<<10) + `"}`
+			final := `{"input_tokens":7,"output_tokens":4,"padding":"` + strings.Repeat("x", 80<<10) + `"}`
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Request-Id", "request-one")
+			_, _ = io.WriteString(w, paidSSE(model, `{"input_tokens":3,"output_tokens":1}`, final, "answer", "end_turn", details, true))
+		})
+		f := newLivePaidFixture(t, paidServerDeps(server, nil))
+		_, request, out := paidRun(t, f)
+		paidRecord(t, f, request, out)
+		view := f.view(t, request.AttemptID)
+		if view.State != "unknown" || view.HeldMicros == "0" || len(view.Result.MessageObjects) != 0 {
+			t.Fatal("oversize observation did not retain the hold without output")
+		}
+		raw, err := f.service.ReadPaidObject(context.Background(), PaidObjectLookup{AttemptID: request.AttemptID, Object: *view.Result.EvidenceObject, MaxBytes: maxObjectBytes})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var observation paidObservationObject
+		if err := json.Unmarshal(raw, &observation); err != nil {
+			t.Fatal(err)
+		}
+		if observation.Error == nil || observation.Error.Type != "capture_refused" || observation.ErrorClass != "protocol_error" || observation.Complete || !observation.OutputStarted || observation.HTTPStatus != 0 || len(observation.Headers) != 0 || len(observation.StopDetails) != 0 || len(observation.RawUsageFinal) != 0 || len(observation.RawUsageMerged) != 0 {
+			t.Fatal("oversize provider detail did not degrade to the fixed unknown observation")
+		}
+	})
 	t.Run("canonical-blocks-and-cache", paidStreamFeatureRows)
 	for _, name := range []string{"complete-artifacts", "eof", "malformed", "missing-final-usage", "http-error", "credential-echo"} {
 		t.Run(name, func(t *testing.T) {
@@ -277,7 +308,7 @@ func TestAnthropicStreamAndUsage(t *testing.T) {
 			if !bytes.Equal(raw, want) || ledger.Digest(sha256.Sum256(raw)) != v.Result.EvidenceSHA256 || int64(len(raw)) != v.Result.EvidenceObject.Bytes {
 				t.Fatalf("observation bytes/reference disagree: %s", raw)
 			}
-			if _, err := f.service.ReadPaidObject(context.Background(), PaidObjectLookup{AttemptID: d.AttemptID, Object: *v.Result.EvidenceObject, MaxBytes: paidOutputLimit}); err != nil {
+			if _, err := f.service.ReadPaidObject(context.Background(), PaidObjectLookup{AttemptID: d.AttemptID, Object: *v.Result.EvidenceObject, MaxBytes: maxObjectBytes}); err != nil {
 				t.Fatal(err)
 			}
 		})

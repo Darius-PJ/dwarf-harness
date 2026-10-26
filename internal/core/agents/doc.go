@@ -450,9 +450,11 @@
 // BindCredential reads one environment or Windows Credential Manager source
 // into bounded private memory and records only provider, scope, version, source
 // kind and visible-ASCII locator. No value, digest or size enters the ledger.
-// RevokeCredential and rotation revoke the old authorization and release its
-// bytes. After every Core start the owner must bind a fresh version per scope;
-// replay never rehydrates a source. Repeated rotations in one start are allowed.
+// RevokeCredential and rotation revoke the old authorization durably before
+// releasing its bytes outside the service lock. Release waits for all concurrent
+// in-flight borrows (at most DispatchTimeout for paid exchanges). After every
+// Core start the owner must bind a fresh version per scope; replay never
+// rehydrates a source. Repeated rotations in one start are allowed.
 //
 // PrepareAnthropic takes an explicit route, credential version, parent turn and
 // task binding. It reserves physical buffers before serializing, then seals and
@@ -541,16 +543,17 @@
 // Unknown/incomplete/refusal/content-error captures select no output objects.
 // The bounded capture rejects literal pinned authentication material in decoded
 // provider fields, including opaque extensions, before any artifact is hashed.
-// Capture failure produces a fixed, nonsecret unknown observation, never
-// successful truncation. No request object, authentication header, arbitrary
-// response header, raw SSE or partial/refused text is persisted.
+// Observation estimates and encoded bytes are capped by the private store's
+// 1 MiB object limit. Capture failure produces a fixed, nonsecret unknown
+// observation, never successful truncation. No request object, authentication
+// header, arbitrary response header, raw SSE or partial/refused text is persisted.
 //
 // ReadPaidObject selects only the recorded input or result objects of an attempt,
 // including prior corrected evidence. Owner reads are passive; Agent reads need
 // the exact originating agent/session/context and current private.read covering
 // all four context slots (continuation, handoff, memory, transcript) as one target.
 // A memory-only grant cannot read a whole exchange. Missing, unrelated and
-// other-origin objects have the same denial. MaxBytes and physical read
-// reservations bound allocation; authority is rechecked after I/O, returned
+// other-origin objects have the same denial. MaxBytes is at most 1 MiB; physical
+// read reservations bound allocation. Authority is rechecked after I/O, returned
 // bytes are owned, and no read samples a clock, charges or appends a record.
 package agents

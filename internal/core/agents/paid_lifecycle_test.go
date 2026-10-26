@@ -12,11 +12,95 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 )
 
 func TestPaidNetworkUnknownAndSlotDrain(t *testing.T) {
 	t.Parallel()
+	t.Run("concurrent-exchanges", func(t *testing.T) {
+		t.Parallel()
+		firstEntered, secondEntered := make(chan struct{}), make(chan struct{})
+		var posts atomic.Int64
+		server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+			model := paidRequestModel(t, r)
+			switch posts.Add(1) {
+			case 1:
+				close(firstEntered)
+				select {
+				case <-secondEntered:
+				case <-r.Context().Done():
+					return
+				}
+			case 2:
+				close(secondEntered)
+			default:
+				t.Error("exchange was resent")
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Request-Id", "request-one")
+			_, _ = io.WriteString(w, paidSSE(model, `{"input_tokens":7,"output_tokens":1}`, `{"output_tokens":4}`, "done", "end_turn", "", true))
+		})
+		f := newLivePaidFixture(t, paidServerDeps(server, nil))
+		ctx := context.Background()
+		binding := bindingOf(f.origin)
+		capacity := paidPhysicalCapacity()
+		capacity.BufferBytes = 256 << 20
+		for _, scope := range []ledger.ScopeKey{{Kind: "colony"}, {Kind: "agent", ID: f.origin.AgentID}} {
+			if _, err := f.service.ConfigureCapacity(ctx, binding, CapacitySpec{CommandID: f.id(), ExpectedVersion: uint64(f.service.p.book.accounts[scope].version), Scope: scope, Limits: capacity}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f.grant = f.id()
+		if _, err := f.service.IssueGrant(ctx, binding, GrantIssue{CommandID: f.id(), ExpectedAuthorityVersion: uint64(f.service.p.authority), Spec: GrantSpec{GrantID: f.grant, Grantee: binding, Operations: []string{"model.call"}, Resources: []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + f.route.RouteID.String()}}, DataClass: "external", Recipients: []Binding{binding}, Limits: capacity, Lifetime: "until_revoked"}}); err != nil {
+			t.Fatal(err)
+		}
+		f.liveSpend(t, ledger.PaidScope{Kind: "grant", ID: f.grant}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.100000", PeriodKind: "utc_day"})
+		f.service.paid.limits.MaxActivePaid = 2
+		f.service.paid.limits.DispatchTimeout = 10 * time.Second
+		first, second := f.prepare(t), f.prepare(t)
+		f.admit(t, first)
+		f.admit(t, second)
+		requests := []PaidDispatch{
+			{CommandID: f.id(), AttemptID: first.AttemptID, ExpectedVersion: 1},
+			{CommandID: f.id(), AttemptID: second.AttemptID, ExpectedVersion: 1},
+		}
+		type result struct {
+			request PaidDispatch
+			out     PaidDispatchOutcome
+			err     error
+		}
+		done := make(chan result, 2)
+		for i, request := range requests {
+			go func() {
+				out, err := f.service.DispatchPaid(ctx, request)
+				done <- result{request, out, err}
+			}()
+			if i == 0 {
+				select {
+				case <-firstEntered:
+				case got := <-done:
+					t.Fatalf("first dispatch returned before its request arrived: %v", got.err)
+				}
+			}
+		}
+		results := []result{<-done, <-done}
+		for _, got := range results {
+			if got.err != nil {
+				t.Errorf("concurrent dispatch: %v", got.err)
+				continue
+			}
+			paidRecord(t, f, got.request, got.out)
+			view := f.view(t, got.request.AttemptID)
+			if view.State != "settled" || view.HeldMicros != "0" || view.Result.CostMicros == nil || *view.Result.CostMicros != 11 {
+				t.Errorf("same-credential exchange did not settle: state=%s held=%s", view.State, view.HeldMicros)
+			}
+		}
+		if posts.Load() != 2 {
+			t.Errorf("server received %d POSTs, want exactly two", posts.Load())
+		}
+	})
 	for _, mode := range []string{"reset", "timeout", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()

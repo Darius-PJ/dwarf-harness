@@ -203,7 +203,7 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 	} else {
 		ref = *request.TrustedEvidence
 	}
-	if ref.Bytes <= 0 || ref.Bytes > paidOutputLimit || ref.SHA256 == (ledger.Digest{}) {
+	if ref.Bytes <= 0 || ref.Bytes > maxObjectBytes || ref.SHA256 == (ledger.Digest{}) {
 		s.mu.Unlock()
 		return PaidReceipt{}, ErrInvalid
 	}
