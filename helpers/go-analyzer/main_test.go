@@ -57,6 +57,7 @@ func nativeRequest(t *testing.T, root string, files map[string]string) request {
 	r.Go.ToolchainPath, r.Go.GOROOT = tool, goroot
 	r.Go.ToolchainSHA256 = hashBytes(body)
 	r.Go.ToolchainFileSize, r.Go.ToolchainModtimeNS = info.Size(), info.ModTime().UnixNano()
+	r.Go.ToolchainVersion = "go1.27.3"
 	for _, directory := range []string{"corpus", "gopath", "gomodcache", "gocache", "tmp", "home"} {
 		if err := os.MkdirAll(filepath.Join(root, directory), 0700); err != nil {
 			t.Fatal(err)

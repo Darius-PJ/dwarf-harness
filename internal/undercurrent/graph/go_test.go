@@ -510,7 +510,8 @@ func TestGoPinsAndEnvironmentAreBinding(t *testing.T) {
 			if role == "helper" {
 				changed.Helper = verifyGoFixtureTool(t, good.Helper.Identity().Path, "go-analyzer/v99")
 			} else {
-				changed.Toolchain = verifyGoFixtureTool(t, good.Toolchain.Identity().Path, "go1.27.3")
+				// Below go.mod's go 1.27, so never the toolchain running this test.
+				changed.Toolchain = verifyGoFixtureTool(t, good.Toolchain.Identity().Path, "go1.26.0")
 			}
 			tools := Tools{Go: &changed}
 			r := request
