@@ -51,6 +51,7 @@ type StreamResult struct {
 	ProfileViolation         bool
 	ContentError             bool
 	OutputStarted            bool
+	ContentBlocks            int
 	UnknownEventTypes        []string
 	UnknownEventTypeOverflow int
 	EventCount               int
@@ -375,6 +376,7 @@ func (s *streamState) blockStart(m map[string]json.RawMessage) error {
 	if s.outputBytes > streamOutputLimit {
 		return ErrLimit
 	}
+	s.result.ContentBlocks++
 	s.open = &b
 	s.partial.Reset()
 	s.text.Reset()

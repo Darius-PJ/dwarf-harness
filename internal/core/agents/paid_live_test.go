@@ -33,17 +33,21 @@ func TestMain(m *testing.M) {
 }
 
 func paidPhysicalCapacity() ledger.Capacity {
-	return ledger.Capacity{TurnSlots: 3, LocalSlots: 4, BufferBytes: 64 << 20, LocalUnits: 1000, MaxOperationBytes: 1 << 20}
+	return ledger.Capacity{TurnSlots: 3, LocalSlots: 4, BufferBytes: 128 << 20, LocalUnits: 1000, MaxOperationBytes: 1 << 20}
 }
-func newLivePaidFixture(t testing.TB) *paidFixture {
+func newLivePaidFixture(t testing.TB, overrides ...serviceDeps) *paidFixture {
 	t.Helper()
 	f := newPaidFixture(t)
 	ctx := context.Background()
 	if err := f.service.Close(); err != nil {
 		t.Fatal(err)
 	}
+	deps := serviceDeps{paidTestAuthority: f.route.Profile.Authority}
+	if len(overrides) != 0 {
+		deps = overrides[0]
+	}
 	var err error
-	f.service, _, err = openPaidService(ctx, f.store, f.root, DefaultLimits(), PaidOptions{Limits: DefaultPaidLimits()}, serviceDeps{paidTestAuthority: f.route.Profile.Authority})
+	f.service, _, err = openPaidService(ctx, f.store, f.root, DefaultLimits(), PaidOptions{Limits: DefaultPaidLimits()}, deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +70,7 @@ func newLivePaidFixture(t testing.TB) *paidFixture {
 	}
 	f.credential = f.service.p.paidCredentials[version]
 	p := providerProfile(f.route.Profile)
+	p.Authority = deps.paidTestAuthority
 	p.CapabilityVersion += "-live"
 	p.VerifiedUTCNS = f.service.p.reviewFloor - 1
 	p.ExpiresUTCNS = p.VerifiedUTCNS + int64(7*24*time.Hour)

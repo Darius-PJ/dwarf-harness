@@ -2,142 +2,145 @@ package agents
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 )
 
-func TestPaidPreparedLifetime(t *testing.T) {
+func TestPaidNetworkUnknownAndSlotDrain(t *testing.T) {
 	t.Parallel()
-	t.Run("bounded-slots-and-close", func(t *testing.T) {
-		t.Parallel()
-		f := newLivePaidFixture(t)
-		ctx := context.Background()
-		f.service.paid.limits.MaxPreparedPaid = 1
-		p, err := f.service.PrepareAnthropic(ctx, bindingOf(f.origin), f.input())
-		if err != nil {
-			t.Fatal(err)
-		}
-		before := f.store.Durable()
-		var busy *BusyError
-		if _, err = f.service.PrepareAnthropic(ctx, bindingOf(f.origin), f.input()); !errors.As(err, &busy) || f.store.Durable() != before {
-			t.Fatalf("preparation did not consume a slot: %v", err)
-		}
-		if f.budget(t, "").HeldMicros != "0" {
-			t.Fatal("preparation reserved money")
-		}
-		if err = p.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err = p.Close(); err != nil {
-			t.Fatal(err)
-		}
-		next, err := f.service.PrepareAnthropic(ctx, bindingOf(f.origin), f.input())
-		if err != nil {
-			t.Fatalf("close leaked slot or physical capacity: %v", err)
-		}
-		defer next.Close()
-	})
-	t.Run("close-during-publication", func(t *testing.T) {
-		t.Parallel()
-		f := newLivePaidFixture(t)
-		r := f.prepare(t)
-		ctx := context.Background()
-		a := scopedBound(t, f.service, bindingOf(f.origin))
-		entered, proceed := make(chan struct{}), make(chan struct{})
-		f.service.deps.beforePublish = func(Binding, string) error { close(entered); <-proceed; return nil }
-		before := f.store.Durable()
-		result := make(chan error, 1)
-		go func() { _, _, err := a.AdmitPaid(ctx, r); result <- err }()
-		<-entered
-		if err := r.Prepared.Close(); err != nil {
-			t.Fatal(err)
-		}
-		close(proceed)
-		if err := <-result; !errors.Is(err, ErrClosed) || f.store.Durable() != before || f.budget(t, "").HeldMicros != "0" {
-			t.Fatalf("closed handle committed: %v", err)
-		}
-		f.service.deps.beforePublish = nil
-		next := f.prepare(t)
-		f.admit(t, next)
-	})
-	t.Run("cancelled-publication-retries", func(t *testing.T) {
-		t.Parallel()
-		f := newLivePaidFixture(t)
-		r := f.prepare(t)
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		f.service.deps.beforePublish = func(Binding, string) error { cancel(); return ctx.Err() }
-		before := f.store.Durable()
-		a := scopedBound(t, f.service, bindingOf(f.origin))
-		if _, _, err := a.AdmitPaid(ctx, r); !errors.Is(err, context.Canceled) || f.store.Durable() != before {
-			t.Fatalf("cancelled publication committed: %v", err)
-		}
-		f.service.deps.beforePublish = nil
-		f.admit(t, r)
-	})
-	t.Run("financial-refusal-retries", func(t *testing.T) {
-		t.Parallel()
-		f := newLivePaidFixture(t)
-		r := f.prepare(t)
-		ctx := context.Background()
-		scope := ledger.PaidScope{Kind: "colony"}
-		f.liveSpend(t, scope, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000119", PeriodKind: "utc_day"})
-		before := f.store.Durable()
-		a := scopedBound(t, f.service, bindingOf(f.origin))
-		var busy *BusyError
-		if _, _, err := a.AdmitPaid(ctx, r); !errors.As(err, &busy) || f.store.Durable() != before || f.budget(t, "").HeldMicros != "0" {
-			t.Fatalf("unaffordable admission changed state: %v", err)
-		}
-		f.liveSpend(t, scope, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000120", PeriodKind: "utc_day"})
-		f.admit(t, r)
-	})
-	t.Run("incarnation-and-explicit-enable", func(t *testing.T) {
-		t.Parallel()
-		f := newLivePaidFixture(t)
-		r := f.prepare(t)
-		ctx := context.Background()
-		if err := f.service.Close(); err != nil {
-			t.Fatal(err)
-		}
-		var err error
-		f.service, _, err = Open(ctx, f.store, f.root, DefaultLimits())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err = f.service.PrepareAnthropic(ctx, bindingOf(f.origin), f.input()); !errors.Is(err, ErrUnavailable) {
-			t.Fatalf("plain Open enabled producers: %v", err)
-		}
-		if _, _, err = scopedBound(t, f.service, bindingOf(f.origin)).AdmitPaid(ctx, r); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("old incarnation handle accepted: %v", err)
-		}
-	})
+	for _, mode := range []string{"reset", "timeout", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			entered, drained := make(chan struct{}), make(chan struct{})
+			var posts atomic.Int64
+			server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+				posts.Add(1)
+				_, _ = io.Copy(io.Discard, r.Body)
+				close(entered)
+				defer close(drained)
+				if mode == "reset" {
+					conn, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					if tlsConn, ok := conn.(*tls.Conn); ok {
+						if raw, ok := tlsConn.NetConn().(*net.TCPConn); ok {
+							_ = raw.SetLinger(0)
+						}
+					}
+					_ = conn.Close()
+					return
+				}
+				<-r.Context().Done()
+			})
+			deps := paidServerDeps(server, nil)
+			f := newLivePaidFixture(t, deps)
+			f.service.paid.limits.MaxActivePaid = 1
+			if mode == "timeout" {
+				f.service.paid.transport.CloseIdleConnections()
+				limits := providers.DefaultLimits()
+				limits.ResponseHeaderTimeout = time.Second
+				transport, err := providers.NewTransportWithRoots(limits, deps.paidTestRoots, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.service.paid.transport = transport
+			}
+			r := f.prepare(t)
+			f.admit(t, r)
+			second := f.prepare(t)
+			f.admit(t, second)
+			d := PaidDispatch{CommandID: f.id(), AttemptID: r.AttemptID, ExpectedVersion: 1}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			type result struct {
+				o   PaidDispatchOutcome
+				err error
+			}
+			done := make(chan result, 1)
+			go func() { o, err := f.service.DispatchPaid(ctx, d); done <- result{o, err} }()
+			<-entered
+			if mode == "cancel" {
+				before := f.store.Durable()
+				_, err := f.service.DispatchPaid(context.Background(), PaidDispatch{CommandID: f.id(), AttemptID: second.AttemptID, ExpectedVersion: 1})
+				var busy *BusyError
+				if !errors.As(err, &busy) || f.store.Durable() != before || posts.Load() != 1 {
+					t.Fatal("active slot limit failed before intent")
+				}
+				cancel()
+			}
+			got := <-done
+			if got.err != nil {
+				t.Fatal(got.err)
+			}
+			<-drained
+			paidRecord(t, f, d, got.o)
+			v := f.view(t, d.AttemptID)
+			want := "unreachable"
+			if mode == "timeout" {
+				want = "timeout"
+			}
+			if v.State != "unknown" || v.HeldMicros == "0" || v.Result.ErrorClass != want || posts.Load() != 1 {
+				t.Fatalf("fault result: state=%s class=%s", v.State, v.Result.ErrorClass)
+			}
+			if len(f.service.paid.exchanges) != 0 {
+				t.Fatal("drained exchange retained active slot")
+			}
+			// Drained physical buffers no longer block an independent preparation.
+			next, err := f.service.PrepareAnthropic(context.Background(), bindingOf(f.origin), f.input())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = next.Close()
+			if _, err := f.service.ReconcilePaid(context.Background(), PaidReconciliation{CommandID: f.id(), AttemptID: second.AttemptID, ExpectedVersion: 1}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
-func TestPaidIntegrityOnlyInspection(t *testing.T) {
+func paidLateRefusalWitnessRow(t *testing.T) {
 	t.Parallel()
-	f := newLivePaidFixture(t)
-	ctx := context.Background()
-	r := f.prepare(t)
-	f.admit(t, r)
-	a := scopedBound(t, f.service, bindingOf(f.origin))
-	before := f.store.Durable()
-	view, err := a.PaidAttemptStatus(ctx, PaidAttemptLookup{AttemptID: r.AttemptID, GrantID: f.inspect, VerifyInput: true})
-	if err != nil || view.InputIntegrity != "verified" || f.store.Durable() != before {
-		t.Fatalf("integrity-only inspection required a byte-reading grant: %v", err)
-	}
-	receipt, err := f.service.ConfigureCapacity(ctx, bindingOf(f.origin), CapacitySpec{CommandID: f.id(), ExpectedVersion: uint64(f.service.p.book.accounts[ledger.ScopeKey{Kind: "colony"}].version), Scope: ledger.ScopeKey{Kind: "colony"}, Limits: paidPhysicalCapacity()})
-	if err != nil {
+	server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+		model := paidRequestModel(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Request-Id", "request-one")
+		_, _ = io.WriteString(w, paidSSE(model, `{"input_tokens":7,"output_tokens":1}`, `{"output_tokens":1}`, "partial", "end_turn", "", false))
+	})
+	f := newLivePaidFixture(t, paidServerDeps(server, nil))
+	f.liveProfile(t, func(p *providers.Profile) {
+		p.ModelID = providers.Sonnet
+		p.RequestedTier = "auto"
+		p.NoChargeRules = []string{"anthropic_refusal_before_output_2026_09_24"}
+	})
+	_, d, out := paidRun(t, f)
+	paidRecord(t, f, d, out)
+	late := paidLateEvidence(t, f, out, func(o *paidObservationObject) {
+		o.Complete = true
+		o.OutputStarted = false
+		o.ContentBlocks = 0
+		o.Error = nil
+		o.ErrorClass = "refused"
+		o.StopReason = "refusal"
+		o.StopDetails = json.RawMessage(`{"type":"refusal","category":null}`)
+		o.RawUsageMerged["output_tokens"] = json.RawMessage(`0`)
+		o.RawUsageFinal = json.RawMessage(`{"output_tokens":0}`)
+	})
+	if _, err := f.service.RecordPaidObservation(context.Background(), PaidObservation{CommandID: f.id(), AttemptID: d.AttemptID, ExpectedVersion: 3, TrustedEvidence: &late}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.service.PaidCommandStatus(ctx, PaidCommandLookup{CommandID: receipt.CommandID, SubmissionSHA256: receipt.SubmissionSHA256}); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("owner lookup of nonpaid command: %v", err)
-	}
-	if _, err = f.service.RevokeGrant(ctx, bindingOf(f.origin), GrantRevocation{CommandID: f.id(), RevokeGrantID: f.inspect, ExpectedVersion: 1, ExpectedAuthorityVersion: uint64(f.service.p.authority)}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = a.PaidAttemptStatus(ctx, PaidAttemptLookup{AttemptID: r.AttemptID, GrantID: f.inspect, VerifyInput: true}); !errors.Is(err, ErrDenied) {
-		t.Fatalf("revoked inspector verified private input: %v", err)
+	v := f.view(t, d.AttemptID)
+	if v.State != "unknown" || v.HeldMicros == "0" || v.Result.OutputStarted == nil || !*v.Result.OutputStarted {
+		t.Fatal("later pre-output assertion erased an earlier output witness")
 	}
 }

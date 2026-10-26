@@ -200,6 +200,27 @@ func NormalizeUsage(p Profile, c Compiled, raw Usage) (units []Units, violation 
 	return []Units{{CacheRead, read}, {CacheWrite1h, hour}, {CacheWrite5m, five}, {Uncached, input}, {Generated, output}}, violation, nil
 }
 
+// NormalizeSealedUsage uses the input classes from the immutable sealed quote.
+// It is the late-evidence counterpart of NormalizeUsage, without retaining or
+// recompiling a request body. It performs the identical normalization.
+func NormalizeSealedUsage(p Profile, inputClasses []string, raw Usage) ([]Units, bool, error) {
+	if len(inputClasses) == 0 {
+		return nil, false, ErrInvalid
+	}
+	seen := make(map[string]bool, len(inputClasses))
+	for _, class := range inputClasses {
+		if class == Generated || !slices.Contains(allClasses, class) || seen[class] {
+			return nil, false, ErrInvalid
+		}
+		seen[class] = true
+	}
+	digest, err := p.SHA256()
+	if err != nil {
+		return nil, false, err
+	}
+	return NormalizeUsage(p, Compiled{profile: digest, cache5: seen[CacheWrite5m], cache1: seen[CacheWrite1h]}, raw)
+}
+
 // PriceUsage applies the pinned per-class tariff with one final rounding. Each
 // counter is int64, but sums use big integers and are never clamped.
 func PriceUsage(p Profile, units []Units) (int64, error) {

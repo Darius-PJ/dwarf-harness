@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"math/big"
 	"slices"
 
@@ -267,10 +268,10 @@ func paidResultState(a paidAttempt, v ledger.RuntimePaidResult, sequence uint64,
 	if a.intent == nil {
 		return a, ErrInvalid
 	}
+	if a.evidence[v.EvidenceSHA256] != 0 {
+		return a, ErrNoEffect
+	}
 	if old := a.result; old != nil {
-		if old.EvidenceSHA256 == v.EvidenceSHA256 {
-			return a, ErrNoEffect
-		}
 		if old.OutputStarted != nil && *old.OutputStarted && !*v.OutputStarted || old.ProviderMessageID != "" && old.ProviderMessageID != v.ProviderMessageID || old.ProviderRequestID != "" && old.ProviderRequestID != v.ProviderRequestID {
 			return a, ErrInvalid
 		}
@@ -287,6 +288,11 @@ func paidResultState(a paidAttempt, v ledger.RuntimePaidResult, sequence uint64,
 		return a, err
 	}
 	a.version, a.ended, a.result, a.resultSequence = v.Version, true, &v, sequence
+	a.evidence = maps.Clone(a.evidence)
+	if a.evidence == nil {
+		a.evidence = make(map[ledger.Digest]uint64)
+	}
+	a.evidence[v.EvidenceSHA256] = sequence + 1
 	a.state = "unknown"
 	if supported && slices.Contains(paidOutcomes, outcome) && v.Kind != "unknown" {
 		a.cost, a.held, a.state = cost, false, "settled"
@@ -346,8 +352,16 @@ func paidResultCost(a paidAttempt, v ledger.RuntimePaidResult) (bool, int64, boo
 	if v.CostMicros == nil || cost != *v.CostMicros {
 		return false, 0, false, ErrInvalid
 	}
-	violation := cost > a.admission.Quote.MaximumMicros
-	for _, c := range a.admission.Quote.Components {
+	violation := paidUsageViolation(a.admission.Quote, units, cost)
+	if violation != v.BoundViolation {
+		return false, 0, false, ErrInvalid
+	}
+	return true, cost, violation, nil
+}
+
+func paidUsageViolation(quote ledger.CostBound, units []providers.Units, cost int64) bool {
+	violation := cost > quote.MaximumMicros
+	for _, c := range quote.Components {
 		total := new(big.Int)
 		for _, u := range units {
 			if slices.Contains(c.Classes, u.Class) {
@@ -357,11 +371,8 @@ func paidResultCost(a paidAttempt, v ledger.RuntimePaidResult) (bool, int64, boo
 		violation = violation || total.Cmp(big.NewInt(c.MaxUnits)) > 0
 	}
 	for _, u := range units {
-		included := slices.ContainsFunc(a.admission.Quote.Components, func(c ledger.PricedDimension) bool { return slices.Contains(c.Classes, u.Class) })
+		included := slices.ContainsFunc(quote.Components, func(c ledger.PricedDimension) bool { return slices.Contains(c.Classes, u.Class) })
 		violation = violation || u.Count > 0 && !included
 	}
-	if violation != v.BoundViolation {
-		return false, 0, false, ErrInvalid
-	}
-	return true, cost, violation, nil
+	return violation
 }

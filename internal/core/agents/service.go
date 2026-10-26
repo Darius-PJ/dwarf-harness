@@ -2,7 +2,9 @@ package agents
 
 import (
 	"context"
+	"crypto/x509"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,6 +35,8 @@ type serviceDeps struct {
 	afterReviewCommit func(ReviewReceipt) error
 	reviewClock       func() (int64, error)
 	paidTestAuthority string
+	paidTestRoots     *x509.CertPool
+	paidWrapConn      func(net.Conn) net.Conn
 	beforeMaterialize func(Binding, string, string) error
 	beforeProjection  func(Binding, string)
 	beforeLookup      func()
@@ -174,6 +178,11 @@ func (s *Service) Close() error {
 	s.mu.Lock()
 	first := !s.closed
 	s.closed = true
+	if s.paid != nil {
+		for _, cancel := range s.paid.exchanges {
+			cancel()
+		}
+	}
 	s.mu.Unlock()
 	if first && s.deps.afterCloseFence != nil {
 		s.deps.afterCloseFence()

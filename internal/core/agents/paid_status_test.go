@@ -64,6 +64,7 @@ func TestPaidStatusViews(t *testing.T) {
 
 func TestPaidParentEndingAndDisclosure(t *testing.T) {
 	t.Parallel()
+	t.Run("artifact-disclosure", paidArtifactDisclosureRows)
 	t.Run("live-and-replay-child", func(t *testing.T) {
 		t.Parallel()
 		f := newPaidFixture(t)

@@ -33,6 +33,40 @@ type Transport struct {
 }
 
 func NewTransport(l Limits) (*Transport, error) { return newTransport(l, transportDeps{}) }
+
+// NewTransportWithRoots is the loopback-test seam. Production uses NewTransport.
+// wrap observes real TCP connections before TLS; dialing, the bounded handshake
+// and certificate verification remain owned here, never by the caller.
+func NewTransportWithRoots(l Limits, roots *x509.CertPool, wrap func(net.Conn) net.Conn) (*Transport, error) {
+	return newTransport(l, transportDeps{roots: roots, dialTLS: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, l.TLSHandshakeTimeout)
+		defer cancel()
+		raw, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		conn := raw
+		if wrap != nil {
+			conn = wrap(raw)
+			if conn == nil {
+				_ = raw.Close()
+				return nil, ErrInvalid
+			}
+		}
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			_ = conn.Close()
+			return nil, ErrInvalid
+		}
+		cfg.ServerName = host
+		secured := tls.Client(conn, cfg)
+		if err := secured.HandshakeContext(ctx); err != nil {
+			_ = secured.Close()
+			return nil, err
+		}
+		return secured, nil
+	}})
+}
 func newTransport(l Limits, d transportDeps) (*Transport, error) {
 	if l.MaxActivePaid <= 0 || l.DispatchTimeout <= 0 || l.TLSHandshakeTimeout <= 0 || l.ResponseHeaderTimeout <= 0 {
 		return nil, ErrInvalid

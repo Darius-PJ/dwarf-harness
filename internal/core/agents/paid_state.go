@@ -27,6 +27,7 @@ type paidAttempt struct {
 	state                             string
 	receipt                           ledger.RuntimePaidReceipt
 	receiptSequence                   uint64
+	evidence                          map[ledger.Digest]uint64
 }
 type paidPlan struct {
 	route      *ledger.RuntimePaidRouteConfigured
@@ -168,7 +169,10 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 	if bytes.Compare(id[:], s.p.maxAttempt[:]) > 0 {
 		return paidAttempt{}, false, nil
 	}
-	if a, ok := s.p.paidAttempts[id]; ok && (evidence == (ledger.Digest{}) || a.result == nil) {
+	if a, ok := s.p.paidAttempts[id]; ok {
+		if evidence != (ledger.Digest{}) && a.evidence[evidence] != 0 {
+			return a, true, ErrNoEffect
+		}
 		return a, true, nil
 	}
 	var a paidAttempt
@@ -191,9 +195,6 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 			a.intent, a.version, a.state = g.intent, g.intent.Version, "sent"
 		}
 		if g.result != nil {
-			if evidence != (ledger.Digest{}) && g.result.EvidenceSHA256 == evidence {
-				return ErrNoEffect
-			}
 			a, err = paidResultState(a, *g.result, c.First+1, g.receipt.Outcome)
 			if err != nil {
 				return err
@@ -205,6 +206,9 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 		a.receipt, a.receiptSequence = g.receipt, c.Last
 		return nil
 	})
+	if err == nil && evidence != (ledger.Digest{}) && a.evidence[evidence] != 0 {
+		err = ErrNoEffect
+	}
 	return a, a.version != 0, err
 }
 

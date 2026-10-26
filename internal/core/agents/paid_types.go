@@ -2,6 +2,7 @@ package agents
 
 import (
 	"errors"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -15,16 +16,23 @@ var (
 )
 
 // PaidLimits bound live producers and owned memory, never historical truth.
-// Dispatch-specific limits are supplied by the dispatch implementation.
 type PaidLimits struct {
-	MaxPaidRoutes, MaxCredentialScopes, MaxCredentialVersions int
-	MaxPaidEnrolledScopes, MaxPreparedPaid, MaxUnresolvedPaid int
-	MaxPaidHotResults, MaxPaidScopes, MaxProfileBytes         int
-	MaxRequestBytes                                           int64
+	MaxPaidRoutes, MaxCredentialScopes, MaxCredentialVersions   int
+	MaxPaidEnrolledScopes, MaxPreparedPaid, MaxUnresolvedPaid   int
+	MaxPaidHotResults, MaxPaidScopes, MaxProfileBytes           int
+	MaxRequestBytes                                             int64
+	MaxActivePaid                                               int
+	DispatchTimeout, TLSHandshakeTimeout, ResponseHeaderTimeout time.Duration
 }
 
 func DefaultPaidLimits() PaidLimits {
-	return PaidLimits{16, 16, 64, 256, 16, 256, 128, 16, 32 << 10, 512 << 10}
+	return PaidLimits{
+		MaxPaidRoutes: 16, MaxCredentialScopes: 16, MaxCredentialVersions: 64,
+		MaxPaidEnrolledScopes: 256, MaxPreparedPaid: 16, MaxUnresolvedPaid: 256,
+		MaxPaidHotResults: 128, MaxPaidScopes: 16, MaxProfileBytes: 32 << 10,
+		MaxRequestBytes: 512 << 10, MaxActivePaid: 3, DispatchTimeout: 120 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second,
+	}
 }
 func (l PaidLimits) validate() error {
 	for _, n := range []int{l.MaxPaidRoutes, l.MaxCredentialScopes, l.MaxCredentialVersions, l.MaxPaidEnrolledScopes, l.MaxPreparedPaid, l.MaxUnresolvedPaid, l.MaxPaidHotResults, l.MaxPaidScopes, l.MaxProfileBytes} {
@@ -33,6 +41,9 @@ func (l PaidLimits) validate() error {
 		}
 	}
 	if l.MaxProfileBytes > providers.ProfileLimit || l.MaxRequestBytes <= 0 || l.MaxRequestBytes > 512<<10 {
+		return ErrInvalid
+	}
+	if l.MaxActivePaid <= 0 || l.DispatchTimeout <= 0 || l.TLSHandshakeTimeout <= 0 || l.ResponseHeaderTimeout <= 0 {
 		return ErrInvalid
 	}
 	return nil
@@ -93,6 +104,58 @@ type PaidAdmission struct {
 type PaidReconciliation struct {
 	CommandID, AttemptID uuid.UUID
 	ExpectedVersion      int64
+}
+
+type PaidDispatch struct {
+	CommandID, AttemptID uuid.UUID
+	ExpectedVersion      int64
+}
+
+type PaidDispatchOutcome struct {
+	IntentReceipt    PaidReceipt
+	ObservedPaidCall *ObservedPaidCall
+	Result           *PaidAttemptView
+}
+
+// ObservedPaidCall binds published evidence, never authority or caller dollars.
+type ObservedPaidCall struct {
+	service  *Service
+	attempt  uuid.UUID
+	origin   ledger.Origin
+	evidence ledger.ObjectRef
+}
+
+func (*ObservedPaidCall) String() string               { return "<observed paid call>" }
+func (*ObservedPaidCall) GoString() string             { return "<observed paid call>" }
+func (*ObservedPaidCall) MarshalJSON() ([]byte, error) { return nil, ErrInvalid }
+
+// Evidence returns only the content address; bytes require private.read.
+func (o *ObservedPaidCall) Evidence() (ledger.ObjectRef, error) {
+	if o == nil || o.service == nil {
+		return ledger.ObjectRef{}, ErrNotBound
+	}
+	return o.evidence, nil
+}
+
+type PaidObservation struct {
+	CommandID, AttemptID uuid.UUID
+	ExpectedVersion      int64
+	Observed             *ObservedPaidCall
+	// TrustedEvidence is an explicit Core-host attestation of late evidence,
+	// never an Agent entrance. Exactly one evidence source must be supplied.
+	TrustedEvidence *ledger.ObjectRef
+}
+
+type PaidCorrection struct {
+	PaidObservation
+	PreviousResultSequence int64
+	PreviousEvidenceSHA256 ledger.Digest
+}
+
+type PaidOverrunAcknowledgement struct {
+	CommandID, GrantID, AttemptID        uuid.UUID
+	ExpectedVersion, ResultSequence      int64
+	EvidenceSHA256, RetiredProfileSHA256 ledger.Digest
 }
 
 // PreparedPaidCall is an incarnation-bound handle, not permission to admit.

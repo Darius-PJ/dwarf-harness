@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
@@ -144,10 +145,23 @@ func (s *Service) PrepareAnthropic(ctx context.Context, origin Binding, input An
 		s.mu.Unlock()
 		return nil, err
 	}
+	secret := s.paid.secrets[input.CredentialVersion]
 	s.mu.Unlock()
 
 	profile := providerProfile(route.Profile)
-	compiled, err := providers.CompileAnthropic(profile, input.Request)
+	var compiled providers.Compiled
+	raw, err := json.Marshal(input.Request)
+	if err == nil {
+		err = secret.WithBytes(func(key []byte) error {
+			if paidContainsSecret(raw, key) {
+				return ErrInvalid
+			}
+			return nil
+		})
+	}
+	if err == nil {
+		compiled, err = providers.CompileAnthropic(profile, input.Request)
+	}
 	var envelope providers.Envelope
 	if err == nil {
 		envelope, err = providers.Seal(profile, compiled, route.CredentialScopeID.String(), input.CredentialVersion.String(), []providers.Header{{Name: "accept", Value: "text/event-stream"}, {Name: "anthropic-version", Value: profile.APIVersion}, {Name: "content-type", Value: "application/json"}})
@@ -188,7 +202,7 @@ func (s *Service) PrepareAnthropic(ctx context.Context, origin Binding, input An
 		s.releasePaidPreparation(p)
 		return nil, err
 	}
-	p.envelope, p.body = envelope, body
+	p.envelope, p.body, p.compiled = envelope, body, compiled
 	d := envelope.Descriptor()
 	p.admission.Request = ledger.SealedDescriptor{Provider: d.Provider, Authority: d.Authority, Model: d.Model, Region: d.Region, Method: d.Method, Path: d.Path, RequestedTier: d.RequestedTier, Credential: p.admission.Request.Credential, BodySHA256: ledger.Digest(sha256.Sum256(body)), BodyBytes: int64(len(body))}
 	for _, h := range d.Headers {

@@ -209,7 +209,15 @@ func (s *Service) paidControl(ctx context.Context, caller scopedCaller, request 
 			err = s.controlGuardsLocked(ctx, in, request)
 		}
 	}
-	defer s.mu.Unlock()
+	var retiredSecret *credentials.Secret
+	defer func() {
+		s.mu.Unlock()
+		// A dispatch borrows the secret before taking mu. Never wait for that
+		// borrow under mu: revocation is already durable and bars new intents.
+		if retiredSecret != nil {
+			retiredSecret.Release()
+		}
+	}()
 	if err != nil {
 		return PaidReceipt{}, err
 	}
@@ -284,7 +292,7 @@ func (s *Service) paidControl(ctx context.Context, caller scopedCaller, request 
 			revoked = p.CredentialVersion
 		}
 		if old := s.paid.secrets[revoked]; old != nil {
-			old.Release()
+			retiredSecret = old
 			delete(s.paid.secrets, revoked)
 		}
 	}

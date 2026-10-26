@@ -22,6 +22,7 @@ func paidCorrection(f *paidFixture, t testing.TB, p ledger.RuntimePaidReserved, 
 
 func TestPaidSettlementAndCorrection(t *testing.T) {
 	t.Parallel()
+	t.Run("live", paidLiveSettlementRows)
 	t.Run("original-tariff-period-and-one-delta", func(t *testing.T) {
 		t.Parallel()
 		f := newPaidFixture(t)

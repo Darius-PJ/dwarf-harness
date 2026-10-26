@@ -13,7 +13,7 @@ import (
 
 func TestPaidProfileAndFeatureRefusal(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"disabled", "unpriced", "incomplete-source", "unknown-endpoint", "unknown-model", "unknown-tier", "expiry-at-configuration", "expiry-at-admission", "beta", "media", "hosted-tool", "prior-tool-history"} {
+	for _, name := range []string{"disabled", "unpriced", "incomplete-source", "unknown-endpoint", "unknown-model", "unknown-tier", "expiry-at-configuration", "expiry-at-admission", "beta", "media", "hosted-tool", "prior-tool-history-sonnet", "prior-tool-history-opus"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f := newLivePaidFixture(t)
@@ -38,8 +38,19 @@ func TestPaidProfileAndFeatureRefusal(t *testing.T) {
 			case "hosted-tool":
 				input.Request.Tools = []providers.Tool{{Name: "remote", InputSchema: json.RawMessage(`{"type":"server_tool"}`)}}
 				_, err = f.service.PrepareAnthropic(ctx, bindingOf(f.origin), input)
-			case "prior-tool-history":
-				input.Request.Messages[0].Content = []providers.Block{{Type: "tool_result", ToolUseID: "prior", Content: []providers.Text{{Type: "text", Text: "result"}}}}
+			case "prior-tool-history-sonnet", "prior-tool-history-opus":
+				f.liveProfile(t, func(p *providers.Profile) {
+					p.ModelID, p.RequestedTier = providers.Sonnet, "auto"
+					if name == "prior-tool-history-opus" {
+						p.ModelID = providers.Opus
+					}
+				})
+				input.ExpectedRouteVersion = f.route.Version
+				input.Request.Messages = []providers.Message{
+					{Role: "assistant", Content: []providers.Block{{Type: "tool_use", ID: "prior", Name: "local", Input: json.RawMessage(`{}`)}}},
+					{Role: "user", Content: []providers.Block{{Type: "tool_result", ToolUseID: "prior", Content: []providers.Text{{Type: "text", Text: "result"}}}}},
+				}
+				before = f.store.Durable()
 				_, err = f.service.PrepareAnthropic(ctx, bindingOf(f.origin), input)
 			case "beta":
 				input.Request, err = providers.ParseRequest([]byte(`{"max_tokens":20,"messages":[{"role":"user","content":[{"type":"text","text":"x"}]}],"betas":["unsupported"]}`))

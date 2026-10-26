@@ -469,7 +469,88 @@
 // sample, including samples from refused calls. Historical replay uses only its
 // prefix's committed floor and never consults a later live sample.
 //
-// ReconcilePaid works even with plain Open. It releases a reserved, never-sent
-// attempt exactly once; an intended attempt returns ErrPaidSent. No dispatch,
-// network, observation, correction or acknowledgement producer is exported.
+// # Paid dispatch and factual settlement
+//
+// DispatchPaid is a host-only one-shot entrance. It reserves an active exchange
+// and 96 MiB of physical response/capture buffers, in addition to the retained
+// preparation, and borrows the pinned credential before its final transition.
+// Current authority, task generation, parent cancellation, route/profile,
+// credential version, seal, quote and occupied spend are rechecked. The existing
+// money hold is counted once. Only the invocation that newly commits the durable
+// dispatch intent may send, outside the lock and inside Secret.WithBytes.
+// The dedicated providers transport permits HTTP/1.1 only: no proxy, redirects,
+// retry, replayable request body, idempotency header or transparent compression.
+// Private serviceDeps can supply loopback roots and a raw TCP observer through
+// providers.NewTransportWithRoots; PaidOptions cannot select a transport.
+//
+// DispatchPaid returns the intent receipt and an opaque ObservedPaidCall, not a
+// settlement. Matching retries return the recorded receipt and any result view,
+// never a send permit or fresh observation. RecordPaidObservation requires a new
+// caller command ID and the handle, or an explicit host-attested TrustedEvidence
+// object reference. It verifies object identity and derives usage/no_charge/
+// unknown through the admission profile; callers cannot supply a price.
+// Completed exclusive counters replace cumulative snapshots and price once.
+// Missing, inconsistent or overflowing usage keeps the full hold. A documented
+// no-charge refusal requires the pinned rule, explicit permitted category, no
+// output witness and no content block ever begun. Haiku refusals stay unknown.
+//
+// CorrectPaidSettlement binds the predecessor result sequence and evidence,
+// preserves known provider identities and the monotone output witness, and
+// replaces one charge in the original period. Repeated evidence has no financial
+// effect and does not consume another command ID. Factual settlement/correction
+// use no clock, present-day credential or live authority, including after plain
+// Open. AcknowledgePaidOverrun is owner-only, retains actual money, retires that
+// profile digest across all matching routes without changing route CAS versions,
+// and clears only the named fence. Other fences continue blocking exposure.
+//
+// ReconcilePaid works even with plain Open. It releases only a reserved,
+// never-sent attempt; an intended attempt ends as unknown with its full hold.
+// An active exchange cannot be reconciled. Close cancels exchanges and waits
+// for their I/O and capture to drain before releasing slots, buffers and secrets.
+//
+// # Paid object encodings and disclosure
+//
+// Input remains the exact raw sealed UTF-8 request body, not a paid_input
+// wrapper. The literal pinned secret is rejected in decoded input before its
+// hash or publication. Output and observation objects live in the originating
+// context's core/objects, published before a result selects their digest/size.
+// They use compact encoding/json, decimal integers, lowercase digest strings,
+// origin {agent_id,session_id,context_id}, and no trailing newline. These object
+// encodings are not frozen ledger payloads.
+//
+// Output field order is schema:1, kind:"paid_output", attempt_id, origin,
+// parent_turn_id, block_index, chunk_index, block. Text blocks are {kind:"text",
+// text}; local tools are {kind:"local_tool_call",id,name,input}; opaque blocks are
+// {kind:"opaque_provider",provider,model,artifact_kind,payload}. Thinking joins
+// thinking/signature exactly; redacted_thinking retains the complete raw JSON
+// block, including extensions. Opaque signatures are neither verified nor used
+// as continuation authority. Text chunks split only at UTF-8 boundaries; every
+// object is at most 1 MiB and the output sequence at most 8 MiB. A malformed tool
+// may retain complete billable usage but never canonical output.
+//
+// Observation order is schema:1, kind:"paid_observation", attempt_id, origin,
+// parent_turn_id, request_sha256, provider_request_id?, provider_message_id?,
+// model?, http_status, headers, stop_reason?, stop_sequence?, stop_details?,
+// raw_usage_start?, raw_usage_final?, raw_usage_merged?, output_started, complete,
+// message_objects, error?, unknown_event_types, unknown_event_type_overflow,
+// content_blocks, content_error, profile_violation, error_class?. Question marks
+// mark omitted empty fields. Raw usage preserves null/absence and merged map
+// keys sort lexically. Headers are sorted lowercase {name,values} from the
+// provider allowlist only; errors are {type,message,details?,request_id?}.
+// complete describes message completion, not certainty about billing.
+// Unknown/incomplete/refusal/content-error captures select no output objects.
+// The bounded capture rejects literal pinned authentication material in decoded
+// provider fields, including opaque extensions, before any artifact is hashed.
+// Capture failure produces a fixed, nonsecret unknown observation, never
+// successful truncation. No request object, authentication header, arbitrary
+// response header, raw SSE or partial/refused text is persisted.
+//
+// ReadPaidObject selects only the recorded input or result objects of an attempt,
+// including prior corrected evidence. Owner reads are passive; Agent reads need
+// the exact originating agent/session/context and current private.read covering
+// all four context slots (continuation, handoff, memory, transcript) as one target.
+// A memory-only grant cannot read a whole exchange. Missing, unrelated and
+// other-origin objects have the same denial. MaxBytes and physical read
+// reservations bound allocation; authority is rechecked after I/O, returned
+// bytes are owned, and no read samples a clock, charges or appends a record.
 package agents

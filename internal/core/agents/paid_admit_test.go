@@ -239,13 +239,59 @@ func TestPaidUnsentRelease(t *testing.T) {
 	if len(f.service.p.book.preparing) != 0 {
 		t.Fatal("unsent release retained physical buffers")
 	}
+}
 
-	// A real durable intent from S3a's fixture is recovery-only in this slice.
-	sent := newPaidFixture(t)
-	p := sent.reserve(t)
-	sent.dispatch(t, p)
-	before = sent.store.Durable()
-	if _, err = sent.service.ReconcilePaid(ctx, PaidReconciliation{CommandID: sent.id(), AttemptID: p.AttemptID, ExpectedVersion: 2}); !errors.Is(err, ErrPaidSent) || sent.store.Durable() != before || sent.budget(t, p.AdmissionPeriod).HeldMicros != "120" {
-		t.Fatalf("intended attempt released: %v", err)
+func TestPaidAdmissionHandleLifetime(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"matched-fresh-handle", "closed-unused-handle"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newLivePaidFixture(t)
+			input := f.input()
+			p, err := f.service.PrepareAnthropic(context.Background(), bindingOf(f.origin), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := PaidAdmission{CommandID: f.id(), AttemptID: input.AttemptID, GrantID: input.GrantID, ParentTurnID: input.ParentTurnID, Prepared: p}
+			a := scopedBound(t, f.service, bindingOf(f.origin))
+			if name == "closed-unused-handle" {
+				if err := p.Close(); err != nil {
+					t.Fatal(err)
+				}
+				before := f.store.Durable()
+				_, _, err := a.AdmitPaid(context.Background(), request)
+				if !errors.Is(err, ErrClosed) || f.store.Durable() != before || f.budget(t, "").HeldMicros != "0" {
+					t.Fatal("closed preparation remained usable or lost ErrClosed")
+				}
+				return
+			}
+			first, bound := f.admit(t, request)
+			recorded, err := bound.Admission()
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.service.paid.limits.MaxPreparedPaid = 1
+			p, err = f.service.PrepareAnthropic(context.Background(), bindingOf(f.origin), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Prepared = p
+			before := f.store.Durable()
+			retry, matched, err := a.AdmitPaid(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := matched.Admission()
+			if err != nil || !sameScopedValue(got, recorded) || retry.Sequence != first.Sequence || f.store.Durable() != before {
+				t.Fatal("matching admission manufactured incomplete metadata")
+			}
+			next, err := f.service.PrepareAnthropic(context.Background(), bindingOf(f.origin), f.input())
+			if err != nil {
+				t.Fatal("matching preparation retained its only physical slot")
+			}
+			if err := next.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

@@ -19,6 +19,7 @@ import (
 func TestPaidCredentialPinning(t *testing.T) {
 	// Mutable environment is process state; all other live rows use the immutable
 	// TestMain fixture and run in parallel after this test completes.
+	t.Run("dispatch", paidLiveCredentialRows)
 	ctx := context.Background()
 	f := newLivePaidFixture(t)
 	const name = "DWARF_PAID_ROTATION_SYNTHETIC"

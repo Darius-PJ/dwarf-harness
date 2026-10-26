@@ -16,15 +16,18 @@ import (
 )
 
 type paidRuntime struct {
-	limits   PaidLimits
-	secrets  map[uuid.UUID]*credentials.Secret
-	prepared map[*preparedPaid]bool
-	calls    map[uuid.UUID]*preparedPaid
+	limits    PaidLimits
+	secrets   map[uuid.UUID]*credentials.Secret
+	prepared  map[*preparedPaid]bool
+	calls     map[uuid.UUID]*preparedPaid
+	transport *providers.Transport
+	exchanges map[uuid.UUID]context.CancelFunc
 }
 type preparedPaid struct {
 	origin                ledger.Origin
 	admission             ledger.RuntimePaidReserved
 	envelope              providers.Envelope
+	compiled              providers.Compiled
 	body                  []byte
 	reservation           scopedReservation
 	consumed, closed      bool
@@ -42,7 +45,19 @@ func openPaidService(ctx context.Context, store privateStore, colonyDir string, 
 	if err != nil {
 		return nil, report, err
 	}
-	s.paid = &paidRuntime{limits: options.Limits, secrets: map[uuid.UUID]*credentials.Secret{}, prepared: map[*preparedPaid]bool{}, calls: map[uuid.UUID]*preparedPaid{}}
+	transportLimits := providers.Limits{MaxActivePaid: options.Limits.MaxActivePaid, DispatchTimeout: options.Limits.DispatchTimeout, TLSHandshakeTimeout: options.Limits.TLSHandshakeTimeout, ResponseHeaderTimeout: options.Limits.ResponseHeaderTimeout}
+	transport, err := providers.NewTransport(transportLimits)
+	if deps.paidTestRoots != nil || deps.paidWrapConn != nil {
+		if transport != nil {
+			transport.CloseIdleConnections()
+		}
+		transport, err = providers.NewTransportWithRoots(transportLimits, deps.paidTestRoots, deps.paidWrapConn)
+	}
+	if err != nil {
+		_ = s.Close()
+		return nil, report, err
+	}
+	s.paid = &paidRuntime{limits: options.Limits, secrets: map[uuid.UUID]*credentials.Secret{}, prepared: map[*preparedPaid]bool{}, calls: map[uuid.UUID]*preparedPaid{}, transport: transport, exchanges: map[uuid.UUID]context.CancelFunc{}}
 	s.p.paidHotLimit = options.Limits.MaxPaidHotResults
 	s.p.prunePaid()
 	return s, report, nil
@@ -56,15 +71,18 @@ func (s *Service) releasePaidPreparation(p *preparedPaid) {
 		return
 	}
 	p.closed = true
-	p.body, p.envelope = nil, providers.Envelope{}
+	p.body, p.envelope, p.compiled = nil, providers.Envelope{}, providers.Compiled{}
 	s.releaseScopedLocked(&p.reservation)
 	delete(s.paid.prepared, p)
-	delete(s.paid.calls, p.admission.AttemptID)
+	if s.paid.calls[p.admission.AttemptID] == p {
+		delete(s.paid.calls, p.admission.AttemptID)
+	}
 }
 func (s *Service) closePaidLocked() {
 	if s.paid == nil {
 		return
 	}
+	s.paid.transport.CloseIdleConnections()
 	for p := range s.paid.prepared {
 		s.releasePaidPreparation(p)
 	}
