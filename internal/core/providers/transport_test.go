@@ -12,6 +12,7 @@ import (
 	"net/http/httptrace"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -85,6 +86,23 @@ func drain(t *testing.T, response *http.Response) {
 	}
 }
 
+// Install before StartTLS. Observe the first real connection's terminal state
+// without blocking httptest's ConnState hook (which runs under its mutex).
+// Client completion alone does not mean the server has consumed a partial
+// request: Server.Close would discard it while the connection is still idle.
+func firstConnectionTerminal(server *httptest.Server) <-chan http.ConnState {
+	terminal := make(chan http.ConnState, 1)
+	var first net.Conn
+	var once sync.Once
+	server.Config.ConnState = func(conn net.Conn, state http.ConnState) {
+		once.Do(func() { first = conn })
+		if conn == first && (state == http.StateClosed || state == http.StateHijacked) {
+			terminal <- state
+		}
+	}
+	return terminal
+}
+
 func TestPaidHTTP1OneShot(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"zero_write", "read_eof", "partial_header", "partial_body", "drop"} {
@@ -121,6 +139,7 @@ func TestPaidHTTP1OneShot(t *testing.T) {
 			}))
 			server.EnableHTTP2 = true
 			server.TLS = &tls.Config{NextProtos: []string{"h2", "http/1.1"}}
+			terminal := firstConnectionTerminal(server)
 			server.StartTLS()
 			defer server.Close()
 			var connection *faultConn
@@ -162,7 +181,6 @@ func TestPaidHTTP1OneShot(t *testing.T) {
 				drain(t, response)
 			}
 			tr.CloseIdleConnections()
-			server.Close()
 			if !reused.Load() || connection.faultWrites.Load() != 1 {
 				t.Fatal("fault did not hit warm connection")
 			}
@@ -172,6 +190,8 @@ func TestPaidHTTP1OneShot(t *testing.T) {
 			if dials.Load() != 1 {
 				t.Fatalf("redial after fault: %d", dials.Load())
 			}
+			state := <-terminal
+			server.Close()
 			wantRequests, wantComplete := int64(1), int64(1)
 			if mode == "read_eof" {
 				wantRequests = 2
@@ -181,7 +201,7 @@ func TestPaidHTTP1OneShot(t *testing.T) {
 				wantRequests = 2
 			}
 			if requests.Load() != wantRequests || complete.Load() != wantComplete {
-				t.Fatalf("server saw additional request: requests=%d complete=%d", requests.Load(), complete.Load())
+				t.Fatalf("server terminal=%s: requests=%d want=%d complete=%d want=%d", state, requests.Load(), wantRequests, complete.Load(), wantComplete)
 			}
 			if wrongProtocol.Load() {
 				t.Fatal("server negotiated HTTP/2")
@@ -241,6 +261,7 @@ func TestTransportALPNHeadersAndStatusesNeverRepeat(t *testing.T) {
 			}))
 			server.EnableHTTP2 = true
 			server.TLS = &tls.Config{NextProtos: []string{"h2", "http/1.1"}}
+			terminal := firstConnectionTerminal(server)
 			server.StartTLS()
 			defer server.Close()
 			tr, e := newTransport(DefaultLimits(), trustedDeps(server, nil))
@@ -254,6 +275,7 @@ func TestTransportALPNHeadersAndStatusesNeverRepeat(t *testing.T) {
 			}
 			drain(t, response)
 			tr.CloseIdleConnections()
+			<-terminal
 			server.Close()
 			if response.StatusCode != status || count.Load() != 1 || invalid.Load() {
 				t.Fatal("wire profile or one-shot status changed")
@@ -273,12 +295,14 @@ func TestTransportRedirectDestinationReceivesNothing(t *testing.T) {
 				w.WriteHeader(200)
 			}))
 			defer target.Close()
-			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				source.Add(1)
 				_, _ = io.Copy(io.Discard, r.Body)
 				w.Header().Set("Location", target.URL+"/destination")
 				w.WriteHeader(status)
 			}))
+			terminal := firstConnectionTerminal(server)
+			server.StartTLS()
 			defer server.Close()
 			deps := trustedDeps(server, nil)
 			deps.roots.AddCert(target.Certificate())
@@ -293,6 +317,7 @@ func TestTransportRedirectDestinationReceivesNothing(t *testing.T) {
 			}
 			drain(t, r)
 			tr.CloseIdleConnections()
+			<-terminal
 			server.Close()
 			target.Close()
 			if r.StatusCode != status || source.Load() != 1 || destination.Load() != 0 {
@@ -304,7 +329,9 @@ func TestTransportRedirectDestinationReceivesNothing(t *testing.T) {
 func TestTransportRejectsUntrustedCertificate(t *testing.T) {
 	t.Parallel()
 	var count atomic.Int64
-	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { count.Add(1) }))
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { count.Add(1) }))
+	terminal := firstConnectionTerminal(server)
+	server.StartTLS()
 	defer server.Close()
 	tr, e := NewTransport(DefaultLimits())
 	if e != nil {
@@ -315,6 +342,9 @@ func TestTransportRejectsUntrustedCertificate(t *testing.T) {
 	if r != nil {
 		r.Body.Close()
 	}
+	tr.CloseIdleConnections()
+	<-terminal
+	server.Close()
 	if e == nil || count.Load() != 0 {
 		t.Fatal("TLS verification bypassed")
 	}
