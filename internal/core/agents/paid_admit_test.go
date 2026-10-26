@@ -17,7 +17,70 @@ func paidInputPath(f *paidFixture, p ledger.RuntimePaidReserved) string {
 func TestPaidAuthorityAndAttenuation(t *testing.T) {
 	t.Parallel()
 	t.Run("task-authority", paidTaskAuthorityRows)
-	for _, name := range []string{"missing-model", "revoked-model", "disabled-spend-ancestor", "missing-spend-leaf", "wrong-origin", "wrong-parent", "wrong-task-generation", "local-or-turn-only", "unrelated-revision"} {
+	t.Run("prepare-time", func(t *testing.T) {
+		t.Parallel()
+		for _, name := range []string{"turn-only", "missing-model", "wrong-route", "wrong-parent", "missing-spend-leaf", "model-only"} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				f := newLivePaidFixture(t)
+				ctx := context.Background()
+				origin := bindingOf(f.origin)
+				input := f.input()
+				switch name {
+				case "turn-only":
+					input.GrantID = f.inspect
+				case "missing-model":
+					input.GrantID = f.id()
+				case "wrong-parent":
+					input.ParentTurnID = f.id()
+				case "wrong-route", "missing-spend-leaf", "model-only":
+					input.GrantID = f.id()
+					spec := GrantSpec{GrantID: input.GrantID, Grantee: origin, Operations: []string{"model.call"}, Resources: []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + input.RouteID.String()}}, DataClass: "external", Recipients: []Binding{origin}, Limits: paidPhysicalCapacity(), Lifetime: "until_revoked"}
+					issue := GrantIssue{CommandID: f.id(), ExpectedAuthorityVersion: uint64(f.service.p.authority), Spec: spec}
+					if name != "missing-spend-leaf" {
+						if name == "wrong-route" {
+							issue.Spec.Resources[0].ResourceKey = "paid-route/" + f.id().String()
+						}
+						if _, err := f.service.IssueGrant(ctx, origin, issue); err != nil {
+							t.Fatal(err)
+						}
+						f.liveSpend(t, ledger.PaidScope{Kind: "grant", ID: input.GrantID}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.100000", PeriodKind: "utc_day"})
+					} else {
+						issue.GrantID, issue.Spec.ParentGrantID = f.grant, f.grant
+						if _, err := scopedBound(t, f.service, origin).IssueGrant(ctx, issue); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				before := f.store.Durable()
+				prepared, err := f.service.PrepareAnthropic(ctx, origin, input)
+				if prepared != nil {
+					t.Cleanup(func() { _ = prepared.Close() })
+				}
+				if name == "model-only" {
+					if err != nil || prepared == nil {
+						t.Fatalf("model.call required unrelated grant authority: %v", err)
+					}
+					if f.store.Durable() != before || f.budget(t, "").HeldMicros != "0" {
+						t.Fatal("preparation committed a paid hold")
+					}
+					f.admit(t, PaidAdmission{CommandID: f.id(), AttemptID: input.AttemptID, GrantID: input.GrantID, ParentTurnID: input.ParentTurnID, Prepared: prepared})
+					if f.budget(t, "").HeldMicros != "120" {
+						t.Fatal("model.call-only admission did not reserve its quote")
+					}
+					return
+				}
+				var busy *BusyError
+				if !errors.Is(err, ErrDenied) || errors.As(err, &busy) || prepared != nil {
+					t.Fatalf("unauthorized preparation: %v", err)
+				}
+				if f.store.Durable() != before || f.budget(t, "").HeldMicros != "0" || len(f.service.p.book.preparing) != 0 {
+					t.Fatal("refused preparation committed or retained a hold")
+				}
+			})
+		}
+	})
+	for _, name := range []string{"handle-mismatch-missing-model", "revoked-model", "disabled-spend-ancestor", "missing-spend-leaf", "wrong-origin", "handle-mismatch-parent", "handle-mismatch-task-generation", "handle-mismatch-turn-only", "unrelated-revision"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f := newLivePaidFixture(t)
@@ -26,7 +89,7 @@ func TestPaidAuthorityAndAttenuation(t *testing.T) {
 			r := f.prepare(t)
 			a := scopedBound(t, f.service, bindingOf(f.origin))
 			switch name {
-			case "missing-model":
+			case "handle-mismatch-missing-model":
 				r.GrantID = f.id()
 			case "revoked-model":
 				_, err := f.service.RevokeGrant(context.Background(), bindingOf(f.origin), GrantRevocation{CommandID: f.id(), RevokeGrantID: root, ExpectedVersion: 1, ExpectedAuthorityVersion: uint64(f.service.p.authority)})
@@ -40,11 +103,11 @@ func TestPaidAuthorityAndAttenuation(t *testing.T) {
 			case "wrong-origin":
 				other := scopedWorkContext(t, f.service, bindingOf(f.origin), 0xe00, 0xe01)
 				a = scopedBound(t, f.service, other)
-			case "wrong-parent":
+			case "handle-mismatch-parent":
 				r.ParentTurnID = f.id()
-			case "wrong-task-generation":
+			case "handle-mismatch-task-generation":
 				r.TaskBinding = &ledger.TaskBinding{TaskID: f.id(), AssignmentID: f.id(), Generation: 2}
-			case "local-or-turn-only":
+			case "handle-mismatch-turn-only":
 				r.GrantID = f.inspect
 			case "unrelated-revision":
 				grant := privateScopedGrant(bindingOf(f.origin), 0xe10, scopedCapacity(), "turn.inspect")

@@ -274,6 +274,8 @@ func (f *paidFixture) refuse(t *testing.T, d []ledger.Draft) {
 		t.Fatal(err)
 	}
 	defer baseline.Close()
+	baseline.p.paidHotLimit = f.service.p.paidHotLimit
+	baseline.p.prunePaid()
 	_, _, _, g, err := decodeFamily(d, before+1)
 	if err == nil {
 		_, err = f.service.planPaid(context.Background(), g, before+1)

@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/Darius-PJ/dwarf-harness/internal/core/credentials"
+	"golang.org/x/sys/windows"
 )
 
 type paidNativeCredential struct {
@@ -33,7 +34,7 @@ func TestNativeCredentialSource(t *testing.T) {
 	// Owns a session-only native resource. Never enumerates or edits other targets.
 	f := newLivePaidFixture(t)
 	ctx := context.Background()
-	dll := syscall.NewLazyDLL("advapi32.dll")
+	dll := windows.NewLazySystemDLL("advapi32.dll")
 	write := dll.NewProc("CredWriteW")
 	remove := dll.NewProc("CredDeleteW")
 	if write.Find() != nil || remove.Find() != nil {

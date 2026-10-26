@@ -87,11 +87,12 @@ func testPaidGroupRules(t *testing.T) {
 	t.Run("historical-attempt-and-command-after-eviction", func(t *testing.T) {
 		t.Parallel()
 		f := newPaidFixture(t)
+		f.service.p.paidHotLimit = 8
 		first := f.reserve(t)
 		f.dispatch(t, first)
 		r := f.result(t, first, 10, 2)
 		receipt := f.append(t, r)
-		for range 129 {
+		for range f.service.p.paidHotLimit + 1 {
 			p := f.reserve(t)
 			f.append(t, ledger.RuntimePaidResult{AttemptID: p.AttemptID, ExpectedVersion: 1, Version: 2, Kind: "released_unsent"})
 		}
