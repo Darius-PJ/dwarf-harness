@@ -2258,4 +2258,294 @@
 // checklist/config surrogate tasks exist. Fixed UUIDv7s/times, actual encoded
 // submissions and EncodeCommit generate every fixture only with
 // TestGoldenF3_12 -update. The history records judgments, not executed checks.
+//
+// # F3-13: paid attempts and accounting (proposed for freeze (D125))
+//
+// C3 owns eight additional version-1 payloads: runtime.paid_route_configured,
+// runtime.credential_changed, runtime.spend_configured, runtime.paid_reserved,
+// runtime.paid_dispatch_intent, runtime.paid_result,
+// runtime.paid_overrun_acknowledged and runtime.paid_receipt. Only Core's agents
+// service produces them through ledgerstore.Submit. Their metadata and private
+// object references are access-filtered; no authentication bytes, secret-derived
+// digest, secret size, private text, body_refs or measurement_path occur.
+//
+// The additive shared-work and shared-book reading is:
+//
+// (a) a runtime.paid_reserved whose parent_turn_id names a turn is a child of
+// that turn; F3-11's rule that a turn's released/cancelled/interrupted ending
+// requires an ending record for every child counts paid children; a
+// runtime.paid_result of any kind is that child's ending, unknown and
+// released_unsent included, and unknown retains its money;
+//
+// (b) a runtime.paid_receipt carrying usage charges one local unit on the named
+// existing F3-11 scopes, as runtime.review_receipt's usage does;
+//
+// (c) a consumer of F3-11 alone cannot reconstruct the turns, child endings or
+// non-paid book of a log that holds F3-13 and must not be used on one: it would
+// accept a turn ending while a paid child is unresolved and undercount consumed
+// local units;
+//
+// (d) F3-13's admission is the first consumer of an external grant's model.call;
+// F3-11's unavailable/producer_absent refusal stays for the other external
+// operations;
+//
+// (e) F3-11's and F3-12's text, bytes, receipts, lookups, group shapes and goldens
+// are unchanged, and F3-13 groups embed no F3-11 or F3-12 record.
+//
+// # Decoder rules and nested values
+//
+// Complete UTF-8 JSON, recursive duplicate-key rejection (even in ignored
+// extensions), required keys, no null for known keys, unknown optional keys
+// ignored, canonical UUIDv7s and nonzero lowercase 64-hex digests follow F0.
+// Every complete payload or schema-4 submission, including whitespace and
+// extensions, is at most 65,536 bytes. Encoder output has the same cap.
+// Producer collection, stream and installation limits are not decoder limits.
+// Money and counts are plain nonnegative JSON integers through MaxInt64, never
+// floats, exponents or clamped values. Exact rate strings use 0|[1-9][0-9]*,
+// at most MaxInt64; denominators are positive. Versions satisfy
+// 0 <= expected_version < MaxInt64 and version = expected_version + 1.
+//
+// Result kind, credential action, spend mode, period kind, scope kind, profile
+// schema and schema-4 operation are closed. Provider, outcome, error_class,
+// source_kind and no_charge_rules members use the open token grammar
+// ^[a-z][a-z0-9_]*$ (at most 64 bytes). Classes use dot-separated such tokens,
+// at most 64 bytes overall. Unfamiliar tokens survive codecs, but confer no
+// permission to dispatch or release money. In particular an unfamiliar
+// no-charge rule is held as unknown, never released and never a refusal to Open.
+// Ordered sets are nonnull, sorted bytewise and distinct. Object lists preserve
+// order, are nonempty when present, and cannot repeat a digest.
+//
+// The following lists give exact compact key order; ? means absent or present,
+// never null:
+//
+//	PaidScope: kind, id?
+//	  Closed colony/agent/credential/task/grant. Colony omits id exactly;
+//	  all others require UUIDv7. Scope sets sort by that kind order, then ID.
+//	SpendTerms: enabled, mode, ceiling_micros?, period_kind, warning_ppm?
+//	  finite requires ceiling >= 0; unlimited forbids ceiling and warning.
+//	  warning is 1..1,000,000. Period is lifetime/utc_day/utc_month.
+//	  Disabled terms retain the chosen mode, ceiling and period.
+//	CredentialRef: scope_id, version
+//	  Both UUIDv7. Version identifies immutable bytes, never a secret hash.
+//	SemanticHeader: name, value
+//	  Names are lowercase HTTP tokens, sorted and distinct; values are UTF-8
+//	  without controls. Authentication and transport-framing headers are absent.
+//	SealedDescriptor: provider, authority, model, region, method, path,
+//	  requested_tier, credential, headers, body_sha256, body_bytes
+//	  HTTPS/POST endpoint without userinfo/query/fragment/opaque/escaped
+//	  ambiguity; authority <= 255 bytes, path <= 2,048, body_bytes > 0.
+//	  Model/API/usage-schema/version identifiers are visible ASCII 1..128;
+//	  region/tier/speed/source-topic use open tokens <= 64.
+//	PricedDimension: classes, max_units, rate_numerator, rate_denominator
+//	  Nonempty sorted distinct classes, max_units >= 0, exact rates.
+//	CostBound: currency, maximum_micros, components, request_sha256,
+//	  capability_version, tariff_version, tariff_sha256, quote_sha256
+//	  USD, finite maximum >= 0, nonempty components with no overlapping class.
+//	PaidUsage: classes, pricing_tier, served_tier?
+//	  classes is sorted distinct {class, units}; units >= 0. Supported
+//	  Anthropic usage includes all five exclusive classes exactly once:
+//	  input.cache_read, input.cache_write_1h, input.cache_write_5m,
+//	  input.uncached, output.generated. Reasoning is inside output once.
+//	NoChargeEvidence: rule, stop_reason, stop_details_type, category_kind,
+//	  category?, complete, content_blocks, output_started, output_tokens?
+//	  stop fields are refusal; complete true, content_blocks 0,
+//	  output_started false, present output_tokens 0. category_kind is
+//	  null/value: null forbids category, value requires a token other than
+//	  bio/frontier_llm/reasoning_extraction. Rule is in the admission
+//	  profile's no_charge_rules; the version-1 writer value is
+//	  anthropic_refusal_before_output_2026_09_24.
+//	Private objects reuse ObjectRef: sha256, bytes
+//	  Evidence, sealed input and message objects have positive byte counts.
+//	PaidLocalUsage: authority_version, grant_id, scopes, units, bytes
+//	  Existing F3-11 ScopeKeys; units 1, bytes 0; delegation only.
+//
+// # Profile and digest encodings
+//
+// Profile's exact known-field order is schema (1), capability_version,
+// tariff_version, provider, authority, method, path, api_version, model_id,
+// region, requested_tier, allowed_served_tiers, speed, context_max, input_max,
+// output_max, usage_schema, cache_classes, tool_choices, no_charge_rules, tariff,
+// verified_utc_ns, expires_utc_ns, sources. api_version is always present.
+// Tariff is {currency,rates}; each sorted rate is {class,numerator,denominator}.
+// Each source is {topic,url,retrieved_utc_ns,quote}, sorted by (topic,url).
+// URLs are HTTPS, <= 2,048 bytes, with no userinfo or controls; quotes are
+// nonempty valid UTF-8 <= 4,096 bytes; 0 < retrieved <= verified < expires.
+// Context/input/output maxima are positive int64. No quote self-digest or
+// tool_prompt_tokens exists. Complete source verification, including the
+// no_charge_billing topic, supported models/tiers/classes and the 32 KiB
+// installation cap are producer rules, not narrower history caps.
+//
+// Profile SHA-256 covers compact JSON of these known fields in this exact order.
+// Tariff SHA-256 covers compact {currency,rates} likewise. Encoding is Go
+// encoding/json.Marshal's: <, >, &, U+2028 and U+2029 become \u003c, \u003e,
+// \u0026, \u2028 and \u2029. Direct profile encoding and its nested route bytes
+// agree. The profile occurs once, in the route record; the route submission
+// binds profile_sha256 and later records carry digests/versions.
+//
+// Producer request hashing uses frame(b) = u64be(len(b)) || b and unnormalized
+// UTF-8: frame each of router-provider-request/v1, provider, HTTPS authority,
+// model, region, POST, escaped path, requested tier, credential scope ID and
+// credential version; u32be(headerCount); frame each sorted header name/value;
+// frame exact body bytes. Authentication is never an input. Version-1 writers
+// use exactly accept, anthropic-version and content-type semantic headers.
+//
+// Quote hashing frames router-cost-quote/v1, raw 32-byte request hash, capability
+// version, tariff version, lowercase-hex tariff hash text, USD and canonical
+// decimal maximum; then u32be(componentCount). Each component is
+// u32be(classCount), framed sorted class strings, framed canonical decimals
+// maxUnits, numerator and denominator. Sort the complete component encodings
+// bytewise and frame each. Duplicate/overlapping classes refuse. The producer
+// reserves the full min(input_max,context_max) independently of requested output
+// at the largest eligible input rate, plus requested output at the largest
+// output rate, with one final upward rounding. No subtraction or double count.
+//
+// Record payloads and conditional rules
+//
+//	runtime.paid_route_configured:
+//	  route_id, expected_version, version, enabled, credential_scope_id,
+//	  profile, observed_utc_ns?
+//	  Observation occurs exactly when enabled, verified <= observed < expires.
+//	runtime.credential_changed:
+//	  scope_id, provider, expected_version, version, action, credential_version,
+//	  source_kind?, source_locator?, revoke_previous_version?
+//	  bind requires kind and visible ASCII locator 1..256, optionally revoking
+//	  a different currently authorized version. revoke forbids all three.
+//	  Version-1 source kinds are environment/windows_credential_manager;
+//	  synthetic fixtures use a clearly fake source and locator. No source_id.
+//	runtime.spend_configured:
+//	  scope, expected_version, version, terms, parent_grant_id?, authority_version
+//	  Only grant scope permits parent; a child requires its exact F3-11 parent.
+//	runtime.paid_reserved:
+//	  attempt_id, version, authority_version, grant_id, parent_turn_id,
+//	  task_binding?, route_id, route_version, profile_sha256, request, quote,
+//	  admission_utc_ns, admission_period, scopes, input_object
+//	  Version 1; positive admission time; period lifetime/YYYY-MM-DD/YYYY-MM;
+//	  at least four scopes; input_object equals the descriptor's body identity.
+//	runtime.paid_dispatch_intent:
+//	  attempt_id, expected_version, version, authority_version, request_sha256,
+//	  quote_sha256, credential, observed_utc_ns
+//	  Expected 1/version 2; positive observation; exactly one intent.
+//	runtime.paid_result:
+//	  attempt_id, expected_version, version, kind, output_started?,
+//	  provider_request_id?, provider_message_id?, evidence_sha256?,
+//	  evidence_object?, message_objects?, usage?, no_charge?, cost_micros?,
+//	  bound_violation, error_class?, previous_result_sequence?,
+//	  previous_evidence_sha256?
+//	runtime.paid_overrun_acknowledged:
+//	  attempt_id, expected_version, version, result_sequence, evidence_sha256,
+//	  retired_profile_sha256
+//	runtime.paid_receipt:
+//	  command_id, submission_sha256, submission, outcome, version, attempt_id?,
+//	  usage?
+//
+// released_unsent has expected 1/version 2, no optional result members and
+// bound_violation false. All other results have expected >= 2, evidence_object
+// matching evidence_sha256, and output_started. Provider IDs are nonempty UTF-8
+// <= 256 bytes without controls. unknown requires error_class, retains the full
+// hold and has no usage, no_charge, cost, messages or predecessor fields.
+// usage/no_charge/correction require cost_micros and provider_message_id.
+// usage and no_charge are mutually exclusive; correction requires exactly one.
+// Both predecessor fields occur together exactly for correction. Message objects
+// occur only on usage or priced correction. No-charge has cost 0, no messages,
+// no bound violation and no output-started witness. Cost overflow cannot be
+// settled: the attempt stays held, never clamped. The observation artifact
+// retains raw usage/stop/header/event/error metadata; it is not a ledger payload.
+//
+// Receipts bind the re-encoded schema-4 SHA-256 to F0's command and the resulting
+// entity version. attempt_id occurs exactly for admit/dispatch/observe/release/
+// correct/overrun acknowledgement. usage occurs exactly for agent delegation.
+// Outcomes are open; writers use configured, bound, revoked, delegated, reserved,
+// sent, released_unsent, unknown, settled, no_charge, corrected, acknowledged.
+// Actual envelope positions supply Sequence and EffectSequence; no self-sequence.
+//
+// # Record and group rules enforced by services
+//
+// Every operation is one [F0 command, exactly one effect, paid_receipt] group.
+// Controls use the actual owner/delegating-agent origin with no turn. Admission
+// command/receipt are Agent, effect Core; intent/result/recovery/correction are
+// all Core at the immutable admission origin and parent turn. Every record has
+// the same operationID=commandID and origin/turn. Owner overrun acknowledgement
+// has no turn. No mixed, detached, reordered or extra records; refusal has no ID.
+//
+// Route configuration is owner CAS. A capability version permanently binds its
+// full profile hash; tariff version binds its tariff hash. Disable preserves
+// scope/profile and changes no hold. Bind introduces a fresh credential-version
+// ID; revocation is irreversible. Restart never silently rebinds mutable sources:
+// the owner's host binds a new version per scope, optionally revoking the old.
+//
+// First colony spend configuration fixes the period kind, including disabled
+// configuration; other scopes match. Period ID is derivable from admission_utc_ns
+// and the colony's period kind, so a later owner kind change can be added by
+// addition. Admission recomputes colony/agent/credential/optional-task/leaf-and-
+// ancestor grant scopes, requires enabled terms and current chain/task authority,
+// and installs one full finite hold atomically in all scopes. Unlimited removes
+// only the cap. Delegation changes no hold and cannot expand parent terms.
+// External resource_key is paid-route/<route UUIDv7>; no F3-11 kind is changed.
+//
+// Admission and intent check current authority, caps, credential, exact seal,
+// route/profile identity and trusted nonregressing time strictly before expiry.
+// One shared observation floor includes prior envelope times, review and paid
+// observations and successful live samples, including refused calls. Replay,
+// queries, matched retries, releases and settlement read no clock.
+//
+// Reservation -> intent/SENT or released_unsent; SENT -> unknown or financial
+// settlement; unknown -> another evidence-bound unknown or final settlement;
+// settled -> duplicate or explicit correction only. Unknown ends the child once
+// but retains money. Same attempt/evidence digest is inert, even with a new
+// command ID. Same command/different canonical submission refuses. Corrections
+// name the exact prior result/evidence for the same message/request, replace cost
+// by one delta in the original admission period, and never release twice.
+// Output-started is monotone; prior known provider IDs never change.
+//
+// Exact usage and cost beyond the bound are recorded unclamped, with a violation
+// fencing every intersecting scope under finite and unlimited modes. Unknown
+// or unnormalizable/overflowing usage retains the hold. Only evidence-backed
+// correction or owner acknowledgement clears its exact fence. Acknowledgement
+// preserves charge/hold/history and retires that profile hash across routes;
+// re-enabling needs a different supported verified profile and fitting caps.
+//
+// Open reduces ledger facts only and reads no paid artifact bytes: for a pending
+// attempt it may at most stat the input object. Content verification occurs on
+// demand and reports/blocks dependent new work, never changes exposure. No
+// clock, source, credential, network or append occurs during replay. A missing
+// artifact cannot erase a charge, release a hold or authorize a retry.
+//
+// Schema-4 canonical submission (producer rule)
+//
+// SHA-256 covers compact JSON in order schema (4), actor, origin, operation,
+// grant_id?, arguments. Closed operations and exact argument key order:
+//
+//	paid.route.configure:
+//	  route_id, expected_version, enabled, credential_scope_id, profile_sha256
+//	paid.credential.bind:
+//	  scope_id, expected_version, provider, credential_version, source_kind,
+//	  source_locator, revoke_previous_version?
+//	paid.credential.revoke:
+//	  scope_id, expected_version, provider, credential_version
+//	paid.spend.configure / paid.spend.delegate:
+//	  scope, expected_version, terms, parent_grant_id?
+//	paid.admit:
+//	  attempt_id, grant_id, parent_turn_id, task_binding?, route_id,
+//	  route_version, profile_sha256, request, quote, input_object
+//	paid.dispatch / paid.release: attempt_id, expected_version
+//	paid.observe:
+//	  attempt_id, expected_version, kind, evidence_sha256, evidence_object,
+//	  message_objects?
+//	paid.correct:
+//	  attempt_id, expected_version, previous_result_sequence,
+//	  previous_evidence_sha256, evidence_sha256, evidence_object, message_objects?
+//	paid.overrun.acknowledge:
+//	  attempt_id, expected_version, result_sequence, evidence_sha256,
+//	  retired_profile_sha256
+//
+// Top-level grant_id occurs exactly for Agent admit/delegate and Core dispatch/
+// observe/release/correct. Other operations are owner-only. Admit's argument
+// grant matches the top-level grant. Observe kind is unknown/usage/no_charge.
+// Derived scopes, period, observations, authority, usage, cost and new versions,
+// command ID, secrets and handles are not caller inputs. A completion command ID
+// is supplied freshly after the network, never reserved during intent.
+// Schemas 1-3 are unchanged. Producers use the concrete argument type, not maps.
+// The F3-13 golden uses fixed IDs/times, encoded submissions and EncodeCommit,
+// with loopback-only synthetic profiles and context-owned hash-named objects.
+// TestGoldenF3_13 -update alone writes its new fixture files.
 package ledger

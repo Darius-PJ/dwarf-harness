@@ -81,6 +81,14 @@ func TestNewCatalogue(t *testing.T) {
 		{"runtime.review_requested", 1}:                 true,
 		{"runtime.review_result", 1}:                    true,
 		{"runtime.review_receipt", 1}:                   true,
+		{"runtime.paid_route_configured", 1}:            true,
+		{"runtime.credential_changed", 1}:               true,
+		{"runtime.spend_configured", 1}:                 true,
+		{"runtime.paid_reserved", 1}:                    true,
+		{"runtime.paid_dispatch_intent", 1}:             true,
+		{"runtime.paid_result", 1}:                      true,
+		{"runtime.paid_overrun_acknowledged", 1}:        true,
+		{"runtime.paid_receipt", 1}:                     true,
 	}
 	if !maps.Equal(def.set, want) || def.Contains(TypeVersion{"fixture.sample", 1}) {
 		t.Errorf("Defined() holds %v, want %v", def.set, want)

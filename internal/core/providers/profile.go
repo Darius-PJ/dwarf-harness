@@ -2,6 +2,7 @@ package providers
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"net"
 	"net/url"
 	"slices"
@@ -28,7 +29,7 @@ type Profile struct {
 	Authority          string        `json:"authority"`
 	Method             string        `json:"method"`
 	Path               string        `json:"path"`
-	APIVersion         string        `json:"api_version,omitempty"`
+	APIVersion         string        `json:"api_version"`
 	ModelID            string        `json:"model_id"`
 	Region             string        `json:"region"`
 	RequestedTier      string        `json:"requested_tier"`
@@ -169,7 +170,7 @@ func (p Profile) Validate() error {
 			return ErrInvalid
 		}
 	}
-	b, e := compact(p)
+	b, e := json.Marshal(p)
 	if e != nil || len(b) > ProfileLimit {
 		return ErrLimit
 	}
@@ -191,7 +192,7 @@ func (p Profile) Canonical() ([]byte, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	return compact(p)
+	return json.Marshal(p)
 }
 
 func (p Profile) SHA256() ([32]byte, error) {
@@ -206,7 +207,7 @@ func (p Profile) TariffSHA256() ([32]byte, error) {
 	if err := p.Validate(); err != nil {
 		return [32]byte{}, err
 	}
-	b, err := compact(p.Tariff)
+	b, err := json.Marshal(p.Tariff)
 	if err != nil {
 		return [32]byte{}, err
 	}
