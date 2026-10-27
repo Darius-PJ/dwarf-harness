@@ -13,6 +13,7 @@ import (
 // go list never needs the network.
 const (
 	xModule          = "golang.org/x/fake"
+	xSysModule       = "golang.org/x/sys"
 	thirdPartyModule = "example.com/thirdparty"
 )
 
@@ -23,11 +24,13 @@ go 1.27
 require (
 	example.com/thirdparty v0.0.0
 	golang.org/x/fake v0.0.0
+	golang.org/x/sys v0.0.0
 )
 
 replace (
 	example.com/thirdparty => ../thirdparty
 	golang.org/x/fake => ../xfake
+	golang.org/x/sys => ../xsys
 )
 `
 
@@ -68,6 +71,9 @@ func writeFixture(t *testing.T, files map[string]string) string {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "xfake", "go.mod"), "module "+xModule+"\n\ngo 1.27\n")
 	writeFile(t, filepath.Join(root, "xfake", "fake.go"), src("fake"))
+	writeFile(t, filepath.Join(root, "xsys", "go.mod"), "module "+xSysModule+"\n\ngo 1.27\n")
+	writeFile(t, filepath.Join(root, "xsys", "sys.go"), src("sys"))
+	writeFile(t, filepath.Join(root, "xsys", "windows", "windows.go"), src("windows"))
 	writeFile(t, filepath.Join(root, "thirdparty", "go.mod"), "module "+thirdPartyModule+"\n\ngo 1.27\n")
 	writeFile(t, filepath.Join(root, "thirdparty", "thirdparty.go"), src("thirdparty"))
 	dir := filepath.Join(root, "main")
@@ -176,6 +182,20 @@ func TestImportBoundary(t *testing.T) {
 			"internal/core/host/plant_darwin.go":   src("host", m("internal/router/route")),
 			"internal/router/route/plant_linux.go": src("route", m("contract/ledger")),
 		}},
+		{name: "durable imports x sys", files: map[string]string{
+			"internal/core/durable/plant.go": src("durable", xSysModule, xSysModule+"/windows"),
+		}},
+		{name: "winexec imports x sys", files: map[string]string{
+			"internal/core/winexec/plant.go": src("winexec", xSysModule, xSysModule+"/windows"),
+		}},
+		{name: "credentials imports x sys", files: map[string]string{
+			"internal/core/credentials/plant.go": src("credentials", xSysModule, xSysModule+"/windows"),
+		}},
+		{name: "agents test variants import x sys", files: map[string]string{
+			"internal/core/agents/agents.go":               src("agents"),
+			"internal/core/agents/agents_internal_test.go": src("agents", "testing", xSysModule, xSysModule+"/windows"),
+			"internal/core/agents/agents_external_test.go": src("agents_test", "testing", xSysModule, xSysModule+"/windows"),
+		}},
 
 		// Must fail.
 		{
@@ -261,6 +281,38 @@ func TestImportBoundary(t *testing.T) {
 			on:    []string{"linux/amd64", "linux/arm64"},
 		},
 		{
+			name:  "unlisted core imports x sys root",
+			files: map[string]string{"internal/core/host/plant.go": src("host", xSysModule)},
+			want:  []violation{forbidden("internal/core/host", xSysModule)},
+		},
+		{
+			name:  "unlisted core imports x sys subpackage",
+			files: map[string]string{"internal/core/host/plant.go": src("host", xSysModule+"/windows")},
+			want:  []violation{forbidden("internal/core/host", xSysModule+"/windows")},
+		},
+		{
+			name:  "unlisted core imports x sys in a linux-only file",
+			files: map[string]string{"internal/core/host/plant_linux.go": src("host", xSysModule+"/windows")},
+			want:  []violation{forbidden("internal/core/host", xSysModule+"/windows")},
+			on:    []string{"linux/amd64", "linux/arm64"},
+		},
+		{
+			name:  "agents production imports x sys",
+			files: map[string]string{"internal/core/agents/plant.go": src("agents", xSysModule+"/windows")},
+			want:  []violation{forbidden("internal/core/agents", xSysModule+"/windows")},
+		},
+		{
+			name: "unlisted core test variants import x sys",
+			files: map[string]string{
+				"internal/core/host/host_internal_test.go": src("host", "testing", xSysModule+"/windows"),
+				"internal/core/host/host_external_test.go": src("host_test", "testing", xSysModule+"/windows"),
+			},
+			want: []violation{
+				forbidden("internal/core/host", xSysModule+"/windows"),
+				forbidden("internal/core/host_test", xSysModule+"/windows"),
+			},
+		},
+		{
 			name:  "cgo in a darwin-only file",
 			files: map[string]string{"internal/core/host/plant_darwin.go": cgoSource},
 			want:  []violation{{kind: cgoFile, pkg: m("internal/core/host"), subject: "plant_darwin.go"}},
@@ -281,6 +333,13 @@ func TestImportBoundary(t *testing.T) {
 			got := map[violation][]string{}
 			for _, f := range boundaryOf(t, tt.files) {
 				got[f.violation] = f.targets
+				if match("golang.org/x/sys/...", f.subject) {
+					for _, text := range []string{f.pkg, f.subject, "D151"} {
+						if !strings.Contains(f.String(), text) {
+							t.Errorf("x/sys diagnostic %q does not contain %q", f.String(), text)
+						}
+					}
+				}
 			}
 			if !maps.EqualFunc(got, want, slices.Equal) {
 				t.Errorf("violations:\n%s\nwant:\n%s", describe(got), describe(want))

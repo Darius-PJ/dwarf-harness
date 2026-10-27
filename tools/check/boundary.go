@@ -70,6 +70,19 @@ const appender = "contract/ledger/appender"
 
 var appenderUsers = []string{"internal/core/...", "internal/router/...", "internal/undercurrent/graph/..."}
 
+// xSys is restricted to these importers regardless of the table's rows (D151).
+const xSys = "golang.org/x/sys/..."
+
+var xSysUsers = []string{
+	"internal/core/durable",     // B3, B18 item 7.
+	"internal/core/winexec",     // B30 item 4.
+	"internal/core/credentials", // D151.
+}
+
+var xSysTestUsers = []string{
+	"internal/core/agents", // D151: native credential tests only.
+}
+
 func match(pattern, path string) bool {
 	if base, ok := strings.CutSuffix(pattern, "/..."); ok {
 		return path == base || strings.HasPrefix(path, base+"/")
@@ -109,6 +122,9 @@ func (r *row) allows(rel string, test bool, imp string) bool {
 		}
 		return match(r.tree, irel) || matchAny(r.trees, irel)
 	}
+	if match(xSys, imp) && !matchAny(xSysUsers, rel) && !(test && matchAny(xSysTestUsers, rel)) {
+		return false
+	}
 	return matchAny(r.external, imp) || test && matchAny(testOnlyImports, imp)
 }
 
@@ -136,6 +152,10 @@ func (v violation) String() string {
 	}
 	if rel, _ := moduleRel(v.subject); rel == appender {
 		return fmt.Sprintf("%s imports %s: only %s may import it (D50)", v.pkg, v.subject, strings.Join(appenderUsers, ", "))
+	}
+	if match(xSys, v.subject) {
+		return fmt.Sprintf("%s imports %s: only %s and test variants of %s may import it (D151)",
+			v.pkg, v.subject, strings.Join(xSysUsers, ", "), strings.Join(xSysTestUsers, ", "))
 	}
 	return fmt.Sprintf("%s imports %s: its row of the import table does not allow it (D45)", v.pkg, v.subject)
 }
