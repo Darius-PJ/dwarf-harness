@@ -22,7 +22,7 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 - Builds on the private-state service as ticket [11](11-enforce-scoped-grants-and-atomic-task-ownership.md) left it. Until ticket 15 gives turn start and local work a production caller, the cost is latent.
 - Adds no record type, because B3's indexes and snapshots are rebuildable and discardable, never ledger authority, and changes no frozen record, rule or golden ([D139](../../../docs/DECISIONS.md#d139-f3-10-private-state-records-frozen), [D140](../../../docs/DECISIONS.md#d140-f3-11-scoped-authority-task-and-non-paid-work-records-frozen)). A new dependency would wait for the owner (D29).
 - A ruled design chooses the fix before code (D117), and ticket 11's measurement driver, rerun, is its evidence.
-- The ticket's code reaches the three-OS CI (D133) with its one push after its close (D141); no provider credentials are needed.
+- Each slice's branch commit passes the three-OS CI (D133) before `main` moves to it (D153); no provider credentials are needed.
 
 ## Scope boundaries
 

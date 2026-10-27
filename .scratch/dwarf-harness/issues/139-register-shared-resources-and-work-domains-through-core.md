@@ -22,7 +22,7 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 - Consumes the frozen F3-10 and F3-11 families ([D139](../../../docs/DECISIONS.md#d139-f3-10-private-state-records-frozen), [D140](../../../docs/DECISIONS.md#d140-f3-11-scoped-authority-task-and-non-paid-work-records-frozen)) and changes them only by addition (D40).
 - A ruled design settles the family's records, commands and slices before code (D117). Once the build advisor approves the contract slice with its freeze record, the project manager freezes the family under [D125](../../../docs/DECISIONS.md#d125-completed-contract-slices-are-frozen-without-the-owners-approval); only a breaking change to a frozen contract (D40), a D52 approval, a new dependency (D29) or another change that touches an owner decision (D41) waits for the owner.
 - D112 approved the D52 boundary before C3 implementation; registrations serve test agents only, and nothing here admits colony work (D52).
-- The ticket's code reaches the three-OS CI (D133) with its one push after its close (D141); no provider credentials are needed.
+- Each slice's branch commit passes the three-OS CI (D133) before `main` moves to it (D153); no provider credentials are needed.
 
 ## Scope boundaries
 
