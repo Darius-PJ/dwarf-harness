@@ -1,15 +1,17 @@
 name: Check
 
 on:
-  # A push to main that changes more than Markdown starts a run. Pushes go once
-  # per ticket, after its close, so CI runs once per ticket (D141, D146).
+  # Check each slice on its exact branch commit before main advances (D152).
   push:
-    branches: [main]
-    paths-ignore: ['**.md']
+    branches: ['build/**', 'docs/**', 'fix/**']
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   GOTOOLCHAIN: local
@@ -21,8 +23,53 @@ env:
   DWARF_GRAPH_TYPESCRIPT: ''
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - name: Check out the event commit and history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Fetch main
+        shell: bash
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+      - name: Classify changed paths
+        id: classify
+        shell: bash
+        env:
+          CHECKED_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          base=$(git merge-base origin/main "$CHECKED_SHA")
+          paths="$RUNNER_TEMP/changed-paths"
+          git diff --no-renames --name-only -z "$base" "$CHECKED_SHA" -- > "$paths"
+          code=false
+          printf 'Changed paths since merge base %s:\n' "$base"
+          while IFS= read -r -d '' path; do
+            printf '  path=%q\n' "$path"
+            if [[ "$path" != *.md ]]; then
+              code=true
+            fi
+          done < "$paths"
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            code=true
+          fi
+          printf 'code=%s (event=%s)\n' "$code" "$EVENT_NAME"
+          printf 'code=%s\n' "$code" >> "$GITHUB_OUTPUT"
+
   check:
     name: Check / ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -230,4 +277,70 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go run ./tools/check
+          escape_data() {
+            local data=$1
+            data=${data//'%'/'%25'}
+            data=${data//$'\r'/'%0D'}
+            data=${data//$'\n'/'%0A'}
+            printf '%s' "$data"
+          }
+          inventory="ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-}; $(go version); $(git --version)"
+          printf '::notice::%s\n' "$(escape_data "$inventory")"
+
+          log="$RUNNER_TEMP/check.log"
+          # Treat child output as data, even if a test prints workflow commands.
+          command_token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          printf '::stop-commands::%s\n' "$command_token"
+          set +e
+          go run ./tools/check 2>&1 | tee "$log"
+          check_status=${PIPESTATUS[0]}
+          # Diagnostics must not replace the check command's exit status.
+          printf '::%s::\n' "$command_token"
+
+          if (( check_status != 0 )); then
+            # Prioritize failed steps, then associate buffered test failures
+            # with the package footer that follows them. Cap both at ten.
+            awk '
+              function emit(message) {
+                if (count >= 10) return
+                gsub(/%/, "%25", message)
+                gsub(/\r/, "%0D", message)
+                gsub(/\n/, "%0A", message)
+                printf "::error::%s\n", message
+                count++
+              }
+              FNR == NR {
+                if (/^FAIL step [0-9]+ \(/) emit($0)
+                next
+              }
+              /^== Step / { pending = 0 }
+              /^[[:space:]]*--- FAIL: / {
+                if (pending < 10) tests[++pending] = $0
+              }
+              /^FAIL\t/ {
+                split($0, fields, "\t")
+                for (i = 1; i <= pending; i++) emit(fields[2] "\n" tests[i])
+                pending = 0
+              }
+            ' "$log" "$log"
+          fi
+          exit "$check_status"
+
+  result:
+    name: Check result
+    runs-on: ubuntu-24.04
+    needs: [changes, check]
+    if: always()
+    steps:
+      - name: Require the expected check outcome
+        shell: bash
+        env:
+          CODE: ${{ needs.changes.outputs.code }}
+          CHECK_RESULT: ${{ needs.check.result }}
+        run: |
+          printf 'code=%s check=%s\n' "$CODE" "$CHECK_RESULT"
+          if [[ "$CODE" == true && "$CHECK_RESULT" == success ]] ||
+             [[ "$CODE" == false && "$CHECK_RESULT" == skipped ]]; then
+            exit 0
+          fi
+          exit 1
