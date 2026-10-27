@@ -46,12 +46,11 @@ func openPaidService(ctx context.Context, store privateStore, colonyDir string, 
 		return nil, report, err
 	}
 	transportLimits := providers.Limits{MaxActivePaid: options.Limits.MaxActivePaid, DispatchTimeout: options.Limits.DispatchTimeout, TLSHandshakeTimeout: options.Limits.TLSHandshakeTimeout, ResponseHeaderTimeout: options.Limits.ResponseHeaderTimeout}
-	transport, err := providers.NewTransport(transportLimits)
+	var transport *providers.Transport
 	if deps.paidTestRoots != nil || deps.paidWrapConn != nil {
-		if transport != nil {
-			transport.CloseIdleConnections()
-		}
 		transport, err = providers.NewTransportWithRoots(transportLimits, deps.paidTestRoots, deps.paidWrapConn)
+	} else {
+		transport, err = providers.NewTransport(transportLimits)
 	}
 	if err != nil {
 		_ = s.Close()

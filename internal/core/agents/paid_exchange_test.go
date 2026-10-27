@@ -299,13 +299,8 @@ func TestAnthropicStreamAndUsage(t *testing.T) {
 				t.Fatalf("output bytes/reference disagree: %s", output)
 			}
 			raw := readTestFile(t, filepath.Join(root, v.Result.EvidenceSHA256.String()))
-			var observation paidObservationObject
-			if json.Unmarshal(raw, &observation) != nil {
-				t.Fatal("invalid observation")
-			}
-			expectedObservation := paidObservationObject{Schema: 1, Kind: "paid_observation", AttemptID: admission.AttemptID, Origin: f.origin, ParentTurnID: admission.ParentTurnID, RequestSHA256: admission.Quote.RequestSHA256, ProviderRequestID: "request-one", ProviderMessageID: "message-one", Model: admission.Request.Model, HTTPStatus: 200, Headers: []paidResponseHeader{{"anthropic-ratelimit-requests-remaining", []string{"2"}}, {"content-type", []string{"text/event-stream"}}, {"request-id", []string{"request-one"}}}, StopReason: "end_turn", StopDetails: json.RawMessage(`null`), RawUsageStart: json.RawMessage(`{"input_tokens":3,"output_tokens":1}`), RawUsageFinal: json.RawMessage(`{"input_tokens":7,"output_tokens":4}`), RawUsageMerged: map[string]json.RawMessage{"input_tokens": json.RawMessage(`7`), "output_tokens": json.RawMessage(`4`)}, OutputStarted: true, Complete: true, MessageObjects: v.Result.MessageObjects, UnknownEventTypes: []string{}, ContentBlocks: 1}
-			want, _ := json.Marshal(expectedObservation)
-			if !bytes.Equal(raw, want) || ledger.Digest(sha256.Sum256(raw)) != v.Result.EvidenceSHA256 || int64(len(raw)) != v.Result.EvidenceObject.Bytes {
+			want := fmt.Sprintf(`{"schema":1,"kind":"paid_observation","attempt_id":%q,"origin":{"agent_id":%q,"session_id":%q,"context_id":%q},"parent_turn_id":%q,"request_sha256":%q,"provider_request_id":"request-one","provider_message_id":"message-one","model":%q,"http_status":200,"headers":[{"name":"anthropic-ratelimit-requests-remaining","values":["2"]},{"name":"content-type","values":["text/event-stream"]},{"name":"request-id","values":["request-one"]}],"stop_reason":"end_turn","stop_details":null,"raw_usage_start":{"input_tokens":3,"output_tokens":1},"raw_usage_final":{"input_tokens":7,"output_tokens":4},"raw_usage_merged":{"input_tokens":7,"output_tokens":4},"output_started":true,"complete":true,"message_objects":[{"sha256":%q,"bytes":%d}],"unknown_event_types":[],"unknown_event_type_overflow":0,"content_blocks":1,"content_error":false,"profile_violation":false}`, admission.AttemptID.String(), f.origin.AgentID.String(), f.origin.SessionID.String(), f.origin.ContextID.String(), admission.ParentTurnID.String(), admission.Quote.RequestSHA256.String(), admission.Request.Model, v.Result.MessageObjects[0].SHA256.String(), v.Result.MessageObjects[0].Bytes)
+			if string(raw) != want || ledger.Digest(sha256.Sum256(raw)) != v.Result.EvidenceSHA256 || int64(len(raw)) != v.Result.EvidenceObject.Bytes {
 				t.Fatalf("observation bytes/reference disagree: %s", raw)
 			}
 			if _, err := f.service.ReadPaidObject(context.Background(), PaidObjectLookup{AttemptID: d.AttemptID, Object: *v.Result.EvidenceObject, MaxBytes: maxObjectBytes}); err != nil {
@@ -341,11 +336,14 @@ func TestPaidCloseDrainsAndReconcileHolds(t *testing.T) {
 	if err := f.service.Close(); err != nil {
 		t.Fatal(err)
 	}
+	f.service.mu.Lock()
+	drained := len(f.service.paid.exchanges) == 0 && len(f.service.paid.calls) == 0
+	f.service.mu.Unlock()
+	if !drained {
+		t.Fatal("Close returned before exchange buffers drained")
+	}
 	if err := <-result; err != nil {
 		t.Fatal(err)
-	}
-	if len(f.service.paid.exchanges) != 0 || len(f.service.paid.calls) != 0 {
-		t.Fatal("Close returned before exchange buffers drained")
 	}
 	reopenScoped(t, f.serviceFixture, DefaultLimits())
 	reconcile := PaidReconciliation{CommandID: f.id(), AttemptID: r.AttemptID, ExpectedVersion: 2}
@@ -356,6 +354,17 @@ func TestPaidCloseDrainsAndReconcileHolds(t *testing.T) {
 	v := f.view(t, r.AttemptID)
 	if v.State != "unknown" || v.HeldMicros == "0" || !v.Ended {
 		t.Fatal("sent recovery released money or left child active")
+	}
+	raw, err := f.service.ReadPaidObject(context.Background(), PaidObjectLookup{AttemptID: r.AttemptID, Object: *v.Result.EvidenceObject, MaxBytes: maxObjectBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovery paidObservationObject
+	if err := json.Unmarshal(raw, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	if recovery.Error == nil || recovery.Error.Type != "recovery_reconciled" || recovery.ErrorClass != "unreachable" || recovery.HTTPStatus != 0 || recovery.Complete {
+		t.Fatal("reconciliation is indistinguishable from an observed dial failure")
 	}
 	before := f.store.Durable()
 	retry, err := f.service.ReconcilePaid(context.Background(), reconcile)

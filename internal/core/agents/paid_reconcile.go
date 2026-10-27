@@ -38,8 +38,12 @@ func (s *Service) ReconcilePaid(ctx context.Context, request PaidReconciliation)
 		s.mu.Unlock()
 		return PaidReceipt{}, err
 	}
+	recovery := providers.ResponseEvidence{
+		ErrorClass: "unreachable",
+		ErrorBody:  json.RawMessage(`{"error":{"type":"recovery_reconciled","message":"Durable intent recovered without a committed result; delivery and billing are unknown."}}`),
+	}
 	if match.found && a.intent != nil {
-		raw, err := json.Marshal(paidObservation(a, providers.ResponseEvidence{ErrorClass: "unreachable"}))
+		raw, err := json.Marshal(paidObservation(a, recovery))
 		ref := ledger.ObjectRef{SHA256: ledger.Digest(sha256.Sum256(raw)), Bytes: int64(len(raw))}
 		observation := PaidObservation{CommandID: request.CommandID, AttemptID: request.AttemptID, ExpectedVersion: request.ExpectedVersion}
 		sub := paidObservationSubmission(a, observation, ref, "unknown", nil, nil)
@@ -64,7 +68,7 @@ func (s *Service) ReconcilePaid(ctx context.Context, request PaidReconciliation)
 			return PaidReceipt{}, ErrRevision
 		}
 		s.mu.Unlock()
-		observation, err := s.publishPaidObservation(ctx, a, providers.ResponseEvidence{ErrorClass: "unreachable"}, nil)
+		observation, err := s.publishPaidObservation(ctx, a, recovery, nil)
 		if err != nil {
 			return PaidReceipt{}, err
 		}

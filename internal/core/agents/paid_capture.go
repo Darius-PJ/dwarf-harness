@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
-	"strings"
 	"unicode/utf8"
 	"uuid"
 
@@ -128,7 +127,7 @@ func paidContainsSecret(raw, key []byte) bool {
 		if err != nil {
 			return true
 		}
-		if text, ok := token.(string); ok && strings.Contains(text, string(key)) {
+		if text, ok := token.(string); ok && bytes.Contains([]byte(text), key) {
 			return true
 		}
 	}
@@ -192,7 +191,7 @@ func paidCaptureAllowed(o paidObservationObject, blocks []providers.OutputBlock,
 	safe := true
 	text := func(v string) {
 		size += 6*len(v) + 4
-		if len(key) != 0 && strings.Contains(v, string(key)) {
+		if len(key) != 0 && bytes.Contains([]byte(v), key) {
 			safe = false
 		}
 	}
@@ -235,7 +234,7 @@ func paidCaptureAllowed(o paidObservationObject, blocks []providers.OutputBlock,
 	for _, b := range blocks {
 		if len(key) != 0 {
 			for _, v := range []string{b.Type, b.Text, b.ID, b.Name, b.Thinking, b.Signature, b.Data} {
-				if strings.Contains(v, string(key)) {
+				if bytes.Contains([]byte(v), key) {
 					return false
 				}
 			}

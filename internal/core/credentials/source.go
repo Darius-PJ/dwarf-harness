@@ -1,6 +1,3 @@
-// Package credentials resolves configured sources once into owned, bounded
-// memory. Sources are host configuration, never agent input. Release overwrites
-// owned buffers; Go strings, syscall buffers and HTTP are not secure erasure.
 package credentials
 
 import (

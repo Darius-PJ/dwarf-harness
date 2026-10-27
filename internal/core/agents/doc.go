@@ -486,11 +486,18 @@
 // providers.NewTransportWithRoots; PaidOptions cannot select a transport.
 //
 // DispatchPaid returns the intent receipt and an opaque ObservedPaidCall, not a
-// settlement. Matching retries return the recorded receipt and any result view,
-// never a send permit or fresh observation. RecordPaidObservation requires a new
-// caller command ID and the handle, or an explicit host-attested TrustedEvidence
-// object reference. It verifies object identity and derives usage/no_charge/
-// unknown through the admission profile; callers cannot supply a price.
+// settlement. Matching retries under current dispatch authority return the
+// recorded receipt and any result view, never a send permit or fresh observation.
+// Passive receipt lookup remains available after revocation or route retirement.
+// RecordPaidObservation requires a new caller command ID and the handle, or an
+// explicit host-attested TrustedEvidence object reference. That object must
+// already be in the attempt context's core/objects: Core's published observation,
+// or evidence placed by a later host publisher. Ticket 13 provides no public
+// late-evidence publisher. The entrance verifies object identity and derives
+// usage/no_charge/unknown through the admission profile; callers cannot supply
+// a price.
+// These host factual reads use MaxConcurrentWrites but take no physical byte
+// reservation, unlike the bound ReadPaidObject entrance.
 // Completed exclusive counters replace cumulative snapshots and price once.
 // Missing, inconsistent or overflowing usage keeps the full hold. A documented
 // no-charge refusal requires the pinned rule, explicit permitted category, no
@@ -507,8 +514,12 @@
 //
 // ReconcilePaid works even with plain Open. It releases only a reserved,
 // never-sent attempt; an intended attempt ends as unknown with its full hold.
-// An active exchange cannot be reconciled. Close cancels exchanges and waits
-// for their I/O and capture to drain before releasing slots, buffers and secrets.
+// Its deterministic observation uses error_class "unreachable" from the closed
+// writer set, with error type "recovery_reconciled": delivery and billing are
+// unknown, not an observed dial failure. Same-ID reconciliation reconstructs
+// identical bytes. An active exchange cannot be reconciled. Close cancels
+// exchanges and waits for their I/O and capture to drain before releasing slots,
+// buffers and secrets.
 //
 // # Paid object encodings and disclosure
 //
@@ -556,4 +567,35 @@
 // other-origin objects have the same denial. MaxBytes is at most 1 MiB; physical
 // read reservations bound allocation. Authority is rechecked after I/O, returned
 // bytes are owned, and no read samples a clock, charges or appends a record.
+//
+// # Paid operating and measured-cost limits
+//
+// Unknown provider errors, timeouts and disconnects have no owner-entered refund
+// or release path; only later complete, bound evidence can settle their holds.
+// The owner must bind a fresh credential version per scope after every start;
+// this is a start-up burden, not a rotation cap. The colony period kind is fixed
+// by its first configuration. A route refuses use from expires_utc_ns, normally
+// seven days after verification unless installation chooses otherwise. A stale
+// keep-alive connection leaves unknown exposure, without retry. The default
+// 120-second dispatch deadline is for a small drill, not maximal generation.
+// Haiku 4.5 refusals never infer zero charge; Opus/Sonnet prior-tool history is
+// refused before admission because its thinking-artifact replay is unsupported.
+//
+// Bookkeeping measurements are not an SLA, throughput/capacity/population limit
+// or C3-exit claim. Existing scoped/private replay and authorization costs remain
+// inherited limits. Paid cold work is explicit: attempt and credential-version
+// IDs at or below their watermarks (including fresh out-of-order IDs), historical
+// attempts and receipts, original-period/missing-account totals, task enrollment
+// and rare scope reactivation. Agent.PaidBudgetStatus reconstructs origin-filtered
+// totals on every call. An inherited contextTask scan remains when no hot task
+// serves the context. Old-object selection scans from the attempt's admission;
+// duplicate evidence reads its three-record receipt. Later results on a hot
+// attempt use its retained evidence map, not a new whole-history scan per result.
+// Open's paid reduction does not read artifacts, present or absent.
+//
+// Physical admission is separate from financial exposure. Each preparation
+// reserves 20 times its request bound plus 10 MiB on its scopes; each active
+// exchange adds 96 MiB. For three exchanges and retained preparations, every
+// shared colony/scope cap must cover the sum, not three copied allowances.
+// This reservation arithmetic is not a measurement of resident memory.
 package agents
