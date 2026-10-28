@@ -127,6 +127,7 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 		})
 		if err == nil {
 			s.p.installReview(plan)
+			s.p.publishHistory(nil, nil, committed.Last)
 			s.p.reviewFloor, s.p.through = floor, committed.Last
 			if bytes.Compare(input.id[:], s.p.maxCommand[:]) > 0 {
 				s.p.maxCommand = input.id

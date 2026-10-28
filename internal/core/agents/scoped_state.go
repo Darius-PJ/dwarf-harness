@@ -65,11 +65,14 @@ func (p *projection) registeredOrigin(origin ledger.Origin) bool {
 	return ok && agent.session == origin.SessionID && p.contexts[origin.ContextID] == origin.AgentID
 }
 
-// The live maps are not an existence oracle. Every miss is checked against the
-// already-validated ledger prefix, including evicted terminal identities.
+// Live maps and valid above-maximum proofs serve the current accepted prefix.
+// Other misses consult history, including pruned terminal identities.
 func (s *Service) loadGrant(ctx context.Context, id uuid.UUID, through uint64) (grantState, bool, error) {
-	if grant, ok := s.p.grants[id]; ok {
+	if grant, ok := s.p.grants[id]; ok && through == s.p.through {
 		return grant, true, nil
+	}
+	if s.p.identityAbsent(id, s.p.identities.grant, through) {
+		return grantState{}, false, nil
 	}
 	var grant grantState
 	found := false
@@ -101,8 +104,11 @@ func (s *Service) loadGrant(ctx context.Context, id uuid.UUID, through uint64) (
 }
 
 func (s *Service) loadTask(ctx context.Context, id uuid.UUID, through uint64) (scopedTaskState, bool, error) {
-	if task, ok := s.p.tasks[id]; ok {
+	if task, ok := s.p.tasks[id]; ok && through == s.p.through {
 		return task, true, nil
+	}
+	if s.p.identityAbsent(id, s.p.identities.task, through) {
+		return scopedTaskState{}, false, nil
 	}
 	var task scopedTaskState
 	found := false
@@ -136,8 +142,11 @@ func (s *Service) loadTask(ctx context.Context, id uuid.UUID, through uint64) (s
 }
 
 func (s *Service) loadWork(ctx context.Context, id uuid.UUID, through uint64) (scopedWorkState, bool, error) {
-	if work, ok := s.p.work[id]; ok {
+	if work, ok := s.p.work[id]; ok && through == s.p.through {
 		return work, true, nil
+	}
+	if s.p.identityAbsent(id, s.p.identities.work, through) {
+		return scopedWorkState{}, false, nil
 	}
 	var work scopedWorkState
 	found := false
@@ -193,6 +202,12 @@ func releasesWork(kind, outcome string) bool {
 }
 
 func (s *Service) assignmentUnused(ctx context.Context, assignment ledger.AssignmentInput, through uint64) (idUnused, contextUnused bool, err error) {
+	if s.p.identityAbsent(assignment.AssignmentID, s.p.identities.assignment, through) {
+		key := scopeKey{assignment.Assignee.AgentID, assignment.Assignee.ContextID}
+		if task, known := s.p.contextAssociation(key, through); known {
+			return true, task == (uuid.UUID{}), nil
+		}
+	}
 	idUnused, contextUnused = true, true
 	err = s.scan(ctx, 0, through, func(commit ledger.Commit) error {
 		for _, record := range commit.Records {
@@ -276,9 +291,17 @@ func (s *Service) contextTask(ctx context.Context, origin ledger.Origin, through
 	if s.p.agents[origin.AgentID].general == origin.ContextID {
 		return scopedTaskState{}, false, nil
 	}
-	for _, task := range s.p.tasks {
-		if task.record.Assignment != nil && task.record.Assignment.Assignee.ContextID == origin.ContextID {
-			return task, true, nil
+	if id, known := s.p.contextAssociation(scopeKey{origin.AgentID, origin.ContextID}, through); known {
+		if id == (uuid.UUID{}) {
+			return scopedTaskState{}, false, nil
+		}
+		return s.loadTask(ctx, id, through)
+	}
+	if through == s.p.through {
+		for _, task := range s.p.tasks {
+			if task.record.Assignment != nil && task.record.Assignment.Assignee.ContextID == origin.ContextID {
+				return task, true, nil
+			}
 		}
 	}
 	var id uuid.UUID

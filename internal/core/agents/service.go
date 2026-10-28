@@ -53,11 +53,12 @@ type agentState struct {
 	directory        string
 }
 type scopeState struct {
-	ids       submissionIDs
-	revision  uint64
-	heads     map[string]Head
-	materials map[string]string
-	issues    []IntegrityIssue
+	ids         submissionIDs
+	revision    uint64
+	heads       map[string]Head
+	materials   map[string]string
+	issues      []IntegrityIssue
+	association contextAssociation
 }
 type scratchState struct {
 	ledger.ScratchCreated
@@ -90,6 +91,7 @@ type projection struct {
 	maxCredentialVersion uuid.UUID
 	book                 budgetBook
 	maxCommand           uuid.UUID
+	identities           identityMaxima
 	through              uint64
 }
 
@@ -99,6 +101,7 @@ func newProjection() projection {
 		scopes: map[scopeKey]*scopeState{}, scratches: map[uuid.UUID]scratchState{},
 		grants: map[uuid.UUID]grantState{}, tasks: map[uuid.UUID]scopedTaskState{}, work: map[uuid.UUID]scopedWorkState{},
 		reviews:    map[uuid.UUID]reviewSlot{},
+		identities: newIdentityMaxima(),
 		book:       budgetBook{accounts: map[ledger.ScopeKey]budgetAccount{}, preparing: map[ledger.ScopeKey][4]int64{}, paid: map[ledger.PaidScope]paidAccount{}},
 		paidRoutes: map[uuid.UUID]ledger.RuntimePaidRouteConfigured{}, paidCredentialScopes: map[uuid.UUID]paidCredentialScope{},
 		paidCredentials: map[uuid.UUID]ledger.RuntimeCredentialChanged{},

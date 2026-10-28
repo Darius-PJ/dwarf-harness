@@ -365,6 +365,7 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 		for _, record := range c.Records {
 			s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
 		}
+		s.p.publishHistory(g, scoped, c.Last)
 		s.p.through = c.Last
 		return nil
 	})
