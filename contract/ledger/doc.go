@@ -159,8 +159,9 @@
 // returns those this contract version defines: the four F0 record types,
 // the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
-// F3-10 types, the ten F3-11 types, the three F3-12 types and the eight
-// F3-13 types below, forty-nine in all, each at version 1.
+// F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
+// F3-13 types and the four F3-139 types below, fifty-three in all,
+// each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -180,6 +181,9 @@
 // also by addition to format version 1.
 // F3-13 is ticket 13's part of F3, frozen (D148),
 // also by addition to format version 1.
+// F3-139 is ticket 139's part of F3, proposed for freeze (D125),
+// also by addition to format version 1; record availability does not imply
+// an operational producer or graph consumer.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -2552,4 +2556,209 @@
 // The F3-13 golden uses fixed IDs/times, encoded submissions and EncodeCommit,
 // with loopback-only synthetic profiles and context-owned hash-named objects.
 // TestGoldenF3_13 -update alone writes its new fixture files.
+//
+// # Registration and declaration records (F3-139)
+//
+// Ticket 139's four version-1 types and schema-5 canonical submission are
+// proposed for freeze (D125). This addition does not change format version 1,
+// F0, earlier families, schemas 1-4, grants, task lifecycle or authorization.
+// Registrations and declarations are evidence, never permission. A resource
+// registration is not a prerequisite for an existing external grant; a work
+// domain is not a new F3-11 Resource kind. Record availability alone does not
+// establish an operational Core producer or Ticket61 graph projection.
+//
+// Payload owner: C3. The designated producer and sole permitted appender caller
+// is internal/core/agents, through ledgerstore.Submit on an owner transition.
+// Consumers are Core replay and owner-authorized metadata queries, followed by
+// Ticket61's independently authorized record consumer. All known payload
+// fields, required group envelope bindings, canonical submission and actual
+// effect/receipt sequences are replay-essential. Metadata is access-filtered:
+// opaque identities, exact external addresses, versions, audiences, pinned
+// sources, consumers and receipts, not private content or provider configuration.
+// No labels, arbitrary descriptions, bodies, credential, account, locator,
+// capability handle, measurement or resolver is introduced.
+//
+// # Codec rules
+//
+// MaxRegistrationPayloadBytes is 65536 for each complete payload and schema-5
+// submission. Check received byte length BEFORE parsing, counting whitespace
+// and ignored extensions, and check the compact encoded output independently.
+// The receipt cap covers the whole receipt, not just its embedded submission.
+// Input is one complete UTF-8 JSON object. Duplicate members are rejected at
+// every depth, even inside ignored extensions. Every known field below is
+// required and non-null. Unknown optional members are ignored at every level;
+// encoders emit known fields only. A known member belonging to another kind
+// or operation is forbidden even when null. Errors wrap ErrInvalid.
+//
+// UUIDs are canonical lowercase UUIDv7. Digests are nonzero lowercase SHA-256.
+// Integers are plain unsigned JSON decimal integers through MaxInt64, never
+// signed, fractional, exponent notation or strings. Expected zero creates
+// version one; positive expected advances exactly one. Expected must be less
+// than MaxInt64: check before addition. Reference versions are positive.
+// The codecs enforce shape, set ordering, versions and receipt binding, not
+// state/history existence, currentness, scope containment or population limits.
+//
+// Exact nested known-field order:
+//
+//	RegistrationRef: kind, id, version
+//	  kind is resource or work_domain; ID namespaces are kind-scoped.
+//	DeclarationConsumer task: kind ("task"), task_id
+//	  binding is forbidden.
+//	DeclarationConsumer context: kind ("context"), binding
+//	  binding uses agent_id, context_id; task_id is forbidden.
+//	Resource: kind ("external"), resource_key
+//	  existing F3-11 Resource grammar; all other kinds/members are forbidden.
+//	Origin: agent_id, session_id, context_id
+//
+// Audience is a required nonempty array, strictly UUID-byte ascending/distinct.
+// Consumers is a required, possibly empty array, strictly ascending/distinct by
+// compact known-field JSON UTF-8 bytes. Context sorts before task. No numeric
+// fan-out limit is part of decoding; the complete encoded-size cap bounds both.
+// The same UUID may identify a resource, a work domain and a declaration:
+// there is no family-wide cross-kind exclusion.
+//
+// A resource registration binds an explicit Resource, not a key derived from
+// its ResourceID. The external key retains F3-11's 1-256-byte UTF-8/no-control
+// grammar. A supplied bare UUID need not equal ResourceID; paid-route/<UUID>
+// and ordinary opaque non-UUID keys work equally. Compare exact bytes, without
+// trimming, case folding, Unicode normalization, aliases, prefix interpretation,
+// URL parsing or implicit fallback. The trusted owner/host supplies nonsecret
+// opaque identity, never a URL, account identifier or credential. The byte
+// grammar cannot prove that semantic precondition and is not a secret detector.
+// A paid-route-shaped key is ordinary identity here: no route, credential,
+// provider configuration, spend terms or provider invocation is required.
+// Address immutability and uniqueness are service state rules below.
+//
+// Exact payload known-field order (all required):
+//
+//	runtime.resource_registered:
+//	  resource_id, expected_version, version, resource, audience
+//	runtime.work_domain_registered:
+//	  work_domain_id, expected_version, version, audience
+//	runtime.declaration_changed:
+//	  declaration_id, expected_version, version, subject, audience, consumers
+//	runtime.registration_receipt:
+//	  command_id, submission_sha256, submission, outcome, version
+//
+// Each effect is a complete selected version, not just a creation notice.
+// Subject is a RegistrationRef. Consumers replaces the entire declaration set;
+// [] withdraws its edges without deleting its identity. Receipt version is the
+// resulting target version and equals the submission expectation plus one.
+// Outcome is an open token matching ^[a-z][a-z0-9_]*$, at most 64 ASCII bytes.
+// Writers emit applied. Decoders preserve unfamiliar well-formed outcomes,
+// but Core fails closed on them rather than applying them as success.
+// All other documented kinds, actor and operations are closed.
+//
+// Schema-5 canonical submission (producer rule)
+//
+// Root order is schema (5), actor ("owner"), origin, operation, arguments.
+// Exactly three operations and concrete argument types exist:
+//
+//	resource.set / ResourceRegistrationArguments:
+//	  resource_id, expected_version, resource, audience
+//	work_domain.set / WorkDomainRegistrationArguments:
+//	  work_domain_id, expected_version, audience
+//	declaration.set / DeclarationArguments:
+//	  declaration_id, expected_version, subject, audience, consumers
+//
+// The operation and concrete arguments bind target kind and identity; no
+// redundant target wrapper, register/revise operation or inferred Resource
+// exists. Origin includes the actual registered sole session and context.
+// SHA-256 covers exact compact known-field RegistrationSubmission.Encode bytes,
+// using encoding/json ordering/escaping, including HTML and U+2028/U+2029
+// escaping. Receipt decoding recomputes this digest. Unknown optional fields
+// do not enter that preimage. Command ID, time, committed sequences, resulting
+// version, views and ephemeral handles remain outside it. The exact explicit
+// external address, audience, subject pin and consumers are inside it.
+//
+// Core preflight, replay and state rules (not codec history lookups)
+//
+// Each transition is one Submit and one complete three-record commit:
+//
+//	resource.set: ledger.command, runtime.resource_registered,
+//	  runtime.registration_receipt
+//	work_domain.set: ledger.command, runtime.work_domain_registered,
+//	  runtime.registration_receipt
+//	declaration.set: ledger.command, runtime.declaration_changed,
+//	  runtime.registration_receipt
+//
+// All three envelopes have actor owner, identical registered agent/session/
+// context origin and operation_id equal to command_id. turn_id, measurement_path
+// and body_refs are absent. No extra, missing, reordered or mixed-family record
+// is allowed. F0 and receipt command/digest agree. Effect identity, version,
+// fields and receipt result reconstruct exactly from the canonical submission
+// and pre-transition state. Preflight additionally checks the ORIGINAL normalized
+// request, not merely an internally consistent altered group and digest.
+//
+// Only the trusted owner Service may mutate or query this family, never Agent.
+// Caller-supplied Binding is not authentication: bind owner actor and current
+// registered origin internally. Copy arrays before sorting, never deduplicate;
+// duplicates are invalid. Normalize nil producer consumers to []. Bound copying
+// by the payload-derived element-count guard and then check submission, effect
+// and whole receipt encoded sizes.
+//
+// Global command deduplication precedes CAS, source-currentness and admission
+// limits. A retry matches family, actor, origin, operation and canonical digest
+// and returns the original actual receipt, even after subsequent revisions.
+// Command IDs remain global across families. A new identity expects zero;
+// a revision expects its current version and advances exactly one.
+//
+// One external address belongs to at most one resource registration in the
+// colony and never changes for that identity. Resources, domains and
+// declarations use separate kind-scoped identity namespaces. Every audience
+// agent and every origin/context must be registered. A declaration pins the
+// source version current at its commit. Its audience is contained in that
+// pinned source audience and every named task's audience; each consumer
+// context's agent belongs to the declaration audience. No inferred roles,
+// future membership or automatic scope expansion is allowed.
+//
+// Task consumers name stable task IDs, not assignments or generations;
+// unassigned and terminal tasks may be consumers. Context consumers name exact
+// bindings, never reassignment-following aliases. Source revisions do not
+// retarget, narrow or withdraw existing declarations. Explicit declaration
+// replacement is required. Registration narrowing is neither grant revocation
+// nor automatic edge withdrawal. Audience membership is evidence scope, not
+// disclosure permission; later graph projection needs independent filtering.
+//
+// Only two future producer population defaults are specified:
+// MaxRegistrations=256 counts resources plus domains; MaxDeclarations=1024
+// counts declaration identities, including withdrawn ones. Revisions consume
+// no new identity slot. These settings do not constrain decoding, replay or
+// matching retries, and this contract adds no CoreLimits implementation.
+// The default population times per-record ceilings is 80 MiB of encoded latest
+// snapshots, not a measured Go heap bound or a capacity claim.
+//
+// Replay reconstructs validated committed facts without provider work or new
+// registration appends. Invalid group/state is inconsistency, not absence.
+// Preserve Close, cancellation and poisoning semantics. Read actual committed
+// effect/receipt sequences and install through the committed boundary before
+// acknowledgement; a lost acknowledgement does not undo a committed group.
+// No predicted receipt, exactly-once delivery claim or durable ack marker exists.
+//
+// Owner queries expose isolated typed metadata only. Resource lookup uses the
+// exact external Resource address; domain/declaration lookup uses its UUID.
+// Exact-version lookup resolves the pinned RegistrationRef; command lookup
+// returns the original receipt. Zero cursor means genesis; ToEnd captures one
+// current durable boundary; numeric cursors must be complete commit boundaries
+// at or before it. Reject future/mid-commit cursors. Historical selection scans
+// validated complete commits and cannot borrow a later source version.
+// No listing/search/raw-ledger endpoint, history cache or second authority store
+// is specified here.
+//
+// # Golden
+//
+// TestGoldenF3_139 -update alone writes every file in testdata/f3/139:
+// one generated log, real hash-named initialization objects and one task body.
+// The fixed colony is 019a1390-0000-7000-8000-000000000001.
+// Five prerequisite commits contain two F3-10 agent registrations, one work
+// context, one owner unassigned F3-11 task and one owner root external grant:
+// 23 records. The grant precedes registration and uses the exact opaque
+// paid-route/<id(0x450)> address, independently of providers or route records.
+// Fourteen new-family groups add 42 records: 19 commits/65 records total.
+// The first new effect/receipt are 25/26 and the final pair is 64/65.
+// The fixture covers both source kinds to task/context, source narrowing and
+// widening, pinned revisions, mixed consumers and explicit empty withdrawals.
+// Earlier frozen fixture bytes remain unchanged. Before joint freeze review,
+// the complete fixture's earlier-family prerequisites must also pass actual
+// ledgerstore.Open and agents.Open; reader/codec success alone is insufficient.
 package ledger

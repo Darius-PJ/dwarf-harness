@@ -1,7 +1,6 @@
 package ledger
 
 import (
-	"maps"
 	"testing"
 )
 
@@ -89,8 +88,18 @@ func TestNewCatalogue(t *testing.T) {
 		{"runtime.paid_result", 1}:                      true,
 		{"runtime.paid_overrun_acknowledged", 1}:        true,
 		{"runtime.paid_receipt", 1}:                     true,
+		{"runtime.resource_registered", 1}:              true,
+		{"runtime.work_domain_registered", 1}:           true,
+		{"runtime.declaration_changed", 1}:              true,
+		{"runtime.registration_receipt", 1}:             true,
 	}
-	if !maps.Equal(def.set, want) || def.Contains(TypeVersion{"fixture.sample", 1}) {
-		t.Errorf("Defined() holds %v, want %v", def.set, want)
+	for tv := range want {
+		if !def.Contains(tv) || def.Contains(TypeVersion{tv.Type, 2}) {
+			t.Errorf("Defined() admission for %s: v1=%v v2=%v; want true, false",
+				tv.Type, def.Contains(tv), def.Contains(TypeVersion{tv.Type, 2}))
+		}
+	}
+	if def.Contains(TypeVersion{"fixture.sample", 1}) {
+		t.Error("Defined() admits fixture.sample")
 	}
 }

@@ -60,9 +60,11 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeRuntimePaidRouteConfigured, TypeRuntimeCredentialChanged,
 // TypeRuntimeSpendConfigured, TypeRuntimePaidReserved,
 // TypeRuntimePaidDispatchIntent, TypeRuntimePaidResult,
-// TypeRuntimePaidOverrunAcknowledged and TypeRuntimePaidReceipt.
-// All forty-nine are at version 1. It never contains a type in the reserved
-// fixture namespace.
+// TypeRuntimePaidOverrunAcknowledged and TypeRuntimePaidReceipt; and F3-139,
+// proposed for freeze (D125): TypeRuntimeResourceRegistered,
+// TypeRuntimeWorkDomainRegistered, TypeRuntimeDeclarationChanged and
+// TypeRuntimeRegistrationReceipt. All fifty-three are at version 1.
+// It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
 		{TypeCommand, 1}:                        true,
@@ -114,5 +116,9 @@ func Defined() Catalogue {
 		{TypeRuntimePaidResult, 1}:              true,
 		{TypeRuntimePaidOverrunAcknowledged, 1}: true,
 		{TypeRuntimePaidReceipt, 1}:             true,
+		{TypeRuntimeResourceRegistered, 1}:      true,
+		{TypeRuntimeWorkDomainRegistered, 1}:    true,
+		{TypeRuntimeDeclarationChanged, 1}:      true,
+		{TypeRuntimeRegistrationReceipt, 1}:     true,
 	}}
 }

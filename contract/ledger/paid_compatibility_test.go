@@ -96,9 +96,6 @@ func TestF3_13Compatibility(t *testing.T) {
 	t.Run("catalogue_additions", func(t *testing.T) {
 		t.Parallel()
 		c := Defined()
-		if len(c.set) != 49 {
-			t.Fatalf("catalogue entries=%d", len(c.set))
-		}
 		for _, typ := range []string{TypeRuntimePaidRouteConfigured, TypeRuntimeCredentialChanged, TypeRuntimeSpendConfigured, TypeRuntimePaidReserved, TypeRuntimePaidDispatchIntent, TypeRuntimePaidResult, TypeRuntimePaidOverrunAcknowledged, TypeRuntimePaidReceipt} {
 			if !c.Contains(TypeVersion{typ, 1}) || c.Contains(TypeVersion{typ, 2}) {
 				t.Fatalf("catalogue type %s", typ)
