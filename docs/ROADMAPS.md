@@ -168,7 +168,7 @@ Notes on the edges:
 | C0 | Repository, toolchain, check command, decision log | Nothing; every owner input has arrived (D43–D46) | Done |
 | C1 | Action ledger and body store | C0 | Done |
 | C2 | Workspaces, observation, promotion, temporary scratch | C1; frozen `ledger-format`/`ledger-appender`; explicit D52 owner approval of integrated Core C2 boundary | Done |
-| C3 | Agent runtime | C2; owner: private remote with CI (D42), green on Windows (D133) | In progress (2026-10-25: tickets 10, 11 and 12 are resolved, B31–B33; CI runs once per ticket again (D146), and C3 cannot exit until it passes on Windows, Linux and macOS; the latest CI result recorded is run 13, on 6e11d49 with ticket 11's S1 and S2, which passed on all three; C3's other tickets remain open) |
+| C3 | Agent runtime | C2; remote with CI (D42, D145, D153), green on Windows (D133) | In progress (2026-10-27: tickets 10, 11 and 12 are resolved, B31–B33; each code slice passes CI on Windows, Linux and macOS before `main` moves (D153), and C3 still needs all three green at its exit; public run 2 on d8336c8 passed ticket 13's code on all three, while that ticket's close awaits verification; C3's other tickets remain open) |
 | C4 | Validation runner and promotion gate; real-work gate | C3; U1.L and frozen `law-format` (D47); approved D52 boundary | Waiting |
 | C5 | Check registry and governance | C4 | Waiting |
 | C6 | Broker, role graph and Corps boards | C3; C5 for the Corps-authority gate | Waiting |
@@ -222,11 +222,11 @@ A step's status is stated only here and in the step's `**Status.**` line where i
 
 ## Working across roadmaps
 
-These rules implement D41, D42, D78, D79 and D116; the existing repository working rules remain in force.
+These rules implement D41, D42, D78, D79, D116, D152 and D153; the existing repository working rules remain in force.
 
 1. **Assignment.** The owner assigns one agent per step, or per part of a step where the roadmap splits it.
 2. **Isolation.** Each agent works in its own git worktree and branch.
-3. **Integration.** Commit on your own branch whenever the tests you touched pass. Before `main` moves: rebase onto `main`, run `go run ./tools/check`, then fast-forward `main` (D46). A commit that changes only Markdown files since a passing check needs only the document check instead: links resolve and files are LF (D128). A slice merge runs the check with `-race=false`; each ticket's last code slice runs it in full (D129). `main` only moves forward.
+3. **Integration.** Commit on your own branch whenever the tests you touched pass, using D152's focused coder checks. Rebase onto `main`, push the work branch, and require a successful `Check result` on that exact commit before fast-forwarding and pushing `main` (D153). Code branches run the full three-OS check, race included. Markdown-only changes since the merge base with `main` skip that matrix but still require the document check: links resolve and files are LF (D128). A rebase or fix-up creates a new commit that needs its own CI result. `main` only moves forward.
 4. **Owner sign-off first** for changes that touch a frozen contract, an owner decision or a new dependency.
 5. **When blocked,** stop at the step's stop point, set its status to *Blocked* with the reason here and in the roadmap, and report. Never write a stub, placeholder or fake of what the step waits for. Tests may use stand-in data only against a frozen contract.
 6. **Decisions.** A build decision that revises a [PROPOSAL] or [INFERENCE] gets a B entry in `DECISIONS.md`. Anything a document marks as awaiting the owner goes back to the owner.
