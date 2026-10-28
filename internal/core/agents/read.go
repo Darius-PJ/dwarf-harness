@@ -87,15 +87,15 @@ func (s *Service) ReadPrivate(ctx context.Context, r PrivateRead) (PrivatePage, 
 		return PrivatePage{}, ErrInvalid
 	}
 	s.mu.Lock()
-	st := s.p.scopes[keyFor(ids, r.Scope)]
+	revision := s.p.scopes[keyFor(ids, r.Scope)].revision
 	through := s.p.through
 	err = s.scopeIssuesLocked(ids, r.Scope)
 	s.mu.Unlock()
 	if err != nil {
 		return PrivatePage{}, err
 	}
-	if r.Revision > st.revision {
-		return PrivatePage{}, &RevisionError{Expected: r.Revision, Current: st.revision}
+	if r.Revision > revision {
+		return PrivatePage{}, &RevisionError{Expected: r.Revision, Current: revision}
 	}
 	path, err := s.scopePath(ids, r.Scope)
 	if err != nil {
@@ -115,9 +115,35 @@ type privateSelection struct {
 	nextCursor uint64
 }
 
+// currentPrivateHead is called under Service.mu, including during replay.
+// An unchanged slot retains its own occurrence metadata across scope revisions.
+func (p *projection) currentPrivateHead(ids submissionIDs, scope, slot string, through, revision uint64) (Head, bool) {
+	st := p.scopes[keyFor(ids, scope)]
+	if slot == "transcript" || through != p.through || st == nil || st.revision != revision ||
+		st.ids.agent != ids.agent || st.ids.session != ids.session || scope == "context" && st.ids.context != ids.context {
+		return Head{}, false
+	}
+	return st.heads[slot], true
+}
+
 // Selection is metadata only. Both owner and Agent reads use these exact
 // historical occurrences; object reads begin only after the Agent reserves them.
 func (s *Service) selectPrivateRead(ctx context.Context, ids submissionIDs, r PrivateRead, through uint64, maxSelected int) (privateSelection, error) {
+	if err := ctx.Err(); err != nil {
+		return privateSelection{}, err
+	}
+	s.mu.Lock()
+	current, exact := s.p.currentPrivateHead(ids, r.Scope, r.Slot, through, r.Revision)
+	s.mu.Unlock()
+	if exact {
+		if current.SHA256 == (ledger.Digest{}) {
+			return privateSelection{heads: []Head{}}, nil
+		}
+		if current.Bytes > r.MaxBytes {
+			return privateSelection{}, ErrTooLarge
+		}
+		return privateSelection{heads: []Head{current}, present: true, bytes: current.Bytes}, nil
+	}
 	selection := privateSelection{heads: []Head{}}
 	var head Head
 	cursorFound := r.Cursor == 0

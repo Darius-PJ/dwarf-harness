@@ -78,16 +78,24 @@
 // after restart, before CAS, integrity and capacity checks; a different digest
 // returns ErrCommandMismatch. CommandStatus requires the receipt's own binding,
 // command ID and submission digest. It returns ErrUnavailable for an absent
-// private receipt. Old receipt lookups and historical reads scan ledger history.
+// private receipt. Cold receipt lookups and historical reads scan ledger history;
+// bounded receipt metadata reuse does not change receipt matching or authority.
 // A matched private-write retry waits for the same scope's in-flight completion,
 // without holding the service lock, reserving bytes, charging, inspecting or
 // materializing again. Cancellation ends that wait, not the committed fact;
 // receipt-only status remains available. A failed completion does not erase
 // its historical receipt.
-// A new private write scans the whole ledger for preflight integrity and again
-// for committed materialization. After replay, Open scans the whole history
-// per scope to validate objects, with another scan for each scope it completes.
-// These costs grow with ledger history and, for Open, the number of scopes.
+// New private writes and turn admissions freshly verify selected objects and
+// Markdown. One checksummed last-materialized digest per Markdown slot can prove
+// historical membership, not health; unmatched regular bytes fall back to a same-slot
+// history scan. Exact current-prefix/revision non-transcript selections use
+// current heads, retaining each head's own revision and sequence. Historical
+// selections and transcript pages still scan occurrence history.
+// Open performs ordinary complete-group reduction and one global historical
+// object/materialization traversal across scopes, then freshly verifies current
+// objects and files for completion. These are two outer streaming passes, not
+// exactly two physical ledger reads: cold reducer lookups and changed-file
+// membership fallbacks can still read history.
 // No constant-latency or product-capacity claim follows from storage-only
 // measurements.
 //
@@ -308,33 +316,23 @@
 // above. (5) A backwards system clock refuses new review decisions until it
 // passes the floor.
 //
-// Costs, as built. Live state is one slot per live task and the request-ID
-// and command-ID watermarks; there is no all-request index or snapshot. A
-// fresh command or request ID above its watermark needs no history scan; one
-// at or below it scans history. A new command reads its witnesses once, in
-// one batch from the start of the segment holding the earliest witness to the
-// commit holding the latest. With 64 MiB segments that start is in practice
-// the log's, so the batch costs the witness's position, where the replaced
-// form read the whole prefix. After Submit one commit's envelope times are
-// read back. A cold receipt or request lookup scans the whole history; a
-// result on a replaced or terminal request loads that request from history
-// twice. Every new decision and every replayed F3-12 group rechecks both
-// participants' read rights. For an Agent's artifact reference the
-// artifact-read authority check takes the reference's source from the
-// witness batch, checks the current chain of each of the Agent's grants, and
-// loads only the task that the source names. These checks read the live
-// projection; a task one of them needs that is terminal, and so evicted from
-// it, is read by scanning the whole history. On the ordinary path the source
-// names the task under review, which is live, so a decision costs about the
-// participants' grants plus its witness batch, and Open adds that for each
-// F3-12 group. An Agent's retry rechecks its own read rights under the lock
-// the same way, except that a retry matched before the witness batch is read
-// has none: each artifact reference then reads its source, from the start of
-// the source's segment to its commit, and after an approve or a fail the
-// reviewed task is terminal, so a reference naming it also costs at least one
-// whole-history scan. Ticket 12 measured these costs with a throwaway driver
-// on one Windows host; the figures are in its evidence. They are bookkeeping
-// figures, not an SLA, a capacity or a population limit.
+// Costs, as built. Live state retains one review slot per live task, identity
+// watermarks and context/task associations. A fresh identity above its validated
+// namespace watermark needs no history lookup. Historical commands, grants,
+// tasks, work, reviews and immutable source metadata share a bounded per-Service
+// cache. Invalid, missing or evicted entries fall back to authoritative history;
+// cold receipt/request/task lookups may scan the whole covered prefix.
+// Witnesses reuse exact validated source records from that cache. Remaining
+// misses are read together from the start of the earliest source's segment
+// through the latest source's complete commit. With 64 MiB segments, that start
+// may still be the log's. After Submit one commit's envelope times are read back.
+// Every preparation, final decision and replayed F3-12 group retains current
+// authority, participant read-rights and source-identity checks. A historical
+// result or retry can reuse metadata but not permission, bytes or a prior plan.
+// Terminal tasks and replaced requests may require cold lookup again after
+// eviction. Open includes these reducer lookups as well as private integrity
+// inspection; neither a warm cache nor bookkeeping measurements establish
+// constant total cost, an SLA, capacity or a population limit.
 //
 // # Materialization and integrity
 //
@@ -587,8 +585,9 @@
 // IDs at or below their watermarks (including fresh out-of-order IDs), historical
 // attempts and receipts, original-period/missing-account totals, task enrollment
 // and rare scope reactivation. Agent.PaidBudgetStatus reconstructs origin-filtered
-// totals on every call. An inherited contextTask scan remains when no hot task
-// serves the context. Old-object selection scans from the attempt's admission;
+// totals on every call. Validated context/task associations avoid the inherited
+// contextTask scan at the exact current prefix; missing, damaged or older-prefix
+// proofs retain historical fallback. Old-object selection scans from admission;
 // duplicate evidence reads its three-record receipt. Later results on a hot
 // attempt use its retained evidence map, not a new whole-history scan per result.
 // Open's paid reduction does not read artifacts, present or absent.

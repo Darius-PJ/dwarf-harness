@@ -111,7 +111,7 @@ func TestPaidGroupRulesAndFrozenReplay(t *testing.T) {
 				t.Fatalf("missing output changed replay: %v", err)
 			}
 			defer reopened.Close()
-			if !reflect.DeepEqual(baseline, reopened.p) {
+			if !sameProjectionState(baseline, reopened.p) {
 				t.Fatal("output availability changed ledger money or state")
 			}
 		})

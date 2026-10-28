@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -92,15 +93,18 @@ func (s *Service) scopeHistory(ctx context.Context, ids submissionIDs, scope str
 	})
 	return current, err
 }
-func (s *Service) historyDigests(ctx context.Context, ids submissionIDs, scope string, through, revision uint64) (map[string][]ledger.Digest, error) {
-	history := map[string][]ledger.Digest{}
-	_, err := s.scopeHistory(ctx, ids, scope, through, revision, func(slot string, h Head, mode string) error {
-		if markdownSlot(slot) && mode != "clear" && !slices.Contains(history[slot], h.SHA256) {
-			history[slot] = append(history[slot], h.SHA256)
+
+// Unknown regular bytes need only one same-slot membership answer, not the
+// lifetime collection of all digests. A miss remains foreign.
+func (s *Service) historicalMaterialization(ctx context.Context, ids submissionIDs, scope, slot string, through, revision uint64, digest ledger.Digest) (bool, error) {
+	found := false
+	_, err := s.scopeHistory(ctx, ids, scope, through, revision, func(changed string, h Head, mode string) error {
+		if changed == slot && mode != "clear" && h.SHA256 == digest {
+			found = true
 		}
 		return nil
 	})
-	return history, err
+	return found, err
 }
 func (s *Service) objectIssue(path privateScope, b ReadBinding, slot string, h Head) IntegrityIssue {
 	issue := IntegrityIssue{ReadBinding: b, Slot: slot, Revision: h.Revision, ExpectedSHA256: h.SHA256, Reason: "object_missing_or_invalid"}
@@ -130,6 +134,12 @@ func (s *Service) inspectOpen(ctx context.Context) (Reconciliation, error) {
 		}
 		return bytes.Compare(a.context[:], b.context[:])
 	})
+	type inspection struct {
+		path     privateScope
+		observed map[string]materializationObservation
+		issues   []IntegrityIssue
+	}
+	scopes := make(map[scopeKey]*inspection, len(keys))
 	for _, k := range keys {
 		st := s.p.scopes[k]
 		scope := "context"
@@ -140,40 +150,82 @@ func (s *Service) inspectOpen(ctx context.Context) (Reconciliation, error) {
 		if err != nil {
 			return report, err
 		}
-		b := ReadBinding{Binding{st.ids.agent, st.ids.context}, scope}
-		_, err = s.scopeHistory(ctx, st.ids, scope, s.p.through, st.revision, func(slot string, h Head, mode string) error {
-			if mode == "clear" {
-				return nil
+		check := &inspection{path: path, observed: map[string]materializationObservation{}}
+		for slot, head := range st.heads {
+			if markdownSlot(slot) {
+				// Completion observes again; errors and foreign bytes are reported
+				// there, never used as permission to overwrite.
+				check.observed[slot], _ = path.classifyMaterialization(slot, head.SHA256, nil)
 			}
-			if _, err := readObject(path, h); err != nil {
-				issue := s.objectIssue(path, b, slot, h)
-				report.Issues = append(report.Issues, issue)
-				if h == st.heads[slot] || slot == "transcript" {
-					st.issues = append(st.issues, issue)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return report, err
 		}
-		if len(st.issues) == 0 {
-			if err := s.completeScope(ctx, st.ids, scope, true, &report); err != nil {
-				if !errors.Is(err, ErrIntegrity) && !errors.Is(err, ErrMaterialization) {
-					return report, err
+		scopes[k] = check
+	}
+	// One global traversal preserves every occurrence in both revision families.
+	// Reports are collected per scope to retain sorted-scope/occurrence order.
+	err := s.scan(ctx, 0, s.p.through, func(c ledger.Commit) error {
+		g, scoped, _, _, err := decodeFamily(draftsOf(c), c.First)
+		if err != nil {
+			return err
+		}
+		ids, revisions, indexes := scopedRevisions(g, scoped)
+		for i, rev := range revisions {
+			k := keyFor(ids, rev.Scope)
+			st, check := s.p.scopes[k], scopes[k]
+			if st == nil || check == nil || st.ids.session != ids.session || uint64(rev.Revision) > st.revision {
+				continue
+			}
+			b := ReadBinding{Binding{st.ids.agent, st.ids.context}, rev.Scope}
+			for _, change := range rev.Changes {
+				if err := ctx.Err(); err != nil {
+					return err
 				}
+				if change.Mode == "clear" {
+					continue
+				}
+				h := Head{change.SHA256, change.Bytes, uint64(rev.Revision), c.First + uint64(indexes[i])}
+				if observed := check.observed[change.Slot]; observed.kind == observationRegular && observed.digest == h.SHA256 {
+					observed.state = materializationStale
+					check.observed[change.Slot] = observed
+				}
+				if _, err := readObject(check.path, h); err != nil {
+					issue := s.objectIssue(check.path, b, change.Slot, h)
+					check.issues = append(check.issues, issue)
+					if h == st.heads[change.Slot] || change.Slot == "transcript" {
+						st.issues = append(st.issues, issue)
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return report, err
+	}
+	for _, k := range keys {
+		st, check := s.p.scopes[k], scopes[k]
+		report.Issues = append(report.Issues, check.issues...)
+		if len(st.issues) != 0 {
+			continue
+		}
+		scope := "context"
+		if k.context == ([16]byte{}) {
+			scope = "agent"
+		}
+		if err := s.inspectScope(ctx, st.ids, scope, true, true, &report, check.observed); err != nil {
+			if !errors.Is(err, ErrIntegrity) && !errors.Is(err, ErrMaterialization) {
+				return report, err
 			}
 		}
 	}
 	return report, nil
 }
 func (s *Service) inspectLive(ctx context.Context, ids submissionIDs, scope string) error {
-	return s.inspectScope(ctx, ids, scope, false, false, nil)
+	return s.inspectScope(ctx, ids, scope, false, false, nil, nil)
 }
 func (s *Service) completeScope(ctx context.Context, ids submissionIDs, scope string, opening bool, report *Reconciliation) error {
-	return s.inspectScope(ctx, ids, scope, true, opening, report)
+	return s.inspectScope(ctx, ids, scope, true, opening, report, nil)
 }
-func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope string, complete, opening bool, report *Reconciliation) error {
+func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope string, complete, opening bool, report *Reconciliation, observed map[string]materializationObservation) error {
 	path, err := s.scopePath(ids, scope)
 	if err != nil {
 		return err
@@ -181,20 +233,59 @@ func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope str
 	s.mu.Lock()
 	st := s.p.scopes[keyFor(ids, scope)]
 	through := s.p.through
+	var heads map[string]Head
+	var hints map[string]materializationHint
+	var revision uint64
+	if st != nil {
+		heads, hints, revision = maps.Clone(st.heads), maps.Clone(st.materialized), st.revision
+	}
 	s.mu.Unlock()
 	if st == nil {
 		return ErrNotBound
 	}
-	history, err := s.historyDigests(ctx, ids, scope, through, st.revision)
-	if err != nil {
-		return err
+	if hints == nil {
+		hints = map[string]materializationHint{}
+	}
+	observed = maps.Clone(observed)
+	if observed == nil {
+		observed = map[string]materializationObservation{}
+	}
+	var historyErr error
+	// Scope gates serialize completion; copy its mutable proof fields under mu.
+	// Neither a valid hint nor the startup pass remembers health.
+	classify := func(slot string, h Head) (materializationObservation, error) {
+		var earlier []ledger.Digest
+		if hint := hints[slot]; hint.valid(ids, scope, slot, revision, through) {
+			earlier = append(earlier, hint.head.SHA256)
+		} else {
+			delete(hints, slot)
+		}
+		observation, err := path.classifyMaterialization(slot, h.SHA256, earlier)
+		if err == nil && observation.state == materializationForeign && observation.kind == observationRegular {
+			prior, known := observed[slot]
+			if known && prior.kind == observationRegular && prior.digest == observation.digest {
+				if prior.state != materializationForeign {
+					observation.state = materializationStale
+				}
+			} else {
+				var member bool
+				member, historyErr = s.historicalMaterialization(ctx, ids, scope, slot, through, revision, observation.digest)
+				if member {
+					observation.state = materializationStale
+				}
+			}
+		}
+		if err == nil && historyErr == nil {
+			observed[slot] = observation
+		}
+		return observation, err
 	}
 	b := ReadBinding{Binding{ids.agent, ids.context}, scope}
 	states := map[string]string{}
 	var issues []IntegrityIssue
 	var materialErr error
-	slots := make([]string, 0, len(st.heads))
-	for slot := range st.heads {
+	slots := make([]string, 0, len(heads))
+	for slot := range heads {
 		slots = append(slots, slot)
 	}
 	slices.Sort(slots)
@@ -202,8 +293,8 @@ func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope str
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		h := st.heads[slot]
-		data, err := readObject(path, h)
+		h := heads[slot]
+		_, err := readObject(path, h)
 		if err != nil {
 			issues = append(issues, s.objectIssue(path, b, slot, h))
 			continue
@@ -211,10 +302,13 @@ func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope str
 		if !markdownSlot(slot) {
 			continue
 		}
-		observation, err := path.classifyMaterialization(slot, h.SHA256, history[slot])
+		observation, err := classify(slot, h)
+		if historyErr != nil {
+			return historyErr
+		}
 		states[slot] = string(observation.state)
 		if err != nil || observation.state == materializationForeign {
-			issues = append(issues, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: st.revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "foreign_materialization"})
+			issues = append(issues, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "foreign_materialization"})
 			continue
 		}
 		if observation.state == materializationStale && complete {
@@ -222,18 +316,35 @@ func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope str
 				err = s.deps.beforeMaterialize(b.Binding, scope, slot)
 			}
 			if err == nil {
+				// Hooks and external edits may change the file after inspection.
+				// Reobserve before replacement, falling back only for new bytes.
+				observation, err = classify(slot, h)
+				if historyErr != nil {
+					return historyErr
+				}
+				if err != nil || observation.state == materializationForeign {
+					issues = append(issues, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "foreign_materialization"})
+					states[slot] = string(materializationForeign)
+					continue
+				}
+				data, readErr := readObject(path, h)
+				if readErr != nil {
+					issues = append(issues, s.objectIssue(path, b, slot, h))
+					continue
+				}
 				err = path.materialize(slot, data)
 			}
 			if err != nil {
 				materialErr = errors.Join(materialErr, ErrMaterialization, err)
 				if opening && report != nil {
-					report.Issues = append(report.Issues, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: st.revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "stale_completion_failed"})
+					report.Issues = append(report.Issues, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "stale_completion_failed"})
 				}
 				continue
 			}
+			hints[slot] = materializationHint{head: h, sum: materializationChecksum(ids, scope, slot, h)}
 			states[slot] = string(materializationCurrent)
 			if opening && report != nil {
-				report.Completed = append(report.Completed, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: st.revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "stale_completed"})
+				report.Completed = append(report.Completed, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "stale_completed"})
 			}
 		}
 	}
@@ -242,6 +353,7 @@ func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope str
 	}
 	s.mu.Lock()
 	st.materials = states
+	st.materialized = hints
 	if len(issues) > 0 {
 		st.issues = append(st.issues, issues...)
 	}

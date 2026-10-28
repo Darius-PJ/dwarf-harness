@@ -81,7 +81,7 @@ func FuzzReviewGroupReplay(f *testing.F) {
 		if err == nil {
 			_, err = fixture.service.planReview(context.Background(), g, before+1)
 		}
-		unchanged := reflect.DeepEqual(fixture.service.p, baseline.p)
+		unchanged := sameProjectionState(fixture.service.p, baseline.p)
 		fixture.service.mu.Unlock()
 		if !unchanged || fixture.store.Durable() != before {
 			t.Fatal("fuzz preflight installed state")

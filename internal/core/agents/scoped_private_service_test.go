@@ -307,3 +307,189 @@ func TestScopedProjectionBeforeAckAndIndependentPreparation(t *testing.T) {
 		}
 	})
 }
+
+func TestPrivateCurrentHeadProjectionFence(t *testing.T) {
+	t.Parallel()
+	for _, fail := range []bool{false, true} {
+		name := "completed"
+		if fail {
+			name = "failed_completion"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			projecting, release := make(chan struct{}), make(chan struct{})
+			waiting, looking := make(chan struct{}, 1), make(chan struct{}, 1)
+			var once sync.Once
+			defer once.Do(func() { close(release) })
+			var armed, watchLookup atomic.Bool
+			writeCtx, cancelWrite := context.WithCancel(ctx)
+			defer cancelWrite()
+			f, b, agent, grant := scopedPrivateFixture(t, serviceDeps{
+				beforeMaterialize: func(_ Binding, scope, slot string) error {
+					if armed.Load() && fail && scope == "context" && slot == "memory" {
+						return errors.New("completion failed")
+					}
+					return nil
+				},
+				afterScopedCommit: func(ScopedReceipt) error {
+					if armed.Load() {
+						cancelWrite()
+					}
+					return nil
+				},
+				beforeProjection: func(_ Binding, scope string) {
+					if scope == "context" && armed.CompareAndSwap(true, false) {
+						close(projecting)
+						<-release
+					}
+				},
+				beforeReplayWait: func() { waiting <- struct{}{} },
+				beforeLookup: func() {
+					if watchLookup.CompareAndSwap(true, false) {
+						looking <- struct{}{}
+					}
+				},
+			}, scopedCapacity())
+			request := ScopedPrivateWrite{CommandID: privateID(300), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 1, Changes: []Change{{"memory", "replace", []byte("selected")}}}
+			armed.Store(true)
+			original := make(chan error, 1)
+			go func() { _, err := agent.WritePrivate(writeCtx, request); original <- err }()
+			<-projecting
+			before := f.store.Durable()
+			duplicate := make(chan error, 1)
+			go func() { _, err := agent.WritePrivate(ctx, request); duplicate <- err }()
+			select {
+			case <-waiting:
+			case err := <-duplicate:
+				t.Fatalf("duplicate skipped projection fence: %v", err)
+			}
+			turnCtx, cancelTurn := context.WithCancel(ctx)
+			defer cancelTurn()
+			start := make(chan error, 1)
+			watchLookup.Store(true)
+			go func() {
+				_, err := agent.StartTurn(turnCtx, TurnAdmission{CommandID: privateID(301), GrantID: grant.GrantID, TurnID: privateID(302)})
+				start <- err
+			}()
+			select {
+			case <-looking:
+			case err := <-start:
+				t.Fatalf("new start refused before scope wait: %v", err)
+			}
+			cancelTurn()
+			if err := <-start; !errors.Is(err, context.Canceled) {
+				t.Fatalf("new start crossed incomplete projection: %v", err)
+			}
+			type readResult struct {
+				page ScopedPrivatePage
+				err  error
+			}
+			read := make(chan readResult, 1)
+			watchLookup.Store(true)
+			go func() {
+				page, err := agent.ReadPrivate(ctx, ScopedPrivateRead{CommandID: privateID(303), GrantID: grant.GrantID, Scope: "context", Slot: "memory", Revision: 2, MaxBytes: 8})
+				read <- readResult{page, err}
+			}()
+			select {
+			case <-looking:
+			case got := <-read:
+				t.Fatalf("new read skipped projection wait: %+v", got)
+			}
+			select {
+			case err := <-original:
+				t.Fatalf("write acknowledged before projection: %v", err)
+			case err := <-duplicate:
+				t.Fatalf("duplicate acknowledged before projection: %v", err)
+			case got := <-read:
+				t.Fatalf("read disclosed before projection: %+v", got)
+			default:
+			}
+			if f.store.Durable() != before {
+				t.Fatal("waiting/cancelled operation appended")
+			}
+			once.Do(func() { close(release) })
+			if err := <-original; fail && !errors.Is(err, ErrMaterialization) || !fail && err != nil {
+				t.Fatalf("durable write obeyed caller cancellation or false acknowledgement: %v", err)
+			}
+			if err := <-duplicate; err != nil {
+				t.Fatalf("matched receipt required healthy completion: %v", err)
+			}
+			got := <-read
+			if got.err != nil || string(got.page.Page.Bytes) != "selected" {
+				t.Fatalf("new current-head read lost committed selection: %+v", got)
+			}
+			view, err := f.service.Snapshot(ctx, ReadBinding{b, "context"})
+			material := "current"
+			if fail {
+				material = "stale"
+			}
+			if err != nil || view.Revision != 2 || view.Materializations["memory"] != material {
+				t.Fatalf("projection acknowledgement lost completion state: %+v %v", view, err)
+			}
+			book, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+			if err != nil || book.Used.LocalUnits != 2 || book.Held != (Exposure{}) {
+				t.Fatalf("duplicate/start charged or leaked; write/read should charge once: %+v %v", book, err)
+			}
+			writePrivate(t, f.service, b, 304, 2, Change{"handoff", "replace", []byte("successor")})
+			file := filepath.Join(f.root, "agents", "Scout-10", "contexts", b.ContextID.String(), "Memory.md")
+			if string(readTestFile(t, file)) != "selected" {
+				t.Fatal("successor could not complete selected head after projection")
+			}
+		})
+	}
+	t.Run("close_drains_projection", func(t *testing.T) {
+		t.Parallel()
+		projecting, release, fenced := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		defer once.Do(func() { close(release) })
+		var armed atomic.Bool
+		f, b, agent, grant := scopedPrivateFixture(t, serviceDeps{
+			beforeProjection: func(_ Binding, scope string) {
+				if scope == "context" && armed.CompareAndSwap(true, false) {
+					close(projecting)
+					<-release
+				}
+			},
+			afterCloseFence: func() { close(fenced) },
+		}, scopedCapacity())
+		armed.Store(true)
+		done := make(chan error, 1)
+		go func() {
+			_, err := agent.WritePrivate(context.Background(), ScopedPrivateWrite{CommandID: privateID(300), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 1, Changes: []Change{{"memory", "replace", []byte("drained")}}})
+			done <- err
+		}()
+		<-projecting
+		before := f.store.Durable()
+		closing := make(chan error, 1)
+		go func() { closing <- f.service.Close() }()
+		<-fenced
+		select {
+		case err := <-closing:
+			t.Fatalf("Close abandoned pending projection: %v", err)
+		default:
+		}
+		if _, err := agent.ReadPrivate(context.Background(), ScopedPrivateRead{CommandID: privateID(301), GrantID: grant.GrantID, Scope: "context", Slot: "memory", Revision: 2, MaxBytes: 7}); !errors.Is(err, ErrClosed) {
+			t.Fatalf("new read crossed Close fence: %v", err)
+		}
+		once.Do(func() { close(release) })
+		if err := <-done; !errors.Is(err, ErrClosed) {
+			t.Fatalf("completed write skipped final Close check: %v", err)
+		}
+		if err := <-closing; err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		f.service, _, err = Open(context.Background(), f.store, f.root, DefaultLimits())
+		if err != nil || f.store.Durable() != before {
+			t.Fatalf("Close lost committed state: %v", err)
+		}
+		if page := readPrivate(t, f.service, b, 2, "memory"); string(page.Bytes) != "drained" {
+			t.Fatal("Close lost selected bytes")
+		}
+		book, err := f.service.CapacityStatus(context.Background(), CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+		if err != nil || book.Used.LocalUnits != 1 || book.Held != (Exposure{}) {
+			t.Fatalf("drained write charged twice or leaked: %+v %v", book, err)
+		}
+	})
+}

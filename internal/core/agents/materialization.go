@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -30,6 +32,36 @@ type materializationObservation struct {
 	state  materializationState
 	kind   observationKind
 	digest ledger.Digest // absent for missing, wrong-kind or unreadable entries
+}
+
+// A hint proves only same-slot historical membership, never file health. Its
+// checksum covers both the committed occurrence and the binding used as proof.
+type materializationHint struct {
+	head Head
+	sum  [32]byte
+}
+
+func materializationChecksum(ids submissionIDs, scope, slot string, h Head) [32]byte {
+	key := keyFor(ids, scope)
+	data := append([]byte{}, key.agent[:]...)
+	data = append(data, ids.session[:]...)
+	data = append(data, key.context[:]...)
+	data = append(data, scope...)
+	data = append(data, 0)
+	data = append(data, slot...)
+	data = append(data, 0)
+	data = append(data, h.SHA256[:]...)
+	data = binary.LittleEndian.AppendUint64(data, uint64(h.Bytes))
+	data = binary.LittleEndian.AppendUint64(data, h.Revision)
+	data = binary.LittleEndian.AppendUint64(data, h.Sequence)
+	return sha256.Sum256(data)
+}
+
+func (h materializationHint) valid(ids submissionIDs, scope, slot string, revision, through uint64) bool {
+	return markdownSlot(slot) && h.head.SHA256 != (ledger.Digest{}) &&
+		h.head.Bytes >= 0 && h.head.Bytes <= maxObjectBytes &&
+		h.head.Revision > 0 && h.head.Revision <= revision && h.head.Sequence > 0 && h.head.Sequence <= through &&
+		h.sum == materializationChecksum(ids, scope, slot, h.head)
 }
 
 // materialize replaces only a managed Markdown slot. Its caller supplies the

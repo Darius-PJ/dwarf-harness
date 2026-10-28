@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 	"uuid"
@@ -280,7 +279,7 @@ func (f *paidFixture) refuse(t *testing.T, d []ledger.Draft) {
 	if err == nil {
 		_, err = f.service.planPaid(context.Background(), g, before+1)
 	}
-	if err == nil || !reflect.DeepEqual(f.service.p, baseline.p) || f.store.Durable() != before {
+	if err == nil || !sameProjectionState(f.service.p, baseline.p) || f.store.Durable() != before {
 		t.Fatalf("invalid preflight changed state or succeeded: %v", err)
 	}
 	if err := f.service.Close(); err != nil {

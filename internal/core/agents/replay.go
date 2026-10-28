@@ -189,6 +189,7 @@ func (p *projection) planPrivateRevisions(ids submissionIDs, revisions []ledger.
 			*st = *old
 			st.heads = maps.Clone(old.heads)
 			st.materials = maps.Clone(old.materials)
+			st.materialized = maps.Clone(old.materialized)
 			st.issues = slices.Clone(old.issues)
 		}
 		for _, c := range rev.Changes {

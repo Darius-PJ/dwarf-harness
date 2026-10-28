@@ -71,7 +71,7 @@ func reviewPreflight(t *testing.T, f *serviceFixture, d []ledger.Draft) error {
 	if err == nil {
 		_, err = f.service.planReview(ctx, g, f.service.p.through+1)
 	}
-	if !reflect.DeepEqual(baseline.p, f.service.p) {
+	if !sameProjectionState(baseline.p, f.service.p) {
 		t.Fatal("preflight installed rejected or uncommitted state")
 	}
 	return err

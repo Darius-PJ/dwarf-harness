@@ -3,7 +3,6 @@ package agents
 import (
 	"context"
 	"os"
-	"reflect"
 	"testing"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -80,7 +79,7 @@ func FuzzPaidGroupReplay(f *testing.F) {
 		if err == nil {
 			_, err = fixture.service.planPaid(context.Background(), g, before+1)
 		}
-		unchanged := reflect.DeepEqual(fixture.service.p, baseline.p)
+		unchanged := sameProjectionState(fixture.service.p, baseline.p)
 		fixture.service.mu.Unlock()
 		if !unchanged || fixture.store.Durable() != before {
 			t.Fatal("preflight installed a paid effect")

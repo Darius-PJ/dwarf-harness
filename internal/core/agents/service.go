@@ -54,12 +54,13 @@ type agentState struct {
 	directory        string
 }
 type scopeState struct {
-	ids         submissionIDs
-	revision    uint64
-	heads       map[string]Head
-	materials   map[string]string
-	issues      []IntegrityIssue
-	association contextAssociation
+	ids          submissionIDs
+	revision     uint64
+	heads        map[string]Head
+	materials    map[string]string
+	materialized map[string]materializationHint
+	issues       []IntegrityIssue
+	association  contextAssociation
 }
 type scratchState struct {
 	ledger.ScratchCreated

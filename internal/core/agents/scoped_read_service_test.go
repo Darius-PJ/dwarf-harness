@@ -221,3 +221,129 @@ func TestScopedReadRevocationAndArtifacts(t *testing.T) {
 		}
 	})
 }
+
+func TestPrivateCurrentHeadSelection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, b, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+	writePrivate(t, f.service, b, 300, 1, Change{"continuation", "replace", []byte("kept")}, Change{"memory", "replace", []byte("same")}, Change{"transcript", "append", []byte("same")})
+	first, err := f.service.Snapshot(ctx, ReadBinding{b, "context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	olderPrefix := f.store.Durable()
+	if _, err := agent.WritePrivate(ctx, ScopedPrivateWrite{CommandID: privateID(301), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 2, Changes: []Change{{"handoff", "replace", []byte("later")}, {"transcript", "append", []byte("same")}}}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.service.Snapshot(ctx, ReadBinding{b, "context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePrivate(t, f.service, b, 302, 3, Change{"continuation", "clear", nil}, Change{"transcript", "append", []byte("last")})
+	third, err := f.service.Snapshot(ctx, ReadBinding{b, "context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type readCase struct {
+		slot             string
+		revision, cursor uint64
+		maxBytes         int64
+		heads            []Head
+		present          bool
+		next             uint64
+		body             string
+	}
+	cases := []readCase{
+		{"memory", 4, 0, 4, []Head{first.Heads["memory"]}, true, 0, "same"},
+		{"continuation", 4, 0, 1, nil, false, 0, ""},
+		{"continuation", 2, 0, 4, []Head{first.Heads["continuation"]}, true, 0, "kept"},
+		{"transcript", 4, 0, 4, []Head{first.Heads["transcript"]}, true, first.Heads["transcript"].Sequence, "same"},
+		{"transcript", 4, first.Heads["transcript"].Sequence, 4, []Head{second.Heads["transcript"]}, true, second.Heads["transcript"].Sequence, "same"},
+		{"transcript", 4, second.Heads["transcript"].Sequence, 4, []Head{third.Heads["transcript"]}, true, 0, "last"},
+		{"transcript", 4, third.Heads["transcript"].Sequence, 4, nil, true, 0, ""},
+	}
+	var requests []ScopedPrivateRead
+	var pages []ScopedPrivatePage
+	for i, row := range cases {
+		// Cold and repeated warm calls have the same observable receipt/page.
+		f.service.mu.Lock()
+		f.service.history.close()
+		f.service.history = newHistoryIndex()
+		f.service.mu.Unlock()
+		request := ScopedPrivateRead{CommandID: privateID(310 + i), GrantID: grant.GrantID, Scope: "context", Slot: row.slot, Revision: row.revision, Cursor: row.cursor, MaxBytes: row.maxBytes}
+		got, err := agent.ReadPrivate(ctx, request)
+		if err != nil || got.Page.Revision != row.revision || got.Page.Present != row.present || got.Page.NextCursor != row.next {
+			t.Fatalf("selection %d: %+v %v", i, got, err)
+		}
+		if row.slot == "transcript" {
+			if len(got.Page.Chunks) != len(row.heads) {
+				t.Fatalf("transcript occurrence %d: %+v", i, got.Page)
+			}
+			for j, h := range row.heads {
+				if got.Page.Chunks[j].Sequence != h.Sequence || got.Page.Chunks[j].Revision != h.Revision || string(got.Page.Chunks[j].Bytes) != row.body {
+					t.Fatalf("repeated digest lost occurrence %d: %+v", i, got.Page)
+				}
+			}
+		} else if string(got.Page.Bytes) != row.body {
+			t.Fatalf("selected wrong bytes %d: %q", i, got.Page.Bytes)
+		}
+		var selected []ledger.SelectedObject
+		var usageFound bool
+		if err := f.service.scan(ctx, 0, f.store.Durable(), func(c ledger.Commit) error {
+			for _, record := range c.Records {
+				if record.Type == ledger.TypeRuntimeLocalUsed && record.OperationID == request.CommandID {
+					usage, err := ledger.DecodeRuntimeLocalUsed(record.Payload)
+					if err != nil {
+						return err
+					}
+					selected, usageFound = usage.Selected, true
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if !usageFound || len(selected) != len(row.heads) {
+			t.Fatalf("receipt lost exact selected metadata %d: %+v", i, selected)
+		}
+		for j, h := range row.heads {
+			want := ledger.SelectedObject{SHA256: h.SHA256, Bytes: h.Bytes, Revision: int64(h.Revision), Sequence: int64(h.Sequence)}
+			if selected[j] != want {
+				t.Fatalf("scope revision replaced unchanged Head occurrence %d: %+v want %+v", i, selected[j], want)
+			}
+		}
+		before := f.store.Durable()
+		if replay, err := agent.ReadPrivate(ctx, request); err != nil || !reflect.DeepEqual(replay, got) || f.store.Durable() != before {
+			t.Fatalf("warm selection replay %d: %+v %v", i, replay, err)
+		}
+		requests, pages = append(requests, request), append(pages, got)
+	}
+	before := f.store.Durable()
+	if _, err := agent.ReadPrivate(ctx, ScopedPrivateRead{CommandID: privateID(330), GrantID: grant.GrantID, Scope: "context", Slot: "memory", Revision: 4, MaxBytes: 3}); !errors.Is(err, ErrTooLarge) || f.store.Durable() != before {
+		t.Fatalf("current head exceeded byte boundary: %v", err)
+	}
+	writePrivate(t, f.service, b, 331, 4, Change{"memory", "replace", []byte("future")})
+	ids := submissionIDs{b.AgentID, privateID(11), b.ContextID}
+	read := PrivateRead{ReadBinding: ReadBinding{b, "context"}, Slot: "memory", Revision: 2, MaxBytes: 4}
+	selection, err := f.service.selectPrivateRead(ctx, ids, read, olderPrefix, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _ := f.service.scopePath(ids, "context")
+	page, err := f.service.readPrivateSelection(path, read, selection)
+	if err != nil || string(page.Bytes) != "same" {
+		t.Fatalf("older prefix borrowed future current bytes: %+v %v", page, err)
+	}
+	read.Revision = 5
+	if _, err := f.service.selectPrivateRead(ctx, ids, read, olderPrefix, 1); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("current revision became available at an older prefix: %v", err)
+	}
+	reopenScoped(t, f, DefaultLimits())
+	agent = scopedBound(t, f.service, b)
+	before = f.store.Durable()
+	for i, request := range requests {
+		if replay, err := agent.ReadPrivate(ctx, request); err != nil || !reflect.DeepEqual(replay, pages[i]) || f.store.Durable() != before {
+			t.Fatalf("reduced receipt changed selection %d: %+v %v", i, replay, err)
+		}
+	}
+}

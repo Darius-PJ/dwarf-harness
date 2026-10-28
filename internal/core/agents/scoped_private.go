@@ -75,7 +75,26 @@ func (s *Service) planScopedPrivate(ctx context.Context, g *scopedGroup, first u
 // exact prefix after a real cursor. Its historical producer's chunk ceiling is
 // not replaced by today's Limits, so a bounded early stop is proved by cursor.
 func (s *Service) validatePrivateSelection(ctx context.Context, ids submissionIDs, usage ledger.RuntimeLocalUsed, through uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	read := *usage.Read
+	if head, exact := s.p.currentPrivateHead(ids, read.Scope, read.Slot, through, uint64(read.Revision)); exact {
+		if usage.NextCursor != nil {
+			return ErrInvalid
+		}
+		if head.SHA256 == (ledger.Digest{}) {
+			if len(usage.Selected) != 0 || usage.Bytes != 0 {
+				return ErrInvalid
+			}
+			return nil
+		}
+		want := ledger.SelectedObject{SHA256: head.SHA256, Bytes: head.Bytes, Revision: int64(head.Revision), Sequence: int64(head.Sequence)}
+		if len(usage.Selected) != 1 || usage.Selected[0] != want || usage.Bytes != head.Bytes || head.Bytes > read.MaxBytes {
+			return ErrInvalid
+		}
+		return nil
+	}
 	var head Head
 	index, used := 0, int64(0)
 	cursorFound, more := read.Cursor == 0, false

@@ -409,3 +409,236 @@ func TestPrivateIntegrityDoesNotInspectLinkedObjects(t *testing.T) {
 		}
 	}
 }
+
+func TestPrivateIntegrityAfterWarmCheck(t *testing.T) {
+	t.Parallel()
+	for _, row := range []string{"object_removed", "object_corrupt", "foreign", "wrong_kind", "link", "missing", "historical_hint_mismatch", "historical_hint_discard", "historical_hint_damaged", "damaged_hint_foreign"} {
+		t.Run(row, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, b, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+			writePrivate(t, f.service, b, 300, 1, Change{"memory", "replace", []byte("earlier")})
+			request := ScopedPrivateWrite{CommandID: privateID(301), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 2, Changes: []Change{{"memory", "replace", []byte("current")}}}
+			receipt, err := agent.WritePrivate(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A successful new operation has inspected the actual current files.
+			writePrivate(t, f.service, b, 302, 3, Change{"handoff", "replace", []byte("other-slot")})
+			ids := submissionIDs{b.AgentID, privateID(11), b.ContextID}
+			path, err := f.service.scopePath(ids, "context")
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, _ := path.markdownPath("memory")
+			digest, _ := hashObject([]byte("current"))
+			object := filepath.Join(path.objects(), digest.String())
+			switch row {
+			case "object_removed":
+				if err := os.Remove(object); err != nil {
+					t.Fatal(err)
+				}
+			case "object_corrupt":
+				writeTestFile(t, object, []byte("corrupt"))
+			case "foreign", "damaged_hint_foreign":
+				writeTestFile(t, file, []byte("other-slot"))
+			case "wrong_kind", "link", "missing":
+				if err := os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+				if row == "wrong_kind" {
+					if err := os.Mkdir(file, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if row == "link" {
+					target := filepath.Join(testRoot(t), "outside")
+					writeTestFile(t, target, []byte("current"))
+					if err := os.Symlink(target, file); err != nil {
+						t.Fatal(err)
+					}
+				}
+			default:
+				writeTestFile(t, file, []byte("earlier"))
+			}
+			f.service.mu.Lock()
+			state := f.service.p.scopes[keyFor(ids, "context")]
+			if row == "historical_hint_discard" {
+				state.materialized = nil
+			}
+			if row == "historical_hint_damaged" {
+				hint := state.materialized["memory"]
+				hint.sum[0] ^= 1
+				state.materialized["memory"] = hint
+			}
+			if row == "damaged_hint_foreign" {
+				hint := state.materialized["memory"]
+				hint.head.SHA256, _ = hashObject([]byte("other-slot"))
+				state.materialized["memory"] = hint
+			}
+			f.service.mu.Unlock()
+			before := f.store.Durable()
+			if got, err := agent.WritePrivate(ctx, request); err != nil || !reflect.DeepEqual(got, receipt) || f.store.Durable() != before {
+				t.Fatalf("historical receipt acquired a health prerequisite: %+v %v", got, err)
+			}
+			next := ScopedPrivateWrite{CommandID: privateID(303), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 4, Changes: []Change{{"handoff", "replace", []byte("next")}}}
+			_, err = agent.WritePrivate(ctx, next)
+			stale := row == "missing" || row == "historical_hint_mismatch" || row == "historical_hint_discard" || row == "historical_hint_damaged"
+			if stale {
+				if err != nil || string(readTestFile(t, file)) != "current" {
+					t.Fatalf("recoverable same-slot Markdown refused or not completed: %v", err)
+				}
+			} else if err != ErrIntegrity || f.store.Durable() != before {
+				t.Fatalf("warm inspection concealed changed bytes or disclosed hashes: %v", err)
+			}
+			book, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+			want := int64(1)
+			if stale {
+				want++
+			}
+			if err != nil || book.Used.LocalUnits != want || book.Held != (Exposure{}) {
+				t.Fatalf("integrity refusal or receipt charged/leaked: %+v %v", book, err)
+			}
+		})
+	}
+}
+
+func TestPrivateFusedHistoryInspection(t *testing.T) {
+	t.Parallel()
+	t.Run("ordered_occurrences_and_fences", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		f, b, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+		sibling := createPrivate(t, f.service, b, 20)
+		repeated := []byte("same historical bytes")
+		first := writePrivate(t, f.service, b, 300, 1, Change{"memory", "replace", repeated})
+		second, err := agent.WritePrivate(ctx, ScopedPrivateWrite{CommandID: privateID(301), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 2, Changes: []Change{{"handoff", "replace", repeated}, {"memory", "replace", repeated}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writePrivate(t, f.service, b, 302, 3, Change{"handoff", "replace", []byte("intact")}, Change{"memory", "replace", []byte("intact")})
+		writePrivate(t, f.service, sibling, 303, 1, Change{"memory", "replace", repeated}, Change{"transcript", "append", repeated})
+		writePrivate(t, f.service, sibling, 304, 2, Change{"memory", "replace", []byte("intact")}, Change{"transcript", "append", repeated})
+		writePrivate(t, f.service, sibling, 305, 3, Change{"transcript", "append", []byte("intact")})
+		digest, _ := hashObject(repeated)
+		for _, binding := range []Binding{b, sibling} {
+			path, err := f.service.scopePath(submissionIDs{binding.AgentID, privateID(11), binding.ContextID}, "context")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(path.objects(), digest.String())); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.service.Close(); err != nil {
+			t.Fatal(err)
+		}
+		before := f.store.Durable()
+		var report Reconciliation
+		f.service, report, err = Open(ctx, f.store, f.root, DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []IntegrityIssue{
+			{ReadBinding: ReadBinding{b, "context"}, Slot: "memory", Revision: first.Revision, ExpectedSHA256: digest, Reason: "object_missing_or_invalid"},
+			{ReadBinding: ReadBinding{b, "context"}, Slot: "handoff", Revision: uint64(second.Version), ExpectedSHA256: digest, Reason: "object_missing_or_invalid"},
+			{ReadBinding: ReadBinding{b, "context"}, Slot: "memory", Revision: uint64(second.Version), ExpectedSHA256: digest, Reason: "object_missing_or_invalid"},
+			{ReadBinding: ReadBinding{sibling, "context"}, Slot: "memory", Revision: 2, ExpectedSHA256: digest, Reason: "object_missing_or_invalid"},
+			{ReadBinding: ReadBinding{sibling, "context"}, Slot: "transcript", Revision: 2, ExpectedSHA256: digest, Reason: "object_missing_or_invalid"},
+			{ReadBinding: ReadBinding{sibling, "context"}, Slot: "transcript", Revision: 3, ExpectedSHA256: digest, Reason: "object_missing_or_invalid"},
+		}
+		if !reflect.DeepEqual(report.Issues, want) || len(report.Completed) != 0 || f.store.Durable() != before {
+			t.Fatalf("lost occurrence identity/order or recovery appended: %+v", report)
+		}
+		if page := readPrivate(t, f.service, b, 4, "memory"); string(page.Bytes) != "intact" {
+			t.Fatalf("superseded corruption fenced current head: %+v", page)
+		}
+		if _, err := f.service.ReadPrivate(ctx, PrivateRead{ReadBinding: ReadBinding{sibling, "context"}, Slot: "memory", Revision: 4, MaxBytes: 100}); !errors.Is(err, ErrIntegrity) {
+			t.Fatalf("old transcript occurrence failed to fence scope: %v", err)
+		}
+		// The same digest under agent scope must be verified there, too, and
+		// an agent head failure fences otherwise intact sibling contexts.
+		if _, err := f.service.WritePrivate(ctx, PrivateWrite{Binding: b, CommandID: privateID(306), Scope: "agent", ExpectedVersion: 1, Changes: []Change{{"memory", "replace", repeated}}}); err != nil {
+			t.Fatal(err)
+		}
+		path, _ := f.service.scopePath(submissionIDs{b.AgentID, privateID(11), b.ContextID}, "agent")
+		writeTestFile(t, filepath.Join(path.objects(), digest.String()), []byte("corrupt"))
+		if err := f.service.Close(); err != nil {
+			t.Fatal(err)
+		}
+		f.service, report, err = Open(ctx, f.store, f.root, DefaultLimits())
+		observed, _ := hashObject([]byte("corrupt"))
+		agentIssue := IntegrityIssue{ReadBinding: ReadBinding{b, "agent"}, Slot: "memory", Revision: 2, ExpectedSHA256: digest, ObservedSHA256: observed, Reason: "object_mismatch"}
+		if err != nil || !reflect.DeepEqual(report.Issues, append([]IntegrityIssue{agentIssue}, want...)) {
+			t.Fatalf("agent-scope order/binding changed: %+v %v", report, err)
+		}
+		if _, err := f.service.ReadPrivate(ctx, PrivateRead{ReadBinding: ReadBinding{b, "context"}, Slot: "memory", Revision: 4, MaxBytes: 100}); !errors.Is(err, ErrIntegrity) {
+			t.Fatalf("agent head did not fence intact context: %v", err)
+		}
+	})
+	for _, change := range []string{"missing", "stale", "foreign_during_completion", "different_history_during_completion"} {
+		t.Run(change, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f := newServiceFixture(t, serviceDeps{})
+			b := registerPrivate(t, f.service, 10)
+			writePrivate(t, f.service, b, 20, 1, Change{"memory", "replace", []byte("first")})
+			writePrivate(t, f.service, b, 21, 2, Change{"memory", "replace", []byte("second")})
+			writePrivate(t, f.service, b, 22, 3, Change{"memory", "replace", []byte("current")})
+			path, _ := f.service.scopePath(submissionIDs{b.AgentID, privateID(11), b.ContextID}, "context")
+			file, _ := path.markdownPath("memory")
+			if err := f.service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if change == "missing" {
+				if err := os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeTestFile(t, file, []byte("first"))
+			}
+			before := f.store.Durable()
+			deps := serviceDeps{beforeMaterialize: func(_ Binding, scope, slot string) error {
+				if scope == "context" && slot == "memory" {
+					if change == "foreign_during_completion" {
+						writeTestFile(t, file, []byte("foreign"))
+					}
+					if change == "different_history_during_completion" {
+						writeTestFile(t, file, []byte("second"))
+					}
+				}
+				return nil
+			}}
+			var report Reconciliation
+			var err error
+			f.service, report, err = openService(ctx, f.store, f.root, DefaultLimits(), deps)
+			if err != nil || f.store.Durable() != before {
+				t.Fatalf("completion changed ledger: %+v %v", report, err)
+			}
+			if change == "foreign_during_completion" {
+				if len(report.Issues) != 1 || report.Issues[0].Reason != "foreign_materialization" || len(report.Completed) != 0 || string(readTestFile(t, file)) != "foreign" {
+					t.Fatalf("completion reused stale overwrite proof: %+v", report)
+				}
+			} else if len(report.Issues) != 0 || len(report.Completed) != 1 || report.Completed[0].ReadBinding != (ReadBinding{b, "context"}) || report.Completed[0].Revision != 4 || report.Completed[0].Slot != "memory" || string(readTestFile(t, file)) != "current" {
+				t.Fatalf("missing/historical completion lost: %+v", report)
+			}
+		})
+	}
+}
+
+// Replayed projections need not have the same optional membership hints as a
+// live service. Every authoritative field and materialization/issue observation
+// still participates in the rejected-group and recovery no-effect assertions.
+func sameProjectionState(a, b projection) bool {
+	withoutHints := func(p projection) projection {
+		scopes := make(map[scopeKey]*scopeState, len(p.scopes))
+		for key, state := range p.scopes {
+			copy := *state
+			copy.materialized = nil
+			scopes[key] = &copy
+		}
+		p.scopes = scopes
+		return p
+	}
+	return reflect.DeepEqual(withoutHints(a), withoutHints(b))
+}
