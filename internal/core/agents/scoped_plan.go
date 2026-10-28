@@ -90,7 +90,7 @@ func (p *projection) installScoped(plan scopedPlan) {
 }
 
 // Retain authority and unresolved exposure, not a lifetime terminal index.
-// Historical lookups and assignment freshness always scan the ledger on miss.
+// Historical lookups use bounded hints, then the ledger on a miss.
 func (p *projection) pruneScoped() {
 	live := map[uuid.UUID]bool{}
 	visited := map[uuid.UUID]bool{}

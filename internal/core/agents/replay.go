@@ -366,6 +366,7 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 			s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
 		}
 		s.p.publishHistory(g, scoped, c.Last)
+		s.history.advance(s.p.through, c.Last, d)
 		s.p.through = c.Last
 		return nil
 	})
@@ -385,6 +386,13 @@ type commandMatch struct {
 }
 
 func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
+	if err := ctx.Err(); err != nil {
+		return commandMatch{}, err
+	}
+	if match, hit := s.history.command(id, after, through); hit {
+		return match, nil
+	}
+	var matched ledger.Commit
 	var found commandMatch
 	err := s.scan(ctx, after, through, func(c ledger.Commit) error {
 		for _, r := range c.Records {
@@ -406,9 +414,16 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 				return err
 			}
 			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid}
+			matched = c
 		}
 		return nil
 	})
+	if err == nil {
+		if s.deps.beforeHistoryFill != nil {
+			s.deps.beforeHistoryFill(historyKey{kind: historyCommand, id: id})
+		}
+		s.history.putCommand(id, after, through, found, matched)
+	}
 	return found, err
 }
 func matchReceipt(m commandMatch, ids submissionIDs, digest ledger.Digest) (Receipt, error) {

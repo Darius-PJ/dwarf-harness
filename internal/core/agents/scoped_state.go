@@ -74,6 +74,9 @@ func (s *Service) loadGrant(ctx context.Context, id uuid.UUID, through uint64) (
 	if s.p.identityAbsent(id, s.p.identities.grant, through) {
 		return grantState{}, false, nil
 	}
+	if grant, found, hit := s.history.grant(id, through); hit {
+		return grant, found, nil
+	}
 	var grant grantState
 	found := false
 	err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
@@ -100,6 +103,9 @@ func (s *Service) loadGrant(ctx context.Context, id uuid.UUID, through uint64) (
 		}
 		return nil
 	})
+	if err == nil {
+		s.history.putGrant(id, through, grant, found)
+	}
 	return grant, found, err
 }
 
@@ -109,6 +115,9 @@ func (s *Service) loadTask(ctx context.Context, id uuid.UUID, through uint64) (s
 	}
 	if s.p.identityAbsent(id, s.p.identities.task, through) {
 		return scopedTaskState{}, false, nil
+	}
+	if task, found, hit := s.history.task(id, through); hit {
+		return task, found, nil
 	}
 	var task scopedTaskState
 	found := false
@@ -138,6 +147,9 @@ func (s *Service) loadTask(ctx context.Context, id uuid.UUID, through uint64) (s
 		}
 		return nil
 	})
+	if err == nil {
+		s.history.putTask(id, through, task, found)
+	}
 	return task, found, err
 }
 
@@ -147,6 +159,9 @@ func (s *Service) loadWork(ctx context.Context, id uuid.UUID, through uint64) (s
 	}
 	if s.p.identityAbsent(id, s.p.identities.work, through) {
 		return scopedWorkState{}, false, nil
+	}
+	if work, found, hit := s.history.work(id, through); hit {
+		return work, found, nil
 	}
 	var work scopedWorkState
 	found := false
@@ -191,6 +206,9 @@ func (s *Service) loadWork(ctx context.Context, id uuid.UUID, through uint64) (s
 		}
 		return nil
 	})
+	if err == nil {
+		s.history.putWork(id, through, work, found)
+	}
 	return work, found, err
 }
 
@@ -207,6 +225,13 @@ func (s *Service) assignmentUnused(ctx context.Context, assignment ledger.Assign
 		if task, known := s.p.contextAssociation(key, through); known {
 			return true, task == (uuid.UUID{}), nil
 		}
+	}
+	key := historyKey{kind: historyAssignment, id: assignment.AssignmentID, context: assignment.Assignee.ContextID}
+	if e, hit := s.history.get(key, 0, through); hit {
+		if e.found && len(e.data) == 2 && e.data[0] <= 1 && e.data[1] <= 1 {
+			return e.data[0] == 1, e.data[1] == 1, nil
+		}
+		s.history.discard(key)
 	}
 	idUnused, contextUnused = true, true
 	err = s.scan(ctx, 0, through, func(commit ledger.Commit) error {
@@ -225,6 +250,16 @@ func (s *Service) assignmentUnused(ctx context.Context, assignment ledger.Assign
 		}
 		return nil
 	})
+	if err == nil {
+		data := []byte{0, 0}
+		if idUnused {
+			data[0] = 1
+		}
+		if contextUnused {
+			data[1] = 1
+		}
+		s.history.put(historyEntry{key: key, from: through, found: true, data: data})
+	}
 	return idUnused, contextUnused, err
 }
 

@@ -119,15 +119,18 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 		// The exact group was preflighted at this prefix. Read back only its
 		// envelope times, not its immutable source witnesses a second time.
 		floor := plan.floor
+		var accepted ledger.Commit
 		err = s.scan(context.Background(), committed.First-1, committed.Last, func(c ledger.Commit) error {
 			for _, r := range c.Records {
 				floor = max(floor, r.EventTimeNS)
 			}
+			accepted = c
 			return nil
 		})
 		if err == nil {
 			s.p.installReview(plan)
 			s.p.publishHistory(nil, nil, committed.Last)
+			s.history.advance(s.p.through, committed.Last, draftsOf(accepted))
 			s.p.reviewFloor, s.p.through = floor, committed.Last
 			if bytes.Compare(input.id[:], s.p.maxCommand[:]) > 0 {
 				s.p.maxCommand = input.id

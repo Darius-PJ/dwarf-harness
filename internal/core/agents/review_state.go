@@ -11,9 +11,12 @@ import (
 // establishes historical identity, outcome and explicit replacement edges.
 func (s *Service) loadReview(ctx context.Context, id uuid.UUID, through uint64) (reviewSlot, bool, error) {
 	for _, slot := range s.p.reviews {
-		if slot.id == id {
+		if slot.id == id && through == s.p.through {
 			return slot, true, nil
 		}
+	}
+	if slot, found, hit := s.history.review(id, through); hit {
+		return slot, found, nil
 	}
 	var slot reviewSlot
 	found := false
@@ -44,5 +47,8 @@ func (s *Service) loadReview(ctx context.Context, id uuid.UUID, through uint64) 
 		}
 		return nil
 	})
+	if err == nil {
+		s.history.putReview(id, through, slot, found)
+	}
 	return slot, found, err
 }

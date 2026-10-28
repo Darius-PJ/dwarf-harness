@@ -40,6 +40,7 @@ type serviceDeps struct {
 	beforeMaterialize func(Binding, string, string) error
 	beforeProjection  func(Binding, string)
 	beforeLookup      func()
+	beforeHistoryFill func(historyKey)
 	beforeReplayWait  func()
 	afterCloseFence   func()
 }
@@ -124,6 +125,7 @@ type Service struct {
 	deps          serviceDeps
 	dirs          directoryDurability
 	p             projection
+	history       *historyIndex
 	gates         map[scopeKey]*scopeGate
 	preparing     int
 	openedThrough uint64
@@ -157,7 +159,7 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 	if deps.reviewClock == nil {
 		deps.reviewClock = func() (int64, error) { return time.Now().UTC().UnixNano(), nil }
 	}
-	s := &Service{store: store, colony: colony, limits: limits, deps: deps, p: newProjection(), gates: map[scopeKey]*scopeGate{}}
+	s := &Service{store: store, colony: colony, limits: limits, deps: deps, p: newProjection(), history: newHistoryIndex(), gates: map[scopeKey]*scopeGate{}}
 	if err := s.refreshLocked(ctx, store.Durable()); err != nil {
 		return nil, report, err
 	}
@@ -193,6 +195,7 @@ func (s *Service) Close() error {
 	s.active.Wait()
 	s.mu.Lock()
 	s.closePaidLocked()
+	s.history.close()
 	s.mu.Unlock()
 	return nil
 }
