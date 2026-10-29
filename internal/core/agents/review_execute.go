@@ -120,7 +120,7 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 		// authoritative read without rereading immutable source witnesses.
 		floor := plan.floor
 		var accepted ledger.Commit
-		accepted, err = s.readCommittedRange(context.Background(), committed.First, committed.Last)
+		accepted, _, err = s.readCommittedRange(context.Background(), committed.First, committed.Last, nil)
 		if err == nil {
 			for _, r := range accepted.Records {
 				floor = max(floor, r.EventTimeNS)

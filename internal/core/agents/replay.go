@@ -243,6 +243,10 @@ func (s *Service) scan(ctx context.Context, after, through uint64, visit func(le
 	if err != nil {
 		return err
 	}
+	return scanReader(ctx, r, visit)
+}
+
+func scanReader(ctx context.Context, r *ledger.Reader, visit func(ledger.Commit) error) (err error) {
 	defer func() { err = errors.Join(err, r.Close()) }()
 	for {
 		if err := ctx.Err(); err != nil {
@@ -276,12 +280,23 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 
 // readCommittedRange requires one complete authoritative commit, including a
 // successful reader close. A Submit receipt is a range, not decoded effects.
-func (s *Service) readCommittedRange(ctx context.Context, first, last uint64) (ledger.Commit, error) {
+func (s *Service) readCommittedRange(ctx context.Context, first, last uint64, checkpoint *ledger.ReadCheckpoint) (ledger.Commit, *ledger.ReadCheckpoint, error) {
 	if first == 0 || last < first {
-		return ledger.Commit{}, inconsistent(first, "acknowledgement range")
+		return ledger.Commit{}, nil, inconsistent(first, "acknowledgement range")
+	}
+	opts := ledger.ReadOptions{Colony: s.store.Colony(), After: first - 1, Through: last, Consume: privateConsumption(), AllTypes: true}
+	var r *ledger.Reader
+	var err error
+	if checkpoint == nil {
+		r, err = ledger.OpenReader(s.store.LogDir(), opts)
+	} else {
+		r, err = ledger.OpenReaderWithCheckpoint(s.store.LogDir(), opts, checkpoint)
+	}
+	if err != nil {
+		return ledger.Commit{}, nil, err
 	}
 	var accepted ledger.Commit
-	err := s.scan(ctx, first-1, last, func(c ledger.Commit) error {
+	err = scanReader(ctx, r, func(c ledger.Commit) error {
 		if accepted.First != 0 || c.First != first || c.Last != last {
 			return inconsistent(first, "acknowledgement commit range")
 		}
@@ -289,12 +304,12 @@ func (s *Service) readCommittedRange(ctx context.Context, first, last uint64) (l
 		return nil
 	})
 	if err != nil {
-		return ledger.Commit{}, err
+		return ledger.Commit{}, nil, err
 	}
 	if accepted.First == 0 {
-		return ledger.Commit{}, inconsistent(first, "missing acknowledgement commit")
+		return ledger.Commit{}, nil, inconsistent(first, "missing acknowledgement commit")
 	}
-	return accepted, nil
+	return accepted, r.Checkpoint(), nil
 }
 
 // acceptCommitLocked is shared by refresh and a contiguous scoped acknowledgement.

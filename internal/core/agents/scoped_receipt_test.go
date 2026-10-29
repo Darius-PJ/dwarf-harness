@@ -272,6 +272,18 @@ func TestScopedAcknowledgementInterleaving(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			f, agent, start, admit := scopedLocalFixture(t, DefaultLimits())
+			warm := start
+			warm.CommandID, warm.TurnID = privateID(8990), privateID(8991)
+			if _, err := agent.StartTurn(ctx, warm); err != nil {
+				t.Fatal(err)
+			}
+			warmed, err := f.service.EndTurn(ctx, TurnEnding{CommandID: privateID(8992), TurnID: warm.TurnID, ExpectedVersion: 1, Outcome: "released"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.service.history.ackCheckpoint(warmed.Sequence) == nil {
+				t.Fatal("completed scoped acknowledgement did not warm a checkpoint")
+			}
 			beforeBook, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
 			if err != nil {
 				t.Fatal(err)
@@ -350,6 +362,72 @@ func TestScopedAcknowledgementInterleaving(t *testing.T) {
 	}
 }
 
+func warmScopedPrivateAcknowledgement(t *testing.T, f *serviceFixture, agent *Agent, grant GrantSpec) ScopedReceipt {
+	t.Helper()
+	receipt, err := agent.WritePrivate(context.Background(), ScopedPrivateWrite{CommandID: privateID(2400), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 1, Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("warm acknowledgement")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.service.history.ackCheckpoint(receipt.Sequence) == nil {
+		t.Fatal("completed private acknowledgement did not warm a checkpoint")
+	}
+	return receipt
+}
+
+func TestScopedAcknowledgementPrefixChanged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, _, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+	warmed := warmScopedPrivateAcknowledgement(t, f, agent, grant)
+	before := f.store.Durable()
+	baseline, _, err := Open(ctx, f.store, f.root, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baseline.Close()
+	path := filepath.Join(f.store.LogDir(), ledger.SegmentName(1))
+	prefix := readTestFile(t, path)
+	if end := bytes.IndexByte(prefix, '\n'); end < 0 || end == len(prefix)-1 {
+		t.Fatal("prefix needs an earlier nonterminal line")
+	}
+	var source int64
+	var durable uint64
+	var damaged []byte
+	f.service.deps.afterScopedSubmit = func() {
+		f.service.deps.afterScopedSubmit = nil
+		durable = f.store.Durable()
+		if err := f.service.scan(ctx, before, durable, func(c ledger.Commit) error {
+			source = int64(c.Records[1].Seq)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		damaged = readTestFile(t, path)
+		if !bytes.HasPrefix(damaged, prefix) {
+			t.Fatal("Submit changed the saved prefix")
+		}
+		// Leave the last saved-prefix line and every new commit byte intact.
+		damaged[0] = 'x'
+		writeTestFile(t, path, damaged)
+	}
+	receipt, err := agent.WritePrivate(ctx, ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: uint64(warmed.Version), Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("must not be accepted")}}})
+	if !errors.Is(err, ledger.ErrCorrupt) || !reflect.DeepEqual(receipt, ScopedReceipt{}) {
+		t.Fatalf("changed earlier prefix acknowledged: %+v %v", receipt, err)
+	}
+	if !sameProjectionState(f.service.p, baseline.p) {
+		t.Fatal("corrupt prefix published an effect, frontier or charge, or retained a hold")
+	}
+	if durable <= before || f.store.Durable() != durable || !bytes.Equal(readTestFile(t, path), damaged) {
+		t.Fatal("failed acknowledgement rolled back or rewrote durable Submit")
+	}
+	if _, _, err := f.service.sourceRecord(ctx, source, durable); !errors.Is(err, ledger.ErrCorrupt) {
+		t.Fatalf("rejected acknowledgement published a successful source proof: %v", err)
+	}
+}
+
 func TestScopedAcknowledgementRejectsRewrittenCommit(t *testing.T) {
 	t.Parallel()
 	for _, fault := range []string{"corrupt", "command", "submission", "transition"} {
@@ -357,6 +435,7 @@ func TestScopedAcknowledgementRejectsRewrittenCommit(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			f, _, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+			warmed := warmScopedPrivateAcknowledgement(t, f, agent, grant)
 			before := f.store.Durable()
 			baseline, _, err := Open(ctx, f.store, f.root, DefaultLimits())
 			if err != nil {
@@ -419,7 +498,7 @@ func TestScopedAcknowledgementRejectsRewrittenCommit(t *testing.T) {
 				}
 				writeTestFile(t, path, append(bytes.Clone(prefix), suffix...))
 			}
-			request := ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 1, Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("submitted")}}}
+			request := ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: uint64(warmed.Version), Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("submitted")}}}
 			receipt, err := agent.WritePrivate(ctx, request)
 			want := ErrInconsistent
 			if fault == "corrupt" {
@@ -452,16 +531,17 @@ func TestScopedAcknowledgementRange(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f, _, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+	warmed := warmScopedPrivateAcknowledgement(t, f, agent, grant)
 	var previous ledger.Commit
 	before := f.store.Durable()
 	if err := f.service.scan(ctx, 0, before, func(c ledger.Commit) error { previous = c; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := agent.WritePrivate(ctx, ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 1, Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("exact interval")}}})
+	receipt, err := agent.WritePrivate(ctx, ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: uint64(warmed.Version), Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("exact interval")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	exact, err := f.service.readCommittedRange(ctx, before+1, receipt.Sequence)
+	exact, _, err := f.service.readCommittedRange(ctx, before+1, receipt.Sequence, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,13 +549,13 @@ func TestScopedAcknowledgementRange(t *testing.T) {
 	if got := scopedReceiptAt(scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, last.Payload), last.Seq); !reflect.DeepEqual(got, receipt) {
 		t.Fatalf("exact interval changed durable receipt: %+v %+v", got, receipt)
 	}
-	if _, err := f.service.readCommittedRange(ctx, previous.First, receipt.Sequence); !errors.Is(err, ErrInconsistent) {
+	if _, _, err := f.service.readCommittedRange(ctx, previous.First, receipt.Sequence, nil); !errors.Is(err, ErrInconsistent) {
 		t.Fatalf("multiple commits accepted as one acknowledgement: %v", err)
 	}
-	if _, err := f.service.readCommittedRange(ctx, before+2, receipt.Sequence); !errors.Is(err, ledger.ErrCursor) {
+	if _, _, err := f.service.readCommittedRange(ctx, before+2, receipt.Sequence, nil); !errors.Is(err, ledger.ErrCursor) {
 		t.Fatalf("partial lower acknowledgement boundary: %v", err)
 	}
-	if _, err := f.service.readCommittedRange(ctx, before+1, receipt.Sequence-1); !errors.Is(err, ledger.ErrCursor) {
+	if _, _, err := f.service.readCommittedRange(ctx, before+1, receipt.Sequence-1, nil); !errors.Is(err, ledger.ErrCursor) {
 		t.Fatalf("partial upper acknowledgement boundary: %v", err)
 	}
 }

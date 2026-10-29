@@ -320,13 +320,15 @@
 // Costs, as built. Live state retains one review slot per live task, identity
 // watermarks and context/task associations. A fresh identity above its validated
 // namespace watermark needs no history lookup. Historical commands, grants,
-// tasks, work, reviews, workspace-registration membership and immutable source
-// metadata share one per-Service LRU capped at 256 entries and 8 MiB of charged
-// retained metadata, with bounded container overhead; this is not a total-RSS
-// bound. Invalid, missing, disabled or evicted entries fall back to authoritative
-// history. Cold receipt/request/task/registration lookups may scan the whole
-// covered prefix. Registration caches neither authority nor scratch readiness:
-// current context binding, grants and an open matching root scratch still apply.
+// tasks, work, reviews, workspace-registration membership, immutable source
+// metadata and one copied Reader checkpoint share one per-Service LRU capped at
+// 256 entries and 8 MiB of charged retained metadata, with bounded container
+// overhead; this is not a total-RSS bound. The checkpoint costs 256 bytes in
+// addition to its entry's 128-byte charge. Invalid, missing, disabled or evicted
+// entries fall back to authoritative history. Cold receipt/request/task/registration
+// lookups may scan the whole covered prefix. Registration caches neither authority
+// nor scratch readiness: current context binding, grants and an open matching
+// root scratch still apply.
 //
 // Fully accepted commits warm eligible private-revision and body-reference
 // source records using copied metadata, not retained reader commits or body bytes.
@@ -334,10 +336,13 @@
 // Remaining misses are read together from the start of the earliest source's
 // segment through the latest source's complete commit. With 64 MiB segments,
 // that start may still be the log's. A contiguous nonduplicate scoped Submit
-// reuses one authoritative interval read for reduction and acknowledgement;
-// gaps, duplicates and prior installation retain refresh plus exact-interval
-// lookup. Even a bounded read may decode the containing segment's prefix.
-// No single observed command seeds a global command-search answer.
+// reuses one authoritative interval read for reduction and acknowledgement.
+// A warm Reader checkpoint hashes the entire previously verified containing
+// prefix instead of decoding it again, then decodes the actual new commit.
+// Prefix I/O and hashing remain; cold, rotated, invalid or evicted checkpoints
+// still require prefix decoding. Gaps, duplicates and prior installation retain
+// refresh plus exact-interval lookup. No single observed command seeds a global
+// command-search answer.
 //
 // Every preparation, final decision and replayed F3-12 group retains current
 // authority, participant read-rights and source-identity checks. A historical

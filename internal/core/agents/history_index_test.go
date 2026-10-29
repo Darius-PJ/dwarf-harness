@@ -463,6 +463,185 @@ func TestHistoryIndexPrefixAndDiscard(t *testing.T) {
 	}
 }
 
+func TestHistoryIndexAcknowledgementFallback(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"discarded", "evicted", "disabled", "damaged", "decoder", "byte-pressure"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, binding, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+			warmed := warmScopedPrivateAcknowledgement(t, f, agent, grant)
+			beforeBook, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "byte-pressure" {
+				func() {
+					s := f.service
+					s.mu.Lock()
+					defer s.mu.Unlock()
+					h := s.history
+					checkpoint := h.ackCheckpoint(warmed.Sequence)
+					h.mu.Lock()
+					h.clearLocked()
+					h.mu.Unlock()
+					h.putAckCheckpoint(warmed.Sequence, checkpoint)
+					h.mu.Lock()
+					if h.bytes != 384 || len(h.entries) != 1 {
+						t.Errorf("opaque proof escaped shared charge: bytes=%d entries=%d", h.bytes, len(h.entries))
+					}
+					h.mu.Unlock()
+					// Exact fit, replacement and removal use the same shared
+					// allowance. One extra byte then evicts the genuine proof.
+					pressure := historyEntry{key: historyKey{kind: historyCommand, id: privateID(29999)}, from: warmed.Sequence, found: true, data: make([]byte, historyByteLimit-128-384)}
+					h.put(pressure)
+					h.putAckCheckpoint(warmed.Sequence, checkpoint)
+					h.mu.Lock()
+					if h.bytes != historyByteLimit || len(h.entries) != 2 {
+						t.Errorf("checkpoint replacement changed the shared bound: bytes=%d entries=%d", h.bytes, len(h.entries))
+					}
+					h.mu.Unlock()
+					h.discard(historyKey{kind: historyAckRead})
+					h.mu.Lock()
+					if h.bytes != historyByteLimit-384 {
+						t.Errorf("checkpoint removal left charged bytes: %d", h.bytes)
+					}
+					h.mu.Unlock()
+					h.putAckCheckpoint(warmed.Sequence, checkpoint)
+					pressure.data = append(pressure.data, 0)
+					h.put(pressure)
+					h.mu.Lock()
+					if h.bytes != historyByteLimit-383 || len(h.entries) != 1 {
+						t.Errorf("byte pressure did not evict within the shared bound: bytes=%d entries=%d", h.bytes, len(h.entries))
+					}
+					h.mu.Unlock()
+				}()
+			} else {
+				damageHistoryCache(f.service, mode)
+			}
+			if f.service.history.ackCheckpoint(warmed.Sequence) != nil {
+				t.Fatal("discarded or invalid checkpoint remained usable")
+			}
+			request := ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: uint64(warmed.Version), Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("after checkpoint loss")}}}
+			receipt, err := agent.WritePrivate(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			through := f.store.Durable()
+			var durable ScopedReceipt
+			if err := f.service.scan(ctx, warmed.Sequence, through, func(c ledger.Commit) error {
+				last := c.Records[len(c.Records)-1]
+				durable = scopedReceiptAt(scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, last.Payload), last.Seq)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(receipt, durable) || receipt.Version != warmed.Version+1 {
+				t.Fatalf("fallback changed the authoritative receipt: %+v %+v", receipt, durable)
+			}
+			for phase := range 2 {
+				if phase == 1 {
+					reopenScoped(t, f, DefaultLimits())
+					agent = scopedBound(t, f.service, binding)
+				}
+				retry, err := agent.WritePrivate(ctx, request)
+				if err != nil || !reflect.DeepEqual(retry, durable) || f.store.Durable() != through {
+					t.Fatalf("checkpoint loss repeated the durable write: %+v %v", retry, err)
+				}
+				view, err := agent.Snapshot(ctx, ScopedSnapshotLookup{GrantID: grant.GrantID, Scope: "context"})
+				if err != nil || view.Revision != uint64(warmed.Version+1) {
+					t.Fatalf("fallback lost the accepted private head: %+v %v", view, err)
+				}
+				if page := readPrivate(t, f.service, binding, view.Revision, "memory"); string(page.Bytes) != "after checkpoint loss" {
+					t.Fatalf("fallback materialized a different write: %q", page.Bytes)
+				}
+				book, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+				used := beforeBook.Used
+				used.LocalUnits++
+				if err != nil || book.Used != used || book.Held != beforeBook.Held {
+					t.Fatalf("fallback repeated a charge or leaked a hold: %+v %v", book, err)
+				}
+				changed := request
+				changed.Changes = []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("changed request")}}
+				assertReviewRefusal(t, f, func() error { _, err := agent.WritePrivate(ctx, changed); return err }, ErrCommandMismatch)
+			}
+		})
+	}
+	for _, publication := range []string{"foreign-review", "direct-review"} {
+		t.Run(publication, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, request := liveReviewFixture(t)
+			creation := scopedNewTask(2600, 2601, uuid.UUID{}, reviewOwner().AgentID)
+			warmed, err := f.service.CreateTask(ctx, reviewOwner(), creation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkpoint := f.service.history.ackCheckpoint(warmed.Sequence)
+			if checkpoint == nil {
+				t.Fatal("real scoped creation did not warm a checkpoint")
+			}
+			var reviewed ReviewReceipt
+			if publication == "foreign-review" {
+				reviewed = historyReviewAppend(t, f, "owner", reviewOwner(), "review.request", request)
+			} else {
+				reviewed, err = f.service.RequestReview(ctx, reviewOwner(), request)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			view, err := f.service.ReviewStatus(ctx, ReviewLookup{RequestID: request.RequestID})
+			if err != nil || view.State != "pending" || view.RequestSequence != reviewed.EffectSequence {
+				t.Fatalf("accepted review advance lost its request: %+v %v", view, err)
+			}
+			advanced := f.store.Durable()
+			// A fill from the old accepted prefix cannot retimestamp its proof.
+			f.service.history.putAckCheckpoint(warmed.Sequence, checkpoint)
+			if f.service.history.ackCheckpoint(warmed.Sequence) != nil || f.service.history.ackCheckpoint(advanced) != nil {
+				t.Fatal("review advance retained or retimestamped the old checkpoint")
+			}
+			cancel := TaskMutation{CommandID: privateID(2602), TaskID: creation.TaskID, ExpectedVersion: 1, Action: "cancel"}
+			receipt, err := f.service.TransitionTask(ctx, reviewOwner(), cancel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			through := f.store.Durable()
+			var durable ScopedReceipt
+			if err := f.service.scan(ctx, advanced, through, func(c ledger.Commit) error {
+				last := c.Records[len(c.Records)-1]
+				durable = scopedReceiptAt(scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, last.Payload), last.Seq)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(receipt, durable) {
+				t.Fatalf("post-review acknowledgement differs from durable receipt: %+v %+v", receipt, durable)
+			}
+			beforeBook, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for phase := range 2 {
+				if phase == 1 {
+					reopenScoped(t, f, DefaultLimits())
+				}
+				retry, err := f.service.TransitionTask(ctx, reviewOwner(), cancel)
+				if err != nil || !reflect.DeepEqual(retry, durable) || f.store.Durable() != through {
+					t.Fatalf("post-review retry repeated acceptance: %+v %v", retry, err)
+				}
+				task, err := f.service.TaskStatus(ctx, TaskLookup{TaskID: creation.TaskID})
+				if err != nil || task.Task.State != "cancelled" || task.Task.Version != 2 {
+					t.Fatalf("post-review effect changed: %+v %v", task, err)
+				}
+				book, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+				if err != nil || !reflect.DeepEqual(book, beforeBook) {
+					t.Fatalf("post-review retry changed exposure: %+v %v", book, err)
+				}
+			}
+		})
+	}
+}
+
 // Publish already-preflighted real records without installing their plan, so
 // the next public query exercises refreshLocked instead of the live shortcut.
 func historyReviewAppend(t *testing.T, f *serviceFixture, actor string, binding Binding, operation string, request any) ReviewReceipt {

@@ -141,6 +141,7 @@ const (
 	historyAssignment
 	historySource
 	historyWorkspace
+	historyAckRead
 
 	historyEntryLimit = 256
 	historyByteLimit  = 8 << 20
@@ -152,19 +153,37 @@ type historyKey struct {
 	sequence    uint64
 }
 
-// Only encoded metadata is retained. In particular, a selected record never
-// keeps its reader's entire commit backing buffer alive.
+// Encoded metadata and one copied opaque Reader checkpoint are retained. A
+// selected record never keeps its reader's entire commit backing buffer alive.
 type historyEntry struct {
 	key                      historyKey
 	from, after, first, last uint64
 	task                     uuid.UUID
 	found                    bool
 	data                     []byte
+	checkpoint               *ledger.ReadCheckpoint
 	checksum                 uint32
 }
 
+func (e historyEntry) retainedCharge() int {
+	charge := len(e.data) + 128
+	if e.checkpoint != nil {
+		charge += 256
+	}
+	return charge
+}
+
+func (e historyEntry) validCheckpointWrapper() bool {
+	if e.key.kind != historyAckRead {
+		return e.checkpoint == nil
+	}
+	return e.key == (historyKey{kind: historyAckRead}) && e.checkpoint != nil &&
+		len(e.data) == 0 && e.found && e.after == 0 && e.first == 0 &&
+		e.last == 0 && e.task == (uuid.UUID{})
+}
+
 func (e historyEntry) sum() uint32 {
-	var metadata [90]byte
+	var metadata [91]byte
 	metadata[0] = e.key.kind
 	copy(metadata[1:17], e.key.id[:])
 	copy(metadata[17:33], e.key.context[:])
@@ -176,6 +195,9 @@ func (e historyEntry) sum() uint32 {
 	copy(metadata[73:89], e.task[:])
 	if e.found {
 		metadata[89] = 1
+	}
+	if e.checkpoint != nil {
+		metadata[90] = 1
 	}
 	return crc32.Update(crc32.ChecksumIEEE(metadata[:]), crc32.IEEETable, e.data)
 }
@@ -211,7 +233,7 @@ func (h *historyIndex) clearLocked() {
 
 func (h *historyIndex) removeLocked(key historyKey) {
 	if node := h.entries[key]; node != nil {
-		h.bytes -= len(node.Value.(*historyEntry).data) + 128
+		h.bytes -= node.Value.(*historyEntry).retainedCharge()
 		delete(h.entries, key)
 		h.lru.Remove(node)
 	}
@@ -250,11 +272,15 @@ func (h *historyIndex) get(key historyKey, after, through uint64) (historyEntry,
 		return historyEntry{}, false
 	}
 	e := node.Value.(*historyEntry)
-	if e.key != key || e.checksum != e.sum() || e.from > h.through || !e.found && len(e.data) != 0 {
+	if e.key != key || e.checksum != e.sum() || !e.validCheckpointWrapper() || e.from > h.through || !e.found && len(e.data) != 0 {
 		h.removeLocked(key)
 		return historyEntry{}, false
 	}
-	if key.kind == historySource {
+	if key.kind == historyAckRead {
+		if e.from != through || through != h.through {
+			return historyEntry{}, false
+		}
+	} else if key.kind == historySource {
 		if !e.found || e.first == 0 || e.first > key.sequence || key.sequence > e.last || e.last > through || through > h.through {
 			return historyEntry{}, false
 		}
@@ -272,12 +298,16 @@ func (h *historyIndex) get(key historyKey, after, through uint64) (historyEntry,
 	}
 	out := *e
 	out.data = bytes.Clone(e.data)
+	if e.checkpoint != nil {
+		checkpoint := *e.checkpoint
+		out.checkpoint = &checkpoint
+	}
 	h.lru.MoveToFront(node)
 	return out, true
 }
 
 func (h *historyIndex) put(e historyEntry) {
-	if h == nil || len(e.data)+128 > historyByteLimit {
+	if h == nil || !e.validCheckpointWrapper() || e.retainedCharge() > historyByteLimit {
 		return
 	}
 	h.mu.Lock()
@@ -298,15 +328,34 @@ func (h *historyIndex) put(e historyEntry) {
 		h.entries = make(map[historyKey]*list.Element)
 	}
 	h.removeLocked(e.key)
-	for len(h.entries) >= historyEntryLimit || h.bytes+len(e.data)+128 > historyByteLimit {
+	for len(h.entries) >= historyEntryLimit || h.bytes+e.retainedCharge() > historyByteLimit {
 		h.removeLocked(h.lru.Back().Value.(*historyEntry).key)
 	}
 	data := make([]byte, len(e.data))
 	copy(data, e.data)
 	e.data = data
+	if e.checkpoint != nil {
+		checkpoint := *e.checkpoint
+		e.checkpoint = &checkpoint
+	}
 	e.checksum = e.sum()
 	h.entries[e.key] = h.lru.PushFront(&e)
-	h.bytes += len(data) + 128
+	h.bytes += e.retainedCharge()
+}
+
+func (h *historyIndex) ackCheckpoint(after uint64) *ledger.ReadCheckpoint {
+	e, ok := h.get(historyKey{kind: historyAckRead}, 0, after)
+	if !ok {
+		return nil
+	}
+	return e.checkpoint
+}
+
+func (h *historyIndex) putAckCheckpoint(after uint64, checkpoint *ledger.ReadCheckpoint) {
+	if checkpoint == nil {
+		return
+	}
+	h.put(historyEntry{key: historyKey{kind: historyAckRead}, from: after, found: true, checkpoint: checkpoint})
 }
 
 // Accepted effects invalidate answers; they do not reduce historical state a
@@ -321,6 +370,7 @@ func (h *historyIndex) advance(after, through uint64, drafts []ledger.Draft) {
 	if h.checksum != historyCoverageSum(h.through) || h.through != after {
 		h.clearLocked()
 	}
+	h.removeLocked(historyKey{kind: historyAckRead})
 	invalidateTask := func(id uuid.UUID) {
 		h.removeLocked(historyKey{kind: historyTask, id: id})
 		for key, node := range h.entries {

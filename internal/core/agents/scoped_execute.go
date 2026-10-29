@@ -339,10 +339,17 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 	}
 	var actual commandMatch
 	if !committed.Duplicate && committed.First == s.p.through+1 {
+		checkpoint := s.history.ackCheckpoint(s.p.through)
+		if checkpoint == nil {
+			checkpoint = &ledger.ReadCheckpoint{}
+		}
 		var accepted ledger.Commit
-		accepted, err = s.readCommittedRange(context.Background(), committed.First, committed.Last)
+		accepted, checkpoint, err = s.readCommittedRange(context.Background(), committed.First, committed.Last, checkpoint)
 		if err == nil {
 			actual, err = s.acceptCommitLocked(context.Background(), accepted, &input)
+		}
+		if err == nil {
+			s.history.putAckCheckpoint(s.p.through, checkpoint)
 		}
 	} else {
 		err = s.refreshLocked(context.Background(), max(s.p.through, committed.Last))
