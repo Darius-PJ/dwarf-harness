@@ -168,7 +168,7 @@ Notes on the edges:
 | C0 | Repository, toolchain, check command, decision log | Nothing; every owner input has arrived (D43–D46) | Done |
 | C1 | Action ledger and body store | C0 | Done |
 | C2 | Workspaces, observation, promotion, temporary scratch | C1; frozen `ledger-format`/`ledger-appender`; explicit D52 owner approval of integrated Core C2 boundary | Done |
-| C3 | Agent runtime | C2; remote with CI (D42, D145, D153), green on Windows (D133) | In progress (2026-10-27: tickets 10, 11 and 12 are resolved, B31–B33; each code slice passes CI on Windows, Linux and macOS before `main` moves (D153), and C3 still needs all three green at its exit; public run 2 on d8336c8 passed ticket 13's code on all three, while that ticket's close awaits verification; C3's other tickets remain open) |
+| C3 | Agent runtime | C2; remote with CI (D42, D145, D153), green on Windows (D133) | In progress (2026-10-29: tickets 10, 11 and 12 are resolved, B31–B33; ticket 139's registration producer is complete, B34; each code slice passes CI on Windows, Linux and macOS before `main` moves (D153), and C3 still needs all three green at its exit; public run 2 on d8336c8 passed ticket 13's code on all three, while that ticket's close awaits Fable verification; C3's other tickets remain open) |
 | C4 | Validation runner and promotion gate; real-work gate | C3; U1.L and frozen `law-format` (D47); approved D52 boundary | Waiting |
 | C5 | Check registry and governance | C4 | Waiting |
 | C6 | Broker, role graph and Corps boards | C3; C5 for the Corps-authority gate | Waiting |
@@ -186,7 +186,7 @@ Notes on the edges:
 | R5 | Optional modules | R4; qualified C10 profile before enabling external plugins/helpers | Waiting |
 | U1 | Law and engine capabilities | C1 contracts frozen; U1.L `law-format` before U1.E engine/replay | In progress |
 | U2 | Synthetic ledgers, simulation, adversarial suite | U1.E for field simulation; validation cases: C3/C4 (A1), C5/C6 (governance), C10 (A2) | Waiting |
-| U3 | Coupling graph service | Foundation: C2 and frozen `ledger-appender` (C1, D50); accepted-promotion integration: C4 (D52) | In progress (foundation partial: ticket 61 S1–S5 landed, F-U3-61 frozen D130; 61's remaining criteria and ticket 62 wait for producer freezes: tickets 15, 17, 139; promotion integration: C4) |
+| U3 | Coupling graph service | Foundation: C2 and frozen `ledger-appender` (C1, D50); accepted-promotion integration: C4 (D52) | In progress (foundation partial: ticket 61 S1–S5 landed, F-U3-61 frozen D130; ticket 139 supplies the registration producer for F3-139 (D154); 61's remaining criteria and ticket 62 still wait for producer freezes: tickets 15, 17; promotion integration: C4) |
 | U4 | Promotion-pipeline field kinds | C2, C4, C5, U1.E, U3 | Waiting |
 | U5 | Resource pressure | R1, U1.E, U3's completed graph foundation; C4 for the runner-queue node | Waiting |
 | U6 | Perception, disclosure, shadow rendering | U4, U5, R1 | Waiting |

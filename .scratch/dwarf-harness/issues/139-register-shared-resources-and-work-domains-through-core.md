@@ -1,6 +1,6 @@
 # 139: Register shared resources and work domains through Core
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Published: 2026-10-24
 Spec: [DwarfHarness system specification](../spec.md)
@@ -32,12 +32,12 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 
 ## Acceptance criteria
 
-- [ ] The owner registers and revises shared resources and work domains through producer-owned typed Core transitions that bind actor, operation and target, check the expected version and current authority, and commit one replay-complete group ending in its receipt before acknowledging; an agent cannot register, revise or widen a registration.
-- [ ] A registered shared resource is one that F3-11's grants can name, by resource kind and key. Each registration's identity is opaque and non-secret, never a URL, account name or credential.
-- [ ] A registration, and any declaration linking one to a task or context, is scoped and versioned: a revision supersedes the earlier version without rewriting history, and replay at any cursor sees the version then current. A registration or declaration is evidence for the graph, never a permission.
-- [ ] The family is specified with its real payloads, permitted caller, consumers, privacy and replay-essential fields and a golden sample, and is frozen by addition to the ledger format before its producer writes it; F3-10's and F3-11's records, rules and goldens are unchanged.
-- [ ] At restart the service rebuilds every registration from the ledger alone and appends nothing; a crash before or after the commit leaves only committed registrations, and a same-command retry returns the original receipt.
-- [ ] Ticket 61 can build its resource and work-domain nodes from the frozen records without stand-in data: the golden holds every registration and declaration shape a node or declared edge needs.
+- [x] The owner registers and revises shared resources and work domains through producer-owned typed Core transitions that bind actor, operation and target, check the expected version and current authority, and commit one replay-complete group ending in its receipt before acknowledging; an agent cannot register, revise or widen a registration.
+- [x] A registered shared resource is one that F3-11's grants can name, by resource kind and key. Each registration's identity is opaque and non-secret, never a URL, account name or credential.
+- [x] A registration, and any declaration linking one to a task or context, is scoped and versioned: a revision supersedes the earlier version without rewriting history, and replay at any cursor sees the version then current. A registration or declaration is evidence for the graph, never a permission.
+- [x] The family is specified with its real payloads, permitted caller, consumers, privacy and replay-essential fields and a golden sample, and is frozen by addition to the ledger format before its producer writes it; F3-10's and F3-11's records, rules and goldens are unchanged.
+- [x] At restart the service rebuilds every registration from the ledger alone and appends nothing; a crash before or after the commit leaves only committed registrations, and a same-command retry returns the original receipt.
+- [x] Ticket 61 can build its resource and work-domain nodes from the frozen records without stand-in data: the golden holds every registration and declaration shape a node or declared edge needs.
 
 ## Verification boundary
 
@@ -58,3 +58,7 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-24 — Published at the owner's word, which made the family ticket its own ticket, 139, and with his approval of the breakdown ([D142](../../../docs/DECISIONS.md#d142-tickets-139-and-140-published-with-three-blocker-changes)). This adopts the ticket for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-28 — Claimed for the ruled three-slice Core registration build under D117/D125/D152.
+
+2026-10-29 — Resolution: the three-slice build supplies owner-only CAS registration/declaration transitions, exact opaque F3-11 resource addresses, scoped versioned evidence, historical/pinned queries and original command receipts (B34). The complete additive F3-139 family was frozen before its producer (D154); see the [ledger catalogue](../../../docs/CONTRACTS.md) and [Core package documentation](../../../internal/core/agents/doc.go). Real process-interruption and injected torn-tail recovery prove ledger-only reconstruction without Core replay appends and retries without duplicate effects; they do not establish power-loss durability. Registrations remain evidence, not permission. Ticket61 receives real record shapes, not implemented graph nodes/edges; later action facts, provider execution and views are outside this ticket. D52's testing-only boundary, C4 admission and separate whole-ticket Fable verification remain unchanged.
