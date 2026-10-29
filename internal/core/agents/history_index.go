@@ -650,8 +650,9 @@ func (h *historyIndex) putCommand(id uuid.UUID, after, through uint64, match com
 }
 
 type historySourceValue struct {
-	Record  ledger.Record
-	Payload []byte
+	Record   ledger.Record
+	Payload  []byte
+	BodyRefs []string
 }
 
 func (h *historyIndex) source(sequence int64, through uint64, colony uuid.UUID) (ledger.Record, bool) {
@@ -664,6 +665,15 @@ func (h *historyIndex) source(sequence int64, through uint64, colony uuid.UUID) 
 	err := json.Unmarshal(e.data, &value)
 	record := value.Record
 	record.Payload = value.Payload
+	if err == nil && value.BodyRefs != nil {
+		record.BodyRefs = make([]ledger.Digest, len(value.BodyRefs))
+		for i, text := range value.BodyRefs {
+			record.BodyRefs[i], err = ledger.ParseDigest(text)
+			if err != nil {
+				break
+			}
+		}
+	}
 	if err == nil && record.Seq == uint64(sequence) && record.ColonyID == colony && record.CommitCount > 0 && record.CommitIndex >= 0 && record.CommitIndex < record.CommitCount && uint64(record.CommitCount) == e.last-e.first+1 && uint64(record.CommitIndex) == record.Seq-e.first && validID(record.CommitID) && json.Valid(record.Payload) && json.Valid(record.JSON) {
 		sum := ledger.Digest(sha256.Sum256(record.JSON))
 		var err error
@@ -694,7 +704,16 @@ func (h *historyIndex) putSource(record ledger.Record, first, last, through uint
 	// RawMessage (which may rewrite escaping). Both byte copies are charged.
 	payload := record.Payload
 	record.Payload = nil
-	data, err := json.Marshal(historySourceValue{Record: record, Payload: payload})
+	// Digests marshal as text but need explicit parsing on decode.
+	var bodyRefs []string
+	if record.BodyRefs != nil {
+		bodyRefs = make([]string, len(record.BodyRefs))
+		for i, digest := range record.BodyRefs {
+			bodyRefs[i] = digest.String()
+		}
+	}
+	record.BodyRefs = nil
+	data, err := json.Marshal(historySourceValue{Record: record, Payload: payload, BodyRefs: bodyRefs})
 	if err == nil {
 		h.put(historyEntry{key: historyKey{kind: historySource, sequence: record.Seq}, from: through, first: first, last: last, found: true, data: data})
 	}
