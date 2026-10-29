@@ -9,7 +9,7 @@ import (
 	"uuid"
 )
 
-// F3-139's version-1 records are proposed for freeze (D125).
+// F3-139's version-1 records are frozen (D154).
 const (
 	TypeRuntimeResourceRegistered   = "runtime.resource_registered"
 	TypeRuntimeWorkDomainRegistered = "runtime.work_domain_registered"

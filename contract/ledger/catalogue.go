@@ -61,7 +61,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeRuntimeSpendConfigured, TypeRuntimePaidReserved,
 // TypeRuntimePaidDispatchIntent, TypeRuntimePaidResult,
 // TypeRuntimePaidOverrunAcknowledged and TypeRuntimePaidReceipt; and F3-139,
-// proposed for freeze (D125): TypeRuntimeResourceRegistered,
+// frozen (D154): TypeRuntimeResourceRegistered,
 // TypeRuntimeWorkDomainRegistered, TypeRuntimeDeclarationChanged and
 // TypeRuntimeRegistrationReceipt. All fifty-three are at version 1.
 // It never contains a type in the reserved fixture namespace.

@@ -181,7 +181,7 @@
 // also by addition to format version 1.
 // F3-13 is ticket 13's part of F3, frozen (D148),
 // also by addition to format version 1.
-// F3-139 is ticket 139's part of F3, proposed for freeze (D125),
+// F3-139 is ticket 139's part of F3, frozen (D154),
 // also by addition to format version 1; record availability does not imply
 // an operational producer or graph consumer.
 // The type namespace "ledger." is reserved for F0
@@ -2560,7 +2560,7 @@
 // # Registration and declaration records (F3-139)
 //
 // Ticket 139's four version-1 types and schema-5 canonical submission are
-// proposed for freeze (D125). This addition does not change format version 1,
+// frozen (D154). This addition does not change format version 1,
 // F0, earlier families, schemas 1-4, grants, task lifecycle or authorization.
 // Registrations and declarations are evidence, never permission. A resource
 // registration is not a prerequisite for an existing external grant; a work

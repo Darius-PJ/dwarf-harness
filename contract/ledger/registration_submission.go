@@ -7,8 +7,8 @@ import (
 	"uuid"
 )
 
-// RegistrationSubmission is schema 5's canonical owner request, proposed for
-// freeze (D125). Arguments is the matching concrete value, never arbitrary JSON.
+// RegistrationSubmission is schema 5's canonical owner request, frozen
+// (D154). Arguments is the matching concrete value, never arbitrary JSON.
 // The operation and its arguments bind the kind-scoped target without a wrapper.
 type RegistrationSubmission struct {
 	Schema    int64  `json:"schema"`
