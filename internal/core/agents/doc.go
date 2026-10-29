@@ -597,4 +597,49 @@
 // exchange adds 96 MiB. For three exchanges and retained preparations, every
 // shared colony/scope cap must cover the sum, not three copied allowances.
 // This reservation arithmetic is not a measurement of resident memory.
+//
+// # Owner registrations and declarations
+//
+// SetResourceRegistration, SetWorkDomainRegistration and SetDeclaration are
+// trusted owner-only CAS setters. Service access is not authentication of a
+// caller-supplied Binding. No Agent mutation or registration query is exposed.
+// These records are evidence, never grants, observed use or disclosure authority.
+// Existing grants work without registration; registering, narrowing or withdrawing
+// evidence cannot issue, widen, revoke or charge a grant.
+//
+// A resource's UUID is separate from its explicit immutable, unique external
+// ledger.Resource address. Keys compare exactly; no alias, normalization or
+// resolver exists. The trusted host supplies nonsecret opaque identity, never a
+// URL, account identifier or credential. The byte grammar is not a secret
+// detector. An opaque paid-route key requires no provider setup or invocation.
+// Resource, work-domain and declaration IDs occupy independent namespaces.
+//
+// Expected zero creates version one; positive expectations advance exactly one.
+// Audiences contain registered agents. A declaration pins the source version
+// current at commit, with audience contained in that source and each named task.
+// Each named context is an exact registered binding whose agent is in the
+// declaration audience. Unassigned and terminal tasks are valid consumers.
+// Consumer replacement is complete; an empty array withdraws the edges. Later
+// source revisions or task reassignment never rewrite an existing declaration.
+//
+// Global command retries precede CAS, source-currentness and population admission.
+// One command/effect/receipt group is preflighted against the original normalized
+// request and the same transition planner used by replay. After Submit, completion
+// reads the actual receipt and installs through its durable boundary before
+// acknowledgement, even if the caller cancels. Uncertain writes or an unprovable
+// committed result poison the service. Lost acknowledgement does not roll back;
+// Close waits for active completion. Open rebuilds from the ledger without append.
+//
+// ResourceStatus selects by exact address; WorkDomainStatus and DeclarationStatus
+// select by UUID. RegistrationVersion resolves an exact pinned source version,
+// and RegistrationCommandStatus returns the original receipt. These passive
+// owner queries return isolated typed values: no clock, charge, private-object
+// read or external request. Zero is genesis, ToEnd captures one durable boundary,
+// and numeric cursors must be complete boundaries no later than that capture.
+// Historical selection scans validated complete groups, never today's state.
+// Only three latest-state maps are retained; versions and receipts stay in the
+// ledger. MaxRegistrations (default 256) counts resources plus domains, and
+// MaxDeclarations (default 1024) counts all declarations, including withdrawals.
+// Revisions need no new slot; lowered producer limits do not impede replay or
+// matching retries. These are admission bounds, not measured heap capacity.
 package agents

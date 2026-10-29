@@ -266,7 +266,7 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 	}
 	err := s.scan(ctx, s.p.through, through, func(c ledger.Commit) error {
 		d := draftsOf(c)
-		g, scoped, review, paid, err := decodeFamily(d, c.First)
+		g, scoped, review, paid, registration, err := decodeFamily(d, c.First)
 		if err != nil {
 			return err
 		}
@@ -282,6 +282,9 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 		}
 		if paid != nil {
 			command = &paid.command
+		}
+		if registration != nil {
+			command = &registration.command
 		}
 		if command != nil {
 			if bytes.Compare(command.CommandID[:], s.p.maxCommand[:]) <= 0 {
@@ -331,6 +334,16 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 			}
 			s.p.installPaid(next)
 		}
+		if registration != nil {
+			next, err := s.planRegistration(ctx, registration, c.First)
+			if err != nil {
+				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+					return err
+				}
+				return inconsistent(c.First, "invalid registration transition: "+err.Error())
+			}
+			s.p.installRegistration(next)
+		}
 		for _, r := range d {
 			switch r.Type {
 			case ledger.TypeCommand:
@@ -378,12 +391,13 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 }
 
 type commandMatch struct {
-	found   bool
-	command ledger.Command
-	group   *privateGroup
-	scoped  *scopedGroup
-	review  *reviewGroup
-	paid    *paidGroup
+	found        bool
+	command      ledger.Command
+	group        *privateGroup
+	scoped       *scopedGroup
+	review       *reviewGroup
+	paid         *paidGroup
+	registration *registrationGroup
 }
 
 func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
@@ -410,11 +424,11 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 			if found.found {
 				return inconsistent(c.First, "duplicate command")
 			}
-			g, scoped, review, paid, err := decodeFamily(draftsOf(c), c.First)
+			g, scoped, review, paid, registration, err := decodeFamily(draftsOf(c), c.First)
 			if err != nil {
 				return err
 			}
-			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid}
+			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration}
 			matched = c
 		}
 		return nil

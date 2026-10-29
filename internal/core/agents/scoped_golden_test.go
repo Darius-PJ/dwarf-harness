@@ -33,6 +33,9 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 	if chapter == "13" {
 		colony = uuid.MustParse("019a1300-0000-7000-8000-000000000001")
 	}
+	if chapter == "139" {
+		colony = uuid.MustParse("019a1390-0000-7000-8000-000000000001")
+	}
 	r, err := ledger.OpenReader(filepath.Join(dir, "log"), ledger.ReadOptions{Colony: colony, Through: ledger.ToEnd, AllTypes: true, Consume: ledger.Consumption{}})
 	if err != nil {
 		t.Fatal(err)

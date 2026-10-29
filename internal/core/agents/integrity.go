@@ -70,7 +70,7 @@ func refuseInitialMarkdown(path privateScope) error {
 func (s *Service) scopeHistory(ctx context.Context, ids submissionIDs, scope string, through, revision uint64, visit func(string, Head, string) error) (uint64, error) {
 	var current uint64
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		g, scoped, _, _, err := decodeFamily(draftsOf(c), c.First)
+		g, scoped, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return err
 		}
@@ -163,7 +163,7 @@ func (s *Service) inspectOpen(ctx context.Context) (Reconciliation, error) {
 	// One global traversal preserves every occurrence in both revision families.
 	// Reports are collected per scope to retain sorted-scope/occurrence order.
 	err := s.scan(ctx, 0, s.p.through, func(c ledger.Commit) error {
-		g, scoped, _, _, err := decodeFamily(draftsOf(c), c.First)
+		g, scoped, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return err
 		}

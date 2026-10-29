@@ -42,7 +42,7 @@ func (s *Service) paidObjectSelected(ctx context.Context, a paidAttempt, ref led
 	// historical query, not a scan in dispatch or an ordinary settlement.
 	found := false
 	err := s.scan(ctx, a.sequence-2, s.p.through, func(c ledger.Commit) error {
-		_, _, _, g, err := decodeFamily(draftsOf(c), c.First)
+		_, _, _, g, _, err := decodeFamily(draftsOf(c), c.First)
 		if err == nil && g != nil && g.receipt.AttemptID == a.admission.AttemptID && selected(g.result) {
 			found = true
 		}

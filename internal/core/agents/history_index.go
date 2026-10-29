@@ -597,7 +597,7 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 				return commandMatch{found: true, command: command}, true
 			}
 			if uint64(len(v.Drafts)) == e.last-e.first+1 {
-				g, scoped, review, paid, err := decodeFamily(v.Drafts, e.first)
+				g, scoped, review, paid, _, err := decodeFamily(v.Drafts, e.first)
 				occurrences := 0
 				for _, draft := range v.Drafts {
 					if draft.Type == ledger.TypeCommand {
@@ -620,6 +620,9 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 }
 
 func (h *historyIndex) putCommand(id uuid.UUID, after, through uint64, match commandMatch, commit ledger.Commit) {
+	if match.registration != nil {
+		return
+	}
 	e := historyEntry{key: historyKey{kind: historyCommand, id: id}, from: through, after: after, found: match.found}
 	if match.found {
 		command, err := match.command.Encode()

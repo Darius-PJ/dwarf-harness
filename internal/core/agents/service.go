@@ -24,25 +24,26 @@ type privateStore interface {
 	Durable() uint64
 }
 type serviceDeps struct {
-	beforePublish     func(Binding, string) error
-	afterPublish      func(Binding, string)
-	beforeRead        func(Binding, string) error
-	afterRead         func(Binding, string)
-	beforeSubmit      func([]ledger.Draft) []ledger.Draft
-	afterCommit       func(Receipt)
-	afterScopedSubmit func()
-	afterScopedCommit func(ScopedReceipt) error
-	afterReviewCommit func(ReviewReceipt) error
-	reviewClock       func() (int64, error)
-	paidTestAuthority string
-	paidTestRoots     *x509.CertPool
-	paidWrapConn      func(net.Conn) net.Conn
-	beforeMaterialize func(Binding, string, string) error
-	beforeProjection  func(Binding, string)
-	beforeLookup      func()
-	beforeHistoryFill func(historyKey)
-	beforeReplayWait  func()
-	afterCloseFence   func()
+	beforePublish           func(Binding, string) error
+	afterPublish            func(Binding, string)
+	beforeRead              func(Binding, string) error
+	afterRead               func(Binding, string)
+	beforeSubmit            func([]ledger.Draft) []ledger.Draft
+	afterCommit             func(Receipt)
+	afterScopedSubmit       func()
+	afterScopedCommit       func(ScopedReceipt) error
+	afterReviewCommit       func(ReviewReceipt) error
+	afterRegistrationCommit func(RegistrationReceipt) error
+	reviewClock             func() (int64, error)
+	paidTestAuthority       string
+	paidTestRoots           *x509.CertPool
+	paidWrapConn            func(net.Conn) net.Conn
+	beforeMaterialize       func(Binding, string, string) error
+	beforeProjection        func(Binding, string)
+	beforeLookup            func()
+	beforeHistoryFill       func(historyKey)
+	beforeReplayWait        func()
+	afterCloseFence         func()
 }
 type scopeKey struct{ agent, context uuid.UUID }
 type scopeGate struct {
@@ -78,6 +79,9 @@ type projection struct {
 	tasks                map[uuid.UUID]scopedTaskState
 	work                 map[uuid.UUID]scopedWorkState
 	reviews              map[uuid.UUID]reviewSlot
+	resources            map[uuid.UUID]ResourceRegistrationView
+	domains              map[uuid.UUID]WorkDomainRegistrationView
+	declarations         map[uuid.UUID]DeclarationView
 	maxRequest           uuid.UUID
 	reviewFloor          int64
 	paidRoutes           map[uuid.UUID]ledger.RuntimePaidRouteConfigured
@@ -102,10 +106,12 @@ func newProjection() projection {
 		agents: map[uuid.UUID]agentState{}, contexts: map[uuid.UUID]uuid.UUID{}, sessions: map[uuid.UUID]uuid.UUID{},
 		scopes: map[scopeKey]*scopeState{}, scratches: map[uuid.UUID]scratchState{},
 		grants: map[uuid.UUID]grantState{}, tasks: map[uuid.UUID]scopedTaskState{}, work: map[uuid.UUID]scopedWorkState{},
-		reviews:    map[uuid.UUID]reviewSlot{},
-		identities: newIdentityMaxima(),
-		book:       budgetBook{accounts: map[ledger.ScopeKey]budgetAccount{}, preparing: map[ledger.ScopeKey][4]int64{}, paid: map[ledger.PaidScope]paidAccount{}},
-		paidRoutes: map[uuid.UUID]ledger.RuntimePaidRouteConfigured{}, paidCredentialScopes: map[uuid.UUID]paidCredentialScope{},
+		reviews:   map[uuid.UUID]reviewSlot{},
+		resources: map[uuid.UUID]ResourceRegistrationView{}, domains: map[uuid.UUID]WorkDomainRegistrationView{},
+		declarations: map[uuid.UUID]DeclarationView{},
+		identities:   newIdentityMaxima(),
+		book:         budgetBook{accounts: map[ledger.ScopeKey]budgetAccount{}, preparing: map[ledger.ScopeKey][4]int64{}, paid: map[ledger.PaidScope]paidAccount{}},
+		paidRoutes:   map[uuid.UUID]ledger.RuntimePaidRouteConfigured{}, paidCredentialScopes: map[uuid.UUID]paidCredentialScope{},
 		paidCredentials: map[uuid.UUID]ledger.RuntimeCredentialChanged{},
 		paidAttempts:    map[uuid.UUID]paidAttempt{}, paidChildren: map[uuid.UUID]int{},
 		paidHotLimit:     128,
@@ -307,6 +313,8 @@ func privateConsumption() ledger.Consumption {
 		ledger.TypeRuntimePaidRouteConfigured: {1}, ledger.TypeRuntimeCredentialChanged: {1}, ledger.TypeRuntimeSpendConfigured: {1},
 		ledger.TypeRuntimePaidReserved: {1}, ledger.TypeRuntimePaidDispatchIntent: {1}, ledger.TypeRuntimePaidResult: {1},
 		ledger.TypeRuntimePaidOverrunAcknowledged: {1}, ledger.TypeRuntimePaidReceipt: {1},
+		ledger.TypeRuntimeResourceRegistered: {1}, ledger.TypeRuntimeWorkDomainRegistered: {1},
+		ledger.TypeRuntimeDeclarationChanged: {1}, ledger.TypeRuntimeRegistrationReceipt: {1},
 	}
 }
 func isPrivateType(t string) bool {
