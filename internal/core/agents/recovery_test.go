@@ -626,9 +626,10 @@ func TestPrivateFusedHistoryInspection(t *testing.T) {
 	}
 }
 
-// Replayed projections need not have the same optional membership hints as a
-// live service. Every authoritative field and materialization/issue observation
-// still participates in the rejected-group and recovery no-effect assertions.
+// Replayed projections may differ from a live service in optional membership
+// hints and whether an empty origin-preparation map has been allocated.
+// Every authoritative field, nonempty reservation map and materialization/issue
+// observation still participates in rejected-group and recovery assertions.
 func sameProjectionState(a, b projection) bool {
 	withoutHints := func(p projection) projection {
 		scopes := make(map[scopeKey]*scopeState, len(p.scopes))
@@ -638,6 +639,9 @@ func sameProjectionState(a, b projection) bool {
 			scopes[key] = &copy
 		}
 		p.scopes = scopes
+		if len(p.book.originPreparing) == 0 {
+			p.book.originPreparing = nil
+		}
 		return p
 	}
 	return reflect.DeepEqual(withoutHints(a), withoutHints(b))

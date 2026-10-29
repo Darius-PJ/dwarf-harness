@@ -866,4 +866,265 @@ func TestHistoryIndexAuthoritativeCorruption(t *testing.T) {
 	if _, err := f.service.CommandStatus(ctx, lookup); !errors.Is(err, ledger.ErrCorrupt) {
 		t.Fatalf("damaged acceleration hid corrupt authoritative history: %v", err)
 	}
+	if _, _, err := f.service.sourceRecord(ctx, int64(receipt.Sequence-1), f.store.Durable()); !errors.Is(err, ledger.ErrCorrupt) {
+		t.Fatalf("damaged source acceleration hid corrupt authoritative commit: %v", err)
+	}
+}
+
+func TestHistoryIndexWorkspaceRegistration(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"warm", "discarded", "evicted", "damaged", "decoder"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, commits := scopedGoldenFixture(t, "11", 4)
+			var err error
+			f.service, _, err = Open(ctx, f.store, f.root, DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			registration := commits[4]
+			workspace := scopedDecode(t, ledger.DecodeWorkspaceRegistered, registration.Records[0].Payload)
+			resource := ledger.Resource{Kind: "workspace", WorkspaceID: workspace.WorkspaceID, Binding: ledger.Binding{AgentID: commits[0].Records[0].AgentID, ContextID: commits[0].Records[0].ContextID}, PathPrefix: "."}
+			query := func(resource ledger.Resource, through uint64) (bool, error) {
+				f.service.mu.Lock()
+				defer f.service.mu.Unlock()
+				return f.service.registeredResource(ctx, resource, through)
+			}
+			before := f.store.Durable()
+			if found, err := query(resource, before); err != nil || found {
+				t.Fatalf("workspace before registration: %v %v", found, err)
+			}
+			registered, err := f.store.Append(ctx, scopedGoldenDrafts(registration))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}}); err != nil {
+				t.Fatal(err)
+			}
+			if found, err := query(resource, registered.Last); err != nil || !found {
+				t.Fatalf("accepted registration retained absence: %v %v", found, err)
+			}
+			if mode == "damaged" {
+				h := f.service.history
+				h.mu.Lock()
+				node := h.entries[historyKey{kind: historyWorkspace, id: resource.WorkspaceID}]
+				if node != nil {
+					// Change the answer without updating its checksum.
+					node.Value.(*historyEntry).found = false
+				}
+				h.mu.Unlock()
+			} else {
+				damageHistoryCache(f.service, mode)
+			}
+			if found, err := query(resource, registered.Last); err != nil || !found {
+				t.Fatalf("registration lost after %s: %v %v", mode, found, err)
+			}
+			cancelled, cancel := context.WithCancel(ctx)
+			cancel()
+			f.service.mu.Lock()
+			found, err := f.service.registeredResource(cancelled, resource, registered.Last)
+			f.service.mu.Unlock()
+			if found || !errors.Is(err, context.Canceled) {
+				t.Fatalf("warm registration ignored cancellation: %v %v", found, err)
+			}
+			wrong := resource
+			wrong.Binding.AgentID = privateID(29999)
+			if found, err := query(wrong, registered.Last); err != nil || found {
+				t.Fatalf("registration bypassed context binding: %v %v", found, err)
+			}
+			if found, err := query(resource, before); err != nil || found {
+				t.Fatalf("later registration leaked into earlier prefix: %v %v", found, err)
+			}
+			if _, err := query(resource, registered.First); !errors.Is(err, ledger.ErrCursor) {
+				t.Fatalf("partial registration commit accepted: %v", err)
+			}
+			if found, err := query(resource, registered.Last); err != nil || !found {
+				t.Fatalf("historical absence replaced current registration: %v %v", found, err)
+			}
+			if _, err := f.store.Append(ctx, scopedGoldenDrafts(commits[5])); err != nil {
+				t.Fatal(err)
+			}
+			drafts := scopedGoldenDrafts(commits[6])
+			advanced, err := f.store.Submit(ctx, drafts[0], drafts[1:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := query(resource, advanced.First); !errors.Is(err, ledger.ErrCursor) {
+				t.Fatalf("registration proof accepted an arbitrary intermediate prefix: %v", err)
+			}
+			// An unrelated malformed registration is still part of the full
+			// authoritative search. Optional invalidation must lose the proof,
+			// not turn this decoder error into a positive or negative answer.
+			if _, err := f.store.Append(ctx, []ledger.Draft{{Type: ledger.TypeWorkspaceRegistered, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: []byte("{}")}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}}); err != nil {
+				t.Fatalf("optional invalidation added a refusal: %v", err)
+			}
+			through := f.store.Durable()
+			if _, err := query(resource, through); !errors.Is(err, ledger.ErrInvalid) {
+				t.Fatalf("registration proof concealed authoritative error: %v", err)
+			}
+			if _, err := query(resource, through); !errors.Is(err, ledger.ErrInvalid) || f.store.Durable() != through {
+				t.Fatalf("failed full search published an answer or an effect: %v", err)
+			}
+		})
+	}
+}
+
+func TestHistoryIndexWorkspaceReadiness(t *testing.T) {
+	t.Parallel()
+	for _, refusal := range []string{"grant", "origin", "revoked", "closed", "missing"} {
+		t.Run(refusal, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, agent, start, admit := scopedLocalFixture(t, DefaultLimits())
+			if _, err := agent.StartTurn(ctx, start); err != nil {
+				t.Fatal(err)
+			}
+			f.service.mu.Lock()
+			found, err := f.service.registeredResource(ctx, admit.Target, f.service.p.through)
+			f.service.mu.Unlock()
+			if err != nil || !found {
+				t.Fatalf("registered workspace: %v %v", found, err)
+			}
+			want := ErrDenied
+			switch refusal {
+			case "grant":
+				admit.GrantID = privateID(29999)
+			case "origin":
+				admit.Target.Binding.ContextID = privateID(29999)
+			case "revoked":
+				if _, err := f.service.RevokeGrant(ctx, Binding{AgentID: agent.ids.agent, ContextID: agent.ids.context}, GrantRevocation{CommandID: privateID(9011), RevokeGrantID: scopedGoldenID(0x300), ExpectedVersion: 1, ExpectedAuthorityVersion: 4}); err != nil {
+					t.Fatal(err)
+				}
+			case "closed", "missing":
+				binding := Binding{AgentID: agent.ids.agent, ContextID: agent.ids.context}
+				scratch, err := f.service.ScratchBinding(ctx, ScratchLookup{Binding: binding, WorkspaceID: admit.Target.WorkspaceID})
+				if err != nil || scratch.State != "present" {
+					t.Fatalf("initial matching scratch: %+v %v", scratch, err)
+				}
+				if refusal == "closed" {
+					payload := testPayload(t, ledger.ScratchClosed{ScratchID: scratch.ScratchID, ContextID: binding.ContextID, Reason: "abandoned"})
+					if _, err := f.store.Append(ctx, []ledger.Draft{{Type: ledger.TypeScratchClosed, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: payload}}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					// Losing the live scratch projection must not make cached
+					// registration evidence a substitute for a matching root.
+					f.service.mu.Lock()
+					delete(f.service.p.scratches, scratch.ScratchID)
+					f.service.mu.Unlock()
+				}
+				want = ErrUnavailable
+			}
+			assertReviewRefusal(t, f, func() error {
+				_, err := agent.AdmitLocal(ctx, admit)
+				return err
+			}, want)
+		})
+	}
+}
+
+func TestHistoryIndexAcceptedSources(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"warm", "discarded", "evicted", "damaged"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, binding, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+			writePrivate(t, f.service, binding, 2500, 1, Change{Slot: "memory", Mode: "replace", Bytes: []byte("owner source")})
+			if _, err := agent.WritePrivate(ctx, ScopedPrivateWrite{CommandID: privateID(2501), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: 2, Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("scoped source")}}}); err != nil {
+				t.Fatal(err)
+			}
+			task := scopedNewTask(2502, 2503, uuid.UUID{}, binding.AgentID)
+			if _, err := f.service.CreateTask(ctx, binding, task); err != nil {
+				t.Fatal(err)
+			}
+			var sources []ledger.Record
+			bounds := map[uint64][2]uint64{}
+			through := f.store.Durable()
+			if err := f.service.scan(ctx, 0, through, func(c ledger.Commit) error {
+				for _, record := range c.Records {
+					if record.Type == ledger.TypePrivateRevision || record.Type == ledger.TypePrivateScopedRevision || len(record.BodyRefs) != 0 {
+						sources = append(sources, record)
+						bounds[record.Seq] = [2]uint64{c.First, c.Last}
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for phase := range 2 {
+				if phase == 1 {
+					reopenScoped(t, f, DefaultLimits())
+				}
+				// The first query follows real live acceptance or Open, not a
+				// hand-inserted entry or a warming source lookup.
+				damageHistoryCache(f.service, mode)
+				for _, want := range sources {
+					seq := int64(want.Seq)
+					got, found, err := f.service.sourceRecord(ctx, seq, through)
+					if err != nil || !found || !reflect.DeepEqual(got, want) {
+						t.Fatalf("accepted source %d changed: %+v %v", seq, got, err)
+					}
+					if len(got.BodyRefs) != 0 {
+						got.BodyRefs[0] = ledger.Digest{}
+					}
+					got.Payload[0], got.JSON[0] = '!', '!'
+					again, found, err := f.service.sourceRecord(ctx, seq, through)
+					if err != nil || !found || !reflect.DeepEqual(again, want) {
+						t.Fatalf("source %d lent mutable storage: %+v %v", seq, again, err)
+					}
+					bound := bounds[want.Seq]
+					if _, found, err := f.service.sourceRecord(ctx, seq, bound[0]-1); err != nil || found {
+						t.Fatalf("source %d leaked before its commit: %v %v", seq, found, err)
+					}
+					if want.Seq < bound[1] {
+						if _, _, err := f.service.sourceRecord(ctx, seq, bound[1]-1); !errors.Is(err, ledger.ErrCursor) {
+							t.Fatalf("source %d escaped its complete commit: %v", seq, err)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHistoryIndexSourceEligibility(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"unconsumed-body-reference", "command-without-body-reference"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, commits := scopedGoldenFixture(t, "11", 5)
+			var err error
+			f.service, _, err = Open(ctx, f.store, f.root, DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A body-bearing capture-input record is unconsumed; an F0
+			// command is consumed but not eligible for source warming.
+			// Neither may turn a later authoritative error into a hit.
+			source := commits[4].Records[1]
+			if kind == "command-without-body-reference" {
+				source = commits[0].Records[0]
+			}
+			through := f.store.Durable()
+			if err := f.store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(f.store.LogDir(), ledger.SegmentName(1))
+			lines := bytes.SplitAfter(readTestFile(t, path), []byte{'\n'})
+			lines[source.Seq-1][0] = 'x'
+			writeTestFile(t, path, bytes.Join(lines, nil))
+			if _, _, err := f.service.sourceRecord(ctx, int64(source.Seq), through); !errors.Is(err, ledger.ErrCorrupt) {
+				t.Fatalf("ineligible source bypassed authoritative reader: %v", err)
+			}
+		})
+	}
 }

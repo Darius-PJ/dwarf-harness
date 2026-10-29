@@ -300,6 +300,16 @@ func (s *Service) registeredResource(ctx context.Context, resource ledger.Resour
 		if s.p.contexts[resource.Binding.ContextID] != resource.Binding.AgentID {
 			return false, nil
 		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		key := historyKey{kind: historyWorkspace, id: resource.WorkspaceID}
+		if e, hit := s.history.get(key, 0, through); hit {
+			if len(e.data) == 0 && e.first == 0 && e.last == 0 && e.task == (uuid.UUID{}) {
+				return e.found, nil
+			}
+			s.history.discard(key)
+		}
 		found := false
 		err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
 			for _, record := range commit.Records {
@@ -314,6 +324,9 @@ func (s *Service) registeredResource(ctx context.Context, resource ledger.Resour
 			}
 			return nil
 		})
+		if err == nil {
+			s.history.put(historyEntry{key: key, from: through, found: found})
+		}
 		return found, err
 	case "external":
 		return true, nil

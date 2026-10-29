@@ -140,6 +140,7 @@ const (
 	historyReview
 	historyAssignment
 	historySource
+	historyWorkspace
 
 	historyEntryLimit = 256
 	historyByteLimit  = 8 << 20
@@ -335,6 +336,10 @@ func (h *historyIndex) advance(after, through uint64, drafts []ledger.Draft) {
 			var p ledger.Command
 			p, err = ledger.DecodeCommand(draft.Payload)
 			h.removeLocked(historyKey{kind: historyCommand, id: p.CommandID})
+		case ledger.TypeWorkspaceRegistered:
+			var p ledger.WorkspaceRegistered
+			p, err = ledger.DecodeWorkspaceRegistered(draft.Payload)
+			h.removeLocked(historyKey{kind: historyWorkspace, id: p.WorkspaceID})
 		case ledger.TypeRuntimeGrantIssued:
 			var p ledger.RuntimeGrantIssued
 			p, err = ledger.DecodeRuntimeGrantIssued(draft.Payload)
@@ -692,5 +697,18 @@ func (h *historyIndex) putSource(record ledger.Record, first, last, through uint
 	data, err := json.Marshal(historySourceValue{Record: record, Payload: payload})
 	if err == nil {
 		h.put(historyEntry{key: historyKey{kind: historySource, sequence: record.Seq}, from: through, first: first, last: last, found: true, data: data})
+	}
+}
+
+// warmSources runs after acceptance and coverage publication, with no history
+// mutex held. putSource copies only eligible metadata into the same bounded LRU.
+func (h *historyIndex) warmSources(commit ledger.Commit) {
+	if h == nil {
+		return
+	}
+	for _, record := range commit.Records {
+		if record.Type == ledger.TypePrivateRevision || record.Type == ledger.TypePrivateScopedRevision || len(record.BodyRefs) != 0 {
+			h.putSource(record, commit.First, commit.Last, commit.Last)
+		}
 	}
 }

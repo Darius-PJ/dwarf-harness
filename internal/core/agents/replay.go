@@ -265,129 +265,194 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 		return nil
 	}
 	err := s.scan(ctx, s.p.through, through, func(c ledger.Commit) error {
-		d := draftsOf(c)
-		g, scoped, review, paid, registration, err := decodeFamily(d, c.First)
-		if err != nil {
-			return err
-		}
-		var command *ledger.Command
-		if g != nil {
-			command = &g.command
-		}
-		if scoped != nil {
-			command = &scoped.command
-		}
-		if review != nil {
-			command = &review.command
-		}
-		if paid != nil {
-			command = &paid.command
-		}
-		if registration != nil {
-			command = &registration.command
-		}
-		if command != nil {
-			if bytes.Compare(command.CommandID[:], s.p.maxCommand[:]) <= 0 {
-				old, err := s.findCommand(ctx, command.CommandID, 0, c.First-1)
-				if err != nil {
-					return err
-				}
-				if old.found {
-					return inconsistent(c.First, "reused command ID")
-				}
-			}
-		}
-		if g != nil {
-			next, err := s.p.planGroup(g, c.First)
-			if err != nil {
-				return inconsistent(c.First, "invalid private transition")
-			}
-			s.p.install(g, next)
-		}
-		if scoped != nil {
-			next, err := s.planScoped(ctx, scoped, c.First)
-			if err != nil {
-				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-					return err
-				}
-				return inconsistent(c.First, "invalid scoped transition: "+err.Error())
-			}
-			s.p.installScoped(next)
-		}
-		if review != nil {
-			next, err := s.planReview(ctx, review, c.First)
-			if err != nil {
-				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-					return err
-				}
-				return inconsistent(c.First, "invalid review transition: "+err.Error())
-			}
-			s.p.installReview(next)
-		}
-		if paid != nil {
-			next, err := s.planPaid(ctx, paid, c.First)
-			if err != nil {
-				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-					return err
-				}
-				return inconsistent(c.First, "invalid paid transition: "+err.Error())
-			}
-			s.p.installPaid(next)
-		}
-		if registration != nil {
-			next, err := s.planRegistration(ctx, registration, c.First)
-			if err != nil {
-				if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-					return err
-				}
-				return inconsistent(c.First, "invalid registration transition: "+err.Error())
-			}
-			s.p.installRegistration(next)
-		}
-		for _, r := range d {
-			switch r.Type {
-			case ledger.TypeCommand:
-				p, err := ledger.DecodeCommand(r.Payload)
-				if err != nil {
-					return err
-				}
-				if bytes.Compare(p.CommandID[:], s.p.maxCommand[:]) > 0 {
-					s.p.maxCommand = p.CommandID
-				}
-			case ledger.TypeScratchCreated:
-				p, err := ledger.DecodeScratchCreated(r.Payload)
-				if err != nil {
-					return err
-				}
-				if p.ContextID != r.ContextID {
-					return inconsistent(c.First, "scratch context")
-				}
-				s.p.scratches[p.ScratchID] = scratchState{ScratchCreated: p, sequence: c.Last}
-			case ledger.TypeScratchClosed:
-				p, err := ledger.DecodeScratchClosed(r.Payload)
-				if err != nil {
-					return err
-				}
-				old, ok := s.p.scratches[p.ScratchID]
-				if !ok || old.ContextID != p.ContextID || (r.Actor != ledger.ActorOwner && (r.Actor != ledger.ActorAgent || p.ContextID != r.ContextID)) {
-					return inconsistent(c.First, "scratch closure")
-				}
-				old.closed = true
-				s.p.scratches[p.ScratchID] = old
-			}
-		}
-		for _, record := range c.Records {
-			s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
-		}
-		s.p.publishHistory(g, scoped, c.Last)
-		s.history.advance(s.p.through, c.Last, d)
-		s.p.through = c.Last
-		return nil
+		_, err := s.acceptCommitLocked(ctx, c, nil)
+		return err
 	})
 	if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
 		s.poisoned = true
 	}
 	return err
+}
+
+// readCommittedRange requires one complete authoritative commit, including a
+// successful reader close. A Submit receipt is a range, not decoded effects.
+func (s *Service) readCommittedRange(ctx context.Context, first, last uint64) (ledger.Commit, error) {
+	if first == 0 || last < first {
+		return ledger.Commit{}, inconsistent(first, "acknowledgement range")
+	}
+	var accepted ledger.Commit
+	err := s.scan(ctx, first-1, last, func(c ledger.Commit) error {
+		if accepted.First != 0 || c.First != first || c.Last != last {
+			return inconsistent(first, "acknowledgement commit range")
+		}
+		accepted = c
+		return nil
+	})
+	if err != nil {
+		return ledger.Commit{}, err
+	}
+	if accepted.First == 0 {
+		return ledger.Commit{}, inconsistent(first, "missing acknowledgement commit")
+	}
+	return accepted, nil
+}
+
+// acceptCommitLocked is shared by refresh and a contiguous scoped acknowledgement.
+// expected binds the latter to its actual command before any effect is installed.
+// It never turns that single occurrence into a global command-search proof.
+func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expected *scopedInput) (commandMatch, error) {
+	d := draftsOf(c)
+	g, scoped, review, paid, registration, err := decodeFamily(d, c.First)
+	if err != nil {
+		return commandMatch{}, err
+	}
+	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration}
+	switch {
+	case g != nil:
+		match.command, match.found = g.command, true
+	case scoped != nil:
+		match.command, match.found = scoped.command, true
+	case review != nil:
+		match.command, match.found = review.command, true
+	case paid != nil:
+		match.command, match.found = paid.command, true
+	case registration != nil:
+		match.command, match.found = registration.command, true
+	}
+	if expected != nil {
+		if !match.found || match.command.CommandID != expected.id || match.scoped == nil {
+			return commandMatch{}, inconsistent(c.First, "acknowledgement command or family")
+		}
+		if _, err := matchScopedReceipt(match, *expected); err != nil {
+			return commandMatch{}, err
+		}
+	}
+	if match.found && bytes.Compare(match.command.CommandID[:], s.p.maxCommand[:]) <= 0 {
+		old, err := s.findCommand(ctx, match.command.CommandID, 0, c.First-1)
+		if err != nil {
+			return commandMatch{}, err
+		}
+		if old.found {
+			return commandMatch{}, inconsistent(c.First, "reused command ID")
+		}
+	}
+	var privateNext map[scopeKey]*scopeState
+	var scopedNext scopedPlan
+	var reviewNext reviewPlan
+	var paidNext paidPlan
+	var registrationNext registrationPlan
+	if g != nil {
+		privateNext, err = s.p.planGroup(g, c.First)
+		if err != nil {
+			return commandMatch{}, inconsistent(c.First, "invalid private transition")
+		}
+	}
+	if scoped != nil {
+		scopedNext, err = s.planScoped(ctx, scoped, c.First)
+		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, err
+			}
+			return commandMatch{}, inconsistent(c.First, "invalid scoped transition: "+err.Error())
+		}
+	}
+	if review != nil {
+		reviewNext, err = s.planReview(ctx, review, c.First)
+		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, err
+			}
+			return commandMatch{}, inconsistent(c.First, "invalid review transition: "+err.Error())
+		}
+	}
+	if paid != nil {
+		paidNext, err = s.planPaid(ctx, paid, c.First)
+		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, err
+			}
+			return commandMatch{}, inconsistent(c.First, "invalid paid transition: "+err.Error())
+		}
+	}
+	if registration != nil {
+		registrationNext, err = s.planRegistration(ctx, registration, c.First)
+		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, err
+			}
+			return commandMatch{}, inconsistent(c.First, "invalid registration transition: "+err.Error())
+		}
+	}
+	// Stage the shared envelope effects too: a later invalid closure in an
+	// otherwise unconsumed group must not publish an earlier scratch or maximum.
+	maxCommand := s.p.maxCommand
+	var scratches map[uuid.UUID]scratchState
+	for _, r := range d {
+		switch r.Type {
+		case ledger.TypeCommand:
+			p, err := ledger.DecodeCommand(r.Payload)
+			if err != nil {
+				return commandMatch{}, err
+			}
+			if bytes.Compare(p.CommandID[:], maxCommand[:]) > 0 {
+				maxCommand = p.CommandID
+			}
+		case ledger.TypeScratchCreated:
+			p, err := ledger.DecodeScratchCreated(r.Payload)
+			if err != nil {
+				return commandMatch{}, err
+			}
+			if p.ContextID != r.ContextID {
+				return commandMatch{}, inconsistent(c.First, "scratch context")
+			}
+			if scratches == nil {
+				scratches = make(map[uuid.UUID]scratchState)
+			}
+			scratches[p.ScratchID] = scratchState{ScratchCreated: p, sequence: c.Last}
+		case ledger.TypeScratchClosed:
+			p, err := ledger.DecodeScratchClosed(r.Payload)
+			if err != nil {
+				return commandMatch{}, err
+			}
+			old, ok := scratches[p.ScratchID]
+			if !ok {
+				old, ok = s.p.scratches[p.ScratchID]
+			}
+			if !ok || old.ContextID != p.ContextID || (r.Actor != ledger.ActorOwner && (r.Actor != ledger.ActorAgent || p.ContextID != r.ContextID)) {
+				return commandMatch{}, inconsistent(c.First, "scratch closure")
+			}
+			old.closed = true
+			if scratches == nil {
+				scratches = make(map[uuid.UUID]scratchState)
+			}
+			scratches[p.ScratchID] = old
+		}
+	}
+	if g != nil {
+		s.p.install(g, privateNext)
+	}
+	if scoped != nil {
+		s.p.installScoped(scopedNext)
+	}
+	if review != nil {
+		s.p.installReview(reviewNext)
+	}
+	if paid != nil {
+		s.p.installPaid(paidNext)
+	}
+	if registration != nil {
+		s.p.installRegistration(registrationNext)
+	}
+	s.p.maxCommand = maxCommand
+	maps.Copy(s.p.scratches, scratches)
+	for _, record := range c.Records {
+		s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
+	}
+	s.p.publishHistory(g, scoped, c.Last)
+	s.history.advance(s.p.through, c.Last, d)
+	s.history.warmSources(c)
+	s.p.through = c.Last
+	return match, nil
 }
 
 type commandMatch struct {

@@ -280,8 +280,9 @@
 // task description's body unpin, receipt) and a reject three. The
 // projection, the book and the receipt are installed before the
 // acknowledgement. A commit that lands at the preflighted prefix installs the
-// reducer's plan with only its envelope times read back; a duplicate or a
-// non-adjacent commit refreshes and looks up the command as F3-11 does. An
+// reducer's plan after reading its exact complete interval and envelope times;
+// a duplicate or non-adjacent commit refreshes and looks up the exact receipt
+// interval. No immutable witness is reread solely for live installation. An
 // uncertain write poisons the service, and cancellation after Submit cannot
 // undo the commit.
 //
@@ -319,20 +320,33 @@
 // Costs, as built. Live state retains one review slot per live task, identity
 // watermarks and context/task associations. A fresh identity above its validated
 // namespace watermark needs no history lookup. Historical commands, grants,
-// tasks, work, reviews and immutable source metadata share a bounded per-Service
-// cache. Invalid, missing or evicted entries fall back to authoritative history;
-// cold receipt/request/task lookups may scan the whole covered prefix.
-// Witnesses reuse exact validated source records from that cache. Remaining
-// misses are read together from the start of the earliest source's segment
-// through the latest source's complete commit. With 64 MiB segments, that start
-// may still be the log's. After Submit one commit's envelope times are read back.
+// tasks, work, reviews, workspace-registration membership and immutable source
+// metadata share one per-Service LRU capped at 256 entries and 8 MiB of charged
+// retained metadata, with bounded container overhead; this is not a total-RSS
+// bound. Invalid, missing, disabled or evicted entries fall back to authoritative
+// history. Cold receipt/request/task/registration lookups may scan the whole
+// covered prefix. Registration caches neither authority nor scratch readiness:
+// current context binding, grants and an open matching root scratch still apply.
+//
+// Fully accepted commits warm eligible private-revision and body-reference
+// source records using copied metadata, not retained reader commits or body bytes.
+// Witnesses reuse exact source identity and complete-commit prefix proofs.
+// Remaining misses are read together from the start of the earliest source's
+// segment through the latest source's complete commit. With 64 MiB segments,
+// that start may still be the log's. A contiguous nonduplicate scoped Submit
+// reuses one authoritative interval read for reduction and acknowledgement;
+// gaps, duplicates and prior installation retain refresh plus exact-interval
+// lookup. Even a bounded read may decode the containing segment's prefix.
+// No single observed command seeds a global command-search answer.
+//
 // Every preparation, final decision and replayed F3-12 group retains current
 // authority, participant read-rights and source-identity checks. A historical
 // result or retry can reuse metadata but not permission, bytes or a prior plan.
 // Terminal tasks and replaced requests may require cold lookup again after
-// eviction. Open includes these reducer lookups as well as private integrity
-// inspection; neither a warm cache nor bookkeeping measurements establish
-// constant total cost, an SLA, capacity or a population limit.
+// eviction. Open includes these reducer lookups as well as historical private
+// occurrence inspection; live object and Markdown health is freshly observed.
+// Neither a warm cache nor bookkeeping measurements establish constant total
+// cost, an SLA, capacity or a population limit.
 //
 // # Materialization and integrity
 //

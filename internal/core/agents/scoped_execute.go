@@ -337,11 +337,19 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 	if s.deps.afterScopedSubmit != nil {
 		s.deps.afterScopedSubmit()
 	}
-	if err := s.refreshLocked(context.Background(), max(s.p.through, committed.Last)); err != nil {
-		s.mu.Unlock()
-		return scopedResult{}, err
+	var actual commandMatch
+	if !committed.Duplicate && committed.First == s.p.through+1 {
+		var accepted ledger.Commit
+		accepted, err = s.readCommittedRange(context.Background(), committed.First, committed.Last)
+		if err == nil {
+			actual, err = s.acceptCommitLocked(context.Background(), accepted, &input)
+		}
+	} else {
+		err = s.refreshLocked(context.Background(), max(s.p.through, committed.Last))
+		if err == nil {
+			actual, err = s.findCommand(context.Background(), input.id, committed.First-1, committed.Last)
+		}
 	}
-	actual, err := s.findCommand(context.Background(), input.id, committed.First-1, committed.Last)
 	if err != nil || !actual.found {
 		s.poisoned = true
 		s.mu.Unlock()
