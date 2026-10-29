@@ -227,6 +227,137 @@ func FuzzCheckCorruption(f *testing.F) {
 	})
 }
 
+// FuzzReaderCheckpoint reuses one small real log per worker. Both saved
+// positions are minted by successful numeric reads before any mutation; the
+// unchanged seeds enter warm restoration rather than failing a preflight.
+func FuzzReaderCheckpoint(f *testing.F) {
+	inputs := append(goldenInputs(), goldenCommit{
+		header: CommitHeader{ColonyID: goldenColony, CommitID: fid("c5"), EventTimeNS: 1791000002000000000},
+		drafts: []Draft{sampleDraft(`{"n":7}`), sampleDraft(`{"n":8}`)},
+	})
+	g, err := buildLog("", goldenColony, allFixtures, inputs)
+	if err != nil {
+		f.Fatal(err)
+	}
+	dir, otherDir := f.TempDir(), f.TempDir()
+	for _, name := range g.names {
+		writeFile(f, filepath.Join(dir, name), g.files[name])
+	}
+	checkpoints := [2]*ReadCheckpoint{
+		requireReaderCheckpoint(f, dir, 0, 3, nil),
+		requireReaderCheckpoint(f, dir, 0, 6, nil),
+	}
+	afters := [2]uint64{3, 6}
+	for mode := uint8(0); mode < 16; mode++ {
+		f.Add(mode, uint32(0), byte(1))
+	}
+	// Seed byte/line/commit/segment boundaries, their neighboring cuts, and
+	// both warm positions. Modes 0 and 1 are unchanged warm reads.
+	var base uint32
+	for _, name := range g.names {
+		for _, b := range g.boundaries(name) {
+			for _, delta := range []int64{-1, 0, 1} {
+				if at := b + delta; at >= 0 && at <= int64(len(g.files[name])) {
+					for mode := uint8(2); mode < 6; mode++ {
+						f.Add(mode, base+uint32(at), byte(1))
+					}
+				}
+			}
+		}
+		for _, rec := range g.records {
+			if rec.seg == name {
+				for mode := uint8(2); mode < 4; mode++ {
+					f.Add(mode, base+uint32(rec.off)+64, byte(1))
+					f.Add(mode, base+uint32(rec.off)+uint32(len(rec.line))-1, byte(1))
+				}
+			}
+		}
+		base += uint32(len(g.files[name]))
+	}
+	f.Add(uint8(6), uint32(0), byte(0))  // correctly hashed unsupported prefix format
+	f.Add(uint8(7), uint32(6), byte(1))  // correctly hashed malformed suffix envelope
+	f.Add(uint8(9), uint32(0), byte(1))  // changed predecessor, same seq
+	f.Add(uint8(11), uint32(0), byte(1)) // damaged afterHash on valid source
+	f.Add(uint8(12), uint32(3), byte(1)) // consumed version at seq 4
+
+	f.Fuzz(func(t *testing.T, mode uint8, pos uint32, mask byte) {
+		which := int(mode % 2)
+		p := *checkpoints[which]
+		hint := &p
+		opts := ReadOptions{Colony: goldenColony, After: afters[which], Through: 8, AllTypes: true}
+		target := dir
+		name := g.names[0]
+		at := int(pos % (base + 1))
+		if size := len(g.files[name]); at >= size {
+			name, at = g.final(), at-size
+		}
+		data := bytes.Clone(g.files[name])
+		switch (mode / 2) % 8 {
+		case 0: // unchanged genuine warm continuation
+		case 1: // bounded single-byte damage, including hash/TAB/LF
+			data[at%len(data)] ^= mask
+		case 2: // bounded cut, including a short saved prefix
+			data = data[:at]
+		case 3: // correctly hashed invalid envelope or unsupported format
+			rec := g.records[int(pos)%len(g.records)]
+			name = rec.seg
+			line := rehash(t, rec.line, func(js string) string {
+				if mask%2 == 0 {
+					return sub(`"format":1`, `"format":2`)(js)
+				}
+				return "{"
+			})
+			data = append(bytes.Clone(g.files[name][:rec.off]), line...)
+			data = append(data, g.files[name][rec.off+int64(len(rec.line)):]...)
+		case 4: // fresh predecessor equality, not segment-name continuity
+			rec := g.record(4)
+			name = rec.seg
+			line := rehash(t, rec.line, sub(`"n":4`, `"n":9`))
+			data = append(bytes.Clone(g.files[name][:rec.off]), line...)
+		case 5: // detectable damage only; never recompute the token checksum
+			switch pos % 5 {
+			case 0:
+				p.afterHash[int(mask)%len(p.afterHash)] ^= 1
+			case 1:
+				p.checksum[int(mask)%len(p.checksum)] ^= 1
+			case 2:
+				p.offset ^= int64(mask) + 1
+			case 3:
+				p.baseTime ^= int64(mask) + 1
+			case 4:
+				p.version ^= uint64(mask) + 1
+			}
+		case 6: // changed context, range, consumption or directory
+			switch pos % 8 {
+			case 0:
+				opts.After = uint64(mask % 10)
+			case 1:
+				opts.Through = uint64(mask % 10)
+			case 2:
+				opts.Colony = fid("09")
+			case 3:
+				opts.Consume = Consumption{"fixture.sample": {1}}
+			case 4:
+				opts.AllTypes = false
+			case 5:
+				opts.Through = ToEnd
+			case 6:
+				opts.Through = opts.After
+			case 7:
+				target = otherDir
+			}
+		case 7:
+			if mask%2 == 0 {
+				hint = nil
+			} else {
+				hint = &ReadCheckpoint{}
+			}
+		}
+		g.reset(t, target, name, data)
+		assertCheckpointRead(t, target, opts, hint)
+	})
+}
+
 func FuzzDecodeF2_05(f *testing.F) {
 	fixtures := f2Payloads()
 	for i, tc := range fixtures {

@@ -3,6 +3,9 @@ package ledger
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -43,19 +46,96 @@ type Commit struct {
 	Records []Record // its consumed records, or all with AllTypes, in seq order
 }
 
+// ReadCheckpoint is an opaque, process-local proof of a Reader's completed
+// position. Only Reader.Checkpoint creates a usable value. A zero or damaged
+// value is a hint miss, not an error. It has no persistent encoding.
+type ReadCheckpoint struct {
+	version      uint64
+	directory    [32]byte
+	colony       [16]byte
+	segmentFirst uint64
+	offset       int64
+	baseSeq      uint64
+	baseHash     [32]byte
+	baseTime     int64
+	afterSeq     uint64
+	afterHash    [32]byte
+	afterTime    int64
+	prefix       [32]byte
+	checksum     [32]byte
+}
+
+// sum detects accidental damage, not hostile same-process reconstruction.
+func (p *ReadCheckpoint) sum() [32]byte {
+	var b [200]byte
+	binary.LittleEndian.PutUint64(b[0:8], p.version)
+	copy(b[8:40], p.directory[:])
+	copy(b[40:56], p.colony[:])
+	binary.LittleEndian.PutUint64(b[56:64], p.segmentFirst)
+	binary.LittleEndian.PutUint64(b[64:72], uint64(p.offset))
+	binary.LittleEndian.PutUint64(b[72:80], p.baseSeq)
+	copy(b[80:112], p.baseHash[:])
+	binary.LittleEndian.PutUint64(b[112:120], uint64(p.baseTime))
+	binary.LittleEndian.PutUint64(b[120:128], p.afterSeq)
+	copy(b[128:160], p.afterHash[:])
+	binary.LittleEndian.PutUint64(b[160:168], uint64(p.afterTime))
+	copy(b[168:200], p.prefix[:])
+	return sha256.Sum256(b[:])
+}
+
+func (p *ReadCheckpoint) baseChain() Chain {
+	return Chain{Seq: p.baseSeq, Hash: hex.EncodeToString(p.baseHash[:]), EventTimeNS: p.baseTime}
+}
+
+func (p *ReadCheckpoint) afterChain() Chain {
+	return Chain{Seq: p.afterSeq, Hash: hex.EncodeToString(p.afterHash[:]), EventTimeNS: p.afterTime}
+}
+
+func (p *ReadCheckpoint) matches(directory [32]byte, opts ReadOptions, seg segment, base Chain) bool {
+	if p == nil || p.version != 1 || p.checksum != p.sum() {
+		return false
+	}
+	if opts.Through == ToEnd || opts.After >= opts.Through ||
+		p.directory != directory || p.colony != [16]byte(opts.Colony) ||
+		p.afterSeq != opts.After || p.segmentFirst != seg.first ||
+		p.segmentFirst == 0 || p.baseSeq != p.segmentFirst-1 ||
+		p.offset <= 0 || p.afterSeq < p.segmentFirst {
+		return false
+	}
+	if p.baseChain() != base {
+		return false
+	}
+	return base.valid() && p.afterChain().valid() && p.afterTime >= p.baseTime
+}
+
 // Reader returns the complete commits of a log in order, verifying every
 // record it reads. It is read-only and not safe for concurrent use.
 type Reader struct {
-	opts   ReadOptions
-	s      *scanner
-	cursor uint64
-	err    error // sticky
+	opts      ReadOptions
+	s         *scanner
+	cursor    uint64
+	err       error    // sticky
+	directory [32]byte // optional path identity; s.prefix != nil enables capture
 }
 
 // OpenReader opens the log in logDir for reading after opts.After. It
 // verifies the link into the segment holding opts.After+1 from the last line
 // of the segment before it.
 func OpenReader(logDir string, opts ReadOptions) (*Reader, error) {
+	return openReader(logDir, opts, nil, false)
+}
+
+// OpenReaderWithCheckpoint opens a Reader with checked file closure and
+// optional checkpoint reuse. A missing, invalid or changed hint uses ordinary
+// scanning, still with checked closure. A usable hint avoids decoding its
+// prefix again only after freshly hashing every prefix byte and checking the
+// preceding segment's chain. Prefix hashing and suffix reading use one file.
+// I/O, seek and actual close failures are errors, not hint misses.
+func OpenReaderWithCheckpoint(logDir string, opts ReadOptions, checkpoint *ReadCheckpoint) (*Reader, error) {
+	return openReader(logDir, opts, checkpoint, true)
+}
+
+func openReader(logDir string, opts ReadOptions, checkpoint *ReadCheckpoint, checkedClose bool) (*Reader, error) {
 	if !isV7(opts.Colony) {
 		return nil, fmt.Errorf("%w: colony ID %s is not a UUIDv7", ErrInvalid, opts.Colony)
 	}
@@ -74,7 +154,7 @@ func OpenReader(logDir string, opts ReadOptions) (*Reader, error) {
 	}
 	start := Genesis()
 	if k > 0 {
-		if start, err = lastRecord(logDir, segs[k-1], opts.Colony); err != nil {
+		if start, err = lastRecord(logDir, segs[k-1], opts.Colony, checkedClose); err != nil {
 			return nil, err
 		}
 		// Checked here too because a reader already at Through never opens
@@ -87,21 +167,45 @@ func OpenReader(logDir string, opts ReadOptions) (*Reader, error) {
 		_, ok := opts.Consume[e.Type]
 		return ok || opts.AllTypes
 	}
-	return &Reader{
+	r := &Reader{
 		opts:   opts,
 		s:      newScanner(logDir, segs[k:], opts.Colony, start, opts.Through == ToEnd, keep),
 		cursor: opts.After,
-	}, nil
+	}
+	r.s.checkedClose = checkedClose
+	if checkedClose && opts.Through != ToEnd && opts.After < opts.Through {
+		if dir, err := filepath.Abs(logDir); err == nil {
+			r.directory = sha256.Sum256([]byte(filepath.Clean(dir)))
+			r.s.prefix = sha256.New()
+			if len(segs) > 0 && checkpoint.matches(r.directory, opts, segs[k], start) {
+				restored, err := r.s.restore(checkpoint)
+				if err != nil {
+					return nil, err
+				}
+				if !restored {
+					// The candidate was closed successfully. Re-list and
+					// recheck the anchor before the ordinary cold scan.
+					return openReader(logDir, opts, nil, true)
+				}
+			}
+		}
+	}
+	return r, nil
 }
 
 // lastRecord verifies the last line of a segment before the one a Reader
 // starts in and returns the chain position after it.
-func lastRecord(dir string, seg segment, colony uuid.UUID) (Chain, error) {
+func lastRecord(dir string, seg segment, colony uuid.UUID, checkedClose bool) (last Chain, err error) {
 	f, err := os.Open(filepath.Join(dir, seg.name))
 	if err != nil {
 		return Chain{}, err
 	}
-	defer f.Close()
+	defer func() {
+		closeErr := f.Close()
+		if checkedClose {
+			err = readCloseError(err, closeErr)
+		}
+	}()
 	fi, err := f.Stat()
 	if err != nil {
 		return Chain{}, err
@@ -157,8 +261,8 @@ func (r *Reader) Next() (Commit, error) {
 	}
 	c, err := r.next()
 	if err != nil {
+		err = readCloseError(err, r.s.close())
 		r.err = err
-		r.s.close()
 	}
 	return c, err
 }
@@ -213,10 +317,61 @@ func (r *Reader) Cursor() uint64 { return r.cursor }
 
 // Close releases the open segment file. Next then fails with an error
 // wrapping os.ErrClosed, unless it had already failed or reached the end.
+// For OpenReaderWithCheckpoint it returns the first actual close failure,
+// including one from automatic closure; repeated calls retain that failure.
 func (r *Reader) Close() error {
-	r.s.close()
+	closeErr := r.s.close()
 	if r.err == nil {
 		r.err = fmt.Errorf("ledger: reader closed: %w", os.ErrClosed)
 	}
+	if r.s.checkedClose {
+		r.err = readCloseError(r.err, closeErr)
+		return closeErr
+	}
 	return nil
+}
+
+// Checkpoint returns a fresh copy of the proof of this Reader's completed
+// numeric Through, or nil. It requires terminal EOF and successful actual
+// closure. ToEnd, equal bounds, early Close and any read or close failure
+// cannot issue a proof. OpenReader never issues one.
+func (r *Reader) Checkpoint() *ReadCheckpoint {
+	s := r.s
+	if !s.checkedClose || s.prefix == nil || r.err != io.EOF || s.closeErr != nil || s.f != nil ||
+		r.opts.Through == ToEnd || r.opts.After >= r.opts.Through ||
+		r.cursor != r.opts.Through || s.v.done.Seq != r.cursor ||
+		s.v.next != 0 || s.v.cur != s.v.done || !s.v.done.valid() || !s.base.valid() ||
+		s.end <= 0 || s.end != s.lr.off || s.i >= len(s.segs) {
+		return nil
+	}
+	seg := s.segs[s.i]
+	if seg.first == 0 || s.base.Seq != seg.first-1 || s.v.done.Seq < seg.first {
+		return nil
+	}
+	p := &ReadCheckpoint{
+		version: 1, directory: r.directory, colony: [16]byte(r.opts.Colony),
+		segmentFirst: seg.first, offset: s.end,
+		baseSeq: s.base.Seq, baseTime: s.base.EventTimeNS,
+		afterSeq: s.v.done.Seq, afterTime: s.v.done.EventTimeNS,
+	}
+	if _, err := hex.Decode(p.baseHash[:], []byte(s.base.Hash)); err != nil {
+		return nil
+	}
+	if _, err := hex.Decode(p.afterHash[:], []byte(s.v.done.Hash)); err != nil {
+		return nil
+	}
+	s.prefix.Sum(p.prefix[:0])
+	p.checksum = p.sum()
+	return p
+}
+
+// readCloseError never hides a close failure behind an EOF success branch.
+func readCloseError(err, closeErr error) error {
+	if closeErr == nil || errors.Is(err, closeErr) {
+		return err
+	}
+	if err == nil || err == io.EOF {
+		return closeErr
+	}
+	return errors.Join(err, closeErr)
 }

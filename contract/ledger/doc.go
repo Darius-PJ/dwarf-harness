@@ -153,6 +153,28 @@
 // the torn-tail rule; it is for offline reading, and while a writer is live
 // it may expose a commit the writer has not acknowledged.
 //
+// OpenReaderWithCheckpoint optionally reuses an opaque, process-local
+// ReadCheckpoint issued by a completed Reader. Before restoring a position it
+// checks the directory, colony, range, segment and freshly read predecessor
+// chain, then hashes every framed byte of the saved prefix on the same file
+// used to read the suffix. Equality reuses the prefix's completed verification,
+// not a caller-asserted chain; the suffix uses the ordinary parser and verifier.
+// Prefix I/O and SHA-256 work remain, even when prefix decoding is avoided.
+//
+// A nil, zero, damaged, stale or mismatched checkpoint selects ordinary
+// scanning. Directory identity uses Abs then Clean without resolving aliases
+// or folding case; failure to derive it disables only checkpoint use/capture.
+// The opt-in reader reports actual file-close failures, including automatic
+// closure and repeated Close, and never treats I/O or seek failures as misses.
+// OpenReader and Check keep their legacy behavior.
+//
+// Reader.Checkpoint returns a fresh value only after a complete, advancing
+// numeric Through, terminal EOF and successful actual closure. ToEnd, equal
+// bounds, partial commits, early Close and errors issue none. The value has no
+// persistent encoding or retained resources; its checksum detects accidental
+// damage, not hostile same-process changes. Checkpoints inherit the append-only
+// live-writer protocol, not snapshot or hostile-rewrite atomicity.
+//
 // # Catalogue
 //
 // A Catalogue lists the record type versions a writer may append. Defined

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -67,6 +68,11 @@ type scanner struct {
 	end  int64 // offset after the last complete commit in the open or final segment
 	torn int64 // bytes of the torn final commit
 	cur  Commit
+
+	checkedClose bool
+	closeErr     error     // first actual close failure, retained in opt-in mode
+	prefix       hash.Hash // hashes logically consumed framed lines; nil in legacy mode
+	base         Chain     // freshly verified chain before the current segment
 }
 
 func newScanner(dir string, segs []segment, colony uuid.UUID, start Chain, tail bool, keep func(*Envelope) bool) *scanner {
@@ -79,11 +85,15 @@ func newScanner(dir string, segs []segment, colony uuid.UUID, start Chain, tail 
 	}
 }
 
-func (s *scanner) close() {
+func (s *scanner) close() error {
 	if s.f != nil {
-		s.f.Close()
+		err := s.f.Close()
 		s.f = nil
+		if s.checkedClose && s.closeErr == nil {
+			s.closeErr = err
+		}
 	}
+	return s.closeErr
 }
 
 func (s *scanner) corrupt(off int64, reason string) error {
@@ -101,7 +111,7 @@ func (s *scanner) next() (Commit, error) {
 	c, err := s.scan()
 	if err != nil {
 		s.eof = true
-		s.close()
+		err = readCloseError(err, s.close())
 	}
 	return c, err
 }
@@ -131,7 +141,9 @@ func (s *scanner) scan() (Commit, error) {
 			case off == 0:
 				return Commit{}, s.corrupt(0, "empty segment before the final one")
 			}
-			s.close()
+			if err := s.close(); err != nil {
+				return Commit{}, err
+			}
 			s.i++
 			continue
 		case err == errPartial || err == errLong:
@@ -141,6 +153,11 @@ func (s *scanner) scan() (Commit, error) {
 			return Commit{}, s.corrupt(off, err.Error())
 		case err != nil:
 			return Commit{}, err
+		}
+		if s.prefix != nil {
+			// Hash at logical consumption, not buffered read-ahead, before
+			// the next line can reuse this storage.
+			s.prefix.Write(line)
 		}
 
 		js, ok := frameLine(line)
@@ -195,7 +212,38 @@ func (s *scanner) open() error {
 	s.f = f
 	s.lr.reset(f)
 	s.end = 0
+	if s.prefix != nil {
+		s.prefix.Reset()
+		s.base = s.v.done
+	}
 	return nil
+}
+
+// restore checks the prefix on the same descriptor used for suffix reading.
+// A byte mismatch is a miss only after the candidate closes successfully.
+func (s *scanner) restore(p *ReadCheckpoint) (bool, error) {
+	if err := s.open(); err != nil {
+		return false, err
+	}
+	n, err := io.CopyBuffer(s.prefix, io.LimitReader(s.f, p.offset), make([]byte, 64<<10))
+	if err != nil {
+		return false, readCloseError(err, s.close())
+	}
+	var prefix [32]byte
+	s.prefix.Sum(prefix[:0])
+	if n != p.offset || prefix != p.prefix {
+		return false, s.close()
+	}
+	if _, err := s.f.Seek(p.offset, io.SeekStart); err != nil {
+		return false, readCloseError(err, s.close())
+	}
+	s.lr.reset(s.f)
+	s.lr.off, s.end = p.offset, p.offset
+	after := p.afterChain()
+	s.v = verifier{colony: s.v.colony, done: after, cur: after}
+	s.cur = Commit{}
+	// s.base stays the fresh predecessor, not the restored after-chain.
+	return true, nil
 }
 
 // tornTail applies the torn-tail rule to the bytes from s.end to the end of
