@@ -131,6 +131,45 @@
 // Ready describes the assignee's own start authority. The owner's task-start
 // entrance requires only the assignee's current turn-admission chain.
 //
+// ListTaskFacts selects one agent's current assignment, whether claimed or
+// delegated, and only waiting or active tasks. Unassigned, submitted and terminal
+// tasks contribute neither rows nor counts. WaitingReady includes ready and
+// ready_queued, preserving the readiness and reason; WaitingBlocked carries the
+// existing viewer-safe reason. Active means committed task state, not a running
+// provider turn. Rows copy the exact task ID, version, assignment and assigning
+// provenance, original DescriptionRef and latest task-effect Sequence. No title
+// is synthesized, no body is read, and a reference grants no permission to read.
+// Agent queries require the selected current inspect chain and task audience
+// before readiness, counts, ordering or look-ahead; the owner has a separate
+// trusted entrance. Readiness describes the assignee's committed authority,
+// dependencies and capacity, including durable occupancy but excluding temporary
+// preparation; it grants no later execution authority. ThroughSequence qualifies
+// the whole page at one fully accepted commit, even when readiness changes
+// without a task-version or task-effect-sequence change.
+//
+// Task-facts pages contain at most Limit rows across all three non-nil buckets,
+// ordered by raw TaskID bytes within each bucket. Counts cover every visible
+// eligible task at that head, regardless of Limit or page position: a count-only
+// consumer needs one call per agent with Limit 1. Limit ranges from 1 through
+// MaxLiveTasks. One page at MaxLiveTasks covers all current eligible tasks unless
+// live tasks exceed a subsequently lowered MaxLiveTasks, when paging at an
+// unchanged head is required. Next is a copied scope-bound traversal coordinate,
+// not authority; continuation re-authorizes at the same current head. Reopening
+// at an unchanged head and binding the same principal accepts the same cursor.
+// Any later commit, even unrelated, makes an old cursor ErrTaskFactsStale after
+// current authorization; revocation can deny first. Discard an incomplete stale
+// enumeration and restart with a nil cursor against current state, never by
+// reading ledger history or treating completed pages as live permission.
+//
+// Each task-facts page scans T retained current tasks, including retained terminal
+// dependencies, with existing authority and readiness work for every eligible
+// waiting task of the target. Bounded sorted insertion costs at most O(T*Limit)
+// ID moves; candidate and output metadata are O(Limit), and Counts is fixed-size.
+// The query adds no lifetime-history enumeration, per-agent index or readiness
+// cache. Existing cold authority/dependency lookups can still scan history, and
+// Reader checkpoint validation still reads and hashes its containing prefix.
+// These bounds imply neither constant latency nor new workload capacity.
+//
 // ConfigureCapacity changes ceilings without resetting usage or releasing
 // occupied work. One checked book applies charges and holds to colony, agent,
 // context and every grant in the chain. A dispatch consumes its reserved unit

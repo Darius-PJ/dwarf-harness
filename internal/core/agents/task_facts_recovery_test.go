@@ -161,7 +161,7 @@ func TestTaskFactsTransitionRecovery(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s: %v", action, err)
 				}
-				view = taskFactsVersion(t, f, fact.TaskID, fact.Version+1, state, before+2)
+				taskFactsVersion(t, f, fact.TaskID, fact.Version+1, state, before+2)
 				fact.Version, fact.State, fact.Sequence, fact.Readiness, fact.Reason = fact.Version+1, state, before+2, readiness, reason
 				var eligible []TaskFact
 				if state == "waiting" || state == "active" {
@@ -320,6 +320,11 @@ func TestTaskFactsTransitionRecovery(t *testing.T) {
 					page, err := query(ctx, q)
 					if err != nil || !reflect.DeepEqual(page, pages[entrance][1]) {
 						t.Fatalf("same-head cursor with limit %d: %+v %v", limit, page, err)
+					}
+					if limit < DefaultLimits().MaxLiveTasks {
+						q.Limit = DefaultLimits().MaxLiveTasks
+						page, err = query(ctx, q)
+						assertTaskFactsError(t, page, err, ErrTooLarge)
 					}
 				}
 			}
