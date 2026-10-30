@@ -177,19 +177,30 @@ func TestOpenAIStreamTierToolAndContentPolicies(t *testing.T) {
 			}
 		})
 	}
-	for _, tool := range []string{"null", `{}`, `{"web_search":{"num_requests":0}}`, `{"x":{}}`, `0`, `[]`, `{"x":null}`, `{"x":0.0}`, `{"x":1}`} {
-		t.Run("tool_"+tool, func(t *testing.T) {
-			t.Parallel()
-			stream := strings.Replace(valid, `"service_tier":"default"`, `"service_tier":"default","tool_usage":`+tool, 1)
-			r, err := ReadOpenAIStream(strings.NewReader(stream), p, c)
-			want := tool == "null" || tool == `{}` || tool == `{"web_search":{"num_requests":0}}` || tool == `{"x":{}}`
-			if (err == nil) != want || r.Priceable != want || string(r.ToolUsage) != tool {
-				t.Fatal("tool usage tolerance changed")
-			}
-			if !want && !r.ProfileViolation {
-				t.Fatal("unbounded tool evidence not fenced")
-			}
-		})
+	for _, location := range []string{"response", "usage"} {
+		for _, tool := range []string{"null", `{}`, `{"web_search":{"num_requests":0}}`, `{"x":{}}`, `0`, `[]`, `{"x":null}`, `{"x":0.0}`, `{"x":1}`} {
+			t.Run(location+"_tool_"+tool, func(t *testing.T) {
+				t.Parallel()
+				stream := strings.Replace(valid, `"service_tier":"default"`, `"service_tier":"default","tool_usage":`+tool, 1)
+				want := tool == "null" || tool == `{}` || tool == `{"web_search":{"num_requests":0}}` || tool == `{"x":{}}`
+				if location == "usage" {
+					stream = strings.Replace(valid, `"usage":{`, `"usage":{"tool_usage":`+tool+`,`, 1)
+					usage, _ := rawObject([]byte(openAIUsage(20, 4, 8, 16)))
+					usage["tool_usage"] = json.RawMessage(tool)
+					_, violation, err := NormalizeUsage(p, c, usage)
+					if (err == nil) != want || violation == want {
+						t.Fatal("nested tool usage changed settlement availability")
+					}
+				}
+				r, err := ReadOpenAIStream(strings.NewReader(stream), p, c)
+				if (err == nil) != want || r.Priceable != want || string(r.ToolUsage) != tool {
+					t.Fatal("tool usage tolerance or retained evidence changed")
+				}
+				if !want && !r.ProfileViolation {
+					t.Fatal("unbounded tool evidence not fenced")
+				}
+			})
+		}
 	}
 	for name, output := range map[string]string{
 		"annotations":     strings.Replace(openAITextOutput, `"annotations":[]`, `"annotations":[{"type":"citation"}]`, 1),
@@ -221,6 +232,34 @@ func TestOpenAIStreamTierToolAndContentPolicies(t *testing.T) {
 	if err != nil || !r.Priceable || len(r.Blocks) != 1 || r.Blocks[0].ID != "call-fixture" || string(r.Blocks[0].Input) != `{"x":1}` {
 		t.Fatal("declared function call not canonical")
 	}
+	for _, row := range []struct {
+		name, field string
+		local       bool
+	}{
+		{"async_false", `"async":false`, true},
+		{"async_true", `"async":true`, false},
+		{"async_null", `"async":null`, false},
+		{"caller_null", `"caller":null`, true},
+		{"caller_nonnull", `"caller":{"type":"hosted"}`, false},
+		{"namespace_null", `"namespace":null`, true},
+		{"namespace_nonnull", `"namespace":"hosted"`, false},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			output := strings.Replace(tool, `"type":"function_call"`, `"type":"function_call",`+row.field, 1)
+			r, err := ReadOpenAIStream(strings.NewReader(openAITerminal("completed", openAIUsage(20, 4, 8, 16), output)), p, toolCompiled)
+			if err != nil || !r.Priceable || r.ContentError == row.local {
+				t.Fatal("function routing fields changed independent usage")
+			}
+			if row.local {
+				if len(r.Blocks) != 1 || r.Blocks[0].Type != "tool_use" {
+					t.Fatal("local function call lost")
+				}
+			} else if len(r.Blocks) != 0 {
+				t.Fatal("nonlocal function became an executable command")
+			}
+		})
+	}
 	for _, bad := range []string{strings.Replace(tool, `"name":"local"`, `"name":"undeclared"`, 1), strings.Replace(tool, `{\"x\":1}`, `{\"x\":1,\"x\":2}`, 1), strings.Replace(tool, `"status":"completed"`, `"status":"incomplete"`, 1), strings.Replace(tool, `"status":"completed"`, `"status":null`, 1), strings.Replace(tool, `"call_id":"call-fixture"`, `"call_id":""`, 1)} {
 		r, err := ReadOpenAIStream(strings.NewReader(openAITerminal("completed", openAIUsage(20, 4, 8, 16), bad)), p, toolCompiled)
 		if err != nil || !r.Priceable || !r.ContentError || r.Blocks != nil {
@@ -243,6 +282,9 @@ func FuzzOpenAIResponsesSSE(f *testing.F) {
 	valid := openAITerminal("completed", openAIUsage(20, 4, 8, 16), openAITextOutput)
 	for _, seed := range []string{valid, "", strings.TrimSuffix(valid, "\n\n"), strings.Replace(valid, `"cached_tokens":4`, `"cached_tokens":null`, 1), strings.Replace(valid, `"input_tokens":20`, `"input_tokens":20,"input_tokens":20`, 1), strings.Replace(valid, "answer", string([]byte{255}), 1), eventJSON(`{"type":"response.output_text.delta","sequence_number":2,"delta":"x"}`) + eventJSON(`{"type":"response.output_text.delta","sequence_number":1,"delta":"x"}`) + valid, eventJSON(`{"type":"response.output_text.delta","response_id":"other","delta":"x"}`) + valid, strings.Replace(valid, `"output_tokens":16`, `"output_tokens":9223372036854775808`, 1), eventJSON(`{"type":"future"}`) + valid} {
 		f.Add([]byte(seed), uint8(1))
+	}
+	for _, tool := range []string{`{"web_search":{"num_requests":0}}`, `{"web_search":{"num_requests":1}}`} {
+		f.Add([]byte(strings.Replace(valid, `"usage":{`, `"usage":{"tool_usage":`+tool+`,`, 1)), uint8(1))
 	}
 	f.Fuzz(func(t *testing.T, b []byte, step uint8) {
 		if len(b) > streamBodyLimit+1 {

@@ -90,7 +90,7 @@ func normalizeOpenAIUsage(raw Usage) ([]Units, bool, error) {
 	if err != nil || checkJSON(encoded, streamLineLimit, false, false) != nil {
 		return nil, false, ErrUsage
 	}
-	if !knownUsage(raw, "input_tokens", "input_tokens_details", "output_tokens", "output_tokens_details", "total_tokens") {
+	if !knownUsage(raw, "input_tokens", "input_tokens_details", "output_tokens", "output_tokens_details", "total_tokens", "tool_usage") || !emptyOpenAIToolUsage(raw["tool_usage"]) {
 		return nil, true, ErrUsage
 	}
 	input, err := zeroWhenAbsent(raw, "input_tokens", false)

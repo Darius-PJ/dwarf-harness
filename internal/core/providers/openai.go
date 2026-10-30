@@ -7,8 +7,6 @@ import (
 	"unicode/utf8"
 )
 
-const openAIRequestLimit = 512 << 10
-
 type openAIText struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -118,7 +116,7 @@ func CompileOpenAI(p Profile, r Request) (Compiled, error) {
 		w.ParallelToolCalls = new(bool)
 	}
 	body, err := compact(w)
-	if err != nil || len(body) > openAIRequestLimit {
+	if err != nil || len(body) > RequestLimit {
 		return Compiled{}, ErrLimit
 	}
 	c.body, c.output, c.classes = body, r.MaxTokens, slices.Clone(openAIClasses[:6])

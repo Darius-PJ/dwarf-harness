@@ -118,7 +118,6 @@ func TestOpenAICompilerRefusesUnsupportedInput(t *testing.T) {
 		"text_content":         func(r *Request) { r.Messages[0].Content[0].Content = []Text{} },
 		"text_error":           func(r *Request) { r.Messages[0].Content[0].IsError = new(bool) },
 		"choice_without_tools": func(r *Request) { r.ToolChoice = &ToolChoice{"auto"} },
-		"oversize":             func(r *Request) { r.Messages[0].Content[0].Text = strings.Repeat("x", openAIRequestLimit) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -282,10 +281,32 @@ func TestOpenAIProfileRefusals(t *testing.T) {
 	}
 }
 
+// The compiler shares RequestLimit; Core owns the smaller admission guard.
+// A provider-specific cap or an off-by-one would reject the boundary request.
+func TestOpenAICompilerRequestLimit(t *testing.T) {
+	t.Parallel()
+	p := openAIProfile()
+	r := fixtureRequest()
+	c, err := CompileOpenAI(p, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Messages[0].Content[0].Text += strings.Repeat("x", RequestLimit-len(c.Body()))
+	c, err = CompileOpenAI(p, r)
+	if err != nil || len(c.Body()) != RequestLimit {
+		t.Fatal("shared request-size boundary rejected")
+	}
+	r.Messages[0].Content[0].Text += "x"
+	if _, err := CompileOpenAI(p, r); !errors.Is(err, ErrLimit) {
+		t.Fatal("oversized request accepted")
+	}
+}
+
 func FuzzOpenAIRequest(f *testing.F) {
 	for _, raw := range [][]byte{[]byte(`{"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`), []byte(`{"max_tokens":16,"max_tokens":17}`), []byte(`{"messages":[{"content":null}]}`), {255}, []byte(`{"max_tokens":9223372036854775808}`), []byte(`{"max_tokens":16`), []byte(`{"store":true}`)} {
 		f.Add(raw)
 	}
+	f.Add([]byte(`{"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"` + strings.Repeat("x", RequestLimit/2) + `"}]}]}`))
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		r, err := ParseRequest(raw)
 		if err != nil {
@@ -296,7 +317,7 @@ func FuzzOpenAIRequest(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if len(c.Body()) > openAIRequestLimit || checkJSON(c.Body(), openAIRequestLimit, false, false) != nil {
+		if len(c.Body()) > RequestLimit || checkJSON(c.Body(), RequestLimit, false, false) != nil {
 			t.Fatal("invalid compiled body")
 		}
 		again, err := CompileOpenAI(p, r)

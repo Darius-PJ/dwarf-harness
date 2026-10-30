@@ -102,9 +102,9 @@ func (s *openAIStreamState) event(name string, data []byte) error {
 		}
 		s.sequence, s.hasSequence = n, true
 	}
-	if value, present := m["response_id"]; present {
+	if _, present := m["response_id"]; present {
 		id, ok := stringField(m, "response_id")
-		if !ok || !visible(id, 256) || s.result.MessageID != "" && s.result.MessageID != id || len(value) == 0 {
+		if !ok || !visible(id, 256) || s.result.MessageID != "" && s.result.MessageID != id {
 			return ErrProtocol
 		}
 		s.result.MessageID = id
@@ -284,6 +284,9 @@ func (s *openAIStreamState) snapshot(raw json.RawMessage, terminal string) error
 	s.result.RawUsageMerged = nil
 	if usage, err := rawObject(s.result.RawUsageFinal); err == nil {
 		s.result.RawUsageMerged = usage
+		if _, present := m["tool_usage"]; !present {
+			s.result.ToolUsage = bytes.Clone(usage["tool_usage"])
+		}
 	}
 	if value, present := m["error"]; present && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 		if len(value) > 64<<10 {
@@ -364,7 +367,10 @@ func (s *openAIStreamState) snapshot(raw json.RawMessage, terminal string) error
 			call, callOK := stringField(item, "call_id")
 			name, nameOK := stringField(item, "name")
 			args, argsOK := stringField(item, "arguments")
-			if !callOK || !visible(call, 256) || calls[call] || !nameOK || !slices.Contains(s.compiled.toolNames, name) || !argsOK || !objectJSON([]byte(args)) || hasStatus && itemStatus != "completed" {
+			asyncOK := len(item["async"]) == 0 || bytes.Equal(bytes.TrimSpace(item["async"]), []byte("false"))
+			callerOK := len(item["caller"]) == 0 || bytes.Equal(bytes.TrimSpace(item["caller"]), []byte("null"))
+			namespaceOK := len(item["namespace"]) == 0 || bytes.Equal(bytes.TrimSpace(item["namespace"]), []byte("null"))
+			if !asyncOK || !callerOK || !namespaceOK || !callOK || !visible(call, 256) || calls[call] || !nameOK || !slices.Contains(s.compiled.toolNames, name) || !argsOK || !objectJSON([]byte(args)) || hasStatus && itemStatus != "completed" {
 				s.result.ContentError = true
 				continue
 			}
