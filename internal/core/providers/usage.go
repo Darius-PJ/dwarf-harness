@@ -85,6 +85,13 @@ func NormalizeUsage(p Profile, c Compiled, raw Usage) (units []Units, violation 
 	if c.profile != digest {
 		return nil, false, ErrInvalid
 	}
+	switch p.Provider {
+	case "anthropic":
+	case "openai":
+		return normalizeOpenAIUsage(raw)
+	default:
+		return nil, false, ErrUnsupported
+	}
 	known := []string{"input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation", "output_tokens_details", "service_tier", "inference_geo", "speed", "server_tool_use", "iterations"}
 	for k, v := range raw {
 		if !slices.Contains(known, k) && string(v) != "null" {
@@ -204,12 +211,16 @@ func NormalizeUsage(p Profile, c Compiled, raw Usage) (units []Units, violation 
 // It is the late-evidence counterpart of NormalizeUsage, without retaining or
 // recompiling a request body. It performs the identical normalization.
 func NormalizeSealedUsage(p Profile, inputClasses []string, raw Usage) ([]Units, bool, error) {
-	if len(inputClasses) == 0 {
+	allowed, _, _, err := providerClasses(p.Provider)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(inputClasses) == 0 || p.Provider == "openai" && len(inputClasses) != len(allowed) {
 		return nil, false, ErrInvalid
 	}
 	seen := make(map[string]bool, len(inputClasses))
 	for _, class := range inputClasses {
-		if class == Generated || !slices.Contains(allClasses, class) || seen[class] {
+		if !slices.Contains(allowed, class) || seen[class] {
 			return nil, false, ErrInvalid
 		}
 		seen[class] = true
@@ -240,13 +251,17 @@ func PriceHistoricalUsage(p Profile, units []Units) (int64, error) {
 }
 
 func priceUsage(p Profile, units []Units) (int64, error) {
-	if len(units) != len(allClasses) {
+	_, _, classes, err := providerClasses(p.Provider)
+	if err != nil {
+		return 0, err
+	}
+	if len(units) != len(classes) {
 		return 0, ErrUsage
 	}
 	seen := map[string]bool{}
 	sum := new(big.Rat)
 	for _, u := range units {
-		if u.Count < 0 || !slices.Contains(allClasses, u.Class) || seen[u.Class] {
+		if u.Count < 0 || !slices.Contains(classes, u.Class) || seen[u.Class] {
 			return 0, ErrUsage
 		}
 		seen[u.Class] = true
@@ -255,6 +270,11 @@ func priceUsage(p Profile, units []Units) (int64, error) {
 				rate, _ := rational(r.Numerator, r.Denominator)
 				sum.Add(sum, rate.Mul(rate, new(big.Rat).SetInt64(u.Count)))
 			}
+		}
+	}
+	if p.Provider == "openai" {
+		if err := validateOpenAIUnits(units); err != nil {
+			return 0, err
 		}
 	}
 	return ceilMicros(sum)

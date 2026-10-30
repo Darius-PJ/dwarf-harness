@@ -14,7 +14,7 @@ import (
 func TestRequestFramingBindsEveryField(t *testing.T) {
 	t.Parallel()
 	d := Descriptor{"anthropic", "127.0.0.1:443", Haiku, "global", "POST", "/v1/messages", "standard_only", "scope-fixture", "version-fixture", fixtureHeaders()}
-	hs, e := semanticHeaders(d.Headers)
+	hs, e := semanticHeaders(d.Provider, d.Headers)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -142,7 +142,7 @@ func TestEnvelopeRefusesAmbiguousURLAndUnsealedHeaders(t *testing.T) {
 	for _, authority := range []string{"api.anthropic.com:443", "user@api.anthropic.com", "api.anthropic.com?x", "api.anthropic.com#x", "example.com", "127.0.0.1:0", "127.0.0.1:0443", "127.0.0.1:99999", "127.0.0.1:443\\evil"} {
 		t.Run(authority, func(t *testing.T) {
 			t.Parallel()
-			if _, e := endpoint(authority, "/v1/messages"); e == nil {
+			if _, e := endpoint("anthropic", authority, "/v1/messages"); e == nil {
 				t.Fatal("ambiguous authority accepted")
 			}
 		})
@@ -150,7 +150,7 @@ func TestEnvelopeRefusesAmbiguousURLAndUnsealedHeaders(t *testing.T) {
 	for _, path := range []string{"", "//v1/messages", "/v1/%6dessages", "/v1/../messages", "/v1/messages?", "/v1/messages#", "https://example.com/v1/messages"} {
 		t.Run("path_"+path, func(t *testing.T) {
 			t.Parallel()
-			if _, e := endpoint("127.0.0.1:443", path); e == nil {
+			if _, e := endpoint("anthropic", "127.0.0.1:443", path); e == nil {
 				t.Fatal("ambiguous path accepted")
 			}
 		})
@@ -170,14 +170,14 @@ func TestEnvelopeRefusesAmbiguousURLAndUnsealedHeaders(t *testing.T) {
 			t.Parallel()
 			headers := fixtureHeaders()
 			headers[0] = row.header
-			if _, e := semanticHeaders(headers); e == nil {
+			if _, e := semanticHeaders("anthropic", headers); e == nil {
 				t.Fatal("unsealed header accepted")
 			}
 		})
 	}
 	t.Run("extra_header", func(t *testing.T) {
 		t.Parallel()
-		if _, e := semanticHeaders(append(fixtureHeaders(), Header{"x-extra", "value"})); e == nil {
+		if _, e := semanticHeaders("anthropic", append(fixtureHeaders(), Header{"x-extra", "value"})); e == nil {
 			t.Fatal("extra semantic header accepted")
 		}
 	})

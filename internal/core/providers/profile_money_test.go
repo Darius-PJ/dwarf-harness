@@ -2,7 +2,9 @@ package providers
 
 import (
 	"bytes"
+	"encoding/json"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 	"testing"
@@ -242,6 +244,12 @@ func FuzzProviderProfile(f *testing.F) {
 	f.Add(b)
 	f.Add([]byte(`{"schema":1,"schema":1}`))
 	f.Add([]byte(`null`))
+	openAI, _ := openAIProfile().Canonical()
+	f.Add(openAI)
+	f.Add(bytes.Replace(openAI, []byte(`"input_max":922000`), []byte(`"input_max":9223372036854775808`), 1))
+	f.Add(bytes.Replace(openAI, []byte(`"provider":"openai"`), []byte(`"provider":"unknown"`), 1))
+	f.Add(bytes.Replace(openAI, []byte(`"denominator":"50"`), []byte(`"denominator":null`), 1))
+	f.Add([]byte{255})
 	f.Fuzz(func(t *testing.T, b []byte) {
 		p, e := ParseProfile(b)
 		if e != nil {
@@ -266,10 +274,51 @@ func FuzzPaidMoney(f *testing.F) {
 	for _, s := range []string{"0", "0.000001", "1.999999", "9223372036854.775807", "01", "1e2"} {
 		f.Add(s)
 	}
+	for _, raw := range []string{openAIUsage(20, 4, 8, 16), openAIUsage(272001, 0, 0, 16), openAIUsage(278529, 0, 0, 16), `{"input_tokens":1,"input_tokens":2}`, `{"input_tokens":null}`, `{"input_tokens":9223372036854775808}`, `{"future":1}`} {
+		f.Add(raw)
+	}
 	f.Fuzz(func(t *testing.T, s string) {
 		n, e := ParseMoney(s)
 		if e == nil && (n < 0 || strings.TrimSpace(s) != s) {
 			t.Fatal("invalid successful amount")
+		}
+		if !strings.HasPrefix(s, "{") || checkJSON([]byte(s), streamLineLimit, false, false) != nil {
+			return
+		}
+		var raw Usage
+		if json.Unmarshal([]byte(s), &raw) != nil {
+			return
+		}
+		p := openAIProfile()
+		units, _, err := NormalizeUsage(p, openAICompiled(t, p, 16), raw)
+		if err != nil {
+			return
+		}
+		input, output := new(big.Int), new(big.Int)
+		for _, u := range units {
+			if strings.HasPrefix(u.Class, "input.") {
+				input.Add(input, big.NewInt(u.Count))
+			} else {
+				output.Add(output, big.NewInt(u.Count))
+			}
+		}
+		wantInput, _, _ := counter(raw, "input_tokens")
+		wantOutput, _, _ := counter(raw, "output_tokens")
+		if input.Cmp(big.NewInt(wantInput)) != 0 || output.Cmp(big.NewInt(wantOutput)) != 0 {
+			t.Fatal("exclusive units changed inclusive totals")
+		}
+		components := make([]Component, 0, len(units))
+		for _, u := range units {
+			for _, rate := range p.Tariff.Rates {
+				if rate.Class == u.Class {
+					components = append(components, Component{[]string{u.Class}, u.Count, rate.Numerator, rate.Denominator})
+				}
+			}
+		}
+		price, priceErr := PriceUsage(p, units)
+		maximum, maximumErr := Maximum(components)
+		if price != maximum || priceErr != maximumErr {
+			t.Fatal("same exclusive sum priced differently")
 		}
 	})
 }

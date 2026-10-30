@@ -114,7 +114,7 @@ func (e Envelope) request(ctx context.Context, secret []byte) (*http.Request, er
 			return nil, ErrInvalid
 		}
 	}
-	u, err := endpoint(e.descriptor.Authority, e.descriptor.Path)
+	u, err := endpoint(e.descriptor.Provider, e.descriptor.Authority, e.descriptor.Path)
 	if err != nil {
 		return nil, err
 	}

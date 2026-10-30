@@ -98,19 +98,27 @@ func rational(n, d string) (*big.Rat, error) {
 }
 
 // Maximum rounds the sum once, rejecting overlap and overflow rather than
-// saturating a financial bound.
+// saturating a financial bound. Class tokens identify one disjoint provider
+// universe; mixing the universes is invalid even when no class overlaps.
 func Maximum(components []Component) (int64, error) {
-	if len(components) == 0 || len(components) > len(allClasses) {
+	if len(components) == 0 || len(components[0].Classes) == 0 {
+		return 0, ErrInvalid
+	}
+	classes := allClasses
+	if slices.Contains(openAIClasses, components[0].Classes[0]) {
+		classes = openAIClasses
+	}
+	if len(components) > len(classes) {
 		return 0, ErrInvalid
 	}
 	seen := make(map[string]bool)
 	sum := new(big.Rat)
 	for _, c := range components {
-		if c.MaxUnits < 0 || len(c.Classes) == 0 || len(c.Classes) > len(allClasses) {
+		if c.MaxUnits < 0 || len(c.Classes) == 0 || len(c.Classes) > len(classes) {
 			return 0, ErrInvalid
 		}
 		for _, class := range c.Classes {
-			if !slices.Contains(allClasses, class) || seen[class] {
+			if !slices.Contains(classes, class) || seen[class] {
 				return 0, ErrInvalid
 			}
 			seen[class] = true
@@ -155,15 +163,22 @@ func BoundHistorical(p Profile, requestedOutput int64, eligible []string) ([]Com
 }
 
 func bound(p Profile, requestedOutput int64, eligible []string) ([]Component, int64, error) {
-	if requestedOutput <= 0 || requestedOutput > p.OutputMax || len(eligible) == 0 {
+	inputs, outputs, _, err := providerClasses(p.Provider)
+	if err != nil {
+		return nil, 0, err
+	}
+	if requestedOutput <= 0 || requestedOutput > p.OutputMax || len(eligible) == 0 || p.Provider == "openai" && requestedOutput < 16 {
 		return nil, 0, ErrInvalid
 	}
 	classes := slices.Clone(eligible)
 	slices.Sort(classes)
+	if p.Provider == "openai" && !slices.Equal(classes, inputs) {
+		return nil, 0, ErrInvalid
+	}
 	var best Rate
 	bestRat := new(big.Rat).SetInt64(-1)
 	for i, class := range classes {
-		if !slices.Contains(inputClasses, class) || i > 0 && class == classes[i-1] {
+		if !slices.Contains(inputs, class) || i > 0 && class == classes[i-1] {
 			return nil, 0, ErrInvalid
 		}
 		for _, r := range p.Tariff.Rates {
@@ -176,12 +191,16 @@ func bound(p Profile, requestedOutput int64, eligible []string) ([]Component, in
 		}
 	}
 	var output Rate
+	bestOutput := new(big.Rat).SetInt64(-1)
 	for _, r := range p.Tariff.Rates {
-		if r.Class == Generated {
-			output = r
+		if slices.Contains(outputs, r.Class) {
+			rate, _ := rational(r.Numerator, r.Denominator)
+			if rate.Cmp(bestOutput) > 0 {
+				output, bestOutput = r, rate
+			}
 		}
 	}
-	cs := []Component{{classes, min(p.InputMax, p.ContextMax), best.Numerator, best.Denominator}, {[]string{Generated}, requestedOutput, output.Numerator, output.Denominator}}
+	cs := []Component{{classes, min(p.InputMax, p.ContextMax), best.Numerator, best.Denominator}, {slices.Clone(outputs), requestedOutput, output.Numerator, output.Denominator}}
 	n, err := Maximum(cs)
 	return cs, n, err
 }

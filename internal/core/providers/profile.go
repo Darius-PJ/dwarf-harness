@@ -84,13 +84,22 @@ func sortedSet(ss []string) bool {
 	return true
 }
 
-func endpoint(authority, path string) (*url.URL, error) {
+func endpoint(provider, authority, path string) (*url.URL, error) {
+	var host, wantPath string
+	switch provider {
+	case "anthropic":
+		host, wantPath = "api.anthropic.com", "/v1/messages"
+	case "openai":
+		host, wantPath = "api.openai.com", "/v1/responses"
+	default:
+		return nil, ErrUnsupported
+	}
 	raw := "https://" + authority + path
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || u.Host != authority || u.Path != path || u.RawPath != "" || strings.ContainsAny(raw, "%\\#?\r\n\t ") || path != "/v1/messages" {
+	if err != nil || u.Scheme != "https" || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" || u.Host != authority || u.Path != path || u.RawPath != "" || strings.ContainsAny(raw, "%\\#?\r\n\t ") || path != wantPath {
 		return nil, ErrInvalid
 	}
-	if authority != "api.anthropic.com" {
+	if authority != host {
 		host, port, e := net.SplitHostPort(authority)
 		ip := net.ParseIP(host)
 		if e != nil || ip == nil || !ip.IsLoopback() || port == "" {
@@ -118,29 +127,48 @@ func (p Profile) ValidateHistorical() error {
 }
 
 func (p Profile) validate(historical bool) error {
-	if p.Schema != 1 || !visible(p.CapabilityVersion, 128) || !visible(p.TariffVersion, 128) || p.Provider != "anthropic" || p.Method != "POST" || p.APIVersion != APIVersion || p.UsageSchema != "anthropic-messages-text/v1" {
+	if p.Schema != 1 || !visible(p.CapabilityVersion, 128) || !visible(p.TariffVersion, 128) || p.Method != "POST" {
 		return ErrUnsupported
 	}
-	if _, err := endpoint(p.Authority, p.Path); err != nil {
+	if _, err := endpoint(p.Provider, p.Authority, p.Path); err != nil {
 		return err
 	}
-	if p.ModelID != Haiku && p.ModelID != Sonnet && p.ModelID != Opus {
-		return ErrUnsupported
-	}
-	if p.Region != "global" && p.Region != "us" || p.Speed != "standard" || !slices.Equal(p.AllowedServedTiers, []string{"standard"}) {
-		return ErrUnsupported
-	}
-	if p.ModelID == Haiku {
-		if p.Region != "global" || p.RequestedTier != "standard_only" || len(p.NoChargeRules) != 0 {
+	switch p.Provider {
+	case "anthropic":
+		if p.APIVersion != APIVersion || p.UsageSchema != "anthropic-messages-text/v1" || p.ModelID != Haiku && p.ModelID != Sonnet && p.ModelID != Opus {
 			return ErrUnsupported
 		}
-	} else if p.RequestedTier != "auto" {
+		if p.Region != "global" && p.Region != "us" || p.Speed != "standard" || !slices.Equal(p.AllowedServedTiers, []string{"standard"}) {
+			return ErrUnsupported
+		}
+		if p.ModelID == Haiku {
+			if p.Region != "global" || p.RequestedTier != "standard_only" || len(p.NoChargeRules) != 0 {
+				return ErrUnsupported
+			}
+		} else if p.RequestedTier != "auto" {
+			return ErrUnsupported
+		}
+		if !slices.Equal(p.CacheClasses, []string{CacheRead, CacheWrite1h, CacheWrite5m}) {
+			return ErrUnsupported
+		}
+	case "openai":
+		if p.APIVersion != "v1" || p.UsageSchema != openAIUsageSchema || !slices.Contains([]string{"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}, p.ModelID) {
+			return ErrUnsupported
+		}
+		if p.Region != "global" || p.Speed != "standard" || p.RequestedTier != "default" || !slices.Equal(p.AllowedServedTiers, []string{"default"}) || len(p.NoChargeRules) != 0 || !slices.Equal(p.CacheClasses, []string{"input.cached.long", "input.cached.short", "input.write.long", "input.write.short"}) {
+			return ErrUnsupported
+		}
+		// Synthetic loopback profiles may exercise different rectangular limits.
+		if !historical && p.Authority == "api.openai.com" && (p.ContextMax != 1050000 || p.InputMax != 922000 || p.OutputMax != 128000) {
+			return ErrUnsupported
+		}
+	default:
 		return ErrUnsupported
 	}
 	if p.ContextMax <= 0 || p.InputMax <= 0 || p.OutputMax <= 0 || !historical && (p.VerifiedUTCNS <= 0 || p.ExpiresUTCNS <= p.VerifiedUTCNS) {
 		return ErrInvalid
 	}
-	if !slices.Equal(p.CacheClasses, []string{CacheRead, CacheWrite1h, CacheWrite5m}) || !slices.Equal(p.ToolChoices, []string{"auto", "none"}) || !sortedSet(p.NoChargeRules) {
+	if !slices.Equal(p.ToolChoices, []string{"auto", "none"}) || !sortedSet(p.NoChargeRules) {
 		return ErrUnsupported
 	}
 	for _, rule := range p.NoChargeRules {
@@ -148,11 +176,15 @@ func (p Profile) validate(historical bool) error {
 			return ErrInvalid
 		}
 	}
-	if p.Tariff.Currency != "USD" || len(p.Tariff.Rates) != len(allClasses) {
+	_, _, classes, err := providerClasses(p.Provider)
+	if err != nil {
+		return err
+	}
+	if p.Tariff.Currency != "USD" || len(p.Tariff.Rates) != len(classes) {
 		return ErrInvalid
 	}
 	for i, r := range p.Tariff.Rates {
-		if r.Class != allClasses[i] {
+		if r.Class != classes[i] {
 			return ErrInvalid
 		}
 		if _, err := rational(r.Numerator, r.Denominator); err != nil {
@@ -175,6 +207,9 @@ func (p Profile) validate(historical bool) error {
 			return ErrInvalid
 		}
 		if p.Authority == "api.anthropic.com" && (u.Hostname() != "platform.claude.com" && u.Hostname() != "support.claude.com" && u.Hostname() != "api.anthropic.com") {
+			return ErrUnsupported
+		}
+		if p.Provider == "openai" && p.Authority == "api.openai.com" && (u.Host != "developers.openai.com" && u.Host != "api.openai.com" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "") {
 			return ErrUnsupported
 		}
 		topics[s.Topic] = true

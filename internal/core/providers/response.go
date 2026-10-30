@@ -27,12 +27,23 @@ type ResponseHeader struct {
 	Values []string
 }
 
-func responseHeaders(h http.Header) ([]ResponseHeader, error) {
+func responseHeaders(provider string, h http.Header) ([]ResponseHeader, error) {
+	if provider != "anthropic" && provider != "openai" {
+		return nil, ErrUnsupported
+	}
 	var out []ResponseHeader
 	size := 0
 	for name, values := range h {
 		name = strings.ToLower(name)
-		keep := slices.Contains([]string{"request-id", "anthropic-organization-id", "anthropic-workspace-id", "retry-after", "content-type"}, name) || strings.HasPrefix(name, "anthropic-ratelimit-") || strings.HasPrefix(name, "anthropic-priority-")
+		var keep bool
+		switch provider {
+		case "anthropic":
+			keep = slices.Contains([]string{"request-id", "anthropic-organization-id", "anthropic-workspace-id", "retry-after", "content-type"}, name) || strings.HasPrefix(name, "anthropic-ratelimit-") || strings.HasPrefix(name, "anthropic-priority-")
+		case "openai":
+			keep = slices.Contains([]string{"content-type", "x-request-id", "openai-organization", "openai-processing-ms", "openai-version", "retry-after"}, name) || strings.HasPrefix(name, "x-ratelimit-")
+		default:
+			return nil, ErrUnsupported
+		}
 		for _, value := range values {
 			size += len(name) + len(value) + 4
 			if size > 64<<10 {
@@ -51,11 +62,14 @@ func responseHeaders(h http.Header) ([]ResponseHeader, error) {
 // errors, refusal, EOF and network errors never imply a free request or retry.
 func ReadAnthropicResponse(response *http.Response, p Profile, c Compiled) (ResponseEvidence, error) {
 	var result ResponseEvidence
+	if p.Provider != "anthropic" {
+		return result, ErrUnsupported
+	}
 	if response == nil || response.Body == nil {
 		return result, ErrInvalid
 	}
 	result.Status = response.StatusCode
-	headers, err := responseHeaders(response.Header)
+	headers, err := responseHeaders(p.Provider, response.Header)
 	if err != nil {
 		return result, err
 	}

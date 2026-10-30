@@ -33,8 +33,9 @@ type OutputBlock struct {
 }
 
 // StreamResult distinguishes message completion from financial availability.
-// An incomplete/error result carries no canonical output blocks. Raw usage is
-// evidence only: it does not imply settlement or a no-charge result.
+// Non-success terminals expose no assistant/tool commands; OpenAI may retain
+// independently complete opaque reasoning. Raw usage is evidence only: it does
+// not imply settlement or a no-charge result.
 type StreamResult struct {
 	MessageID                string
 	Model                    string
@@ -42,6 +43,8 @@ type StreamResult struct {
 	StopReason               string
 	StopSequence             json.RawMessage
 	StopDetails              json.RawMessage
+	ServedTier               json.RawMessage
+	ToolUsage                json.RawMessage
 	RawUsageStart            json.RawMessage
 	RawUsageFinal            json.RawMessage
 	RawUsageMerged           Usage
@@ -90,6 +93,9 @@ func rawObject(raw []byte) (map[string]json.RawMessage, error) {
 // Limits are checked while reading, not after retaining the entire entity.
 func ReadAnthropicStream(r io.Reader, p Profile, c Compiled) (StreamResult, error) {
 	s := streamState{profile: p, result: StreamResult{RawUsageMerged: Usage{}}}
+	if p.Provider != "anthropic" {
+		return s.result, ErrUnsupported
+	}
 	if err := p.Validate(); err != nil {
 		return s.result, err
 	}
