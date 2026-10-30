@@ -70,6 +70,56 @@ func paidSuccess(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Request-Id", "request-one")
 	_, _ = io.WriteString(w, paidSSE(model, `{"input_tokens":3,"output_tokens":1}`, `{"input_tokens":7,"output_tokens":4}`, "answer", "end_turn", "", true))
 }
+
+func paidProviderFixture(t testing.TB, provider string, deps serviceDeps) *paidFixture {
+	t.Helper()
+	switch provider {
+	case "anthropic":
+		return newLivePaidFixture(t, deps)
+	case "openai":
+		return newOpenAIPaidFixture(t, deps)
+	default:
+		t.Fatal("unsupported fixture provider")
+		return nil
+	}
+}
+
+func paidPrepareInput(t testing.TB, f *paidFixture, input AnthropicInput) *PreparedPaidCall {
+	t.Helper()
+	var p *PreparedPaidCall
+	var err error
+	switch f.route.Profile.Provider {
+	case "anthropic":
+		p, err = f.service.PrepareAnthropic(context.Background(), bindingOf(f.origin), input)
+	case "openai":
+		p, err = f.service.PrepareOpenAI(context.Background(), bindingOf(f.origin), OpenAIInput(input))
+	default:
+		t.Fatal("unsupported fixture provider")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	return p
+}
+
+func paidPrepare(t testing.TB, f *paidFixture) PaidAdmission {
+	t.Helper()
+	input := f.input()
+	return PaidAdmission{CommandID: f.id(), AttemptID: input.AttemptID, GrantID: input.GrantID, ParentTurnID: input.ParentTurnID, TaskBinding: input.TaskBinding, Prepared: paidPrepareInput(t, f, input)}
+}
+
+func paidProviderSuccess(t *testing.T, provider string, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	switch provider {
+	case "anthropic":
+		paidSuccess(t, w, r)
+	case "openai":
+		paidOpenAIReply(t, w, r, paidOpenAIUsage(7, 0, 0, 4))
+	default:
+		t.Error("unsupported fixture provider")
+	}
+}
 func paidRun(t *testing.T, f *paidFixture) (ledger.RuntimePaidReserved, PaidDispatch, PaidDispatchOutcome) {
 	t.Helper()
 	r := f.prepare(t)
@@ -106,6 +156,61 @@ func (c *paidObservedConn) Write(b []byte) (int, error) { c.before(); return c.C
 
 func TestPaidIntentBeforeBytes(t *testing.T) {
 	t.Parallel()
+	for _, provider := range []string{"anthropic", "openai"} {
+		t.Run(provider, func(t *testing.T) { testPaidIntentBeforeBytes(t, provider) })
+	}
+}
+
+func testPaidIntentBeforeBytes(t *testing.T, provider string) {
+	t.Parallel()
+	for _, stage := range []string{"quote", "admission"} {
+		for _, field := range []string{"body", "header", "model", "destination", "credential"} {
+			t.Run(stage+"-"+field, func(t *testing.T) {
+				t.Parallel()
+				var posts atomic.Int64
+				server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+					posts.Add(1)
+					paidProviderSuccess(t, provider, w, r)
+				})
+				f := paidProviderFixture(t, provider, paidServerDeps(server, nil))
+				r := paidPrepare(t, f)
+				if stage == "admission" {
+					f.admit(t, r)
+				}
+				p := r.Prepared.state
+				switch field {
+				case "body":
+					// Keep valid JSON so secret scanning is not a second refusal.
+					index := bytes.Index(p.body, []byte("Synthetic request."))
+					if index < 0 {
+						t.Fatal("missing synthetic request text")
+					}
+					p.body[index] = 's'
+				case "header":
+					p.admission.Request.Headers[0].Value = "application/json"
+				case "model":
+					p.admission.Request.Model = "changed-model"
+				case "destination":
+					p.admission.Request.Authority = "localhost:1"
+				case "credential":
+					p.admission.Request.Credential.Version = f.id()
+				}
+				before := f.store.Durable()
+				var err error
+				if stage == "admission" {
+					_, err = f.service.DispatchPaid(context.Background(), PaidDispatch{CommandID: f.id(), AttemptID: r.AttemptID, ExpectedVersion: 1})
+				} else {
+					_, _, err = scopedBound(t, f.service, bindingOf(f.origin)).AdmitPaid(context.Background(), r)
+				}
+				if err == nil || f.store.Durable() != before || posts.Load() != 0 {
+					t.Fatal("changed seal reached an admission, intent or POST")
+				}
+				if stage == "admission" && f.view(t, r.AttemptID).HeldMicros == "0" {
+					t.Fatal("seal refusal released the existing hold")
+				}
+			})
+		}
+	}
 	t.Run("durable-before-tls-and-duplicate-never-resends", func(t *testing.T) {
 		t.Parallel()
 		var posts, writes atomic.Int64
@@ -116,9 +221,9 @@ func TestPaidIntentBeforeBytes(t *testing.T) {
 			if f.store.Durable() < minimum.Load() {
 				t.Error("server saw request before durable intent")
 			}
-			paidSuccess(t, w, r)
+			paidProviderSuccess(t, provider, w, r)
 		})
-		f = newLivePaidFixture(t, paidServerDeps(server, func(c net.Conn) net.Conn {
+		f = paidProviderFixture(t, provider, paidServerDeps(server, func(c net.Conn) net.Conn {
 			return &paidObservedConn{c, func() {
 				writes.Add(1)
 				if f.store.Durable() < minimum.Load() {
@@ -126,7 +231,7 @@ func TestPaidIntentBeforeBytes(t *testing.T) {
 				}
 			}}
 		}))
-		r := f.prepare(t)
+		r := paidPrepare(t, f)
 		_, bound := f.admit(t, r)
 		admission, err := bound.Admission()
 		if err != nil {
@@ -158,15 +263,18 @@ func TestPaidIntentBeforeBytes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var posts atomic.Int64
-			server := paidServer(t, func(w http.ResponseWriter, r *http.Request) { posts.Add(1); paidSuccess(t, w, r) })
-			f := newLivePaidFixture(t, paidServerDeps(server, nil))
-			r := f.prepare(t)
+			server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+				posts.Add(1)
+				paidProviderSuccess(t, provider, w, r)
+			})
+			f := paidProviderFixture(t, provider, paidServerDeps(server, nil))
+			r := paidPrepare(t, f)
 			f.admit(t, r)
 			switch name {
 			case "changed-body":
 				r.Prepared.state.body[0] = 'x'
 			case "revoked":
-				_, err := f.service.RevokeCredential(context.Background(), bindingOf(f.origin), CredentialRevocation{CommandID: f.id(), ScopeID: f.credential.ScopeID, ExpectedVersion: f.credential.Version, Provider: "anthropic", CredentialVersion: f.credential.CredentialVersion})
+				_, err := f.service.RevokeCredential(context.Background(), bindingOf(f.origin), CredentialRevocation{CommandID: f.id(), ScopeID: f.credential.ScopeID, ExpectedVersion: f.credential.Version, Provider: provider, CredentialVersion: f.credential.CredentialVersion})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -312,6 +420,13 @@ func TestAnthropicStreamAndUsage(t *testing.T) {
 
 func TestPaidCloseDrainsAndReconcileHolds(t *testing.T) {
 	t.Parallel()
+	for _, provider := range []string{"anthropic", "openai"} {
+		t.Run(provider, func(t *testing.T) { testPaidCloseDrainsAndReconcileHolds(t, provider) })
+	}
+}
+
+func testPaidCloseDrainsAndReconcileHolds(t *testing.T, provider string) {
+	t.Parallel()
 	entered := make(chan struct{})
 	server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_ = paidRequestModel(t, r)
@@ -321,8 +436,8 @@ func TestPaidCloseDrainsAndReconcileHolds(t *testing.T) {
 		close(entered)
 		<-r.Context().Done()
 	})
-	f := newLivePaidFixture(t, paidServerDeps(server, nil))
-	r := f.prepare(t)
+	f := paidProviderFixture(t, provider, paidServerDeps(server, nil))
+	r := paidPrepare(t, f)
 	f.admit(t, r)
 	d := PaidDispatch{CommandID: f.id(), AttemptID: r.AttemptID, ExpectedVersion: 1}
 	result := make(chan error, 1)
@@ -374,5 +489,71 @@ func TestPaidCloseDrainsAndReconcileHolds(t *testing.T) {
 	old, err := f.service.DispatchPaid(context.Background(), d)
 	if err != nil || old.IntentReceipt.Sequence == 0 || old.Result == nil || old.Result.State != "unknown" || old.ObservedPaidCall != nil || f.store.Durable() != before {
 		t.Fatal("recovered old dispatch acquired a send permit")
+	}
+}
+
+// Unknown exposure is never reused as headroom for a caller's fresh attempt.
+func TestPaidExplicitNewAttemptAfterUnknown(t *testing.T) {
+	t.Parallel()
+	for _, provider := range []string{"anthropic", "openai"} {
+		t.Run(provider, func(t *testing.T) {
+			t.Parallel()
+			var posts atomic.Int64
+			server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+				posts.Add(1)
+				_ = paidRequestModel(t, r)
+				w.Header().Set("Content-Type", "text/event-stream")
+				// EOF without a terminal is unknown, never a free call.
+			})
+			f := paidProviderFixture(t, provider, paidServerDeps(server, nil))
+			first := paidPrepare(t, f)
+			_, bound := f.admit(t, first)
+			a, err := bound.Admission()
+			if err != nil {
+				t.Fatal(err)
+			}
+			dispatch := PaidDispatch{CommandID: f.id(), AttemptID: first.AttemptID, ExpectedVersion: 1}
+			out, err := f.service.DispatchPaid(context.Background(), dispatch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paidRecord(t, f, dispatch, out)
+			hold := fmt.Sprint(a.Quote.MaximumMicros)
+			old := f.view(t, first.AttemptID)
+			if old.State != "unknown" || old.HeldMicros != hold || old.SettledMicros != "0" || posts.Load() != 1 {
+				t.Fatal("missing original unknown hold")
+			}
+			setCap := func(micros int64) {
+				f.liveSpend(t, ledger.PaidScope{Kind: "colony"}, SpendTermsInput{Enabled: true, Mode: "finite", USD: fmt.Sprintf("%d.%06d", micros/1000000, micros%1000000), PeriodKind: "utc_day"})
+			}
+			second := paidPrepare(t, f)
+			total := a.Quote.MaximumMicros + second.Prepared.state.admission.Quote.MaximumMicros
+			setCap(total - 1)
+			before := f.store.Durable()
+			_, _, err = scopedBound(t, f.service, bindingOf(f.origin)).AdmitPaid(context.Background(), second)
+			if err == nil || f.store.Durable() != before || posts.Load() != 1 || f.view(t, first.AttemptID).HeldMicros != hold {
+				t.Fatal("fresh attempt ignored unresolved exposure")
+			}
+			setCap(total)
+			f.admit(t, second)
+			budget := f.budget(t, "")
+			if budget.HeldMicros != fmt.Sprint(total) || budget.SettledMicros != "0" {
+				t.Fatal("two attempts did not retain both full quotes")
+			}
+			for _, reopen := range []bool{false, true} {
+				if reopen {
+					reopenScoped(t, f.serviceFixture, DefaultLimits())
+				}
+				before := f.store.Durable()
+				retry, err := f.service.DispatchPaid(context.Background(), dispatch)
+				if err != nil || retry.ObservedPaidCall != nil || retry.Result == nil || retry.Result.State != "unknown" || retry.IntentReceipt.Sequence != out.IntentReceipt.Sequence {
+					t.Fatal("old dispatch regained an observation or send permit")
+				}
+				_, err = f.service.DispatchPaid(context.Background(), PaidDispatch{CommandID: f.id(), AttemptID: first.AttemptID, ExpectedVersion: 3})
+				if !errors.Is(err, ErrPaidSent) || posts.Load() != 1 || f.store.Durable() != before || f.budget(t, "").HeldMicros != fmt.Sprint(total) {
+					t.Fatal("same attempt resent or lost exposure across reopen")
+				}
+			}
+		})
 	}
 }

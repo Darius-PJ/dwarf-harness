@@ -522,8 +522,8 @@
 // parent turn and task binding. They select only their named provider and share
 // the same Service, budget book and exchange pool. Both reserve physical buffers
 // before serializing, then seal and quote the owned request once.
-// PreparedPaidCall is opaque and belongs to that
-// Service incarnation; Close releases unused preparation. AdmitPaid rechecks
+// PreparedPaidCall is opaque and belongs to that Service incarnation; Close
+// releases unused preparation. AdmitPaid rechecks
 // current model authority, task generation, every enabled spend ancestor and
 // all finite ceilings. It publishes the raw sealed body as a private object,
 // commits one schema-4 command/effect/receipt group and the full atomic hold,
@@ -534,6 +534,39 @@
 // committed envelope/observation times plus the incarnation's highest successful
 // sample, including samples from refused calls. Historical replay uses only its
 // prefix's committed floor and never consults a later live sample.
+//
+// # Paid caller sequence
+//
+// The trusted host opens the colony's ledger store and calls OpenPaid, registers
+// the agent/general context, configures physical colony/agent capacity, and
+// issues the context turn/read grants and an explicit paid-route model.call
+// grant. BindAgent returns the originating context's scoped entrance. The host
+// then binds a fresh credential version, installs its provider/model profile
+// with ConfigurePaidRoute, and configures enabled spend terms for the colony,
+// agent, credential scope and every grant ancestor (plus task scopes if used).
+// Missing terms refuse admission; neither provider owns a separate wallet.
+//
+// The bound Agent starts a parent turn. The host constructs AnthropicInput or
+// OpenAIInput naming that turn, model-call grant, route/CAS and credential
+// version, then calls PrepareAnthropic or PrepareOpenAI respectively. Defer the
+// preparation's Close. Pass the handle and the same attempt/grant/turn/task IDs
+// to Agent.AdmitPaid with a fresh command ID. BoundCall.Admission returns the
+// sealed metadata and full quote, not a send capability.
+//
+// With another command ID the host calls DispatchPaid at expected version 1.
+// If it returns an ObservedPaidCall, pass that handle to RecordPaidObservation
+// with a new command ID at expected version 2. Do not treat the intent receipt
+// as settlement or repeat a dispatch to obtain a missing response. Query
+// PaidAttemptStatus/PaidBudgetStatus, then read the selected input, evidence and
+// message objects through ReadPaidObject. Bound Agent reads require the original
+// context's private.read grant; status uses its turn.inspect grant. Text and
+// opaque provider artifacts share that original-context boundary.
+//
+// Close the service before the store. Plain Open after reopening the store
+// reconstructs status without network, source rebinding or paid-artifact reads.
+// Explicit ReconcilePaid releases only never-sent reservations; sent attempts
+// remain held. A caller may request a genuinely new attempt, with new IDs and a
+// fresh preparation, only when its quote fits beside every unresolved hold.
 //
 // # Paid dispatch and factual settlement
 //
@@ -556,16 +589,19 @@
 // RecordPaidObservation requires a new caller command ID and the handle, or an
 // explicit host-attested TrustedEvidence object reference. That object must
 // already be in the attempt context's core/objects: Core's published observation,
-// or evidence placed by a later host publisher. Ticket 13 provides no public
-// late-evidence publisher. The entrance verifies object identity and derives
+// or evidence placed by a later host publisher. There is no public late-evidence
+// publisher. The entrance verifies object identity and derives
 // usage/no_charge/unknown through the admission profile; callers cannot supply
 // a price.
 // These host factual reads use MaxConcurrentWrites but take no physical byte
 // reservation, unlike the bound ReadPaidObject entrance.
-// Completed exclusive counters replace cumulative snapshots and price once.
-// Missing, inconsistent or overflowing usage keeps the full hold. A documented
-// no-charge refusal requires the pinned rule, explicit permitted category, no
-// output witness and no content block ever begun. Haiku refusals stay unknown.
+// Anthropic's completed exclusive counters replace cumulative snapshots and
+// price once. Missing, inconsistent or overflowing usage keeps the full hold.
+// A documented Anthropic no-charge refusal requires the pinned rule, explicit
+// permitted category, no output witness and no content block ever begun. Haiku
+// refusals stay unknown. OpenAI has no no-charge rule: refused, incomplete and
+// failed terminals can settle when their final inclusive usage is complete.
+// Settlement proves accounted usage, not a successful visible answer.
 //
 // CorrectPaidSettlement binds the predecessor result sequence and evidence,
 // preserves known provider identities and the monotone output witness, and
@@ -585,6 +621,38 @@
 // exchanges and waits for their I/O and capture to drain before releasing slots,
 // buffers and secrets.
 //
+// # OpenAI Responses subset and accounting
+//
+// Supported model IDs are gpt-6-luna, gpt-6-sol and gpt-6-astra, each with its
+// own explicitly installed current profile; there is no automatic selection.
+//
+// The stateless text subset supports user/assistant text ending in a user
+// message, optional system instructions, and declared local function schemas
+// with auto/none tool choice. It refuses media, hosted tools, function-call
+// history/results, cache markers and provider-side continuation. Tool calls are
+// artifacts only; Core does not execute them. Requests pin global/default,
+// standard speed, store:false, streaming, disabled truncation, background:false,
+// implicit 30-minute caching with prewarm:false, and encrypted reasoning capture.
+//
+// Only a validated terminal supplies final output and billable counters;
+// snapshots neither add usage nor fill missing terminal counters. Served tier
+// must be default and served model must equal the pinned model ID. Inclusive
+// input splits into cached, write and uncached units; output includes reasoning
+// once. The eight classes are input.cached.short/long, input.write.short/long,
+// input.uncached.short/long and output.generated.short/long. All are recorded,
+// with the inactive band's counts zero. Pricing tiers default_short and
+// default_long are tariff interpretations, not requested service tiers.
+//
+// Under openai-responses-text-30m-kguard/v1, inclusive input through 272,000
+// uses the short tariff and from 278,529 uses the long tariff. The interval
+// 272,001–278,528 is unknown with error_class tariff_ambiguous, retained final
+// counters/served tier and the full hold, without a bound-violation fence.
+// This schema has no release path for that interval. The quote maximizes over
+// both bands and all eligible cache classes, independently of requested output.
+// A model mismatch, unsupported tier, missing/null required counter or unknown
+// nonzero billable dimension also retains the hold, never a retry. Unknown
+// null/plain-zero usage extensions and zero-only tool-usage objects are tolerated.
+//
 // # Paid object encodings and disclosure
 //
 // Input remains the exact raw sealed UTF-8 request body, not a paid_input
@@ -600,22 +668,30 @@
 // text}; local tools are {kind:"local_tool_call",id,name,input}; opaque blocks are
 // {kind:"opaque_provider",provider,model,artifact_kind,payload}. Thinking joins
 // thinking/signature exactly; redacted_thinking retains the complete raw JSON
-// block, including extensions. Opaque signatures are neither verified nor used
-// as continuation authority. Text chunks split only at UTF-8 boundaries; every
+// block, including extensions. OpenAI reasoning uses responses_reasoning opaque
+// JSON; response identity and encrypted reasoning remain context-owned evidence,
+// never continuation authority. Anthropic signatures are not verified either.
+// Text chunks split only at UTF-8 boundaries; every
 // object is at most 1 MiB and the output sequence at most 8 MiB. A malformed tool
 // may retain complete billable usage but never canonical output.
 //
 // Observation order is schema:1, kind:"paid_observation", attempt_id, origin,
 // parent_turn_id, request_sha256, provider_request_id?, provider_message_id?,
 // model?, http_status, headers, stop_reason?, stop_sequence?, stop_details?,
-// raw_usage_start?, raw_usage_final?, raw_usage_merged?, output_started, complete,
-// message_objects, error?, unknown_event_types, unknown_event_type_overflow,
-// content_blocks, content_error, profile_violation, error_class?. Question marks
-// mark omitted empty fields. Raw usage preserves null/absence and merged map
-// keys sort lexically. Headers are sorted lowercase {name,values} from the
-// provider allowlist only; errors are {type,message,details?,request_id?}.
-// complete describes message completion, not certainty about billing.
-// Unknown/incomplete/refusal/content-error captures select no output objects.
+// served_tier?, tool_usage?, raw_usage_start?, raw_usage_final?, raw_usage_merged?,
+// output_started, complete, message_objects, error?, unknown_event_types,
+// unknown_event_type_overflow, content_blocks, content_error, profile_violation,
+// error_class?. Question marks mark omitted empty fields. Raw usage preserves
+// null/absence and merged map keys sort lexically. Headers are sorted lowercase
+// {name,values} from the provider allowlist only; errors are
+// {type,message,details?,request_id?,code?,param?}. OpenAI request identity comes
+// from x-request-id, not Anthropic's request-id; published summaries disclose
+// only its presence, not account or header values.
+// complete describes terminal protocol completion, not certainty about billing
+// or a successful answer. Unknown/content-error captures select no outputs.
+// Anthropic incomplete/refusal captures select none; a priceable OpenAI
+// incomplete, failed or refused terminal may retain complete opaque reasoning,
+// but never partial/refused text or local-tool calls.
 // The bounded capture rejects literal pinned authentication material in decoded
 // provider fields, including opaque extensions, before any artifact is hashed.
 // Observation estimates and encoded bytes are capped by the private store's
@@ -644,6 +720,15 @@
 // 120-second dispatch deadline is for a small drill, not maximal generation.
 // Haiku 4.5 refusals never infer zero charge; Opus/Sonnet prior-tool history is
 // refused before admission because its thinking-artifact replay is unsupported.
+// Core's PaidLimits.MaxRequestBytes has a default and hard maximum of 512 KiB
+// for every provider's sealed body, below the providers compiler's 1 MiB guard.
+// The shared 1 MiB SSE line/event cap includes the entire OpenAI terminal response
+// and encrypted reasoning; larger legitimate terminals remain held, never
+// successfully truncated. Entity/output/event/item limits are respectively
+// 16 MiB, 8 MiB, 262,144 and 256; observation artifacts are still at most 1 MiB.
+// Finite ceilings bound this colony's admitted exposure, not a provider invoice
+// or spending by other clients. Local TLS fixtures and injected crashes prove
+// local mechanics, not live model facts, delivery, invoices or power-loss safety.
 //
 // Bookkeeping measurements are not an SLA, throughput/capacity/population limit
 // or C3-exit claim. Existing scoped/private replay and authorization costs remain

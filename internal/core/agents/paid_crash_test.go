@@ -109,7 +109,19 @@ func paidCrashRows() []paidCrashRow {
 // before the parent opens any file from its isolated, closed real-store seed.
 func TestPaidInjectedCrashRecovery(t *testing.T) {
 	t.Parallel()
-	seed := newLivePaidFixture(t)
+	for _, provider := range []string{"anthropic", "openai"} {
+		t.Run(provider, func(t *testing.T) { testPaidInjectedCrashRecovery(t, provider) })
+	}
+}
+
+func testPaidInjectedCrashRecovery(t *testing.T, provider string) {
+	t.Parallel()
+	var seed *paidFixture
+	if provider == "openai" {
+		seed = newOpenAIPaidFixture(t, serviceDeps{paidTestAuthority: "127.0.0.1:443"})
+	} else {
+		seed = newLivePaidFixture(t)
+	}
 	input := paidCrashSeed{Origin: seed.origin, Route: paidEncode(t, seed.route), Credential: paidEncode(t, seed.credential), Grant: seed.grant, Inspect: seed.inspect, Turn: seed.turn, Next: seed.next}
 	var encoded bytes.Buffer
 	if err := gob.NewEncoder(&encoded).Encode(input); err != nil {
@@ -125,6 +137,9 @@ func TestPaidInjectedCrashRecovery(t *testing.T) {
 	}
 	seed.store = nil
 	for _, row := range paidCrashRows() {
+		if provider == "openai" && strings.HasPrefix(row.name, "no_charge_") {
+			continue // OpenAI has no no-charge rule.
+		}
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
 			root := testRoot(t)
@@ -251,7 +266,7 @@ func TestPaidInjectedCrashRecovery(t *testing.T) {
 			}
 			sample := service.p.reviewFloor + int64(time.Hour)
 			service.deps.reviewClock = func() (int64, error) { return sample, nil }
-			_, err = service.BindCredential(context.Background(), bindingOf(input.Origin), CredentialBinding{CommandID: paidGoldenID(0xf010), ScopeID: credential.ScopeID, ExpectedVersion: service.p.paidCredentialScopes[credential.ScopeID].version, Provider: "anthropic", CredentialVersion: paidGoldenID(0xf011), SourceKind: "environment", SourceLocator: paidTestEnvironment})
+			_, err = service.BindCredential(context.Background(), bindingOf(input.Origin), CredentialBinding{CommandID: paidGoldenID(0xf010), ScopeID: credential.ScopeID, ExpectedVersion: service.p.paidCredentialScopes[credential.ScopeID].version, Provider: provider, CredentialVersion: paidGoldenID(0xf011), SourceKind: "environment", SourceLocator: paidTestEnvironment})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -430,6 +445,19 @@ func TestPaidCrashChild(t *testing.T) {
 			stop()
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		if f.route.Profile.Provider == "openai" {
+			w.Header().Set("X-Request-Id", "request-one")
+			count := int64(7)
+			if strings.HasPrefix(boundary, "acknowledgement_") || strings.HasPrefix(boundary, "overrun_") {
+				count = 121
+			}
+			status, output := "completed", paidOpenAIText
+			if boundary == "partial_stream" || strings.HasPrefix(boundary, "unknown_") {
+				status, output = "in_progress", "[]"
+			}
+			_, _ = io.WriteString(w, paidOpenAIEvent(model, status, paidOpenAIUsage(count, 0, 0, 4), output, "", 1))
+			return
+		}
 		w.Header().Set("Request-Id", "request-one")
 		usage := `{"input_tokens":7,"output_tokens":4}`
 		if strings.HasPrefix(boundary, "acknowledgement_") || strings.HasPrefix(boundary, "overrun_") {
@@ -454,7 +482,7 @@ func TestPaidCrashChild(t *testing.T) {
 	sample := f.service.p.reviewFloor + int64(time.Hour)
 	f.service.deps.reviewClock = func() (int64, error) { return sample, nil }
 	version := f.id()
-	_, err = f.service.BindCredential(context.Background(), bindingOf(f.origin), CredentialBinding{CommandID: f.id(), ScopeID: f.credential.ScopeID, ExpectedVersion: f.credential.Version, Provider: "anthropic", CredentialVersion: version, SourceKind: "environment", SourceLocator: paidTestEnvironment, RevokePreviousVersion: f.credential.CredentialVersion})
+	_, err = f.service.BindCredential(context.Background(), bindingOf(f.origin), CredentialBinding{CommandID: f.id(), ScopeID: f.credential.ScopeID, ExpectedVersion: f.credential.Version, Provider: f.route.Profile.Provider, CredentialVersion: version, SourceKind: "environment", SourceLocator: paidTestEnvironment, RevokePreviousVersion: f.credential.CredentialVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,6 +490,15 @@ func TestPaidCrashChild(t *testing.T) {
 	signal.Credential = paidEncode(t, f.credential)
 	f.liveProfile(t, func(p *providers.Profile) {
 		p.Authority = deps.paidTestAuthority
+		if p.Provider == "openai" {
+			// Synthetic rates preserve the established crash matrix's amounts,
+			// while exercising the real Responses compiler/parser and derivation.
+			p.ContextMax, p.InputMax, p.OutputMax = 120, 100, 20
+			p.TariffVersion += "-crash"
+			for i := range p.Tariff.Rates {
+				p.Tariff.Rates[i].Numerator, p.Tariff.Rates[i].Denominator = "1", "1"
+			}
+		}
 		if strings.HasPrefix(boundary, "no_charge_") {
 			p.ModelID, p.RequestedTier = providers.Sonnet, "auto"
 			p.NoChargeRules = []string{"anthropic_refusal_before_output_2026_09_24"}
@@ -538,10 +575,7 @@ func TestPaidCrashChild(t *testing.T) {
 	if boundary == "partial_post" {
 		input.Request.Messages[0].Content[0].Text = strings.Repeat("x", 64<<10)
 	}
-	prepared, err := f.service.PrepareAnthropic(context.Background(), bindingOf(f.origin), input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	prepared := paidPrepareInput(t, f, input)
 	admission := prepared.state.admission
 	admission.AdmissionUTCNS, admission.AdmissionPeriod = sample, paidPeriod("utc_day", sample)
 	signal.Admission = paidEncode(t, admission)
@@ -565,7 +599,7 @@ func TestPaidCrashChild(t *testing.T) {
 		stop()
 	}
 	revoke := func() {
-		_, err := f.service.RevokeCredential(context.Background(), bindingOf(f.origin), CredentialRevocation{CommandID: f.id(), ScopeID: f.credential.ScopeID, ExpectedVersion: f.credential.Version, Provider: "anthropic", CredentialVersion: f.credential.CredentialVersion})
+		_, err := f.service.RevokeCredential(context.Background(), bindingOf(f.origin), CredentialRevocation{CommandID: f.id(), ScopeID: f.credential.ScopeID, ExpectedVersion: f.credential.Version, Provider: f.route.Profile.Provider, CredentialVersion: f.credential.CredentialVersion})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -642,7 +676,12 @@ func TestPaidCrashChild(t *testing.T) {
 	}
 	v := f.view(t, input.AttemptID)
 	if strings.HasPrefix(boundary, "correction_") {
-		late := paidLateEvidence(t, f, out, func(o *paidObservationObject) { o.RawUsageMerged["input_tokens"] = json.RawMessage(`9`) })
+		late := paidLateEvidence(t, f, out, func(o *paidObservationObject) {
+			o.RawUsageMerged["input_tokens"] = json.RawMessage(`9`)
+			if f.route.Profile.Provider == "openai" {
+				o.RawUsageFinal = json.RawMessage(paidOpenAIUsage(9, 0, 0, 4))
+			}
+		})
 		_, err = f.service.CorrectPaidSettlement(ctx, PaidCorrection{PaidObservation: PaidObservation{CommandID: f.id(), AttemptID: input.AttemptID, ExpectedVersion: 3, TrustedEvidence: &late}, PreviousResultSequence: int64(v.ResultSequence), PreviousEvidenceSHA256: v.Result.EvidenceSHA256})
 	} else if strings.HasPrefix(boundary, "acknowledgement_") {
 		if !v.Fenced || v.SettledMicros != "125" {

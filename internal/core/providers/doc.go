@@ -4,10 +4,11 @@
 // and does not discover capabilities or tariffs. The trusted Core installer
 // supplies source-verified profiles; loopback profiles prove mechanics only.
 //
-// CompileAnthropic validates the supported text/local-tool/cache subset and
-// serializes it once. Seal copies those bytes and the nonsecret credential
-// identity. Bound keeps the full inclusive input cap independently of requested
-// output; Maximum and PriceUsage use exact rationals and one final ceiling.
+// CompileAnthropic and CompileOpenAI validate their respective supported
+// text/local-tool/cache subsets and serialize once. Seal copies the bytes and
+// nonsecret credential identity. Bound keeps the full inclusive input cap
+// independently of requested output; Maximum and PriceUsage use exact rationals
+// and one final ceiling.
 // SHA-256 helpers are producer encodings, not a frozen ledger contract.
 // Installation requires complete source topics and supported current semantics;
 // historical profile/pricing entrances preserve the admission-time interpretation
@@ -59,6 +60,21 @@
 // including encrypted reasoning: larger terminals are held, never truncated.
 // Entity/output/event/item limits remain 16 MiB/8 MiB/262144/256. Reasoning output
 // is opaque responses_reasoning JSON; neither it nor a response ID grants authority.
+// Core's shared PaidLimits.MaxRequestBytes additionally caps every sealed body
+// at 512 KiB by default and at most, below this package's 1 MiB RequestLimit.
+// Requested/served default is distinct from the default_short/default_long
+// pricing tiers. Short and long classes each contain input.cached,
+// input.uncached, input.write and output.generated; reasoning is not an
+// additional billable class. No OpenAI error or refusal implies no charge.
+//
+// Core's caller sequence is explicit: install a sourced profile, bind a fresh
+// credential version and configure all spend scopes, start an authorized parent
+// turn, then PrepareAnthropic/PrepareOpenAI, AdmitPaid, DispatchPaid and
+// RecordPaidObservation. Read status and context-owned artifacts separately.
+// Neither a quote, a BoundCall nor a recovered receipt authorizes another POST.
+// Plain Core Open performs no network or source read. Both adapters use the same
+// one-shot transport, exchange pool and budget book; see package agents for the
+// complete operating sequence and recovery/settlement rules.
 //
 // ResponseEvidence is untrusted provider data. Before publishing any artifact,
 // its Core caller must apply the pinned-secret capture policy and the context's
