@@ -652,6 +652,15 @@
 // A model mismatch, unsupported tier, missing/null required counter or unknown
 // nonzero billable dimension also retains the hold, never a retry. Unknown
 // null/plain-zero usage extensions and zero-only tool-usage objects are tolerated.
+// Holds from unknown event, item or part types, a missing served tier, a served
+// model mismatch or a missing, null, inconsistent or overflowing required counter
+// likewise have no release path in this version: there is no public late-evidence
+// publisher, and re-deriving the same observation stays unknown. Unknown event,
+// item or part types, a non-default served tier, nonzero tool usage and a missing,
+// inconsistent or overflowing required counter are also profile violations that
+// fence every scope of the attempt until the owner acknowledges the overrun, which
+// retires the profile digest for the colony's lifetime; a missing served tier, a
+// served model mismatch and the ambiguous tariff interval hold without a fence.
 //
 // # Paid object encodings and disclosure
 //
@@ -720,6 +729,9 @@
 // 120-second dispatch deadline is for a small drill, not maximal generation.
 // Haiku 4.5 refusals never infer zero charge; Opus/Sonnet prior-tool history is
 // refused before admission because its thinking-artifact replay is unsupported.
+// A billable, non-refusal Anthropic terminal that produced no output block
+// currently fails result recording with ErrInvalid, so that attempt keeps its
+// full hold with no settlement path until a later fix.
 // Core's PaidLimits.MaxRequestBytes has a default and hard maximum of 512 KiB
 // for every provider's sealed body, below the providers compiler's 1 MiB guard.
 // The shared 1 MiB SSE line/event cap includes the entire OpenAI terminal response
