@@ -248,6 +248,44 @@ func TestOpenAIBoundAndSettlement(t *testing.T) {
 	}
 }
 
+func TestOpenAIUsageV2SettlementAndReplay(t *testing.T) {
+	t.Parallel()
+	// A real loopback terminal must release the hold, and a plain reopen must
+	// keep the v2 quote supported and the exact four-micro settlement intact.
+	const usage = `{"input_tokens":9,"input_tokens_details":{"cache_write_tokens":0,"cache_write_tokens_details":{"ttl_12h_tokens":0,"ttl_30m_tokens":0},"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":14}`
+	const tools = `,"tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}}`
+	server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+		model := paidRequestModel(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, paidOpenAIEvent(model, "completed", usage, paidOpenAIText, tools, 1))
+	})
+	f := newOpenAIPaidFixture(t, paidServerDeps(server, nil))
+	f.liveProfile(t, func(p *providers.Profile) {
+		p.UsageSchema = "openai-responses-text-30m-kguard/v2"
+		p.CapabilityVersion += "-v2"
+	})
+	_, d, out := paidOpenAIRun(t, f, 16)
+	paidRecord(t, f, d, out)
+	v := f.view(t, d.AttemptID)
+	if v.State != "settled" || v.SettledMicros != "4" || v.HeldMicros != "0" || v.Fenced {
+		t.Fatalf("v2 settlement: state=%s cost=%s held=%s fenced=%v", v.State, v.SettledMicros, v.HeldMicros, v.Fenced)
+	}
+	if v.Result.Usage == nil || v.Result.Usage.PricingTier != "default_short" || len(v.Result.Usage.Classes) != 8 {
+		t.Fatal("v2 settlement lost short-band usage")
+	}
+	want := map[string]int64{"input.uncached.short": 9, "output.generated.short": 5}
+	for _, u := range v.Result.Usage.Classes {
+		if u.Units != want[u.Class] {
+			t.Fatalf("v2 settlement units %s=%d", u.Class, u.Units)
+		}
+	}
+	reopenScoped(t, f.serviceFixture, DefaultLimits())
+	replayed := f.view(t, d.AttemptID)
+	if replayed.State != "settled" || replayed.SettledMicros != "4" || replayed.HeldMicros != "0" || replayed.Fenced {
+		t.Fatalf("v2 replay: state=%s cost=%s held=%s fenced=%v", replayed.State, replayed.SettledMicros, replayed.HeldMicros, replayed.Fenced)
+	}
+}
+
 func TestOpenAIPaidEvidenceStates(t *testing.T) {
 	t.Parallel()
 	// Terminal nulls cannot borrow snapshot counters; non-success is not free,

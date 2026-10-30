@@ -152,7 +152,7 @@ func (p Profile) validate(historical bool) error {
 			return ErrUnsupported
 		}
 	case "openai":
-		if p.APIVersion != "v1" || p.UsageSchema != openAIUsageSchema || !slices.Contains([]string{"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}, p.ModelID) {
+		if p.APIVersion != "v1" || !slices.Contains([]string{openAIUsageSchema, openAIUsageSchemaV2}, p.UsageSchema) || !slices.Contains([]string{"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}, p.ModelID) {
 			return ErrUnsupported
 		}
 		if p.Region != "global" || p.Speed != "standard" || p.RequestedTier != "default" || !slices.Equal(p.AllowedServedTiers, []string{"default"}) || len(p.NoChargeRules) != 0 || !slices.Equal(p.CacheClasses, []string{"input.cached.long", "input.cached.short", "input.write.long", "input.write.short"}) {

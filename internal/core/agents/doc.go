@@ -643,8 +643,9 @@
 // with the inactive band's counts zero. Pricing tiers default_short and
 // default_long are tariff interpretations, not requested service tiers.
 //
-// Under openai-responses-text-30m-kguard/v1, inclusive input through 272,000
-// uses the short tariff and from 278,529 uses the long tariff. The interval
+// Under openai-responses-text-30m-kguard/v1 and
+// openai-responses-text-30m-kguard/v2, inclusive input through 272,000 uses the
+// short tariff and from 278,529 uses the long tariff. The interval
 // 272,001–278,528 is unknown with error_class tariff_ambiguous, retained final
 // counters/served tier and the full hold, without a bound-violation fence.
 // This schema has no release path for that interval. The quote maximizes over

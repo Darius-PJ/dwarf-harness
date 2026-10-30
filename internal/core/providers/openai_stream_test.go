@@ -13,6 +13,70 @@ import (
 const openAITextOutput = `[{"id":"item-text","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"answer","annotations":[],"logprobs":[]}]}]`
 const openAIReasoningOutput = `[{"id":"item-reasoning","type":"reasoning","summary":[{"type":"summary_text","text":"summary"}],"encrypted_content":"opaque synthetic content","extension":{"future":null}}]`
 
+// Sanitized terminal shape: only response/item IDs and output text are synthetic.
+const openAILiveUsage = `{"input_tokens":9,"input_tokens_details":{"cache_write_tokens":0,"cache_write_tokens_details":{"ttl_12h_tokens":0,"ttl_30m_tokens":0},"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":14}`
+const openAILiveToolUsage = `{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}}`
+
+func openAILiveTerminal() string {
+	return eventJSON(`{"type":"response.completed","response":{"id":"response-live-shape","model":"gpt-6-luna","status":"completed","service_tier":"default","incomplete_details":null,"output":` + openAITextOutput + `,"usage":` + openAILiveUsage + `,"tool_usage":` + openAILiveToolUsage + `}}`)
+}
+
+func TestOpenAILiveUsageSchema(t *testing.T) {
+	t.Parallel()
+	// The same provider bytes settle only under the new interpretation; v1
+	// keeps the hold and withholds output, rather than changing shipped policy.
+	for _, schema := range []string{openAIUsageSchema, openAIUsageSchemaV2} {
+		t.Run(schema, func(t *testing.T) {
+			t.Parallel()
+			p := openAIProfile()
+			p.UsageSchema = schema
+			c := openAICompiled(t, p, 16)
+			var raw Usage
+			if err := json.Unmarshal([]byte(openAILiveUsage), &raw); err != nil {
+				t.Fatal(err)
+			}
+			units, violation, normalizeErr := NormalizeUsage(p, c, raw)
+			r, err := ReadOpenAIStream(strings.NewReader(openAILiveTerminal()), p, c)
+			if !r.Complete || string(r.ToolUsage) != openAILiveToolUsage {
+				t.Fatal("live-shaped terminal lost finality or tool evidence")
+			}
+			if schema == openAIUsageSchema {
+				if !errors.Is(err, ErrUsage) || r.Priceable || !r.ProfileViolation || r.Blocks != nil || !errors.Is(normalizeErr, ErrUsage) || !violation {
+					t.Fatal("v1 reinterpreted the split instead of holding it")
+				}
+				return
+			}
+			want := []Units{{"input.cached.long", 0}, {"input.cached.short", 0}, {"input.uncached.long", 0}, {"input.uncached.short", 9}, {"input.write.long", 0}, {"input.write.short", 0}, {"output.generated.long", 0}, {"output.generated.short", 5}}
+			if err != nil || normalizeErr != nil || !r.Priceable || r.ProfileViolation || violation || !reflect.DeepEqual(r.Units, want) || !reflect.DeepEqual(units, want) {
+				t.Fatalf("v2 live usage: stream=%v normalize=%v units=%v", err, normalizeErr, r.Units)
+			}
+			if len(r.Blocks) != 1 || r.Blocks[0].Type != "text" || r.Blocks[0].Text != "answer" {
+				t.Fatal("v2 dropped terminal output")
+			}
+			if cost, err := PriceUsage(p, r.Units); err != nil || cost != 4 {
+				t.Fatalf("live-shaped settlement=%d: %v", cost, err)
+			}
+		})
+	}
+}
+
+func TestOpenAIUsageSplitScalarZeroIntentionalVersionDifference(t *testing.T) {
+	t.Parallel()
+	// Intentional exception to monotonic tolerance: v1 sees an unknown scalar
+	// zero; v2 recognizes the member and requires null or an object.
+	stream := openAITerminal("completed", strings.Replace(openAILiveUsage, `{"ttl_12h_tokens":0,"ttl_30m_tokens":0}`, "0", 1), openAITextOutput)
+	for _, p := range []Profile{openAIProfile(), openAIProfileV2()} {
+		r, err := ReadOpenAIStream(strings.NewReader(stream), p, openAICompiled(t, p, 16))
+		if p.UsageSchema == openAIUsageSchema {
+			if err != nil || !r.Priceable || r.ProfileViolation {
+				t.Fatal("v1 scalar-zero tolerance changed")
+			}
+		} else if !errors.Is(err, ErrUsage) || r.Priceable || !r.ProfileViolation || r.Blocks != nil {
+			t.Fatal("v2 accepted a scalar split")
+		}
+	}
+}
+
 func openAITerminal(status, usage, output string) string {
 	details := "null"
 	if status == "incomplete" {
@@ -286,6 +350,11 @@ func FuzzOpenAIResponsesSSE(f *testing.F) {
 	for _, tool := range []string{`{"web_search":{"num_requests":0}}`, `{"web_search":{"num_requests":1}}`} {
 		f.Add([]byte(strings.Replace(valid, `"usage":{`, `"usage":{"tool_usage":`+tool+`,`, 1)), uint8(1))
 	}
+	f.Add([]byte(openAILiveTerminal()), uint8(1))
+	for _, split := range []string{`{"ttl_30m_tokens":8,"ttl_12h_tokens":0}`, `{"ttl_30m_tokens":7,"ttl_12h_tokens":1}`, `{"ttl_30m_tokens":7,"ttl_12h_tokens":0}`, `0`} {
+		usage := strings.Replace(openAIUsage(20, 4, 8, 16), `"cache_write_tokens":8`, `"cache_write_tokens":8,"cache_write_tokens_details":`+split, 1)
+		f.Add([]byte(openAITerminal("completed", usage, openAITextOutput)), uint8(1))
+	}
 	f.Fuzz(func(t *testing.T, b []byte, step uint8) {
 		if len(b) > streamBodyLimit+1 {
 			return
@@ -303,6 +372,30 @@ func FuzzOpenAIResponsesSSE(f *testing.F) {
 			}
 			if _, err := PriceUsage(p, a.Units); err != nil && !errors.Is(err, ErrOverflow) {
 				t.Fatal("priceable units are invalid")
+			}
+		}
+		p2 := openAIProfileV2()
+		c2 := openAICompiled(t, p2, 16)
+		v2, e2 := ReadOpenAIStream(&fragmentReader{bytes.Clone(b), int(step) + 1}, p2, c2)
+		z2, other2 := ReadOpenAIStream(bytes.NewReader(b), p2, c2)
+		if (e2 == nil) != (other2 == nil) || !reflect.DeepEqual(v2, z2) {
+			t.Fatal("v2 framing fragmentation changed evidence")
+		}
+		if v2.Priceable {
+			if !v2.Complete {
+				t.Fatal("v2 unterminated usage priced")
+			}
+			if _, err := PriceUsage(p2, v2.Units); err != nil && !errors.Is(err, ErrOverflow) {
+				t.Fatal("v2 priceable units are invalid")
+			}
+		}
+		details, _ := rawObject(a.RawUsageMerged["input_tokens_details"])
+		split := bytes.TrimSpace(details["cache_write_tokens_details"])
+		_, splitErr := rawObject(split)
+		if len(split) == 0 || bytes.Equal(split, []byte("null")) || splitErr == nil {
+			// Equivalent to v2 held => v1 held; scalar 0 intentionally differs.
+			if a.Priceable && (!v2.Priceable || !reflect.DeepEqual(a.Units, v2.Units) || a.ProfileViolation != v2.ProfileViolation) {
+				t.Fatal("v2 changed priceable v1 evidence")
 			}
 		}
 	})

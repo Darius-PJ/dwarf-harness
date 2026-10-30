@@ -26,6 +26,13 @@ func openAIProfile() Profile {
 	return p
 }
 
+func openAIProfileV2() Profile {
+	p := openAIProfile()
+	p.UsageSchema = openAIUsageSchemaV2
+	p.CapabilityVersion += "-v2"
+	return p
+}
+
 func openAICompiled(t *testing.T, p Profile, output int64) Compiled {
 	t.Helper()
 	r := fixtureRequest()
@@ -278,6 +285,39 @@ func TestOpenAIProfileRefusals(t *testing.T) {
 		if (p.Validate() == nil) != want {
 			t.Fatal("source host boundary changed")
 		}
+	}
+}
+
+func TestOpenAIProfileUsageVersions(t *testing.T) {
+	t.Parallel()
+	// Both installation and replay select the named interpretation; a future
+	// version cannot silently inherit either one.
+	for _, schema := range []string{openAIUsageSchema, openAIUsageSchemaV2, "openai-responses-text-30m-kguard/v3", "other"} {
+		t.Run(schema, func(t *testing.T) {
+			t.Parallel()
+			p := openAIProfile()
+			p.UsageSchema = schema
+			want := schema == openAIUsageSchema || schema == openAIUsageSchemaV2
+			if (p.Validate() == nil) != want || (p.ValidateHistorical() == nil) != want {
+				t.Fatal("usage version installation or replay policy changed")
+			}
+			raw, _ := json.Marshal(p)
+			if _, err := ParseProfile(raw); (err == nil) != want {
+				t.Fatal("strict profile parser disagrees with validation")
+			}
+			if want {
+				a, err := p.SHA256()
+				q := p
+				q.UsageSchema = openAIUsageSchemaV2
+				if schema == openAIUsageSchemaV2 {
+					q.UsageSchema = openAIUsageSchema
+				}
+				b, other := q.SHA256()
+				if err != nil || other != nil || a == b {
+					t.Fatal("usage interpretation not bound into profile digest")
+				}
+			}
+		})
 	}
 }
 

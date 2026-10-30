@@ -69,6 +69,16 @@
 // input.uncached, input.write and output.generated; reasoning is not an
 // additional billable class. No OpenAI error or refusal implies no charge.
 //
+// openai-responses-text-30m-kguard/v2 additionally recognizes the optional
+// cache_write_tokens_details split: absent/null means no split; an object must
+// have plain non-negative ttl_30m_tokens and ttl_12h_tokens counters (absent/null
+// counts as zero), with zero 12h writes and a sum equal to cache_write_tokens.
+// The aggregate remains mandatory and is the only source of write units.
+// Unknown usage members may be null, plain zero or object trees of those values
+// at any depth; arrays and other values retain the hold with a profile violation.
+// Tool usage keeps its separate zero-only rule. v1 retains its shipped
+// scalar-only extension tolerance, so the split object still holds under v1.
+//
 // Core's caller sequence is explicit: install a sourced profile, bind a fresh
 // credential version and configure all spend scopes, start an authorized parent
 // turn, then PrepareAnthropic/PrepareOpenAI, AdmitPaid, DispatchPaid and

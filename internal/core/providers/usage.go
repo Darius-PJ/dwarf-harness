@@ -88,7 +88,7 @@ func NormalizeUsage(p Profile, c Compiled, raw Usage) (units []Units, violation 
 	switch p.Provider {
 	case "anthropic":
 	case "openai":
-		return normalizeOpenAIUsage(raw)
+		return normalizeOpenAIUsage(p.UsageSchema, raw)
 	default:
 		return nil, false, ErrUnsupported
 	}

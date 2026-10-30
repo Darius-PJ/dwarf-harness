@@ -14,6 +14,7 @@ import (
 var ErrTariffAmbiguous = errors.New("providers: ambiguous tariff band")
 
 const openAIUsageSchema = "openai-responses-text-30m-kguard/v1"
+const openAIUsageSchemaV2 = "openai-responses-text-30m-kguard/v2"
 
 var openAIClasses = []string{
 	"input.cached.long", "input.cached.short",
@@ -46,14 +47,30 @@ func openAIBand(input *big.Int) (string, error) {
 	return "long", nil
 }
 
-func absentCharge(raw json.RawMessage) bool {
+// The caller checks the whole usage object's JSON depth before this recursion.
+func absentCharge(raw json.RawMessage, nested bool) bool {
 	raw = bytes.TrimSpace(raw)
-	return bytes.Equal(raw, []byte("null")) || bytes.Equal(raw, []byte("0"))
+	if bytes.Equal(raw, []byte("null")) || bytes.Equal(raw, []byte("0")) {
+		return true
+	}
+	if !nested {
+		return false
+	}
+	m, err := rawObject(raw)
+	if err != nil {
+		return false
+	}
+	for _, value := range m {
+		if !absentCharge(value, true) {
+			return false
+		}
+	}
+	return true
 }
 
-func knownUsage(m Usage, known ...string) bool {
+func knownUsage(m Usage, nested bool, known ...string) bool {
 	for key, raw := range m {
-		if !slices.Contains(known, key) && !absentCharge(raw) {
+		if !slices.Contains(known, key) && !absentCharge(raw, nested) {
 			return false
 		}
 	}
@@ -85,12 +102,20 @@ func emptyOpenAIToolUsage(raw json.RawMessage) bool {
 	return zeroObject(raw)
 }
 
-func normalizeOpenAIUsage(raw Usage) ([]Units, bool, error) {
+func normalizeOpenAIUsage(schema string, raw Usage) ([]Units, bool, error) {
+	v2 := false
+	switch schema {
+	case openAIUsageSchema:
+	case openAIUsageSchemaV2:
+		v2 = true
+	default:
+		return nil, false, ErrUnsupported
+	}
 	encoded, err := json.Marshal(raw)
 	if err != nil || checkJSON(encoded, streamLineLimit, false, false) != nil {
 		return nil, false, ErrUsage
 	}
-	if !knownUsage(raw, "input_tokens", "input_tokens_details", "output_tokens", "output_tokens_details", "total_tokens", "tool_usage") || !emptyOpenAIToolUsage(raw["tool_usage"]) {
+	if !knownUsage(raw, v2, "input_tokens", "input_tokens_details", "output_tokens", "output_tokens_details", "total_tokens", "tool_usage") || !emptyOpenAIToolUsage(raw["tool_usage"]) {
 		return nil, true, ErrUsage
 	}
 	input, err := zeroWhenAbsent(raw, "input_tokens", false)
@@ -105,7 +130,11 @@ func normalizeOpenAIUsage(raw Usage) ([]Units, bool, error) {
 	if err != nil {
 		return nil, false, ErrUsage
 	}
-	if !knownUsage(details, "cached_tokens", "cache_write_tokens") {
+	knownDetails := []string{"cached_tokens", "cache_write_tokens"}
+	if v2 {
+		knownDetails = append(knownDetails, "cache_write_tokens_details")
+	}
+	if !knownUsage(details, v2, knownDetails...) {
 		return nil, true, ErrUsage
 	}
 	cached, err := zeroWhenAbsent(details, "cached_tokens", false)
@@ -115,6 +144,30 @@ func normalizeOpenAIUsage(raw Usage) ([]Units, bool, error) {
 	write, err := zeroWhenAbsent(details, "cache_write_tokens", false)
 	if err != nil {
 		return nil, false, err
+	}
+	if split := details["cache_write_tokens_details"]; v2 && len(split) != 0 && !bytes.Equal(bytes.TrimSpace(split), []byte("null")) {
+		breakdown, err := rawObject(split)
+		if err != nil || !knownUsage(breakdown, true, "ttl_30m_tokens", "ttl_12h_tokens") {
+			return nil, true, ErrUsage
+		}
+		var counts [2]int64
+		for i, key := range []string{"ttl_30m_tokens", "ttl_12h_tokens"} {
+			value, present := breakdown[key]
+			if !present || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				continue
+			}
+			n, _, ok := counter(breakdown, key)
+			if !ok {
+				return nil, true, ErrUsage
+			}
+			counts[i] = n
+		}
+		if counts[1] != 0 {
+			return nil, true, ErrUsage
+		}
+		if new(big.Int).Add(big.NewInt(counts[0]), big.NewInt(counts[1])).Cmp(big.NewInt(write)) != 0 {
+			return nil, true, ErrUsage
+		}
 	}
 	cache := new(big.Int).Add(big.NewInt(cached), big.NewInt(write))
 	if cache.Cmp(big.NewInt(input)) > 0 {
@@ -127,7 +180,7 @@ func normalizeOpenAIUsage(raw Usage) ([]Units, bool, error) {
 	}
 	if value, present := raw["output_tokens_details"]; present && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 		breakdown, err := rawObject(value)
-		if err != nil || !knownUsage(breakdown, "reasoning_tokens") {
+		if err != nil || !knownUsage(breakdown, v2, "reasoning_tokens") {
 			return nil, true, ErrUsage
 		}
 		if n, present, ok := counter(breakdown, "reasoning_tokens"); present && (!ok || n > output) {

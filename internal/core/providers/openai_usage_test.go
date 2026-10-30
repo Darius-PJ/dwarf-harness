@@ -235,3 +235,137 @@ func TestOpenAIHistoricalBandValidation(t *testing.T) {
 		t.Fatal("maximum saturated")
 	}
 }
+
+func TestOpenAIUsageV2Split(t *testing.T) {
+	t.Parallel()
+	// A split checks the aggregate, never replaces it or adds a priced class.
+	for _, row := range []struct {
+		name, split, write string
+		valid, violation   bool
+		wantWrite          int64
+	}{
+		{"absent", "", "8", true, false, 8},
+		{"null", "null", "8", true, false, 8},
+		{"empty", `{}`, "0", true, false, 0},
+		{"null_members", `{"ttl_30m_tokens":null,"ttl_12h_tokens":null}`, "0", true, false, 0},
+		{"write_30m", `{"ttl_30m_tokens":8}`, "8", true, false, 8},
+		{"write_12h", `{"ttl_30m_tokens":7,"ttl_12h_tokens":1}`, "8", false, true, 0},
+		{"disagree", `{"ttl_30m_tokens":7,"ttl_12h_tokens":0}`, "8", false, true, 0},
+		{"missing_write", `{"ttl_30m_tokens":8}`, "", false, false, 0},
+		{"null_write", `{"ttl_30m_tokens":8}`, "null", false, false, 0},
+		{"array", `[]`, "0", false, true, 0},
+		{"scalar", `0`, "0", false, true, 0},
+		{"string", `"0"`, "0", false, true, 0},
+		{"negative", `{"ttl_30m_tokens":-1}`, "0", false, true, 0},
+		{"fraction", `{"ttl_30m_tokens":0.0}`, "0", false, true, 0},
+		{"exponent", `{"ttl_12h_tokens":0e0}`, "0", false, true, 0},
+		{"string_counter", `{"ttl_12h_tokens":"0"}`, "0", false, true, 0},
+		{"object_counter", `{"ttl_30m_tokens":{}}`, "0", false, true, 0},
+		{"overflow_counter", `{"ttl_30m_tokens":9223372036854775808}`, "0", false, true, 0},
+		{"overflow_sum", `{"ttl_30m_tokens":9223372036854775807,"ttl_12h_tokens":1}`, "0", false, true, 0},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			details := Usage{"cached_tokens": json.RawMessage("4")}
+			if row.write != "" {
+				details["cache_write_tokens"] = json.RawMessage(row.write)
+			}
+			if row.split != "" {
+				details["cache_write_tokens_details"] = json.RawMessage(row.split)
+			}
+			encoded, err := json.Marshal(details)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := Usage{"input_tokens": json.RawMessage("20"), "output_tokens": json.RawMessage("16"), "input_tokens_details": encoded}
+			p := openAIProfileV2()
+			c := openAICompiled(t, p, 16)
+			units, violation, err := NormalizeUsage(p, c, raw)
+			if (err == nil) != row.valid || violation != row.violation || !row.valid && !errors.Is(err, ErrUsage) {
+				t.Fatalf("available=%v violation=%v error=%v", err == nil, violation, err)
+			}
+			late, v, lateErr := NormalizeSealedUsage(p, c.InputClasses(), raw)
+			if !errors.Is(lateErr, err) || v != violation || !reflect.DeepEqual(late, units) {
+				t.Fatal("late evidence disagrees with split interpretation")
+			}
+			if !row.valid {
+				if units != nil {
+					t.Fatal("held split returned billable units")
+				}
+				return
+			}
+			want := map[string]int64{"input.cached.short": 4, "input.write.short": row.wantWrite, "input.uncached.short": 16 - row.wantWrite, "output.generated.short": 16}
+			if len(units) != 8 {
+				t.Fatal("class universe changed")
+			}
+			for _, u := range units {
+				if u.Count != want[u.Class] {
+					t.Fatalf("exclusive units %s=%d", u.Class, u.Count)
+				}
+			}
+			price, err := PriceUsage(p, units)
+			if err != nil || price != 10 {
+				t.Fatalf("split price=%d: %v", price, err)
+			}
+		})
+	}
+}
+
+func TestOpenAIUsageV2UnknownTrees(t *testing.T) {
+	t.Parallel()
+	// Extension tolerance is recursive only for unknown members; tool usage
+	// still requires zero leaves, not nested nulls.
+	for _, location := range []string{"root", "input", "output", "split"} {
+		for _, row := range []struct {
+			name, value string
+			valid       bool
+		}{
+			{"null", `null`, true},
+			{"zero", `0`, true},
+			{"empty", `{}`, true},
+			{"tree", `{"future":{"zero":0,"null":null,"empty":{}}}`, true},
+			{"positive", `{"future":{"count":1}}`, false},
+			{"fraction", `{"future":0.0}`, false},
+			{"exponent", `{"future":0e0}`, false},
+			{"negative_zero", `{"future":-0}`, false},
+			{"string", `{"future":"0"}`, false},
+			{"bool", `{"future":false}`, false},
+			{"array", `{"future":[]}`, false},
+		} {
+			t.Run(location+"/"+row.name, func(t *testing.T) {
+				t.Parallel()
+				var usage Usage
+				_ = json.Unmarshal([]byte(openAIUsage(20, 4, 8, 16)), &usage)
+				value := json.RawMessage(row.value)
+				switch location {
+				case "root":
+					usage["future"] = value
+				case "output":
+					usage["output_tokens_details"], _ = json.Marshal(Usage{"reasoning_tokens": json.RawMessage("12"), "future": value})
+				default:
+					details, _ := rawObject(usage["input_tokens_details"])
+					if location == "split" {
+						details["cache_write_tokens_details"], _ = json.Marshal(Usage{"ttl_30m_tokens": json.RawMessage("8"), "future": value})
+					} else {
+						details["future"] = value
+					}
+					usage["input_tokens_details"], _ = json.Marshal(details)
+				}
+				p := openAIProfileV2()
+				_, v, err := NormalizeUsage(p, openAICompiled(t, p, 16), usage)
+				if (err == nil) != row.valid || v == row.valid {
+					t.Fatalf("available=%v violation=%v", err == nil, v)
+				}
+			})
+		}
+	}
+	for _, tool := range []string{`{"future":null}`, `{"future":{"count":null}}`} {
+		var usage Usage
+		_ = json.Unmarshal([]byte(openAIUsage(20, 4, 8, 16)), &usage)
+		usage["tool_usage"] = json.RawMessage(tool)
+		p := openAIProfileV2()
+		if _, v, err := NormalizeUsage(p, openAICompiled(t, p, 16), usage); !errors.Is(err, ErrUsage) || !v {
+			t.Fatal("unknown-member tolerance leaked into tool usage")
+		}
+	}
+}

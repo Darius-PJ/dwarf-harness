@@ -246,6 +246,8 @@ func FuzzProviderProfile(f *testing.F) {
 	f.Add([]byte(`null`))
 	openAI, _ := openAIProfile().Canonical()
 	f.Add(openAI)
+	openAIV2, _ := openAIProfileV2().Canonical()
+	f.Add(openAIV2)
 	f.Add(bytes.Replace(openAI, []byte(`"input_max":922000`), []byte(`"input_max":9223372036854775808`), 1))
 	f.Add(bytes.Replace(openAI, []byte(`"provider":"openai"`), []byte(`"provider":"unknown"`), 1))
 	f.Add(bytes.Replace(openAI, []byte(`"denominator":"50"`), []byte(`"denominator":null`), 1))
