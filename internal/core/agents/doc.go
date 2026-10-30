@@ -652,16 +652,19 @@
 // both bands and all eligible cache classes, independently of requested output.
 // A model mismatch, unsupported tier, missing/null required counter or unknown
 // nonzero billable dimension also retains the hold, never a retry. Unknown
-// null/plain-zero usage extensions and zero-only tool-usage objects are tolerated.
+// null/plain-zero usage extensions and zero-only tool-usage objects are tolerated;
+// under usage schema v2, object trees of null or zero leaves are tolerated too.
 // Holds from unknown event, item or part types, a missing served tier, a served
 // model mismatch or a missing, null, inconsistent or overflowing required counter
 // likewise have no release path in this version: there is no public late-evidence
 // publisher, and re-deriving the same observation stays unknown. Unknown event,
-// item or part types, a non-default served tier, nonzero tool usage and a missing,
-// inconsistent or overflowing required counter are also profile violations that
-// fence every scope of the attempt until the owner acknowledges the overrun, which
-// retires the profile digest for the colony's lifetime; a missing served tier, a
-// served model mismatch and the ambiguous tariff interval hold without a fence.
+// item or part types, a non-default served tier, nonzero tool usage and an
+// inconsistent required counter (overlapping or overflowing inclusive sums) are
+// also profile violations that fence every scope of the attempt until the owner
+// acknowledges the overrun, which retires the profile digest for the colony's
+// lifetime; a missing served tier, a served model mismatch, a missing, null or
+// overflowing required counter and the ambiguous tariff interval hold without a
+// fence.
 //
 // # Paid object encodings and disclosure
 //
