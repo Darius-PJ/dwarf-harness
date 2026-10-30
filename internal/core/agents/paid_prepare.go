@@ -44,7 +44,7 @@ func requestStorageBound(r providers.Request) (int64, error) {
 			return 0, ErrTooLarge
 		}
 		for _, b := range m.Content {
-			if !add(len(b.Type)+len(b.Text)+len(b.ID)+len(b.Name)+len(b.Input)+len(b.ToolUseID)+256) || !cache(b.CacheControl) || len(b.Content) > providers.RequestLimit/128 {
+			if !add(len(b.Type)+len(b.Text)+len(b.ID)+len(b.Name)+len(b.Input)+len(b.ToolUseID)+len(b.Replay)+256) || !cache(b.CacheControl) || len(b.Content) > providers.RequestLimit/128 {
 				return 0, ErrTooLarge
 			}
 			for _, t := range b.Content {

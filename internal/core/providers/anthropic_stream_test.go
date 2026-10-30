@@ -228,7 +228,12 @@ func TestUsageExclusiveCacheAndReasoning(t *testing.T) {
 func TestSSEPreservesOpaqueAndDrainsInvalidToolJSON(t *testing.T) {
 	t.Parallel()
 	p := fixtureProfile()
-	c := fixtureCompiled(t, p)
+	request := fixtureRequest()
+	request.Tools = []Tool{{Name: "local", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+	c, err := CompileAnthropic(p, request)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, invalid := range []bool{false, true} {
 		t.Run(fmt.Sprint(invalid), func(t *testing.T) {
 			t.Parallel()
@@ -239,12 +244,12 @@ func TestSSEPreservesOpaqueAndDrainsInvalidToolJSON(t *testing.T) {
 			encoded, _ := json.Marshal(partial)
 			stream := streamStart(`{"input_tokens":2,"output_tokens":1}`) + eventJSON(`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"opaque ","signature":""}}`) + eventJSON(`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thought"}}`) + eventJSON(`{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signed"}}`) + eventJSON(`{"type":"content_block_stop","index":0}`) + eventJSON(`{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"opaque-data"}}`) + eventJSON(`{"type":"content_block_stop","index":1}`) + eventJSON(`{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tool-fixture","name":"local","input":{}}}`) + eventJSON(`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":`+string(encoded)+`}}`) + eventJSON(`{"type":"content_block_stop","index":2}`) + streamDelta(`{"output_tokens":7}`) + streamStop()
 			r, e := ReadAnthropicStream(strings.NewReader(stream), p, c)
-			if e != nil || !r.Complete || !r.Priceable || r.ContentError != invalid {
+			if e != nil || !r.Complete || !r.Priceable || r.ContentError {
 				t.Fatalf("opaque/tool completion: %v", e)
 			}
 			if invalid {
-				if r.Blocks != nil {
-					t.Fatal("partial invalid tool escaped")
+				if len(r.Blocks) != 3 || r.Blocks[2].Type != "local_tool_request" || r.Blocks[2].ArgumentsText == nil || *r.Blocks[2].ArgumentsText != partial || r.Replay != nil {
+					t.Fatal("invalid arguments lost correction evidence or became replayable")
 				}
 			} else {
 				if len(r.Blocks) != 3 || r.Blocks[0].Thinking != "opaque thought" || r.Blocks[0].Signature != "signed" || r.Blocks[1].Data != "opaque-data" || string(r.Blocks[2].Input) != `{"x":1}` {
@@ -304,6 +309,11 @@ func TestSSEBoundsBeforeSuccessfulCompletion(t *testing.T) {
 func FuzzProviderSSE(f *testing.F) {
 	for _, s := range []string{plainStream(), strings.ReplaceAll(plainStream(), "\n", "\r\n"), strings.TrimSuffix(plainStream(), streamStop()), streamStart(`{"input_tokens":null,"output_tokens":1}`) + streamDelta(`{"output_tokens":null}`) + streamStop(), strings.Replace(plainStream(), `"index":0`, `"index":0,"index":0`, 1)} {
 		f.Add([]byte(s), uint8(1))
+	}
+	for _, args := range []string{`{"n":1}`, `{"n":1,"n":2}`, `[]`, `{`} {
+		encoded, _ := json.Marshal(args)
+		stream := streamStart(`{"input_tokens":2,"output_tokens":1}`) + eventJSON(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"synthetic-call","name":"undeclared","input":{}}}`) + eventJSON(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":`+string(encoded)+`}}`) + eventJSON(`{"type":"content_block_stop","index":0}`) + streamDelta(`{"output_tokens":7}`) + streamStop()
+		f.Add([]byte(stream), uint8(1))
 	}
 	f.Fuzz(func(t *testing.T, b []byte, step uint8) {
 		p := fixtureProfile()
