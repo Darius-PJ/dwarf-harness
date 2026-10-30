@@ -48,8 +48,10 @@
 // and reasoning is already inside output. Complete usage may settle an incomplete
 // or failed answer; content validity is independent of financial availability.
 // Served tier must be default. Model mismatch, unknown billing dimensions and
-// absent/null required counters retain the hold. Unknown null/plain-zero usage
-// extensions and zero-only tool-usage objects do not introduce charges.
+// absent/null required counters retain the hold. Unknown event, item or part
+// types also retain the hold and mark a profile violation. Unknown
+// null/plain-zero usage extensions and zero-only tool-usage objects do not
+// introduce charges.
 //
 // OpenAI's eight classes split cached, uncached, write and generated units into
 // short/long bands. The versioned kguard schema selects short through 272000 and
