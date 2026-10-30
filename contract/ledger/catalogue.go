@@ -63,7 +63,10 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeRuntimePaidOverrunAcknowledged and TypeRuntimePaidReceipt; and F3-139,
 // frozen (D154): TypeRuntimeResourceRegistered,
 // TypeRuntimeWorkDomainRegistered, TypeRuntimeDeclarationChanged and
-// TypeRuntimeRegistrationReceipt. All fifty-three are at version 1.
+// TypeRuntimeRegistrationReceipt; and F3-15, proposed for freeze (D125):
+// TypePrivateTurnRevision, TypeRuntimeTurnBound, TypeRuntimeToolStarted,
+// TypeRuntimeToolResult, TypeRuntimeTurnResult and TypeRuntimeLoopReceipt.
+// All fifty-nine are at version 1.
 // It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
@@ -120,5 +123,11 @@ func Defined() Catalogue {
 		{TypeRuntimeWorkDomainRegistered, 1}:    true,
 		{TypeRuntimeDeclarationChanged, 1}:      true,
 		{TypeRuntimeRegistrationReceipt, 1}:     true,
+		{TypePrivateTurnRevision, 1}:            true,
+		{TypeRuntimeTurnBound, 1}:               true,
+		{TypeRuntimeToolStarted, 1}:             true,
+		{TypeRuntimeToolResult, 1}:              true,
+		{TypeRuntimeTurnResult, 1}:              true,
+		{TypeRuntimeLoopReceipt, 1}:             true,
 	}}
 }

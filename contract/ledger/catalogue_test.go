@@ -92,12 +92,21 @@ func TestNewCatalogue(t *testing.T) {
 		{"runtime.work_domain_registered", 1}:           true,
 		{"runtime.declaration_changed", 1}:              true,
 		{"runtime.registration_receipt", 1}:             true,
+		{"private.turn_revision", 1}:                    true,
+		{"runtime.turn_bound", 1}:                       true,
+		{"runtime.tool_started", 1}:                     true,
+		{"runtime.tool_result", 1}:                      true,
+		{"runtime.turn_result", 1}:                      true,
+		{"runtime.loop_receipt", 1}:                     true,
 	}
 	for tv := range want {
 		if !def.Contains(tv) || def.Contains(TypeVersion{tv.Type, 2}) {
 			t.Errorf("Defined() admission for %s: v1=%v v2=%v; want true, false",
 				tv.Type, def.Contains(tv), def.Contains(TypeVersion{tv.Type, 2}))
 		}
+	}
+	if len(def.set) != len(want) {
+		t.Fatalf("Defined() has %d types, want exactly %d", len(def.set), len(want))
 	}
 	if def.Contains(TypeVersion{"fixture.sample", 1}) {
 		t.Error("Defined() admits fixture.sample")

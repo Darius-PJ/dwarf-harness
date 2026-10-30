@@ -1,0 +1,1 @@
+{"schema":1,"tool_name":"core_status_v1","operation_schema":1,"operation":"turn.inspect","target":{"kind":"context","binding":{"agent_id":"0199c000-0000-7000-8000-0000000000a1","context_id":"0199c000-0000-7000-8000-0000000000d2"},"scope":"context","slots":[]},"arguments":{"schema":1,"subject":"turn","id":"019a1300-0000-7000-8000-000000000421"}}

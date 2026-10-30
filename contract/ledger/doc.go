@@ -182,8 +182,8 @@
 // the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
 // F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
-// F3-13 types and the four F3-139 types below, fifty-three in all,
-// each at version 1.
+// F3-13 types, the four F3-139 types and the six F3-15 types below,
+// fifty-nine in all, each at version 1. F3-15 is proposed for freeze (D125).
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -2817,4 +2817,249 @@
 // Earlier frozen fixture bytes remain unchanged. Before joint freeze review,
 // the complete fixture's earlier-family prerequisites must also pass actual
 // ledgerstore.Open and agents.Open; reader/codec success alone is insufficient.
+//
+// # Bound turn and tool journal records (F3-15)
+//
+// Ticket 15's six version-1 types and canonical schema-6 submission are
+// proposed for freeze (D125). They add to ledger-format version 1: Defined
+// grows from 53 to 59 types. F0, F2, F-U3-61, F3-10/11/12/13/139, schemas 1-5,
+// their codecs, group rules and golden bytes are unchanged. F3-15 groups embed
+// no earlier-family record. Schema 6 lives only in runtime.loop_receipt,
+// beside the earlier receipt types, never inside runtime.scoped_receipt.
+//
+// Payload owner and designated producer: C3, internal/core/agents, through
+// the existing Core Submit boundary. Consumers are Core preflight/replay,
+// private-head/history/source-reference readers, turn-child accounting and
+// currently authorized context views. All known payload members, normalized
+// submissions, envelope bindings and exact source/effect/receipt identities
+// are replay-essential. Records hold access-filtered metadata and private
+// object references, never raw input, arguments, results, final text, credential
+// sources/values, secret-derived identities or body_refs. Views are not grants.
+// Registration remains evidence, not permission. No unfiltered agent stream,
+// new authority store, money book or appender caller is introduced.
+//
+// Additive shared-state readings:
+//
+// (a) private.turn_revision advances the SAME context revision and transcript
+// predecessor chain as private.revision and private.scoped_revision. Consumers
+// of private heads consume all three in ledger order, including live
+// installation, queries, historical reconstruction, source-reference checks,
+// integrity and history traversal. F3-10+F3-11-only private-head consumers
+// MUST NOT be used on a log containing F3-15.
+//
+// (b) runtime.tool_started is a required-result child of its parent turn;
+// exactly one runtime.tool_result ends it. Turn-child completion consumers
+// consume F3-11 local work, F3-13 paid attempts and F3-15 tool invocations.
+// F3-11 released/cancelled/interrupted turn endings require all three families'
+// child endings. A tool result releases NO local or money accounting;
+// unknown_effect ends the journal child but is not a successful required effect.
+// Existing unknown local/paid holds remain held. An old-family-only child
+// predicate MUST NOT be used on a log containing F3-15.
+//
+// (c) F3-11 arguments_sha256 remains an opaque digest. This producer supplies
+// SHA-256 of the exact normalized invocation bytes described below and compares
+// the same digest again at local.begin. This changes no F3-11 encoding or rule.
+//
+// # Codec rules and ordered members
+//
+// MaxLoopPayloadBytes is 65,536 bytes for each COMPLETE input and each compact
+// output independently, including whitespace, ignored extensions and the
+// entire receipt with its embedded submission. Check the received bound before
+// parsing. One complete UTF-8 JSON object, recursively unique keys even in
+// ignored extensions, required fields, no null known field, canonical lowercase
+// UUIDv7s and nonzero lowercase SHA-256 digests follow F0. Unknown optional
+// members are ignored; encoders emit known members only. Known members of
+// another schema-6 operation are forbidden, even when null. Errors wrap
+// ErrInvalid. Optional members are omitted when absent, not encoded as
+// zero/empty/null. Integers are plain unsigned JSON decimals through MaxInt64,
+// not strings, fractions, exponents or signed values. Positive sequences name
+// actual ledger records; checked revision increments cannot overflow.
+//
+// ObjectRef is exactly F3-11's {sha256,bytes}, with nonnegative bytes.
+// Origin is {agent_id,session_id,context_id}; Resource is unchanged F3-11.
+// PrivateChange has the unchanged {slot,mode,sha256,bytes,previous_sha256?}
+// order for append. Runtime byte/count ceilings are not extra decoder limits.
+//
+// tool_name matches ^[A-Za-z0-9_-]{1,64}$ (ASCII), not the operation grammar.
+// provider_call_id is 1-256 visible ASCII bytes, 0x21 through 0x7e.
+// tool_schema is positive; current writers emit 1. Outcome and reason are open
+// ^[a-z][a-z0-9_]*$ tokens of at most 64 bytes. tool_started.operation is open
+// dot-separated such tokens, at most 64 bytes overall. Unfamiliar well-formed
+// tokens decode but consumers hold/refuse them as unsupported, never infer
+// success, permission, completion or release. Schema, submission operation,
+// actor, scope, slot and mode use the closed sets specified here.
+//
+// Exact payload key order (? means optional, not null):
+//
+//	private.turn_revision:
+//	  scope, expected_version, revision, changes
+//	runtime.turn_bound:
+//	  turn_id, admission_sequence, input_object, policy_object, render_object
+//	runtime.tool_started:
+//	  tool_id, parent_turn_id, attempt_id, provider_call_id, tool_name,
+//	  tool_schema, request_object, request_sha256, operation, target?,
+//	  grant_id?, effect_command_id?
+//	runtime.tool_result:
+//	  tool_id, started_sequence, outcome, result_object, effect_receipt_sequence?
+//	runtime.turn_result:
+//	  turn_id, bound_sequence, outcome, reason, model_calls, tool_dispatches,
+//	  final_message_object?, ending_sequence
+//	runtime.loop_receipt:
+//	  command_id, submission_sha256, submission, outcome, effect_sequence
+//
+// private.turn_revision requires scope=context, expected_version>=1,
+// revision=expected_version+1, and exactly one transcript/append change.
+// Transcript bytes are positive; predecessor is omitted only for the first
+// chunk, otherwise the actual preceding chunk digest from the shared head.
+// No other slot, initialization, replacement or clear is permitted.
+//
+// turn_bound selects three immutable owning-context objects after the ordinary
+// F3-11 admission. admission_sequence identifies that work_admitted effect,
+// whose work_id equals turn_id; its command is admission_command_id.
+//
+// tool_started.request_sha256 equals request_object.sha256. The tool ID is
+// Core-minted, not derived from a provider string. The same (attempt_id,
+// provider_call_id) selects only one tool ID and request digest, within the
+// bound originating turn/context. A second start or changed meaning refuses.
+// target is omitted for invalid_argument, unrecognized, tools.discover and
+// task.list; never publish an inaccessible target. grant_id is required EXACTLY
+// when effect_command_id is absent and operation is neither invalid_argument
+// nor unrecognized: it is the leaf of the one current chain authorizing that
+// passive/catalogue disclosure. Those two invalid operations omit target,
+// grant_id and effect_command_id. Native mutating/accounted entrances require
+// effect_command_id and omit grant_id, relying on the native authorization
+// record instead. Codec history-free checks cannot establish current authority.
+//
+// For file tools, effect_command_id names local.admit, while the matching
+// tool_result.effect_receipt_sequence names local.end's receipt. The consumer
+// verifies that ending's work was admitted by that command. For atomic and
+// accounted read operations both name the one native command and its receipt.
+// Passive/correction results omit effect_receipt_sequence; when present it is
+// positive. A result's started_sequence selects its exact unmatched tool start.
+// No native command reuses the outer loop command ID.
+//
+// Current tool-result writer outcomes: ok, invalid_argument, denied, busy,
+// conflict, too_large, unavailable, unknown_effect. busy describes only
+// workspace-reported context_busy/merge_back_pending/scratch-busy facts.
+// Admission/dispatch resource busy is waiting_resource in the scheduler,
+// producing NO tool_result or model-visible error and consuming no counter;
+// the pending tool retains its tool ID and fixed effect command ID.
+//
+// Current tool-operation writer values: file.read, file.search, file.write,
+// file.edit, context.inspect, turn.inspect, task.inspect, task.start, task.wait,
+// task.resume, task.submit, task.cancel, task.create, task.claim, task.assign,
+// task.complete, task.fail, task.reassign, task.list, private.read, private.write,
+// artifact.read, tools.discover, invalid_argument and unrecognized. An unknown
+// syntactically valid provider name is journaled as unrecognized, never echoed;
+// a name outside tool_name's grammar remains a content failure.
+//
+// Current turn-result outcomes: finished, cancelled, failed, interrupted.
+// Current reasons: natural_stop, cancelled, shutdown, authority_lost, deadline,
+// loop_limit, provider_error, content_invalid, unresolved_result, integrity,
+// scratch_pending, request_too_large. The latter distinguishes a next sealed
+// request/object/manifest that cannot fit from invalid content. finished
+// requires a complete validated natural answer, selected final_message_object
+// (an empty text-object list is allowed), and no required pending result.
+// Cancelled/failed/interrupted omit final_message_object. Counts are nonnegative.
+// This is neither task completion nor promotion. ending_sequence identifies
+// the actual F3-11 work_ended effect, whose command is ending_command_id.
+// Native outcome released accompanies normal/failed closure, cancelled
+// cancellation, interrupted shutdown/interruption. released is NOT model
+// success. Receipt writers emit applied; effect_sequence is the actual runtime
+// effect (turn_result for loop.end), not the private revision or a prediction.
+//
+// # Schema-6 canonical submission
+//
+// SHA-256 covers compact LoopSubmission.Encode JSON in this exact key order:
+//
+//	schema (6), actor, origin, turn_id, operation, expected_version, arguments
+//
+// Exactly four submission operations exist, with concrete arguments:
+//
+//	loop.bind: turn_id, admission_command_id, input_object, policy_object,
+//	  render_object
+//	tool.begin: the exact runtime.tool_started order above
+//	tool.result: the exact runtime.tool_result order above
+//	loop.end: turn_id, bound_sequence, outcome, reason, model_calls,
+//	  tool_dispatches, final_message_object?, ending_command_id
+//
+// Actor is owner for loop.bind, agent for tool.begin, core for tool.result and
+// loop.end. expected_version is 0 for bind/begin, 1 for result/end: one immutable
+// terminal per matching start/binding, NOT the independent private-head CAS.
+// The argument turn_id/parent_turn_id equals the outer turn_id. Source sequences
+// and IDs are bound, then verified against real readback identities. Private
+// manifest/revision predecessors derive from current private state, not guesses.
+// encoding/json's compact key order and escaping define the preimage; unknown
+// optional members do not enter it. Receipt decoding re-encodes and checks it.
+//
+// Normalized invocation preimage, a producer rule, is compact
+// {schema:1,tool_name,operation_schema:1,operation,target?,arguments}, with the
+// concrete argument schema's key order and decimal integers. It binds tool
+// path, schema revision and concrete target. request_object selects these
+// exact bytes and request_sha256 hashes them; local.admit arguments_sha256
+// and local.begin compare that same hash. Only declared model argument
+// equivalents are normalized; ledger/law/launcher parsing remains strict.
+// Malformed invocation evidence instead selects a private
+// {schema:1,tool_name,raw_arguments_sha256} after the literal-secret check.
+// Any retained raw rejected arguments are a bounded JSON string, not executable
+// RawMessage. Its result is a static bounded correction, with zero repair calls.
+//
+// Global authorized outer-command lookup precedes minting internal admission,
+// effect or ending IDs. A retry reuses the recorded IDs, original policy/
+// deadline and render selections; no new meaning, deadline or effect is minted.
+// Same command/principal/digest returns its receipt only after current
+// disclosure authorization; mismatch refuses globally across schemas 1-6.
+//
+// # Service-enforced groups and replay
+//
+// Each complete transition is one Submit, with C=ledger.command and
+// R=runtime.loop_receipt:
+//
+//	loop.bind:   C, runtime.turn_bound, R
+//	tool.begin:  C, runtime.tool_started, R
+//	tool.result: C, runtime.tool_result, R
+//	loop.end:    C, private.turn_revision, runtime.turn_result, R
+//
+// All envelopes bind identical registered agent/session/context/turn and
+// operation_id=command_id. Effects and private revision have actor core;
+// command/receipt actors equal the submission actor above. No measurement_path,
+// body_refs, unrelated, extra, missing, reordered or mixed-family records.
+// F0 command and receipt digests agree; submitted effects and all prior links
+// reconstruct exactly from the ORIGINAL normalized input and pre-transition
+// state. Actual readback sequences, not predicted cursors, establish identity.
+// One reducer validates live preflight and Open; uncertainty poisons the service.
+// Reader/EncodeCommit/ledgerstore do not enforce these producer history rules.
+//
+// Publish private input/request/result/final/manifest objects before selecting
+// them. The append-only runtime/paid journal is canonical during an active turn;
+// publish ONE bounded turn-manifest transcript append at loop.end, not a private
+// revision per journal event. Ordinary read-to-CAS survives mere journal traffic;
+// an actual intervening private write still conflicts. Loop closure follows
+// native EndTurn, after all children end and writers are observed/closed.
+//
+// Bind follows separate ordinary StartTurn admission and precedes first effect.
+// Busy admission commits no binding, retains no input and queues nothing. A
+// crash between admission and bind leaves an orphan admission, recovery_pending
+// and nondispatchable; retries query fixed IDs rather than silently queueing.
+// Definite pre-bind publication failure honestly ends the never-dispatched
+// admission; uncertainty poisons and requires recovery. A tool-start records
+// accepted invocation, NOT execution authorization. Each native operation still
+// obtains fresh current authority/admission; every model call uses its own
+// separately admitted F3-13 paid attempt. Never resend an already-started tool
+// because its result is absent. Unknown unpaired work remains recovery_pending.
+//
+// Ordinary Open reduces metadata but never dispatches, reads credential
+// sources or paid objects, resumes waits, or auto-executes tools. Current and
+// historical private integrity checks cover runtime-owned transcript objects.
+// No recovery bookkeeping is evidence of ticket 16's mid-turn crash/race proof.
+//
+// Not frozen by this family: turn-manifest chunk schema, final-message manifest,
+// request/result/replay object encodings, TurnPolicy/defaults, session interface
+// and terminal settings. Legacy opaque transcript chunks are never reinterpreted
+// as a turn manifest. The new golden is testdata/f3/15, generated only by
+// TestGoldenF3_15 -update with synthetic fixed IDs/times and encoded hashes.
+// It exercises all six types and all four ordered groups; earlier goldens
+// remain byte-identical. Before review its earlier-family setup must pass real
+// Core Open with no error, no issue and unchanged durable sequence. A codec
+// golden alone does not establish an operational loop or provider acceptance.
 package ledger
