@@ -2438,7 +2438,12 @@
 // output rate, with one final upward rounding. No subtraction or double count.
 // OpenAI's input dimension contains its six input classes; its output dimension
 // contains both output.generated.long and output.generated.short, in sorted
-// order. Its usage schema is openai-responses-text-30m-kguard/v1. Historical
+// order. Its usage schema is openai-responses-text-30m-kguard/v1. Usage schema
+// openai-responses-text-30m-kguard/v2 is accepted beside it: v2 also knows
+// input_tokens_details.cache_write_tokens_details, whose ttl_12h_tokens must be
+// zero and whose members must sum to cache_write_tokens, and it tolerates
+// unknown usage members that are null, integer zero or object trees of those.
+// Historical
 // producers reconstruct the bound and actual prices from the admission profile,
 // never from a later tariff or only the recorded component maxima.
 //
