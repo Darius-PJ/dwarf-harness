@@ -48,3 +48,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-08 — Published from the [fortress GUI specification](../../fortress-gui/spec.md) after the owner approved publishing tickets 87–129 in the consolidated breakdown review. These tickets join 01–86 in this tracker so one team works a single frontier. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-10-30 — Ticket [89](89-report-waiting-ready-waiting-blocked-and-active-task-facts.md) is resolved. It supplies authorized per-agent waiting-ready, waiting-blocked and active task facts, complete visible counts and bounded same-head pages with stale-cursor recovery. Count-only consumers need one call per agent at Limit 1; no GUI or launcher transport was added. Ticket [110](110-excavate-designate-and-bind-rooms-through-core-saved-manual-plans.md), this ticket's other blocker, remains unresolved; the other start and authority gates above stand.
