@@ -68,28 +68,8 @@ func (s *Service) listTasks(ctx context.Context, bound *submissionIDs, request T
 	if request.Limit > s.limits.MaxLiveTasks {
 		return TaskPage{}, ErrTooLarge
 	}
-	if bound != nil {
-		chain, err := s.currentChain(ctx, originOf(*bound), request.GrantID, s.p.through)
-		if err != nil {
-			return TaskPage{}, err
-		}
-		allowed := false
-		for _, resource := range chain[0].resources {
-			if resource.Kind != "task" || !validID(resource.TaskID) {
-				continue
-			}
-			_, err := s.authorize(ctx, originOf(*bound), request.GrantID, "task.inspect", []ledger.Resource{resource}, nil, 0, s.p.through)
-			if err == nil {
-				allowed = true
-				break
-			}
-			if !errors.Is(err, ErrDenied) {
-				return TaskPage{}, err
-			}
-		}
-		if !allowed {
-			return TaskPage{}, ErrDenied
-		}
+	if err := s.taskListingPrecheck(ctx, bound, request.GrantID); err != nil {
+		return TaskPage{}, err
 	}
 	// Terminal dependency facts may remain hot, but never enter the live list.
 	// Keep only the next page and one authorized look-ahead, not a skipped-ID
@@ -135,6 +115,31 @@ func (s *Service) listTasks(ctx context.Context, bound *submissionIDs, request T
 	return page, nil
 }
 
+// taskListingPrecheck proves that the selected chain can inspect at least one
+// concrete task resource. Each candidate still needs its own authorization.
+func (s *Service) taskListingPrecheck(ctx context.Context, bound *submissionIDs, grantID uuid.UUID) error {
+	if bound == nil {
+		return nil
+	}
+	chain, err := s.currentChain(ctx, originOf(*bound), grantID, s.p.through)
+	if err != nil {
+		return err
+	}
+	for _, resource := range chain[0].resources {
+		if resource.Kind != "task" || !validID(resource.TaskID) {
+			continue
+		}
+		_, err := s.authorize(ctx, originOf(*bound), grantID, "task.inspect", []ledger.Resource{resource}, nil, 0, s.p.through)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrDenied) {
+			return err
+		}
+	}
+	return ErrDenied
+}
+
 func (s *Service) taskView(ctx context.Context, task scopedTaskState, viewer *submissionIDs) (TaskView, error) {
 	encoded, err := task.record.Encode()
 	if err != nil {
@@ -147,14 +152,14 @@ func (s *Service) taskView(ctx context.Context, task scopedTaskState, viewer *su
 	if task.descriptionSequence == 0 || task.descriptionSequence > math.MaxInt64 {
 		return TaskView{}, ErrUnavailable
 	}
-	state, reason, err := s.taskReadiness(ctx, task.record, viewer)
+	state, reason, err := s.taskReadiness(ctx, task.record, viewer, true)
 	if err != nil {
 		return TaskView{}, err
 	}
 	return TaskView{Task: copy, DescriptionRef: ledger.ArtifactRef{SourceSequence: int64(task.descriptionSequence), SHA256: copy.Description.SHA256, Bytes: copy.Description.Bytes}, Sequence: task.sequence, Readiness: state, Reason: reason, ThroughSequence: s.p.through}, nil
 }
 
-func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChanged, viewer *submissionIDs) (string, string, error) {
+func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChanged, viewer *submissionIDs, includePreparing bool) (string, string, error) {
 	if task.State != "waiting" {
 		return task.State, "", nil
 	}
@@ -189,11 +194,11 @@ func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChan
 	}
 	binding := task.Assignment.Assignee
 	origin := ledger.Origin{AgentID: binding.AgentID, SessionID: s.p.agents[binding.AgentID].session, ContextID: binding.ContextID}
-	start, startReason, err := s.operationReadiness(ctx, origin, "task.start", ledger.Resource{Kind: "task", TaskID: task.TaskID})
+	start, startReason, err := s.operationReadiness(ctx, origin, "task.start", ledger.Resource{Kind: "task", TaskID: task.TaskID}, includePreparing)
 	if err != nil {
 		return "", "", err
 	}
-	turn, turnReason, err := s.operationReadiness(ctx, origin, "turn.start", ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}})
+	turn, turnReason, err := s.operationReadiness(ctx, origin, "turn.start", ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}}, includePreparing)
 	if err != nil {
 		return "", "", err
 	}
@@ -214,7 +219,7 @@ func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChan
 
 // Each candidate is a whole chain for one operation. In particular, a partial
 // task grant and a partial turn grant cannot be combined into either authority.
-func (s *Service) operationReadiness(ctx context.Context, origin ledger.Origin, operation string, target ledger.Resource) (string, string, error) {
+func (s *Service) operationReadiness(ctx context.Context, origin ledger.Origin, operation string, target ledger.Resource, includePreparing bool) (string, string, error) {
 	permission, enrolled, enabled, queued := false, false, false, false
 	for _, id := range s.ownGrantIDs(origin) {
 		chain, err := s.authorize(ctx, origin, id, operation, []ledger.Resource{target}, nil, 0, s.p.through)
@@ -236,7 +241,11 @@ func (s *Service) operationReadiness(ctx context.Context, origin ledger.Origin, 
 				configured = false
 				continue
 			}
-			_, _, available, err := capacityExposures(account, s.p.book.preparing[scope], !account.configured)
+			prepared := [4]int64{}
+			if includePreparing {
+				prepared = s.p.book.preparing[scope]
+			}
+			_, _, available, err := capacityExposures(account, prepared, !account.configured)
 			if err != nil {
 				return "", "", err
 			}
