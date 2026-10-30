@@ -348,8 +348,26 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 			return PaidReceipt{}, ErrIntegrity
 		}
 		block, ok := output.Block.(map[string]any)
-		if !ok || block["kind"] != "text" && block["kind"] != "local_tool_call" && block["kind"] != "opaque_provider" {
+		if !ok || block["kind"] != "text" && block["kind"] != "local_tool_call" && block["kind"] != "local_tool_request" && block["kind"] != "opaque_provider" {
 			return PaidReceipt{}, ErrIntegrity
+		}
+		if block["kind"] == "local_tool_request" {
+			id, idOK := block["id"].(string)
+			name, nameOK := block["name"].(string)
+			_, argumentsOK := block["arguments_text"].(string)
+			if len(block) != 4 || !idOK || len(id) == 0 || len(id) > 256 || !nameOK || len(name) == 0 || len(name) > 64 || !argumentsOK {
+				return PaidReceipt{}, ErrIntegrity
+			}
+			for _, c := range id {
+				if c < 0x21 || c > 0x7e {
+					return PaidReceipt{}, ErrIntegrity
+				}
+			}
+			for _, c := range name {
+				if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+					return PaidReceipt{}, ErrIntegrity
+				}
+			}
 		}
 		previousBlock, previousChunk = output.BlockIndex, output.ChunkIndex
 	}

@@ -61,6 +61,10 @@ func responseHeaders(provider string, h http.Header) ([]ResponseHeader, error) {
 // ReadAnthropicResponse consumes but does not close the response body. HTTP
 // errors, refusal, EOF and network errors never imply a free request or retry.
 func ReadAnthropicResponse(response *http.Response, p Profile, c Compiled) (ResponseEvidence, error) {
+	return readAnthropicResponse(response, p, c, nil)
+}
+
+func readAnthropicResponse(response *http.Response, p Profile, c Compiled, observe func(string) error) (ResponseEvidence, error) {
 	var result ResponseEvidence
 	if p.Provider != "anthropic" {
 		return result, ErrUnsupported
@@ -85,7 +89,7 @@ func ReadAnthropicResponse(response *http.Response, p Profile, c Compiled) (Resp
 			result.ErrorClass = "protocol_error"
 			return result, ErrProtocol
 		}
-		result.Stream, err = ReadAnthropicStream(response.Body, p, c)
+		result.Stream, err = readAnthropicStream(response.Body, p, c, observe)
 		if err != nil {
 			result.ErrorClass = "protocol_error"
 			if len(result.Stream.ProviderError) > 0 {

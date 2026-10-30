@@ -32,15 +32,31 @@
 // cumulative billing evidence. Null invalidates a counter, omission retains it,
 // cache aggregates are checked against exclusive children, and thinking stays
 // inside output. Unknown or incomplete evidence is never a zero settlement.
-// Canonical blocks escape only after message_stop; malformed local-tool JSON
-// discards output while preserving independent final usage. Opaque thinking
-// signatures and redacted provider payloads remain uninterpreted.
+// Canonical blocks escape only after message_stop. Argument-only failures and
+// undeclared valid local names return an untrusted local_tool_request candidate
+// with arguments_text, not executable JSON, without erasing final usage.
+// Names outside the 64-byte ASCII model-tool grammar remain content failures.
+// Thinking deltas and signatures concatenate exactly; the complete assembled
+// assistant array is encoded once as StreamResult.Replay. Opaque extensions and
+// redacted data remain uninterpreted. An unrenderable argument has no replay.
 // ContentBlocks and OutputStarted retain evidence of begun output even when a
 // refusal clears returned blocks. No-charge interpretation belongs to Core and
 // requires the admission profile's dated rule and the complete refusal facts.
 //
-// CompileOpenAI accepts text and declared local functions, not function history,
-// media, hosted tools, cache markers or provider-side continuation state. It pins
+// CompileAnthropic accepts a sole assistant anthropic_replay Block with Replay
+// holding the stored assembled array. Structured tool history stays Haiku-only;
+// Sonnet/Opus require replay. CompileOpenAI accepts a sole assistant openai_replay
+// Block holding the complete stored output array, preserving each item byte for
+// byte, including phase and encrypted reasoning. Both require exactly one
+// immediately following result per call, in call order, before any user text.
+// Duplicate, unmatched and half-matched batches fail before sealing. Core alone
+// verifies the source context/provider/model and frozen system/tools/history
+// prefix; possession of replay bytes is not authority. Provider acceptance of
+// byte-exact replay is not established by loopback tests.
+//
+// OpenAI tool_result blocks contain one text value, encoded as a
+// function_call_output string, at most 64 KiB. Media, hosted tools, cache markers
+// and provider-side continuation state stay unsupported. The compiler pins
 // default/global service, store:false and implicit 30m caching with no prewarm.
 // The Responses reader takes output and usage only from the first validated
 // completed/incomplete/failed terminal; earlier snapshots never add counters or
@@ -52,6 +68,9 @@
 // types also retain the hold and mark a profile violation. Unknown
 // null/plain-zero usage extensions and zero-only tool-usage objects do not
 // introduce charges.
+// Private observer-aware readers emit decoded text only; observer failure
+// disables presentation and content publication but still drains independent
+// terminal usage. Existing exported reader entrances pass no observer.
 //
 // OpenAI's eight classes split cached, uncached, write and generated units into
 // short/long bands. The versioned kguard schema selects short through 272000 and

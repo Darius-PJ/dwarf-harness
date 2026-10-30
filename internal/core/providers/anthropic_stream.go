@@ -30,6 +30,7 @@ type OutputBlock struct {
 	Signature     string          `json:"signature,omitempty"`
 	Data          string          `json:"data,omitempty"`
 	OpaquePayload json.RawMessage `json:"-"`
+	ArgumentsText *string         `json:"arguments_text,omitempty"`
 }
 
 // StreamResult distinguishes message completion from financial availability.
@@ -37,9 +38,12 @@ type OutputBlock struct {
 // independently complete opaque reasoning. Raw usage is evidence only: it does
 // not imply settlement or a no-charge result.
 type StreamResult struct {
-	MessageID                string
-	Model                    string
-	Blocks                   []OutputBlock
+	MessageID string
+	Model     string
+	Blocks    []OutputBlock
+	// Replay is a complete validated assistant array. It is absent when tool
+	// arguments cannot safely be rendered, even though a correction can be made.
+	Replay                   json.RawMessage
 	StopReason               string
 	StopSequence             json.RawMessage
 	StopDetails              json.RawMessage
@@ -71,6 +75,11 @@ type streamState struct {
 	partialSeen                          bool
 	blocks                               []OutputBlock
 	outputBytes                          int
+	compiled                             Compiled
+	observe                              func(string) error
+	assembled                            []map[string]json.RawMessage
+	rawBlock                             map[string]json.RawMessage
+	renderable                           bool
 }
 
 func stringField(m map[string]json.RawMessage, key string) (string, bool) {
@@ -92,7 +101,11 @@ func rawObject(raw []byte) (map[string]json.RawMessage, error) {
 // ReadAnthropicStream follows WHATWG SSE line/event framing, without reconnect.
 // Limits are checked while reading, not after retaining the entire entity.
 func ReadAnthropicStream(r io.Reader, p Profile, c Compiled) (StreamResult, error) {
-	s := streamState{profile: p, result: StreamResult{RawUsageMerged: Usage{}}}
+	return readAnthropicStream(r, p, c, nil)
+}
+
+func readAnthropicStream(r io.Reader, p Profile, c Compiled, observe func(string) error) (StreamResult, error) {
+	s := streamState{profile: p, compiled: c, observe: observe, assembled: []map[string]json.RawMessage{}, renderable: true, result: StreamResult{RawUsageMerged: Usage{}}}
 	if p.Provider != "anthropic" {
 		return s.result, ErrUnsupported
 	}
@@ -110,12 +123,20 @@ func ReadAnthropicStream(r io.Reader, p Profile, c Compiled) (StreamResult, erro
 	if err != nil {
 		s.result.Complete = false
 		s.result.Blocks = nil
+		s.result.Replay = nil
 		s.result.Priceable = false
 		return s.result, err
 	}
 	s.result.Complete = true
 	if !s.result.ContentError && s.result.StopReason != "refusal" {
 		s.result.Blocks = s.blocks
+		if s.renderable {
+			s.result.Replay, err = compact(s.assembled)
+			if err != nil || len(s.result.Replay) > streamOutputLimit {
+				s.result.Blocks, s.result.Replay = nil, nil
+				return s.result, ErrLimit
+			}
+		}
 	}
 	if s.finalOutput {
 		units, violation, e := NormalizeUsage(p, c, s.result.RawUsageMerged)
@@ -218,10 +239,7 @@ func (s *streamState) event(name string, data []byte) error {
 	if s.result.EventCount > streamEventLimit {
 		return ErrLimit
 	}
-	if err := checkJSON(data, streamLineLimit, false, false); err != nil {
-		return ErrProtocol
-	}
-	m, e := rawObject(data)
+	m, e := anthropicEventObject(data)
 	if e != nil {
 		return e
 	}
@@ -253,6 +271,17 @@ func (s *streamState) event(name string, data []byte) error {
 			s.result.ProfileViolation = true
 			return ErrProtocol
 		}
+		if s.result.StopReason == "tool_use" {
+			calls := 0
+			for _, b := range s.blocks {
+				if b.Type == "tool_use" || b.Type == "local_tool_request" {
+					calls++
+				}
+			}
+			if calls == 0 {
+				s.result.ContentError = true
+			}
+		}
 		s.stopped = true
 		return nil
 	case "error":
@@ -262,6 +291,7 @@ func (s *streamState) event(name string, data []byte) error {
 		s.result.ProviderError = bytes.Clone(data)
 		return ErrProtocol
 	default:
+		s.result.ContentError = true
 		if len(typ) > 64 {
 			s.result.UnknownEventTypeOverflow++
 			return nil
@@ -337,16 +367,18 @@ func (s *streamState) blockStart(m map[string]json.RawMessage) error {
 		if !ok {
 			return ErrProtocol
 		}
-		e = s.retain(b.Text)
+		if e = s.retain(b.Text); e == nil {
+			s.present(b.Text)
+		}
 	case "tool_use":
 		b.ID, _ = stringField(raw, "id")
 		b.Name, _ = stringField(raw, "name")
 		b.Input = bytes.Clone(raw["input"])
-		if !visible(b.ID, 256) || !toolName(b.Name) || !objectJSON(b.Input) {
+		if !visible(b.ID, 256) || !modelToolName(b.Name) || len(b.Input) == 0 {
 			return ErrProtocol
 		}
 		for _, old := range s.blocks {
-			if old.Type == "tool_use" && old.ID == b.ID {
+			if (old.Type == "tool_use" || old.Type == "local_tool_request") && old.ID == b.ID {
 				return ErrProtocol
 			}
 		}
@@ -384,6 +416,7 @@ func (s *streamState) blockStart(m map[string]json.RawMessage) error {
 	}
 	s.result.ContentBlocks++
 	s.open = &b
+	s.rawBlock = raw
 	s.partial.Reset()
 	s.text.Reset()
 	s.text.WriteString(b.Text)
@@ -429,6 +462,9 @@ func (s *streamState) blockDelta(m map[string]json.RawMessage) error {
 		return e
 	}
 	if dst != nil {
+		if typ == "text_delta" {
+			s.present(text)
+		}
 		dst.WriteString(text)
 	} else {
 		if !s.partialSeen && string(bytes.TrimSpace(s.open.Input)) != "{}" {
@@ -446,28 +482,44 @@ func (s *streamState) blockStop(m map[string]json.RawMessage) error {
 	if s.open == nil || !s.index(m) {
 		return ErrProtocol
 	}
-	if s.open.Type == "tool_use" && s.partialSeen {
-		raw := []byte(s.partial.String())
-		if !objectJSON(raw) {
-			s.result.ContentError = true
-		} else {
-			s.open.Input = raw
+	if s.open.Type == "tool_use" {
+		if s.partialSeen {
+			s.open.Input = []byte(s.partial.String())
+		}
+		valid := objectJSON(s.open.Input)
+		if !valid || !slices.Contains(s.compiled.toolNames, s.open.Name) {
+			s.open.Type = "local_tool_request"
+			arguments := string(s.open.Input)
+			s.open.ArgumentsText = &arguments
+			s.open.Input = nil
+			s.renderable = s.renderable && valid
 		}
 	}
 	s.open.Text = s.text.String()
 	s.open.Thinking = s.thinking.String()
 	s.open.Signature = s.signature.String()
-	if s.open.Type == "thinking" {
-		payload, err := compact(struct {
+	switch s.open.Type {
+	case "text":
+		s.rawBlock["text"], _ = compact(s.open.Text)
+	case "thinking":
+		s.rawBlock["thinking"], _ = compact(s.open.Thinking)
+		s.rawBlock["signature"], _ = compact(s.open.Signature)
+		// Keep the existing display artifact encoding; replay uses the complete
+		// assembled array below, including provider extension members.
+		s.open.OpaquePayload, _ = compact(struct {
 			Type      string `json:"type"`
 			Thinking  string `json:"thinking"`
 			Signature string `json:"signature"`
 		}{s.open.Type, s.open.Thinking, s.open.Signature})
-		if err != nil {
-			return err
+	case "tool_use":
+		s.rawBlock["input"] = s.open.Input
+	case "local_tool_request":
+		if objectJSON([]byte(*s.open.ArgumentsText)) {
+			s.rawBlock["input"] = json.RawMessage(*s.open.ArgumentsText)
 		}
-		s.open.OpaquePayload = payload
 	}
+	s.assembled = append(s.assembled, s.rawBlock)
+	s.rawBlock = nil
 	b, e := compact(s.open)
 	if e != nil {
 		return e
@@ -515,4 +567,62 @@ func (s *streamState) messageDelta(m map[string]json.RawMessage) error {
 	// delta or the message-start counter is not final billing evidence.
 	_, _, s.finalOutput = counter(usage, "output_tokens")
 	return mergeUsage(s.result.RawUsageMerged, m["usage"])
+}
+
+func modelToolName(name string) bool {
+	return len(name) <= 64 && toolName(name)
+}
+
+func (s *streamState) present(text string) {
+	if text != "" && s.observe != nil && !s.result.ContentError {
+		if s.observe(text) != nil {
+			s.result.ContentError = true
+			s.observe = nil
+		}
+	}
+}
+
+// Arguments alone are untrusted data. Validate every surrounding member and
+// duplicate key, but leave tool input's own duplicate keys for the normalizer.
+func anthropicEventObject(data []byte) (map[string]json.RawMessage, error) {
+	if len(data) > streamLineLimit || !utf8.Valid(data) {
+		return nil, ErrProtocol
+	}
+	var object func([]byte, int) (map[string]json.RawMessage, error)
+	object = func(raw []byte, level int) (map[string]json.RawMessage, error) {
+		d := json.NewDecoder(bytes.NewReader(raw))
+		token, err := d.Token()
+		if err != nil || token != json.Delim('{') {
+			return nil, ErrProtocol
+		}
+		fields := map[string]json.RawMessage{}
+		for d.More() {
+			token, err := d.Token()
+			name, ok := token.(string)
+			if err != nil || !ok || fields[name] != nil {
+				return nil, ErrProtocol
+			}
+			var value json.RawMessage
+			if d.Decode(&value) != nil {
+				return nil, ErrProtocol
+			}
+			fields[name] = value
+			if level == 0 && name == "content_block" {
+				if _, err := object(value, 1); err != nil {
+					return nil, err
+				}
+			} else if !(level == 1 && name == "input") && checkJSON(value, streamLineLimit, false, false) != nil {
+				return nil, ErrProtocol
+			}
+		}
+		token, err = d.Token()
+		if err != nil || token != json.Delim('}') {
+			return nil, ErrProtocol
+		}
+		if _, err = d.Token(); err != io.EOF {
+			return nil, ErrProtocol
+		}
+		return fields, nil
+	}
+	return object(data, 0)
 }

@@ -347,6 +347,8 @@ func FuzzOpenAIRequest(f *testing.F) {
 		f.Add(raw)
 	}
 	f.Add([]byte(`{"max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"` + strings.Repeat("x", RequestLimit/2) + `"}]}]}`))
+	replay, _ := compact(replayRequest("openai"))
+	f.Add(replay)
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		r, err := ParseRequest(raw)
 		if err != nil {

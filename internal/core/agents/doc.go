@@ -709,6 +709,9 @@
 // partial/refused text or local-tool calls.
 // The bounded capture rejects literal pinned authentication material in decoded
 // provider fields, including opaque extensions, before any artifact is hashed.
+// Malformed local-tool arguments containing a backslash are refused before
+// publication, retaining the attempt's hold even when no literal credential
+// can be identified.
 // Observation estimates and encoded bytes are capped by the private store's
 // 1 MiB object limit. Capture failure produces a fixed, nonsecret unknown
 // observation, never successful truncation. No request object, authentication

@@ -324,10 +324,16 @@ func TestOpenAIStreamTierToolAndContentPolicies(t *testing.T) {
 			}
 		})
 	}
-	for _, bad := range []string{strings.Replace(tool, `"name":"local"`, `"name":"undeclared"`, 1), strings.Replace(tool, `{\"x\":1}`, `{\"x\":1,\"x\":2}`, 1), strings.Replace(tool, `"status":"completed"`, `"status":"incomplete"`, 1), strings.Replace(tool, `"status":"completed"`, `"status":null`, 1), strings.Replace(tool, `"call_id":"call-fixture"`, `"call_id":""`, 1)} {
+	for _, bad := range []string{strings.Replace(tool, `"status":"completed"`, `"status":"incomplete"`, 1), strings.Replace(tool, `"status":"completed"`, `"status":null`, 1), strings.Replace(tool, `"call_id":"call-fixture"`, `"call_id":""`, 1)} {
 		r, err := ReadOpenAIStream(strings.NewReader(openAITerminal("completed", openAIUsage(20, 4, 8, 16), bad)), p, toolCompiled)
 		if err != nil || !r.Priceable || !r.ContentError || r.Blocks != nil {
 			t.Fatal("invalid local command escaped")
+		}
+	}
+	for _, bad := range []string{strings.Replace(tool, `"name":"local"`, `"name":"undeclared"`, 1), strings.Replace(tool, `{\"x\":1}`, `{\"x\":1,\"x\":2}`, 1)} {
+		r, err := ReadOpenAIStream(strings.NewReader(openAITerminal("completed", openAIUsage(20, 4, 8, 16), bad)), p, toolCompiled)
+		if err != nil || !r.Priceable || r.ContentError || len(r.Blocks) != 1 || r.Blocks[0].Type != "local_tool_request" {
+			t.Fatal("argument correction lost independently complete usage")
 		}
 	}
 	// Ordinary incomplete assistant/tool output must not erase the separately
@@ -354,6 +360,11 @@ func FuzzOpenAIResponsesSSE(f *testing.F) {
 	for _, split := range []string{`{"ttl_30m_tokens":8,"ttl_12h_tokens":0}`, `{"ttl_30m_tokens":7,"ttl_12h_tokens":1}`, `{"ttl_30m_tokens":7,"ttl_12h_tokens":0}`, `0`} {
 		usage := strings.Replace(openAIUsage(20, 4, 8, 16), `"cache_write_tokens":8`, `"cache_write_tokens":8,"cache_write_tokens_details":`+split, 1)
 		f.Add([]byte(openAITerminal("completed", usage, openAITextOutput)), uint8(1))
+	}
+	for _, args := range []string{`{"n":1}`, `{"n":1,"n":2}`, `[]`, `{`} {
+		encoded, _ := json.Marshal(args)
+		output := `[{"type":"function_call","id":"synthetic-item","call_id":"synthetic-call","name":"undeclared","arguments":` + string(encoded) + `}]`
+		f.Add([]byte(openAITerminal("completed", openAIUsage(20, 4, 8, 16), output)), uint8(1))
 	}
 	f.Fuzz(func(t *testing.T, b []byte, step uint8) {
 		if len(b) > streamBodyLimit+1 {

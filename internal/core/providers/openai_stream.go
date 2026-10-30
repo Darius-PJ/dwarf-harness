@@ -19,13 +19,18 @@ type openAIStreamState struct {
 	hasSequence, hasUsage, unknown, refused bool
 	items                                   map[int64]string
 	itemIndexes                             map[string]int64
+	observe                                 func(string) error
 }
 
 // ReadOpenAIStream uses bounded SSE framing without importing an ordering rule
 // from another provider. Only a fully framed terminal owns usage and output.
 // It stops at that terminal, even if the peer leaves the connection open.
 func ReadOpenAIStream(r io.Reader, p Profile, c Compiled) (StreamResult, error) {
-	s := openAIStreamState{profile: p, compiled: c, items: map[int64]string{}, itemIndexes: map[string]int64{}}
+	return readOpenAIStream(r, p, c, nil)
+}
+
+func readOpenAIStream(r io.Reader, p Profile, c Compiled, observe func(string) error) (StreamResult, error) {
+	s := openAIStreamState{profile: p, compiled: c, observe: observe, items: map[int64]string{}, itemIndexes: map[string]int64{}}
 	if p.Provider != "openai" {
 		return s.result, ErrUnsupported
 	}
@@ -39,6 +44,7 @@ func ReadOpenAIStream(r io.Reader, p Profile, c Compiled) (StreamResult, error) 
 	err := readEvents(r, s.event)
 	if err != errOpenAITerminal {
 		s.result.Blocks = nil
+		s.result.Replay = nil
 		if err == nil {
 			err = ErrProtocol
 		}
@@ -47,18 +53,21 @@ func ReadOpenAIStream(r io.Reader, p Profile, c Compiled) (StreamResult, error) 
 	s.result.Complete = true
 	if s.unknown {
 		s.result.Blocks = nil
+		s.result.Replay = nil
 		return s.result, ErrProtocol
 	}
 	tier, tierOK := stringField(map[string]json.RawMessage{"tier": s.result.ServedTier}, "tier")
 	if !tierOK || tier != "default" || !emptyOpenAIToolUsage(s.result.ToolUsage) {
 		s.result.ProfileViolation = tierOK && tier != "default" || !emptyOpenAIToolUsage(s.result.ToolUsage)
 		s.result.Blocks = nil
+		s.result.Replay = nil
 		return s.result, ErrUsage
 	}
 	units, violation, err := NormalizeUsage(p, c, s.result.RawUsageMerged)
 	s.result.ProfileViolation = s.result.ProfileViolation || violation
 	if err != nil {
 		s.result.Blocks = nil
+		s.result.Replay = nil
 		return s.result, err
 	}
 	s.result.Units, s.result.Priceable = units, true
@@ -187,6 +196,12 @@ func (s *openAIStreamState) event(name string, data []byte) error {
 			return ErrProtocol
 		}
 		s.result.OutputStarted = s.result.OutputStarted || value != ""
+		if typ == "response.output_text.delta" && value != "" && s.observe != nil && !s.result.ContentError && !s.unknown {
+			if s.observe(value) != nil {
+				s.result.ContentError = true
+				s.observe = nil
+			}
+		}
 	case "response.output_text.done", "response.reasoning_summary_text.done", "response.reasoning_text.done", "response.refusal.done", "response.function_call_arguments.done":
 		key := "text"
 		if typ == "response.refusal.done" {
@@ -309,6 +324,7 @@ func (s *openAIStreamState) snapshot(raw json.RawMessage, terminal string) error
 	}
 	blocks := make([]OutputBlock, 0, len(output))
 	calls := map[string]bool{}
+	renderable := true
 	for i, raw := range output {
 		item, err := rawObject(raw)
 		if err != nil {
@@ -367,15 +383,18 @@ func (s *openAIStreamState) snapshot(raw json.RawMessage, terminal string) error
 			call, callOK := stringField(item, "call_id")
 			name, nameOK := stringField(item, "name")
 			args, argsOK := stringField(item, "arguments")
-			asyncOK := len(item["async"]) == 0 || bytes.Equal(bytes.TrimSpace(item["async"]), []byte("false"))
-			callerOK := len(item["caller"]) == 0 || bytes.Equal(bytes.TrimSpace(item["caller"]), []byte("null"))
-			namespaceOK := len(item["namespace"]) == 0 || bytes.Equal(bytes.TrimSpace(item["namespace"]), []byte("null"))
-			if !asyncOK || !callerOK || !namespaceOK || !callOK || !visible(call, 256) || calls[call] || !nameOK || !slices.Contains(s.compiled.toolNames, name) || !argsOK || !objectJSON([]byte(args)) || hasStatus && itemStatus != "completed" {
+			if !localOpenAICall(item) || !callOK || !visible(call, 256) || calls[call] || !nameOK || !modelToolName(name) || !argsOK || hasStatus && itemStatus != "completed" {
 				s.result.ContentError = true
 				continue
 			}
 			calls[call] = true
-			blocks = append(blocks, OutputBlock{Type: "tool_use", ID: call, Name: name, Input: json.RawMessage(args)})
+			valid := objectJSON([]byte(args))
+			if !valid || !slices.Contains(s.compiled.toolNames, name) {
+				blocks = append(blocks, OutputBlock{Type: "local_tool_request", ID: call, Name: name, ArgumentsText: &args})
+				renderable = renderable && valid
+			} else {
+				blocks = append(blocks, OutputBlock{Type: "tool_use", ID: call, Name: name, Input: json.RawMessage(args)})
+			}
 		case "reasoning":
 			id, ok := stringField(item, "id")
 			var summary []json.RawMessage
@@ -408,6 +427,13 @@ func (s *openAIStreamState) snapshot(raw json.RawMessage, terminal string) error
 	}
 	if !s.result.ContentError {
 		s.result.Blocks = blocks
+		if status == "completed" && !s.refused && !s.unknown && renderable {
+			// Freeze validated terminal items, not presentation deltas.
+			s.result.Replay, err = compact(output)
+			if err != nil || len(s.result.Replay) > streamOutputLimit {
+				return ErrLimit
+			}
+		}
 	}
 	return nil
 }

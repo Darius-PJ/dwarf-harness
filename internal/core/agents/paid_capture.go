@@ -80,6 +80,12 @@ type paidToolBlock struct {
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
 }
+type paidToolRequestBlock struct {
+	Kind          string `json:"kind"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	ArgumentsText string `json:"arguments_text"`
+}
 type paidOpaqueBlock struct {
 	Kind         string          `json:"kind"`
 	Provider     string          `json:"provider"`
@@ -258,6 +264,13 @@ func paidCaptureAllowed(o paidObservationObject, blocks []providers.OutputBlock,
 					return false
 				}
 			}
+			if b.ArgumentsText != nil {
+				arguments := []byte(*b.ArgumentsText)
+				valid := json.Valid(arguments)
+				if bytes.Contains(arguments, key) || valid && paidContainsSecret(arguments, key) || !valid && bytes.Contains(arguments, []byte{'\\'}) {
+					return false
+				}
+			}
 			for _, v := range []json.RawMessage{b.Input, b.OpaquePayload} {
 				if len(v) != 0 && paidContainsSecret(v, key) {
 					return false
@@ -335,6 +348,17 @@ func (s *Service) publishPaidOutputs(scope privateScope, a paidAttempt, blocks [
 				o.Block = paidTextBlock{"text", remaining[:used]}
 			case "tool_use":
 				o.Block = paidToolBlock{"local_tool_call", block.ID, block.Name, block.Input}
+			case "local_tool_request":
+				if block.ArgumentsText == nil {
+					return nil, ErrInvalid
+				}
+				// Bound JSON string expansion before allocating the untrusted
+				// artifact, just as text chunks reserve their envelope above.
+				size := 1024 + 6*(len(block.ID)+len(block.Name)+len(*block.ArgumentsText))
+				if size > paidChunkLimit || size > paidOutputLimit-total {
+					return nil, ErrTooLarge
+				}
+				o.Block = paidToolRequestBlock{"local_tool_request", block.ID, block.Name, *block.ArgumentsText}
 			case "thinking", "redacted_thinking":
 				o.Block = paidOpaqueBlock{"opaque_provider", a.profile.Provider, a.profile.ModelID, block.Type, block.OpaquePayload}
 			case "responses_reasoning":

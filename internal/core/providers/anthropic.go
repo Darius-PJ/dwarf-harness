@@ -30,6 +30,8 @@ type Block struct {
 	Content      []Text          `json:"content,omitempty"`
 	IsError      *bool           `json:"is_error,omitempty"`
 	CacheControl *CacheControl   `json:"cache_control,omitempty"`
+	// Replay holds a whole same-provider assistant array, never display fields.
+	Replay json.RawMessage `json:"replay,omitempty"`
 }
 
 type Message struct {
@@ -59,9 +61,7 @@ type Request struct {
 }
 
 type wireRequest struct {
-	Model        string      `json:"model"`
-	MaxTokens    int64       `json:"max_tokens"`
-	Messages     []Message   `json:"messages"`
+	// The leading fields and messages are encoded separately to preserve replay.
 	Stream       bool        `json:"stream"`
 	System       []Text      `json:"system,omitempty"`
 	Tools        []Tool      `json:"tools,omitempty"`
@@ -149,6 +149,8 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 		}
 	}
 	// Clone first: normalizing TTLs must not change a caller-owned request.
+	// Raw replay is restored afterwards: encoding/json compacts RawMessage.
+	original := r.Messages
 	b, e := compact(r)
 	if e != nil || len(b) > RequestLimit {
 		return c, ErrLimit
@@ -156,6 +158,11 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 	r = Request{}
 	if e = decodeStrict(b, &r); e != nil {
 		return c, e
+	}
+	for i := range r.Messages {
+		for j := range r.Messages[i].Content {
+			r.Messages[i].Content[j].Replay = bytes.Clone(original[i].Content[j].Replay)
+		}
 	}
 	breaks := 0
 	seen5 := false
@@ -193,6 +200,7 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 			return c, ErrUnsupported
 		}
 		names[t.Name] = true
+		c.toolNames = append(c.toolNames, t.Name)
 		var schema map[string]json.RawMessage
 		_ = json.Unmarshal(t.InputSchema, &schema)
 		if string(schema["type"]) != `"object"` {
@@ -208,15 +216,40 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 		}
 	}
 	calls := map[string]bool{}
-	results := map[string]bool{}
+	var pending []string
+	var messages []json.RawMessage
+	replayed := false
 	for _, m := range r.Messages {
-		if m.Role != "user" && m.Role != "assistant" || len(m.Content) == 0 {
+		if m.Role != "user" && m.Role != "assistant" || len(m.Content) == 0 || len(pending) > 0 && m.Role != "user" {
 			return c, ErrUnsupported
 		}
+		if m.Content[0].Type == "anthropic_replay" {
+			b := m.Content[0]
+			if m.Role != "assistant" || len(m.Content) != 1 || !replayOnly(b) {
+				return c, ErrUnsupported
+			}
+			ids, err := anthropicReplayCalls(b.Replay)
+			if err != nil {
+				return c, err
+			}
+			for _, id := range ids {
+				if calls[id] {
+					return c, ErrUnsupported
+				}
+				calls[id] = true
+			}
+			pending, replayed = ids, true
+			raw := append([]byte(`{"role":"assistant","content":`), b.Replay...)
+			messages = append(messages, append(raw, '}'))
+			continue
+		}
 		for _, b := range m.Content {
+			if b.Replay != nil {
+				return c, ErrUnsupported
+			}
 			switch b.Type {
 			case "text":
-				if b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil {
+				if m.Role == "user" && len(pending) != 0 || b.ID != "" || b.Name != "" || b.Input != nil || b.ToolUseID != "" || b.Content != nil || b.IsError != nil {
 					return c, ErrUnsupported
 				}
 				if e = text(Text{b.Type, b.Text, b.CacheControl}); e != nil {
@@ -227,11 +260,13 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 					return c, ErrUnsupported
 				}
 				calls[b.ID] = true
+				pending = append(pending, b.ID)
+				replayed = false
 			case "tool_result":
-				if p.ModelID != Haiku || m.Role != "user" || !calls[b.ToolUseID] || results[b.ToolUseID] || len(b.Content) == 0 || b.ID != "" || b.Name != "" || b.Input != nil || b.Text != "" || b.CacheControl != nil {
+				if p.ModelID != Haiku && !replayed || m.Role != "user" || len(pending) == 0 || pending[0] != b.ToolUseID || len(b.Content) == 0 || b.ID != "" || b.Name != "" || b.Input != nil || b.Text != "" || b.CacheControl != nil {
 					return c, ErrUnsupported
 				}
-				results[b.ToolUseID] = true
+				pending = pending[1:]
 				for _, t := range b.Content {
 					if e = text(t); e != nil {
 						return c, e
@@ -241,6 +276,17 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 				return c, ErrUnsupported
 			}
 		}
+		if m.Role == "user" && len(pending) != 0 {
+			return c, ErrUnsupported
+		}
+		raw, err := compact(m)
+		if err != nil {
+			return c, err
+		}
+		messages = append(messages, raw)
+	}
+	if len(pending) != 0 {
+		return c, ErrUnsupported
 	}
 	if len(r.Tools) == 0 {
 		if r.ToolChoice != nil {
@@ -254,14 +300,17 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 			return c, ErrUnsupported
 		}
 	}
-	w := wireRequest{Model: p.ModelID, MaxTokens: r.MaxTokens, Messages: r.Messages, Stream: true, System: r.System, Tools: r.Tools, ToolChoice: r.ToolChoice, ServiceTier: p.RequestedTier}
+	w := wireRequest{Stream: true, System: r.System, Tools: r.Tools, ToolChoice: r.ToolChoice, ServiceTier: p.RequestedTier}
 	if p.ModelID != Haiku {
 		w.InferenceGeo = p.Region
 	}
 	if p.ModelID == Opus {
 		w.Speed = p.Speed
 	}
-	c.body, e = compact(w)
+	c.body, e = wireArrayRequest(struct {
+		Model     string `json:"model"`
+		MaxTokens int64  `json:"max_tokens"`
+	}{p.ModelID, r.MaxTokens}, "messages", messages, w)
 	if e != nil || len(c.body) > RequestLimit {
 		return Compiled{}, ErrLimit
 	}
@@ -279,4 +328,83 @@ func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 	c.output = r.MaxTokens
 	c.profile, e = p.SHA256()
 	return c, e
+}
+
+func replayOnly(b Block) bool {
+	return b.Replay != nil && b.Text == "" && b.ID == "" && b.Name == "" && b.Input == nil && b.ToolUseID == "" && b.Content == nil && b.IsError == nil && b.CacheControl == nil
+}
+
+func anthropicReplayCalls(raw json.RawMessage) ([]string, error) {
+	if checkJSON(raw, RequestLimit, false, false) != nil {
+		return nil, ErrInvalid
+	}
+	var blocks []json.RawMessage
+	if json.Unmarshal(raw, &blocks) != nil || len(blocks) == 0 || len(blocks) > streamBlockLimit {
+		return nil, ErrUnsupported
+	}
+	var calls []string
+	for _, raw := range blocks {
+		b, err := rawObject(raw)
+		if err != nil {
+			return nil, err
+		}
+		typ, _ := stringField(b, "type")
+		switch typ {
+		case "text":
+			if _, ok := stringField(b, "text"); !ok {
+				return nil, ErrUnsupported
+			}
+		case "tool_use":
+			id, _ := stringField(b, "id")
+			name, _ := stringField(b, "name")
+			if !visible(id, 256) || !modelToolName(name) || !objectJSON(b["input"]) {
+				return nil, ErrUnsupported
+			}
+			calls = append(calls, id)
+		case "thinking":
+			_, textOK := stringField(b, "thinking")
+			signature, signatureOK := stringField(b, "signature")
+			if !textOK || !signatureOK || signature == "" {
+				return nil, ErrUnsupported
+			}
+		case "redacted_thinking":
+			data, ok := stringField(b, "data")
+			if !ok || data == "" {
+				return nil, ErrUnsupported
+			}
+		default:
+			return nil, ErrUnsupported
+		}
+	}
+	return calls, nil
+}
+
+// wireArrayRequest is the one serialization boundary for stored replay bytes.
+// json.Encoder compacts even RawMessage, so the validated items are appended
+// directly between independently encoded, fixed-shape request members.
+func wireArrayRequest(head any, name string, items []json.RawMessage, tail any) ([]byte, error) {
+	prefix, err := compact(head)
+	if err != nil {
+		return nil, err
+	}
+	suffix, err := compact(tail)
+	if err != nil {
+		return nil, err
+	}
+	body := append(prefix[:len(prefix)-1], []byte(`,"`+name+`":[`)...)
+	for i, item := range items {
+		if len(item) > RequestLimit-len(body) {
+			return nil, ErrLimit
+		}
+		if i > 0 {
+			body = append(body, ',')
+		}
+		body = append(body, item...)
+	}
+	body = append(body, ']', ',')
+	body = append(body, suffix[1:]...)
+	if len(body) > RequestLimit {
+		return nil, ErrLimit
+	}
+	return body, nil
 }

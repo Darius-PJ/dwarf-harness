@@ -13,6 +13,10 @@ import (
 // ReadOpenAIResponse retains only bounded allowlisted evidence and closes the
 // body after the terminal, without waiting for EOF or issuing another request.
 func ReadOpenAIResponse(response *http.Response, p Profile, c Compiled) (ResponseEvidence, error) {
+	return readOpenAIResponse(response, p, c, nil)
+}
+
+func readOpenAIResponse(response *http.Response, p Profile, c Compiled, observe func(string) error) (ResponseEvidence, error) {
 	var result ResponseEvidence
 	if p.Provider != "openai" {
 		return result, ErrUnsupported
@@ -42,7 +46,7 @@ func ReadOpenAIResponse(response *http.Response, p Profile, c Compiled) (Respons
 			result.ErrorClass = "protocol_error"
 			return result, ErrProtocol
 		}
-		result.Stream, err = ReadOpenAIStream(response.Body, p, c)
+		result.Stream, err = readOpenAIStream(response.Body, p, c, observe)
 		switch {
 		case errors.Is(err, ErrTariffAmbiguous):
 			result.ErrorClass = "tariff_ambiguous"
