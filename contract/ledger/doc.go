@@ -2374,6 +2374,14 @@
 //	  Anthropic usage includes all five exclusive classes exactly once:
 //	  input.cache_read, input.cache_write_1h, input.cache_write_5m,
 //	  input.uncached, output.generated. Reasoning is inside output once.
+//	  OpenAI usage includes all eight classes exactly once:
+//	  input.cached.long, input.cached.short, input.uncached.long,
+//	  input.uncached.short, input.write.long, input.write.short,
+//	  output.generated.long, output.generated.short. Inclusive input
+//	  splits into cached, write and uncached; reasoning remains inside output.
+//	  At most one band is nonzero. pricing_tier is default_short at input
+//	  <=272000 or default_long at input >=278529; served_tier is default.
+//	  Input 272001..278528 is unpriceable, not a third pricing tier.
 //	NoChargeEvidence: rule, stop_reason, stop_details_type, category_kind,
 //	  category?, complete, content_blocks, output_started, output_tokens?
 //	  stop fields are refusal; complete true, content_blocks 0,
@@ -2414,8 +2422,10 @@
 // UTF-8: frame each of router-provider-request/v1, provider, HTTPS authority,
 // model, region, POST, escaped path, requested tier, credential scope ID and
 // credential version; u32be(headerCount); frame each sorted header name/value;
-// frame exact body bytes. Authentication is never an input. Version-1 writers
-// use exactly accept, anthropic-version and content-type semantic headers.
+// frame exact body bytes. Authentication is never an input. Anthropic version-1
+// writers use exactly accept, anthropic-version and content-type semantic
+// headers. OpenAI version-1 writers use exactly accept: text/event-stream and
+// content-type: application/json; no synthetic API-version header is sealed.
 //
 // Quote hashing frames router-cost-quote/v1, raw 32-byte request hash, capability
 // version, tariff version, lowercase-hex tariff hash text, USD and canonical
@@ -2426,6 +2436,25 @@
 // reserves the full min(input_max,context_max) independently of requested output
 // at the largest eligible input rate, plus requested output at the largest
 // output rate, with one final upward rounding. No subtraction or double count.
+// OpenAI's input dimension contains its six input classes; its output dimension
+// contains both output.generated.long and output.generated.short, in sorted
+// order. Its usage schema is openai-responses-text-30m-kguard/v1. Historical
+// producers reconstruct the bound and actual prices from the admission profile,
+// never from a later tariff or only the recorded component maxima.
+//
+// OpenAI's additive version-1 producer vocabulary includes denied, exhausted,
+// rate_limited, overloaded, invalid_request, unavailable, conflict, timeout,
+// unreachable, protocol_error, provider_error, refused and tariff_ambiguous.
+// The ambiguous interval retains the full hold,
+// with threshold_ambiguous diagnostic evidence, and creates no overrun fence.
+// Missing mandatory terminal counters, unsupported served tiers, unknown
+// nonzero billable extensions and nonempty tool usage remain held; no-charge
+// rules are empty. Complete failed, incomplete or refused terminals may still
+// supply billable usage. Unknown usage members may be null or integer zero;
+// top-level tool_usage may be absent/null, an empty object or an object tree
+// whose leaves are integer zero. This vocabulary is producer policy, not a
+// new codec closed set. Chapter 14 is an additive F3-13 OpenAI sample alongside
+// the unchanged Anthropic chapter 13.
 //
 // Record payloads and conditional rules
 //
