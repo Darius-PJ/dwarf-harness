@@ -167,8 +167,24 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 		deps.reviewClock = func() (int64, error) { return time.Now().UTC().UnixNano(), nil }
 	}
 	s := &Service{store: store, colony: colony, limits: limits, deps: deps, p: newProjection(), history: newHistoryIndex(), gates: map[scopeKey]*scopeGate{}}
-	if err := s.refreshLocked(ctx, store.Durable()); err != nil {
-		return nil, report, err
+	through := store.Durable()
+	var checkpoint *ledger.ReadCheckpoint
+	if through != s.p.through {
+		r, err := ledger.OpenReaderWithCheckpoint(s.store.LogDir(), ledger.ReadOptions{
+			Colony: s.store.Colony(), After: s.p.through, Through: through,
+			Consume: privateConsumption(), AllTypes: true,
+		}, nil)
+		if err != nil {
+			return nil, report, err
+		}
+		err = scanReader(ctx, r, func(c ledger.Commit) error {
+			_, err := s.acceptCommitLocked(ctx, c, nil)
+			return err
+		})
+		if err != nil {
+			return nil, report, err
+		}
+		checkpoint = r.Checkpoint()
 	}
 	s.openedThrough = s.p.through
 	report, err = s.inspectOpen(ctx)
@@ -184,6 +200,7 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 		return nil, report, err
 	}
 	report.UnboundCredentials = s.unboundCredentialViews()
+	s.history.putAckCheckpoint(s.openedThrough, checkpoint)
 	return s, report, nil
 }
 func (s *Service) Close() error {

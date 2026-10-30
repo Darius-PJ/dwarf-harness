@@ -27,6 +27,9 @@
 // tasks, capacity, usage, occupied work and review request slots. F3-10, F3-11
 // and F3-12 are decoded as distinct families before applying private changes
 // to the same scope head.
+// Initial replay uses checked Reader closure: Open and OpenPaid return actual
+// replay-close failures, including at EOF or segment transitions, possibly
+// joined with a read or reducer error. Normal EOF alone remains success.
 // Open verifies ledger-selected objects and inspects materializations. It reads
 // no clock, appends no record and dispatches no work. Reconciliation.PendingWork
 // reports unreleased admissions as recovery_pending without inferring an
@@ -339,6 +342,9 @@
 // reuses one authoritative interval read for reduction and acknowledgement.
 // A warm Reader checkpoint hashes the entire previously verified containing
 // prefix instead of decoding it again, then decodes the actual new commit.
+// Successful Open can seed this same charged checkpoint from its existing replay,
+// without an extra scan. Eviction, an accepted frontier advance or segment
+// rotation can still make the first scoped acknowledgement cold.
 // Prefix I/O and hashing remain; cold, rotated, invalid or evicted checkpoints
 // still require prefix decoding. Gaps, duplicates and prior installation retain
 // refresh plus exact-interval lookup. No single observed command seeds a global

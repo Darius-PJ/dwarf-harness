@@ -376,55 +376,67 @@ func warmScopedPrivateAcknowledgement(t *testing.T, f *serviceFixture, agent *Ag
 
 func TestScopedAcknowledgementPrefixChanged(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	f, _, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
-	warmed := warmScopedPrivateAcknowledgement(t, f, agent, grant)
-	before := f.store.Durable()
-	baseline, _, err := Open(ctx, f.store, f.root, DefaultLimits())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer baseline.Close()
-	path := filepath.Join(f.store.LogDir(), ledger.SegmentName(1))
-	prefix := readTestFile(t, path)
-	if end := bytes.IndexByte(prefix, '\n'); end < 0 || end == len(prefix)-1 {
-		t.Fatal("prefix needs an earlier nonterminal line")
-	}
-	var source int64
-	var durable uint64
-	var damaged []byte
-	f.service.deps.afterScopedSubmit = func() {
-		f.service.deps.afterScopedSubmit = nil
-		durable = f.store.Durable()
-		if err := f.service.scan(ctx, before, durable, func(c ledger.Commit) error {
-			source = int64(c.Records[1].Seq)
-			return nil
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if err := f.store.Close(); err != nil {
-			t.Fatal(err)
-		}
-		damaged = readTestFile(t, path)
-		if !bytes.HasPrefix(damaged, prefix) {
-			t.Fatal("Submit changed the saved prefix")
-		}
-		// Leave the last saved-prefix line and every new commit byte intact.
-		damaged[0] = 'x'
-		writeTestFile(t, path, damaged)
-	}
-	receipt, err := agent.WritePrivate(ctx, ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: uint64(warmed.Version), Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("must not be accepted")}}})
-	if !errors.Is(err, ledger.ErrCorrupt) || !reflect.DeepEqual(receipt, ScopedReceipt{}) {
-		t.Fatalf("changed earlier prefix acknowledged: %+v %v", receipt, err)
-	}
-	if !sameProjectionState(f.service.p, baseline.p) {
-		t.Fatal("corrupt prefix published an effect, frontier or charge, or retained a hold")
-	}
-	if durable <= before || f.store.Durable() != durable || !bytes.Equal(readTestFile(t, path), damaged) {
-		t.Fatal("failed acknowledgement rolled back or rewrote durable Submit")
-	}
-	if _, _, err := f.service.sourceRecord(ctx, source, durable); !errors.Is(err, ledger.ErrCorrupt) {
-		t.Fatalf("rejected acknowledgement published a successful source proof: %v", err)
+	for _, provenance := range []string{"scoped-ack", "open"} {
+		t.Run(provenance, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f, binding, agent, grant := scopedPrivateFixture(t, serviceDeps{}, scopedCapacity())
+			warmed := warmScopedPrivateAcknowledgement(t, f, agent, grant)
+			if provenance == "open" {
+				reopenScoped(t, f, DefaultLimits())
+				if f.service.history.ackCheckpoint(f.store.Durable()) == nil {
+					t.Fatal("completed Open did not seed a checkpoint")
+				}
+				agent = scopedBound(t, f.service, binding)
+			}
+			before := f.store.Durable()
+			baseline, _, err := Open(ctx, f.store, f.root, DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer baseline.Close()
+			path := filepath.Join(f.store.LogDir(), ledger.SegmentName(1))
+			prefix := readTestFile(t, path)
+			if end := bytes.IndexByte(prefix, '\n'); end < 0 || end == len(prefix)-1 {
+				t.Fatal("prefix needs an earlier nonterminal line")
+			}
+			var source int64
+			var durable uint64
+			var damaged []byte
+			f.service.deps.afterScopedSubmit = func() {
+				f.service.deps.afterScopedSubmit = nil
+				durable = f.store.Durable()
+				if err := f.service.scan(ctx, before, durable, func(c ledger.Commit) error {
+					source = int64(c.Records[1].Seq)
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.store.Close(); err != nil {
+					t.Fatal(err)
+				}
+				damaged = readTestFile(t, path)
+				if !bytes.HasPrefix(damaged, prefix) {
+					t.Fatal("Submit changed the saved prefix")
+				}
+				// Leave the last saved-prefix line and every new commit byte intact.
+				damaged[0] = 'x'
+				writeTestFile(t, path, damaged)
+			}
+			receipt, err := agent.WritePrivate(ctx, ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: uint64(warmed.Version), Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("must not be accepted")}}})
+			if !errors.Is(err, ledger.ErrCorrupt) || !reflect.DeepEqual(receipt, ScopedReceipt{}) {
+				t.Fatalf("changed earlier prefix acknowledged: %+v %v", receipt, err)
+			}
+			if !sameProjectionState(f.service.p, baseline.p) {
+				t.Fatal("corrupt prefix published an effect, frontier or charge, or retained a hold")
+			}
+			if durable <= before || f.store.Durable() != durable || !bytes.Equal(readTestFile(t, path), damaged) {
+				t.Fatal("failed acknowledgement rolled back or rewrote durable Submit")
+			}
+			if _, _, err := f.service.sourceRecord(ctx, source, durable); !errors.Is(err, ledger.ErrCorrupt) {
+				t.Fatalf("rejected acknowledgement published a successful source proof: %v", err)
+			}
+		})
 	}
 }
 
