@@ -1,6 +1,6 @@
 # 140: Bound the private-state service's replay and lookup cost
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 Published: 2026-10-24
 Spec: [DwarfHarness system specification](../spec.md)
@@ -31,10 +31,10 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 
 ## Acceptance criteria
 
-- [ ] A ruled design chooses the fix before code, from the candidates ticket 11's S4 review gave: a bounded index from work context to task and the turn-start integrity check narrowed to the current heads behind the projection fence; B3's fused startup pass or a snapshot only if those fail.
-- [ ] Every index or snapshot the fix adds is rebuilt from the ledger alone and is discardable: deleting it, or finding it stale or corrupt, loses no committed state, appends nothing and dispatches nothing.
-- [ ] Behaviour is unchanged: grants, busy and denied answers, task transitions, reads and restart recovery give the same results, both frozen goldens replay through the service, and ticket 11's injected crash rows pass unchanged; no record type, frozen rule or golden changes.
-- [ ] Ticket 11's measurement driver, rerun unchanged on the same traffic at the same two log lengths, shows opening the service growing no faster than the ledger's length, as the store's own opening does, and turn start, local admission, local dispatch, task creation and task cancel each within the bound the design states. The output keeps its label, admission and storage only, and claims no capacity.
+- [x] A ruled design chooses the fix before code, from the candidates ticket 11's S4 review gave: a bounded index from work context to task and the turn-start integrity check narrowed to the current heads behind the projection fence; B3's fused startup pass or a snapshot only if those fail.
+- [x] Every index or snapshot the fix adds is rebuilt from the ledger alone and is discardable: deleting it, or finding it stale or corrupt, loses no committed state, appends nothing and dispatches nothing.
+- [x] Behaviour is unchanged: grants, busy and denied answers, task transitions, reads and restart recovery give the same results, both frozen goldens replay through the service, and ticket 11's injected crash rows pass unchanged; no record type, frozen rule or golden changes.
+- [x] Ticket 11's measurement driver, rerun unchanged on the same traffic at the same two log lengths, shows opening the service growing no faster than the ledger's length, as the store's own opening does, and turn start, local admission, local dispatch, task creation and task cancel each within the bound the design states. The output keeps its label, admission and storage only, and claims no capacity.
 
 ## Verification boundary
 
@@ -50,6 +50,14 @@ Canonical sections (resolved through the parent specification’s reading map):
 - Core roadmap C3
 - Decision log B3/B32/D139/D140
 
+## Answer
+
+Six slices supply ledger-derived lookup hints, one bounded metadata cache, fresh current-head integrity checks, fused startup inspection and byte-revalidated acknowledgement checkpoints. The original [ruling](../c3-evidence/ticket-140-design-ruling.md), [endpoint addendum](../c3-evidence/ticket-140-endpoint-addendum.md), [S4 amendment](../c3-evidence/ticket-140-s4-amendment-ruling.json), [S5 ruling](../c3-evidence/ticket-140-s5-design-ruling.json) and [S6 ruling](../c3-evidence/ticket-140-s6-design-ruling.json) retain the design and amendments. D155/D156 authorized the fifth slice and its freeze-first milestones; D157 froze the additive Reader capability before Core consumed it; D158/D159 authorized and ruled the sixth slice. The [package documentation](../../../internal/core/agents/doc.go) describes the built boundary and remaining cold paths.
+
+The unchanged Ticket 11 and Ticket 12 drivers on `453ec63abfc3eb8b15a2322ef09d279dcce22d1e` pass all seven original bounds, using three eligible instances per driver and no noise extension. The endpoint addendum preserves the full workload and original ten-operation growth loop, uses the actual long-to-short record ratio, and does not impose a fixed 87/874 outcome filter. [B35](../../../docs/DECISIONS.md#b35-c3-bounded-private-state-replay-and-lookup-cost-ticket-140) and the [acceptance evidence](../c3-evidence/ticket-140-acceptance-evidence.md) retain the correctness, discard/corruption, frozen replay, crash, measurement, review and hosted receipts, including the earlier failed cohorts.
+
+No record family, golden, authority or provider/money semantics change. Initial replay now reports actual descriptor-close failures from Open/OpenPaid instead of ignoring them, as the S6 ruling classifies and the package documentation explains. The single cache remains limited to 256 entries and 8 MiB of charged metadata, not process memory. Measurements are admission and storage only: no capacity or power-loss claim, D52 real-work approval, C4 delivery or C10 qualification. Canonical C3 progress remains on the [board](../../../docs/ROADMAPS.md) and [paired status line](../../../docs/ROADMAP-CORE.md#c3-agent-runtime); contract versions and status remain in the [register](../../../docs/CONTRACTS.md). Ticket 13's separate verification is not supplied by this ticket.
+
 ## Comments
 
 2026-10-24 — Published as ticket 140 at the owner's word, which also had the tickets' dependencies and order audited and updated, and with his approval of the breakdown ([D142](../../../docs/DECISIONS.md#d142-tickets-139-and-140-published-with-three-blocker-changes)). This adopts the ticket for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
@@ -60,3 +68,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 - the witness batch, which in a one-segment log reads up to each witness's position.
 
 `sourceRecord`'s from-0 scan is no longer among them: ticket 12 moved it to a segment-aligned cursor. Ticket 12's S4 measured the cost of ticket 11's `artifactAuthority`, whose check order loaded every task a participant's grants named before knowing the artifact's own, and its S5 corrected that order. Before S5, on a quiet machine, `agents.Open` took 43.9 s at 1,047 records and 330.6 s at 2,163, and one review decision 1.16 s and 6.0 s. After S5, quiet and under the profiler, the driver rerun on d37ca15 put the read-rights path at 0.000 of every profile: at 2× (the project manager's rerun) `agents.Open` took 14.7 s at 1,047 records and 50.7 s at 2,163 (exponent 1.70; the coder's run 13.2 s → 47.8 s, 1.78) and one approve 84 ms → 140 ms (the coder's 85 → 160 ms); the coder's run on the tree whose hashes equal d37ca15's blobs reached a measured 10.04× (H 10,515, N 868, G 328): `agents.Open` 15.6 s → 1,191.1 s (exponent 1.88) and one approve 94 → 671 ms (0.85). What remains of Open's growth is ticket 10's and 11's per-scope history validation (about 45 % of its CPU) and scoped replay (23–29 %), with the review path's witness batch at 9–11 %, the ruling's O(N·(G + segment)) in a one-segment log; the driver's 10× label was changed by the project manager's answer, hashes recorded, and the 10× log's unmeasured-10× line is false for that run ([evidence](../c3-evidence/ticket-12-evidence.md#s5-the-artifact-read-check-order-2026-10-24)). Ticket 12's [evidence](../c3-evidence/ticket-12-evidence.md#s4s-labelled-measurement) records its driver's setup, so this ticket's rerun can include review traffic. This adds no blocker to this ticket and changes none of its criteria.
+
+2026-10-29 — Resolution: six ruled slices culminate in all seven original measurement bounds passing on `453ec63abfc3eb8b15a2322ef09d279dcce22d1e`. D155–D159 record the bounded exceptions, freeze-first Reader increment and final Open-seeded checkpoint design. [B35](../../../docs/DECISIONS.md#b35-c3-bounded-private-state-replay-and-lookup-cost-ticket-140), [package documentation](../../../internal/core/agents/doc.go) and [acceptance evidence](../c3-evidence/ticket-140-acceptance-evidence.md) retain the decisions, final reviews, exact-SHA hosted proof and limits. Admission and storage only; no power-loss, capacity, provider execution or D52/C4 real-work claim. Ticket 13's verification remains separate.
