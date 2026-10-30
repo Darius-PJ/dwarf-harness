@@ -702,9 +702,11 @@
 // only its presence, not account or header values.
 // complete describes terminal protocol completion, not certainty about billing
 // or a successful answer. Unknown/content-error captures select no outputs.
-// Anthropic incomplete/refusal captures select none; a priceable OpenAI
-// incomplete, failed or refused terminal may retain complete opaque reasoning,
-// but never partial/refused text or local-tool calls.
+// Anthropic incomplete/refusal captures select none. A billable, non-refusal
+// Anthropic terminal with no output block settles on its usage with no message
+// objects, and the result omits message_objects. A priceable OpenAI incomplete,
+// failed or refused terminal may retain complete opaque reasoning, but never
+// partial/refused text or local-tool calls.
 // The bounded capture rejects literal pinned authentication material in decoded
 // provider fields, including opaque extensions, before any artifact is hashed.
 // Observation estimates and encoded bytes are capped by the private store's
@@ -733,9 +735,6 @@
 // 120-second dispatch deadline is for a small drill, not maximal generation.
 // Haiku 4.5 refusals never infer zero charge; Opus/Sonnet prior-tool history is
 // refused before admission because its thinking-artifact replay is unsupported.
-// A billable, non-refusal Anthropic terminal that produced no output block
-// currently fails result recording with ErrInvalid, so that attempt keeps its
-// full hold with no settlement path until a later fix.
 // Core's PaidLimits.MaxRequestBytes has a default and hard maximum of 512 KiB
 // for every provider's sealed body, below the providers compiler's 1 MiB guard.
 // The shared 1 MiB SSE line/event cap includes the entire OpenAI terminal response

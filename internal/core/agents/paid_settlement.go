@@ -159,7 +159,7 @@ func derivePaidResult(a paidAttempt, o paidObservationObject) ledger.RuntimePaid
 	v.ErrorClass = o.ErrorClass
 	if o.ContentError {
 		v.ErrorClass = "protocol_error"
-	} else if o.StopReason != "refusal" {
+	} else if o.StopReason != "refusal" && len(o.MessageObjects) != 0 {
 		v.MessageObjects = slices.Clone(o.MessageObjects)
 	}
 	return v
