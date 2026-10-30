@@ -63,7 +63,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeRuntimePaidOverrunAcknowledged and TypeRuntimePaidReceipt; and F3-139,
 // frozen (D154): TypeRuntimeResourceRegistered,
 // TypeRuntimeWorkDomainRegistered, TypeRuntimeDeclarationChanged and
-// TypeRuntimeRegistrationReceipt; and F3-15, proposed for freeze (D125):
+// TypeRuntimeRegistrationReceipt; and F3-15, frozen (D165):
 // TypePrivateTurnRevision, TypeRuntimeTurnBound, TypeRuntimeToolStarted,
 // TypeRuntimeToolResult, TypeRuntimeTurnResult and TypeRuntimeLoopReceipt.
 // All fifty-nine are at version 1.

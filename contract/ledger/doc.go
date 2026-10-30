@@ -183,7 +183,7 @@
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
 // F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
 // F3-13 types, the four F3-139 types and the six F3-15 types below,
-// fifty-nine in all, each at version 1. F3-15 is proposed for freeze (D125).
+// fifty-nine in all, each at version 1. F3-15 is frozen (D165).
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -2821,7 +2821,7 @@
 // # Bound turn and tool journal records (F3-15)
 //
 // Ticket 15's six version-1 types and canonical schema-6 submission are
-// proposed for freeze (D125). They add to ledger-format version 1: Defined
+// frozen (D165). They add to ledger-format version 1: Defined
 // grows from 53 to 59 types. F0, F2, F-U3-61, F3-10/11/12/13/139, schemas 1-5,
 // their codecs, group rules and golden bytes are unchanged. F3-15 groups embed
 // no earlier-family record. Schema 6 lives only in runtime.loop_receipt,

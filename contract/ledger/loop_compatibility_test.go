@@ -15,7 +15,7 @@ import (
 	"uuid"
 )
 
-// checkLoopGoldenGroup checks F3-15, proposed for freeze (D125), in the sample.
+// checkLoopGoldenGroup checks F3-15, frozen (D165), in the sample.
 // It is not Core's reducer: executable replay enforcement arrives in S3.
 func checkLoopGoldenGroup(c Commit, commits []Commit, files map[string][]byte) error {
 	if len(c.Records) < 3 {

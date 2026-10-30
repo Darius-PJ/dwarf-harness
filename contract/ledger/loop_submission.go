@@ -7,7 +7,7 @@ import (
 	"uuid"
 )
 
-// LoopSubmission is the canonical schema-6 encoding, proposed for freeze (D125).
+// LoopSubmission is the canonical schema-6 encoding, frozen (D165).
 // Arguments is the matching concrete value below, never arbitrary JSON.
 // ExpectedVersion describes binding/result identity, not the private-head CAS.
 type LoopSubmission struct {

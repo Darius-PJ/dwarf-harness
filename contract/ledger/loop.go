@@ -8,7 +8,7 @@ import (
 	"uuid"
 )
 
-// F3-15's six version-1 types are proposed for freeze (D125).
+// F3-15's six version-1 types are frozen (D165).
 const (
 	TypePrivateTurnRevision = "private.turn_revision"
 	TypeRuntimeTurnBound    = "runtime.turn_bound"
