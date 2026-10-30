@@ -513,7 +513,7 @@ Capture/materialization/integration and disk costs must be recorded against the 
 - a promotion request surfaces unavailable validation, leaves canonical unchanged and is never reported as successful delivery;
 - the check is green on Windows, Linux and macOS in CI.
 
-**Status.** In progress (2026-10-29: tickets 10, 11 and 12 are resolved, B31–B33; ticket 139's registration producer is complete, B34; ticket 140's replay and lookup cost fix passes all seven original bounds, B35; each code slice passes CI on Windows, Linux and macOS before `main` moves (D153), and C3 still needs all three green at its exit; public run 2 on d8336c8 passed ticket 13's code on all three, while that ticket's close awaits Fable verification; C3's other tickets remain open).
+**Status.** In progress (2026-10-30: tickets 10, 11 and 12 are resolved, B31–B33; ticket 139's registration producer is complete, B34; ticket 140's replay and lookup cost fix passes all seven original bounds, B35; ticket 13 is resolved, B36, on stand-in approvals under D160, and Fable's audit found nothing blocking; F3-13 is frozen under D148 with D149's golden correction; each code slice passes CI on Windows, Linux and macOS before `main` moves (D153), and C3 still needs all three green at its exit; public run 2 on d8336c8 passed ticket 13's code on all three; tickets 14, 15, 16, 89, 90 and 91 remain open).
 
 ### C4. Validation runner and promotion gate
 
