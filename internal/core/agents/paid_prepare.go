@@ -69,6 +69,14 @@ func (s *Service) livePaidAuthority(ctx context.Context, p *preparedPaid) ([]gra
 }
 
 func (s *Service) PrepareAnthropic(ctx context.Context, origin Binding, input AnthropicInput) (*PreparedPaidCall, error) {
+	return s.preparePaid(ctx, origin, input, "anthropic")
+}
+
+func (s *Service) PrepareOpenAI(ctx context.Context, origin Binding, input OpenAIInput) (*PreparedPaidCall, error) {
+	return s.preparePaid(ctx, origin, AnthropicInput(input), "openai")
+}
+
+func (s *Service) preparePaid(ctx context.Context, origin Binding, input AnthropicInput, provider string) (*PreparedPaidCall, error) {
 	if s == nil {
 		return nil, ErrNotBound
 	}
@@ -108,8 +116,11 @@ func (s *Service) PrepareAnthropic(ctx context.Context, origin Binding, input An
 	if err == nil {
 		err = providerProfile(route.Profile).Current(sample)
 	}
-	if err == nil && route.Profile.Authority != "api.anthropic.com" && route.Profile.Authority != s.deps.paidTestAuthority {
+	if err == nil && route.Profile.Provider != provider {
 		err = providers.ErrUnsupported
+	}
+	if err == nil {
+		err = s.paidDestination(providerProfile(route.Profile))
 	}
 	if err == nil && (len(s.paid.prepared) >= s.paid.limits.MaxPreparedPaid || len(p.admission.Scopes) > s.paid.limits.MaxPaidScopes) {
 		err = &BusyError{Reason: "paid_preparing"}
@@ -160,11 +171,25 @@ func (s *Service) PrepareAnthropic(ctx context.Context, origin Binding, input An
 		})
 	}
 	if err == nil {
-		compiled, err = providers.CompileAnthropic(profile, input.Request)
+		switch provider {
+		case "anthropic":
+			compiled, err = providers.CompileAnthropic(profile, input.Request)
+		case "openai":
+			compiled, err = providers.CompileOpenAI(profile, input.Request)
+		default:
+			err = providers.ErrUnsupported
+		}
 	}
 	var envelope providers.Envelope
 	if err == nil {
-		envelope, err = providers.Seal(profile, compiled, route.CredentialScopeID.String(), input.CredentialVersion.String(), []providers.Header{{Name: "accept", Value: "text/event-stream"}, {Name: "anthropic-version", Value: profile.APIVersion}, {Name: "content-type", Value: "application/json"}})
+		switch provider {
+		case "anthropic":
+			envelope, err = providers.Seal(profile, compiled, route.CredentialScopeID.String(), input.CredentialVersion.String(), []providers.Header{{Name: "accept", Value: "text/event-stream"}, {Name: "anthropic-version", Value: profile.APIVersion}, {Name: "content-type", Value: "application/json"}})
+		case "openai":
+			envelope, err = providers.Seal(profile, compiled, route.CredentialScopeID.String(), input.CredentialVersion.String(), []providers.Header{{Name: "accept", Value: "text/event-stream"}, {Name: "content-type", Value: "application/json"}})
+		default:
+			err = providers.ErrUnsupported
+		}
 	}
 	var body []byte
 	if err == nil {

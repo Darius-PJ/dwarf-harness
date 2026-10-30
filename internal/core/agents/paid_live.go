@@ -34,6 +34,24 @@ type preparedPaid struct {
 	inUse, closeRequested bool
 }
 
+// A loopback profile is dispatchable only through the private verified-TLS seam.
+// Provider, authority and path are one destination, never independent allowlists.
+func (s *Service) paidDestination(p providers.Profile) error {
+	var authority, path string
+	switch p.Provider {
+	case "anthropic":
+		authority, path = "api.anthropic.com", "/v1/messages"
+	case "openai":
+		authority, path = "api.openai.com", "/v1/responses"
+	default:
+		return providers.ErrUnsupported
+	}
+	if p.Method != "POST" || p.Path != path || p.Authority != authority && (s.deps.paidTestAuthority == "" || p.Authority != s.deps.paidTestAuthority) {
+		return providers.ErrUnsupported
+	}
+	return nil
+}
+
 func OpenPaid(ctx context.Context, store privateStore, colonyDir string, limits Limits, options PaidOptions) (*Service, Reconciliation, error) {
 	return openPaidService(ctx, store, colonyDir, limits, options, serviceDeps{})
 }

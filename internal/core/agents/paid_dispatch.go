@@ -150,7 +150,14 @@ func (s *Service) DispatchPaid(ctx context.Context, request PaidDispatch) (PaidD
 		response, networkErr := s.paid.transport.Do(exchangeCtx, p.envelope, key)
 		var evidence providers.ResponseEvidence
 		if response != nil {
-			evidence, e = providers.ReadAnthropicResponse(response, providerProfile(current.profile), p.compiled)
+			switch current.profile.Provider {
+			case "anthropic":
+				evidence, e = providers.ReadAnthropicResponse(response, providerProfile(current.profile), p.compiled)
+			case "openai":
+				evidence, e = providers.ReadOpenAIResponse(response, providerProfile(current.profile), p.compiled)
+			default:
+				e = providers.ErrUnsupported
+			}
 			_ = response.Body.Close()
 			var network net.Error
 			if e != nil && (errors.Is(e, context.Canceled) || errors.Is(e, context.DeadlineExceeded) || errors.As(e, &network)) {
@@ -183,8 +190,8 @@ func (s *Service) dispatchGuardsLocked(ctx context.Context, a paidAttempt, p *pr
 		return 0, err
 	}
 	profile := providerProfile(a.profile)
-	if profile.Authority != "api.anthropic.com" && profile.Authority != s.deps.paidTestAuthority {
-		return 0, providers.ErrUnsupported
+	if err := s.paidDestination(profile); err != nil {
+		return 0, err
 	}
 	if err := checkPaidQuote(a.admission, a.profile); err != nil {
 		return 0, err

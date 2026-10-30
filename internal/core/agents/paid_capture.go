@@ -32,6 +32,8 @@ type paidObservationObject struct {
 	StopReason               string               `json:"stop_reason,omitempty"`
 	StopSequence             json.RawMessage      `json:"stop_sequence,omitempty"`
 	StopDetails              json.RawMessage      `json:"stop_details,omitempty"`
+	ServedTier               json.RawMessage      `json:"served_tier,omitempty"`
+	ToolUsage                json.RawMessage      `json:"tool_usage,omitempty"`
 	RawUsageStart            json.RawMessage      `json:"raw_usage_start,omitempty"`
 	RawUsageFinal            json.RawMessage      `json:"raw_usage_final,omitempty"`
 	RawUsageMerged           providers.Usage      `json:"raw_usage_merged,omitempty"`
@@ -55,6 +57,8 @@ type paidResponseError struct {
 	Message   string          `json:"message"`
 	Details   json.RawMessage `json:"details,omitempty"`
 	RequestID string          `json:"request_id,omitempty"`
+	Code      json.RawMessage `json:"code,omitempty"`
+	Param     json.RawMessage `json:"param,omitempty"`
 }
 type paidOutputObject struct {
 	Schema       int           `json:"schema"`
@@ -136,12 +140,20 @@ func paidContainsSecret(raw, key []byte) bool {
 func paidObservation(a paidAttempt, evidence providers.ResponseEvidence) paidObservationObject {
 	r := evidence.Stream
 	o := paidObservationObject{Schema: 1, Kind: "paid_observation", AttemptID: a.admission.AttemptID, Origin: a.origin, ParentTurnID: a.admission.ParentTurnID, RequestSHA256: a.admission.Quote.RequestSHA256, ProviderMessageID: r.MessageID, Model: r.Model, HTTPStatus: evidence.Status, Headers: []paidResponseHeader{}, StopReason: r.StopReason, StopSequence: r.StopSequence, StopDetails: r.StopDetails, RawUsageStart: r.RawUsageStart, RawUsageFinal: r.RawUsageFinal, RawUsageMerged: r.RawUsageMerged, OutputStarted: r.OutputStarted, Complete: r.Complete, MessageObjects: []ledger.ObjectRef{}, UnknownEventTypes: slices.Clone(r.UnknownEventTypes), UnknownEventTypeOverflow: r.UnknownEventTypeOverflow, ContentBlocks: r.ContentBlocks, ContentError: r.ContentError, ProfileViolation: r.ProfileViolation, ErrorClass: evidence.ErrorClass}
+	o.ServedTier, o.ToolUsage = r.ServedTier, r.ToolUsage
+	requestHeader := ""
+	switch a.profile.Provider {
+	case "anthropic":
+		requestHeader = "request-id"
+	case "openai":
+		requestHeader = "x-request-id"
+	}
 	if o.UnknownEventTypes == nil {
 		o.UnknownEventTypes = []string{}
 	}
 	for _, h := range evidence.Headers {
 		o.Headers = append(o.Headers, paidResponseHeader{h.Name, slices.Clone(h.Values)})
-		if h.Name == "request-id" && len(h.Values) == 1 && paidProviderID(h.Values[0]) {
+		if h.Name == requestHeader && len(h.Values) == 1 && paidProviderID(h.Values[0]) {
 			o.ProviderRequestID = h.Values[0]
 		}
 	}
@@ -157,6 +169,12 @@ func paidObservation(a paidAttempt, evidence providers.ResponseEvidence) paidObs
 		if json.Unmarshal(raw, &wrapper) == nil && wrapper.Error != nil {
 			o.Error = wrapper.Error
 			o.Error.RequestID = wrapper.RequestID
+		}
+		if a.profile.Provider == "openai" && o.Error == nil {
+			var detail paidResponseError
+			if json.Unmarshal(raw, &detail) == nil {
+				o.Error = &detail
+			}
 		}
 	}
 	if r.ContentError && o.ErrorClass == "" {
@@ -213,7 +231,7 @@ func paidCaptureAllowed(o paidObservationObject, blocks []providers.OutputBlock,
 	for _, v := range o.UnknownEventTypes {
 		text(v)
 	}
-	for _, v := range []json.RawMessage{o.StopSequence, o.StopDetails, o.RawUsageStart, o.RawUsageFinal} {
+	for _, v := range []json.RawMessage{o.StopSequence, o.StopDetails, o.ServedTier, o.ToolUsage, o.RawUsageStart, o.RawUsageFinal} {
 		raw(v)
 	}
 	for k, v := range o.RawUsageMerged {
@@ -225,6 +243,8 @@ func paidCaptureAllowed(o paidObservationObject, blocks []providers.OutputBlock,
 		text(o.Error.Message)
 		text(o.Error.RequestID)
 		raw(o.Error.Details)
+		raw(o.Error.Code)
+		raw(o.Error.Param)
 	}
 	if !safe || size > maxObjectBytes {
 		return false
@@ -317,6 +337,11 @@ func (s *Service) publishPaidOutputs(scope privateScope, a paidAttempt, blocks [
 				o.Block = paidToolBlock{"local_tool_call", block.ID, block.Name, block.Input}
 			case "thinking", "redacted_thinking":
 				o.Block = paidOpaqueBlock{"opaque_provider", a.profile.Provider, a.profile.ModelID, block.Type, block.OpaquePayload}
+			case "responses_reasoning":
+				if a.profile.Provider != "openai" {
+					return nil, ErrInvalid
+				}
+				o.Block = paidOpaqueBlock{"opaque_provider", a.profile.Provider, a.profile.ModelID, "responses_reasoning", block.OpaquePayload}
 			default:
 				return nil, ErrInvalid
 			}

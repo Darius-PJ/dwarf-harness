@@ -96,6 +96,9 @@ type AnthropicInput struct {
 	CredentialVersion                uuid.UUID
 	Request                          providers.Request
 }
+
+// OpenAIInput uses the same local request vocabulary and admission identities.
+type OpenAIInput AnthropicInput
 type PaidAdmission struct {
 	CommandID, AttemptID, GrantID, ParentTurnID uuid.UUID
 	TaskBinding                                 *ledger.TaskBinding

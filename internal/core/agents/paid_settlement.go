@@ -67,7 +67,7 @@ func paidRuleToken(s string) bool {
 }
 
 func derivePaidResult(a paidAttempt, o paidObservationObject) ledger.RuntimePaidResult {
-	if o.ErrorClass != "" && !slices.Contains([]string{"denied", "exhausted", "rate_limited", "overloaded", "invalid_request", "unavailable", "conflict", "provider_error", "timeout", "unreachable", "protocol_error", "refused"}, o.ErrorClass) {
+	if o.ErrorClass != "" && !slices.Contains([]string{"denied", "exhausted", "rate_limited", "overloaded", "invalid_request", "unavailable", "conflict", "provider_error", "timeout", "unreachable", "protocol_error", "refused", "tariff_ambiguous"}, o.ErrorClass) {
 		o.ErrorClass, o.Complete = "protocol_error", false
 	}
 	started := o.OutputStarted
@@ -94,6 +94,13 @@ func derivePaidResult(a paidAttempt, o paidObservationObject) ledger.RuntimePaid
 		v.ErrorClass = "protocol_error"
 	}
 	if !o.Complete || o.HTTPStatus != 200 || !paidProviderID(o.ProviderMessageID) || o.Model != a.profile.ModelID {
+		return v
+	}
+	switch a.profile.Provider {
+	case "anthropic":
+	case "openai":
+		return deriveOpenAIResult(a, o, v)
+	default:
 		return v
 	}
 	if o.StopReason == "refusal" {
@@ -156,6 +163,92 @@ func derivePaidResult(a paidAttempt, o paidObservationObject) ledger.RuntimePaid
 		v.MessageObjects = slices.Clone(o.MessageObjects)
 	}
 	return v
+}
+
+// Late evidence is normalized again from the terminal, never from diagnostic
+// snapshots or cached normalized counters. Provider errors do not prove zero.
+func deriveOpenAIResult(a paidAttempt, o paidObservationObject, v ledger.RuntimePaidResult) ledger.RuntimePaidResult {
+	if !slices.Contains([]string{"completed", "incomplete", "failed"}, o.StopReason) || len(o.UnknownEventTypes) != 0 || o.UnknownEventTypeOverflow != 0 || o.ProfileViolation {
+		return v
+	}
+	if o.StopReason == "incomplete" {
+		var details struct {
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(o.StopDetails, &details) != nil || !slices.Contains([]string{"max_output_tokens", "max_messages", "content_filter"}, details.Reason) {
+			return v
+		}
+	}
+	var tier string
+	if json.Unmarshal(o.ServedTier, &tier) != nil || tier != "default" {
+		v.BoundViolation = tier != ""
+		return v
+	}
+	if !paidEmptyToolUsage(o.ToolUsage) {
+		v.BoundViolation = true
+		return v
+	}
+	var final providers.Usage
+	if json.Unmarshal(o.RawUsageFinal, &final) != nil {
+		return v
+	}
+	var classes []string
+	for _, component := range a.admission.Quote.Components {
+		if !slices.Equal(component.Classes, paidOutputClasses("openai")) {
+			classes = append(classes, component.Classes...)
+		}
+	}
+	profile := providerProfile(a.profile)
+	units, violation, err := providers.NormalizeSealedUsage(profile, classes, final)
+	v.BoundViolation = v.BoundViolation || violation
+	if errors.Is(err, providers.ErrTariffAmbiguous) {
+		v.ErrorClass = "tariff_ambiguous"
+		return v
+	}
+	if err != nil {
+		return v
+	}
+	cost, err := providers.PriceHistoricalUsage(profile, units)
+	if err != nil {
+		v.BoundViolation = true
+		return v
+	}
+	usage := &ledger.PaidUsage{PricingTier: paidOpenAITier(units), ServedTier: tier}
+	for _, unit := range units {
+		usage.Classes = append(usage.Classes, ledger.PaidUnits{Class: unit.Class, Units: unit.Count})
+	}
+	v.Kind, v.Usage, v.CostMicros = "usage", usage, &cost
+	v.BoundViolation = paidUsageViolation(a.admission.Quote, units, cost)
+	v.ErrorClass = o.ErrorClass
+	if o.ContentError {
+		v.ErrorClass = "protocol_error"
+	} else if len(o.MessageObjects) != 0 {
+		// The OpenAI reader retains only complete opaque reasoning for a
+		// non-success terminal; these are evidence, not assistant commands.
+		v.MessageObjects = slices.Clone(o.MessageObjects)
+	}
+	return v
+}
+
+func paidEmptyToolUsage(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return true
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return false
+	}
+	for _, value := range fields {
+		if string(value) != "0" {
+			// Nested null is not a zero leaf; only the top-level null is
+			// the documented absence of this separate billing surface.
+			var object map[string]json.RawMessage
+			if json.Unmarshal(value, &object) != nil || object == nil || !paidEmptyToolUsage(value) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *Service) RecordPaidObservation(ctx context.Context, request PaidObservation) (PaidReceipt, error) {

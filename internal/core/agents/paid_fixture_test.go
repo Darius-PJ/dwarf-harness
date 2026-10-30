@@ -41,6 +41,11 @@ func paidEncode(t testing.TB, v paidPayload) json.RawMessage {
 // through the real ledger store; the frozen paid history is not rewritten.
 func newPaidFixture(t testing.TB) *paidFixture {
 	t.Helper()
+	return newPaidFixturePeriod(t, "utc_day")
+}
+
+func newPaidFixturePeriod(t testing.TB, period string) *paidFixture {
+	t.Helper()
 	base, commits := openPaidFixture(t, 2)
 	r := commits[0].Records[0]
 	f := &paidFixture{serviceFixture: base, origin: ledger.Origin{AgentID: r.AgentID, SessionID: r.ExecutionSessionID, ContextID: r.ContextID}, grant: paidGoldenID(0x900), inspect: paidGoldenID(0x901), turn: paidGoldenID(0x902), next: 0xa00}
@@ -108,7 +113,7 @@ func newPaidFixture(t testing.TB) *paidFixture {
 	f.route.ObservedUTCNS = f.service.p.reviewFloor
 	f.append(t, f.route)
 	for _, scope := range []ledger.PaidScope{{Kind: "colony"}, {Kind: "agent", ID: f.origin.AgentID}, {Kind: "credential", ID: f.credential.ScopeID}, {Kind: "grant", ID: f.grant}} {
-		f.spend(t, scope, ledger.SpendTerms{Enabled: true, PeriodKind: "utc_day", Mode: "finite", CeilingMicros: new(int64(100000)), WarningPPM: new(int64(800000))})
+		f.spend(t, scope, ledger.SpendTerms{Enabled: true, PeriodKind: period, Mode: "finite", CeilingMicros: new(int64(100000)), WarningPPM: new(int64(800000))})
 	}
 	return f
 }

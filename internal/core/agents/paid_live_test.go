@@ -37,7 +37,12 @@ func paidPhysicalCapacity() ledger.Capacity {
 }
 func newLivePaidFixture(t testing.TB, overrides ...serviceDeps) *paidFixture {
 	t.Helper()
-	f := newPaidFixture(t)
+	return newLivePaidFixturePeriod(t, "utc_day", overrides...)
+}
+
+func newLivePaidFixturePeriod(t testing.TB, period string, overrides ...serviceDeps) *paidFixture {
+	t.Helper()
+	f := newPaidFixturePeriod(t, period)
 	ctx := context.Background()
 	if err := f.service.Close(); err != nil {
 		t.Fatal(err)
@@ -87,7 +92,7 @@ func newLivePaidFixture(t testing.TB, overrides ...serviceDeps) *paidFixture {
 		t.Fatal(err)
 	}
 	f.route = f.service.p.paidRoutes[f.route.RouteID]
-	f.liveSpend(t, ledger.PaidScope{Kind: "grant", ID: f.grant}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.100000", PeriodKind: "utc_day"})
+	f.liveSpend(t, ledger.PaidScope{Kind: "grant", ID: f.grant}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.100000", PeriodKind: period})
 	return f
 }
 func (f *paidFixture) liveSpend(t testing.TB, scope ledger.PaidScope, terms SpendTermsInput) PaidReceipt {
@@ -134,7 +139,7 @@ func (f *paidFixture) child(t *testing.T, parent uuid.UUID, micros int64) uuid.U
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.DelegateSpend(context.Background(), SpendDelegation{CommandID: f.id(), GrantID: parent, ChildGrantID: id, Terms: SpendTermsInput{Enabled: true, Mode: "finite", USD: fmt.Sprintf("0.%06d", micros), PeriodKind: "utc_day"}})
+	_, err = a.DelegateSpend(context.Background(), SpendDelegation{CommandID: f.id(), GrantID: parent, ChildGrantID: id, Terms: SpendTermsInput{Enabled: true, Mode: "finite", USD: fmt.Sprintf("%d.%06d", micros/1000000, micros%1000000), PeriodKind: f.service.p.book.paidPeriodKind}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
-	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 )
 
 func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidReceipt, *BoundCall, error) {
@@ -157,8 +156,8 @@ func (s *Service) admissionGuardsLocked(ctx context.Context, p *preparedPaid) er
 	if err = profile.Current(sample); err != nil {
 		return err
 	}
-	if profile.Authority != "api.anthropic.com" && profile.Authority != s.deps.paidTestAuthority {
-		return providers.ErrUnsupported
+	if err = s.paidDestination(profile); err != nil {
+		return err
 	}
 	if len(p.admission.Scopes) > s.paid.limits.MaxPaidScopes {
 		return ErrTooLarge

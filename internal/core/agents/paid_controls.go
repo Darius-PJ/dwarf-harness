@@ -318,8 +318,8 @@ func (s *Service) controlGuardsLocked(ctx context.Context, in paidControlInput, 
 			if err != nil {
 				return err
 			}
-			if profile.Authority != "api.anthropic.com" && profile.Authority != s.deps.paidTestAuthority {
-				return providers.ErrUnsupported
+			if err = s.paidDestination(profile); err != nil {
+				return err
 			}
 			sample, err := s.samplePaidLocked()
 			if err != nil {
@@ -337,7 +337,7 @@ func (s *Service) controlGuardsLocked(ctx context.Context, in paidControlInput, 
 		if p.ExpectedVersion != s.p.paidCredentialScopes[p.ScopeID].version {
 			return ErrRevision
 		}
-		if p.Provider != "anthropic" {
+		if p.Provider != "anthropic" && p.Provider != "openai" {
 			return providers.ErrUnsupported
 		}
 		if p.Action == "bind" {

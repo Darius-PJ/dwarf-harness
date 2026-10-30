@@ -38,6 +38,9 @@ func checkPaidQuote(p ledger.RuntimePaidReserved, profile ledger.Profile) error 
 	if d.Provider == "anthropic" && !slices.Equal(d.Headers, []ledger.SemanticHeader{{Name: "accept", Value: "text/event-stream"}, {Name: "anthropic-version", Value: profile.APIVersion}, {Name: "content-type", Value: "application/json"}}) {
 		return ErrInvalid
 	}
+	if d.Provider == "openai" && !slices.Equal(d.Headers, []ledger.SemanticHeader{{Name: "accept", Value: "text/event-stream"}, {Name: "content-type", Value: "application/json"}}) {
+		return ErrInvalid
+	}
 	components := paidComponents(q)
 	quoted, err := providers.QuoteSHA256([32]byte(q.RequestSHA256), q.CapabilityVersion, q.TariffVersion, [32]byte(q.TariffSHA256), q.MaximumMicros, components)
 	if err != nil || ledger.Digest(quoted) != q.QuoteSHA256 {
@@ -50,7 +53,7 @@ func checkPaidQuote(p ledger.RuntimePaidReserved, profile ledger.Profile) error 
 	var inputs []string
 	var output int64
 	for _, c := range components {
-		if slices.Equal(c.Classes, []string{providers.Generated}) {
+		if slices.Equal(c.Classes, paidOutputClasses(pp.Provider)) {
 			output = c.MaxUnits
 		} else {
 			inputs = append(inputs, c.Classes...)
@@ -66,6 +69,27 @@ func checkPaidQuote(p ledger.RuntimePaidReserved, profile ledger.Profile) error 
 		}
 	}
 	return nil
+}
+
+func paidOutputClasses(provider string) []string {
+	switch provider {
+	case "anthropic":
+		return []string{providers.Generated}
+	case "openai":
+		return []string{"output.generated.long", "output.generated.short"}
+	default:
+		return nil
+	}
+}
+
+// Normalization and historical pricing validate the guarded band first.
+func paidOpenAITier(units []providers.Units) string {
+	for _, u := range units {
+		if u.Count > 0 && slices.Contains([]string{"input.cached.long", "input.uncached.long", "input.write.long"}, u.Class) {
+			return "default_long"
+		}
+	}
+	return "default_short"
 }
 
 func (s *Service) paidAuthority(ctx context.Context, a paidAttempt, through uint64) ([]grantRules, *scopedTaskState, error) {
@@ -316,7 +340,7 @@ func paidResultCost(a paidAttempt, v ledger.RuntimePaidResult) (bool, int64, boo
 	if pp.ValidateHistorical() != nil {
 		return false, 0, false, nil
 	}
-	if v.ErrorClass != "" && !slices.Contains([]string{"denied", "exhausted", "rate_limited", "overloaded", "invalid_request", "unavailable", "conflict", "provider_error", "timeout", "unreachable", "protocol_error", "refused"}, v.ErrorClass) {
+	if v.ErrorClass != "" && !slices.Contains([]string{"denied", "exhausted", "rate_limited", "overloaded", "invalid_request", "unavailable", "conflict", "provider_error", "timeout", "unreachable", "protocol_error", "refused", "tariff_ambiguous"}, v.ErrorClass) {
 		return false, 0, false, nil
 	}
 	if v.NoCharge != nil {
@@ -331,10 +355,21 @@ func paidResultCost(a paidAttempt, v ledger.RuntimePaidResult) (bool, int64, boo
 	if v.Usage == nil {
 		return false, 0, false, ErrInvalid
 	}
-	if v.Usage.PricingTier != "standard" || v.Usage.ServedTier != "" && v.Usage.ServedTier != "standard" {
+	var classes []string
+	switch pp.Provider {
+	case "anthropic":
+		if v.Usage.PricingTier != "standard" || v.Usage.ServedTier != "" && v.Usage.ServedTier != "standard" {
+			return false, 0, false, nil
+		}
+		classes = []string{providers.CacheRead, providers.CacheWrite1h, providers.CacheWrite5m, providers.Uncached, providers.Generated}
+	case "openai":
+		if v.Usage.ServedTier != "default" {
+			return false, 0, false, nil
+		}
+		classes = []string{"input.cached.long", "input.cached.short", "input.uncached.long", "input.uncached.short", "input.write.long", "input.write.short", "output.generated.long", "output.generated.short"}
+	default:
 		return false, 0, false, nil
 	}
-	classes := []string{providers.CacheRead, providers.CacheWrite1h, providers.CacheWrite5m, providers.Uncached, providers.Generated}
 	units := make([]providers.Units, 0, len(v.Usage.Classes))
 	for _, u := range v.Usage.Classes {
 		if !slices.Contains(classes, u.Class) {
@@ -347,6 +382,9 @@ func paidResultCost(a paidAttempt, v ledger.RuntimePaidResult) (bool, int64, boo
 	}
 	cost, err := providers.PriceHistoricalUsage(pp, units)
 	if err != nil {
+		return false, 0, false, nil
+	}
+	if pp.Provider == "openai" && v.Usage.PricingTier != paidOpenAITier(units) {
 		return false, 0, false, nil
 	}
 	if v.CostMicros == nil || cost != *v.CostMicros {

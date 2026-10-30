@@ -30,7 +30,7 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 	if chapter == "12" {
 		colony = uuid.MustParse("019a1200-0000-7000-8000-000000000001")
 	}
-	if chapter == "13" {
+	if chapter == "13" || chapter == "14" {
 		colony = uuid.MustParse("019a1300-0000-7000-8000-000000000001")
 	}
 	if chapter == "139" {

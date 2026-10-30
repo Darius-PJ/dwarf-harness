@@ -518,9 +518,11 @@
 // Core start the owner must bind a fresh version per scope; replay never
 // rehydrates a source. Repeated rotations in one start are allowed.
 //
-// PrepareAnthropic takes an explicit route, credential version, parent turn and
-// task binding. It reserves physical buffers before serializing, then seals and
-// quotes the owned request once. PreparedPaidCall is opaque and belongs to that
+// PrepareAnthropic and PrepareOpenAI take an explicit route, credential version,
+// parent turn and task binding. They select only their named provider and share
+// the same Service, budget book and exchange pool. Both reserve physical buffers
+// before serializing, then seal and quote the owned request once.
+// PreparedPaidCall is opaque and belongs to that
 // Service incarnation; Close releases unused preparation. AdmitPaid rechecks
 // current model authority, task generation, every enabled spend ancestor and
 // all finite ceilings. It publishes the raw sealed body as a private object,

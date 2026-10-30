@@ -29,7 +29,7 @@ func openPaidFixture(t testing.TB, prefix int) (*serviceFixture, []ledger.Commit
 func TestPaidGroupRulesAndFrozenReplay(t *testing.T) {
 	t.Parallel()
 	t.Run("rules", testPaidGroupRules)
-	for _, chapter := range []string{"10", "11", "12", "13"} {
+	for _, chapter := range []string{"10", "11", "12", "13", "14"} {
 		t.Run("frozen-"+chapter, func(t *testing.T) {
 			t.Parallel()
 			f, commits := scopedGoldenFixture(t, chapter, -1)
@@ -44,37 +44,58 @@ func TestPaidGroupRulesAndFrozenReplay(t *testing.T) {
 			if f.store.Durable() != before || !reflect.DeepEqual(original, readTestFile(t, segment)) {
 				t.Fatal("Open appended or rewrote the frozen ledger")
 			}
-			if chapter != "13" {
+			if chapter != "13" && chapter != "14" {
 				return
 			}
-			for _, row := range []struct {
-				id          int
-				state, cost string
-				version     int64
-			}{{0x500, "released_unsent", "0", 2}, {0x501, "settled", "21", 5}, {0x502, "no_charge", "0", 3}, {0x503, "settled", "1", 3}, {0x504, "settled", "122", 4}, {0x505, "settled", "2", 3}} {
-				view, err := f.service.PaidAttemptStatus(context.Background(), PaidAttemptLookup{AttemptID: paidGoldenID(row.id)})
-				if err != nil || view.State != row.state || view.SettledMicros != row.cost || view.HeldMicros != "0" || view.Version != row.version || view.ThroughSequence != before {
-					t.Fatalf("attempt %x: %+v %v", row.id, view, err)
+			if chapter == "13" {
+				for _, row := range []struct {
+					id          int
+					state, cost string
+					version     int64
+				}{{0x500, "released_unsent", "0", 2}, {0x501, "settled", "21", 5}, {0x502, "no_charge", "0", 3}, {0x503, "settled", "1", 3}, {0x504, "settled", "122", 4}, {0x505, "settled", "2", 3}} {
+					view, err := f.service.PaidAttemptStatus(context.Background(), PaidAttemptLookup{AttemptID: paidGoldenID(row.id)})
+					if err != nil || view.State != row.state || view.SettledMicros != row.cost || view.HeldMicros != "0" || view.Version != row.version || view.ThroughSequence != before {
+						t.Fatalf("attempt %x: %+v %v", row.id, view, err)
+					}
 				}
-			}
-			for _, row := range []struct{ period, cost string }{{"2026-10-24", "21"}, {"2026-10-25", "125"}} {
-				view, err := f.service.PaidBudgetStatus(context.Background(), PaidBudgetLookup{Scope: ledger.PaidScope{Kind: "colony"}, Period: row.period})
-				if err != nil || view.SettledMicros != row.cost || view.HeldMicros != "0" || view.Fenced {
-					t.Fatalf("period %s: %+v %v", row.period, view, err)
+				for _, row := range []struct{ period, cost string }{{"2026-10-24", "21"}, {"2026-10-25", "125"}} {
+					view, err := f.service.PaidBudgetStatus(context.Background(), PaidBudgetLookup{Scope: ledger.PaidScope{Kind: "colony"}, Period: row.period})
+					if err != nil || view.SettledMicros != row.cost || view.HeldMicros != "0" || view.Fenced {
+						t.Fatalf("period %s: %+v %v", row.period, view, err)
+					}
 				}
-			}
-			local, err := f.service.CapacityStatus(context.Background(), CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
-			if err != nil || local.Used.LocalUnits != 2 {
-				t.Fatalf("paid delegation lost shared local unit: %+v %v", local, err)
-			}
-			route := f.service.p.paidRoutes[paidGoldenID(0x400)]
-			credential := f.service.p.paidCredentialScopes[paidGoldenID(0x401)]
-			if route.Version != 3 || route.Profile.CapabilityVersion != "local-cap-3" || credential.version != 3 || credential.provider != "anthropic" || len(f.service.p.paidCredentials) != 0 {
-				t.Fatal("route identity or credential rotation/revocation was lost")
-			}
-			budget, err := f.service.PaidBudgetStatus(context.Background(), PaidBudgetLookup{Scope: ledger.PaidScope{Kind: "credential", ID: paidGoldenID(0x401)}})
-			if err != nil || budget.Version != 2 || budget.Terms == nil || *budget.Terms.CeilingMicros != 900000 {
-				t.Fatalf("credential spend update lost: %+v %v", budget, err)
+				local, err := f.service.CapacityStatus(context.Background(), CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
+				if err != nil || local.Used.LocalUnits != 2 {
+					t.Fatalf("paid delegation lost shared local unit: %+v %v", local, err)
+				}
+				route := f.service.p.paidRoutes[paidGoldenID(0x400)]
+				credential := f.service.p.paidCredentialScopes[paidGoldenID(0x401)]
+				if route.Version != 3 || route.Profile.CapabilityVersion != "local-cap-3" || credential.version != 3 || credential.provider != "anthropic" || len(f.service.p.paidCredentials) != 0 {
+					t.Fatal("route identity or credential rotation/revocation was lost")
+				}
+				budget, err := f.service.PaidBudgetStatus(context.Background(), PaidBudgetLookup{Scope: ledger.PaidScope{Kind: "credential", ID: paidGoldenID(0x401)}})
+				if err != nil || budget.Version != 2 || budget.Terms == nil || *budget.Terms.CeilingMicros != 900000 {
+					t.Fatalf("credential spend update lost: %+v %v", budget, err)
+				}
+			} else {
+				// A second producer must retain the common book, the guarded
+				// unknown hold and the corrected original-period actual cost.
+				for _, row := range []struct {
+					id                int
+					state, cost, hold string
+					version           int64
+				}{{0x14500, "settled", "10", "0", 3}, {0x14501, "unknown", "0", "230512", 3}, {0x14502, "settled", "10", "0", 3}, {0x14503, "settled", "55719", "0", 5}} {
+					v, err := f.service.PaidAttemptStatus(context.Background(), PaidAttemptLookup{AttemptID: paidGoldenID(row.id)})
+					if err != nil || v.State != row.state || v.SettledMicros != row.cost || v.HeldMicros != row.hold || v.Version != row.version || v.Fenced || v.Admission.AdmissionPeriod != "2026-10-25" {
+						t.Fatalf("OpenAI attempt %x: %+v %v", row.id, v, err)
+					}
+				}
+				for _, row := range []struct{ period, cost string }{{"2026-10-24", "21"}, {"2026-10-25", "55864"}, {"2026-10-26", "0"}} {
+					v, err := f.service.PaidBudgetStatus(context.Background(), PaidBudgetLookup{Scope: ledger.PaidScope{Kind: "colony"}, Period: row.period})
+					if err != nil || v.SettledMicros != row.cost || v.HeldMicros != "230512" || v.Fenced {
+						t.Fatalf("OpenAI period %s: %+v %v", row.period, v, err)
+					}
+				}
 			}
 			for _, commit := range commits {
 				last := commit.Records[len(commit.Records)-1]

@@ -14,6 +14,23 @@ func FuzzPaidGroupReplay(f *testing.F) {
 		f.Add(mode, uint64(0), []byte(`{}`))
 		f.Add(mode, uint64(1), []byte(nil))
 	}
+	// OpenAI intent/receipt seeds must not be accepted against an Anthropic
+	// reservation merely because both use the unchanged schema-4 family.
+	_, openAI := scopedGoldenFixture(f, "14", -1)
+	for _, commit := range openAI {
+		if len(commit.Records) != 3 || commit.Records[1].Type != ledger.TypeRuntimePaidDispatchIntent {
+			continue
+		}
+		intent, err := ledger.DecodeRuntimePaidDispatchIntent(commit.Records[1].Payload)
+		if err != nil {
+			f.Fatal(err)
+		}
+		if intent.Credential.ScopeID != paidGoldenID(0x1401) {
+			continue
+		}
+		f.Add(byte(1), uint64(0), []byte(commit.Records[1].Payload))
+		f.Add(byte(2), uint64(0), []byte(commit.Records[2].Payload))
+	}
 	fixture := newPaidFixture(f)
 	p := fixture.reserve(f)
 	intent := ledger.RuntimePaidDispatchIntent{AttemptID: p.AttemptID, ExpectedVersion: 1, Version: 2, AuthorityVersion: fixture.service.p.authority, RequestSHA256: p.Quote.RequestSHA256, QuoteSHA256: p.Quote.QuoteSHA256, Credential: p.Request.Credential, ObservedUTCNS: fixture.service.p.reviewFloor}
