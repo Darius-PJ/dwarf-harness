@@ -1,4 +1,4 @@
-// Package providers implements record-free Anthropic profiles, sealed requests,
+// Package providers implements record-free Anthropic and OpenAI profiles, sealed requests,
 // exact pricing, one-shot HTTPS transport and bounded response interpretation.
 // It reads no clock, owns no authority or credential source, writes no ledger,
 // and does not discover capabilities or tariffs. The trusted Core installer
@@ -27,7 +27,7 @@
 // response or RoundTripper. Keep-alive is retained; GetBody remains nil and
 // positive ContentLength prevents Go's zero-write replay path.
 //
-// The bounded SSE parser distinguishes complete message state from available
+// The Anthropic SSE parser distinguishes complete message state from available
 // cumulative billing evidence. Null invalidates a counter, omission retains it,
 // cache aggregates are checked against exclusive children, and thinking stays
 // inside output. Unknown or incomplete evidence is never a zero settlement.
@@ -37,6 +37,28 @@
 // ContentBlocks and OutputStarted retain evidence of begun output even when a
 // refusal clears returned blocks. No-charge interpretation belongs to Core and
 // requires the admission profile's dated rule and the complete refusal facts.
+//
+// CompileOpenAI accepts text and declared local functions, not function history,
+// media, hosted tools, cache markers or provider-side continuation state. It pins
+// default/global service, store:false and implicit 30m caching with no prewarm.
+// The Responses reader takes output and usage only from the first validated
+// completed/incomplete/failed terminal; earlier snapshots never add counters or
+// fill missing terminal fields. Cached reads/writes partition inclusive input,
+// and reasoning is already inside output. Complete usage may settle an incomplete
+// or failed answer; content validity is independent of financial availability.
+// Served tier must be default. Model mismatch, unknown billing dimensions and
+// absent/null required counters retain the hold. Unknown null/plain-zero usage
+// extensions and zero-only tool-usage objects do not introduce charges.
+//
+// OpenAI's eight classes split cached, uncached, write and generated units into
+// short/long bands. The versioned kguard schema selects short through 272000 and
+// long above 278528 inclusive input tokens. The intervening interval returns
+// ErrTariffAmbiguous with no bound violation and has no release path under this
+// schema. Admission covers both bands independently of requested output. The
+// shared 1 MiB SSE event/line limit applies to the whole terminal response,
+// including encrypted reasoning: larger terminals are held, never truncated.
+// Entity/output/event/item limits remain 16 MiB/8 MiB/262144/256. Reasoning output
+// is opaque responses_reasoning JSON; neither it nor a response ID grants authority.
 //
 // ResponseEvidence is untrusted provider data. Before publishing any artifact,
 // its Core caller must apply the pinned-secret capture policy and the context's

@@ -78,6 +78,7 @@ type Compiled struct {
 	output         int64
 	profile        [32]byte
 	cache5, cache1 bool
+	toolNames      []string
 }
 
 func (c Compiled) Body() []byte           { return bytes.Clone(c.body) }
@@ -114,6 +115,9 @@ func objectJSON(b []byte) bool {
 
 func CompileAnthropic(p Profile, r Request) (Compiled, error) {
 	var c Compiled
+	if p.Provider != "anthropic" {
+		return c, ErrUnsupported
+	}
 	if e := p.Validate(); e != nil {
 		return c, e
 	}

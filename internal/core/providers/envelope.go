@@ -44,13 +44,20 @@ func (e Envelope) Descriptor() Descriptor {
 func (e Envelope) Body() []byte     { return bytes.Clone(e.body) }
 func (e Envelope) SHA256() [32]byte { return e.digest }
 
-func semanticHeaders(headers []Header) ([]Header, error) {
-	if len(headers) != 3 {
-		return nil, ErrUnsupported
-	}
+func semanticHeaders(provider string, headers []Header) ([]Header, error) {
 	out := slices.Clone(headers)
 	seen := map[string]bool{}
-	allowed := map[string]string{"accept": "text/event-stream", "anthropic-version": APIVersion, "content-type": "application/json"}
+	allowed := map[string]string{"accept": "text/event-stream", "content-type": "application/json"}
+	switch provider {
+	case "anthropic":
+		allowed["anthropic-version"] = APIVersion
+	case "openai":
+	default:
+		return nil, ErrUnsupported
+	}
+	if len(headers) != len(allowed) {
+		return nil, ErrUnsupported
+	}
 	for i, h := range out {
 		n := strings.ToLower(h.Name)
 		if seen[n] || allowed[n] == "" || h.Value != allowed[n] {
@@ -74,7 +81,7 @@ func Seal(p Profile, c Compiled, scope, version string, headers []Header) (Envel
 	if digest != c.profile || len(c.body) == 0 || !visible(scope, 256) || !visible(version, 256) {
 		return e, ErrInvalid
 	}
-	hs, err := semanticHeaders(headers)
+	hs, err := semanticHeaders(p.Provider, headers)
 	if err != nil {
 		return e, err
 	}
