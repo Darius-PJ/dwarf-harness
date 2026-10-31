@@ -27,6 +27,14 @@ type reservationPool struct {
 	profile   *CapacityProfile
 	bytes     int64
 	scratches map[string]*scratchAccess
+	released  func() // Service.SetReleaseNotifier; called under mu.
+}
+
+// releasedLocked reports a release that can let an immediate reserve succeed.
+func (p *reservationPool) releasedLocked() {
+	if p.released != nil {
+		p.released()
+	}
 }
 
 // Tokens are minted and checked under the pool mutex. A subordinate capture is
@@ -213,6 +221,7 @@ func (r *reservation) releaseCaptureBytes() {
 	if r.kind == subordinateReservation {
 		r.guard.child = nil
 	}
+	p.releasedLocked()
 }
 
 func (r *reservation) release() {
@@ -230,6 +239,7 @@ func (r *reservation) release() {
 	r.bytes = 0
 	if r.kind == subordinateReservation {
 		r.guard.child = nil
+		p.releasedLocked()
 		return
 	}
 	if r.child != nil {
@@ -240,6 +250,7 @@ func (r *reservation) release() {
 	a.exclusive = nil
 	close(a.changed)
 	a.changed = make(chan struct{})
+	p.releasedLocked()
 }
 
 // The exclusive admission token itself holds the provisional slot. A kept
@@ -294,6 +305,7 @@ func (p *reservationPool) beginWrite(ctx context.Context, scratch string) (func(
 					a.writers--
 					close(a.changed)
 					a.changed = make(chan struct{})
+					p.releasedLocked()
 				})
 			}, nil
 		}

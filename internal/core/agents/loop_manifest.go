@@ -211,6 +211,12 @@ func (r *loopRuntime) manifest(t *loopTurn, outcome, reason string, final *ledge
 func (r *loopRuntime) finish(t *loopTurn) (err error) {
 	s := r.service
 	defer func() {
+		// A busy capture or step leaves everything for the retry: writers, live
+		// text, the reservation and the turn context stay, and the scheduler
+		// parks the turn. Steps already done are skipped on re-entry.
+		if finishBusy(err) {
+			return
+		}
 		if err != nil {
 			for _, writer := range t.writers {
 				writer.Close()
@@ -269,7 +275,14 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 	for _, id := range ids {
 		writer := t.writers[id]
 		scratch := writer.Scratch()
-		if _, err := writer.CommitObserved(context.Background()); err != nil {
+		var err error
+		if s.deps.beforeFinishCommit != nil {
+			err = s.deps.beforeFinishCommit(t.id)
+		}
+		if err == nil {
+			_, err = writer.CommitObserved(context.Background())
+		}
+		if err != nil {
 			return err
 		}
 		writer.Close()

@@ -369,6 +369,13 @@
 // another writer waits on the pool's changed channel. Cancellation while
 // waiting acquires no count, byte allowance or slot.
 //
+// SetReleaseNotifier registers one host callback that the pool calls, under
+// its mutex, after each change that can let an immediate reserve succeed:
+// returned capture bytes, a cleared exclusive holder and a dropped writer
+// count. A busy refusal is never queued; the callback only tells the host a
+// retry may now pass. It must not block, wait or re-enter the Service, and a
+// later registration replaces it.
+//
 // The pool alone mints the unexported tokens. Under the same mutex, capture
 // refuses nil, unminted, wrong-scratch, used, released or bytes-less tokens with
 // a typed internal error matching ErrInvalid. Marking is atomic: one token

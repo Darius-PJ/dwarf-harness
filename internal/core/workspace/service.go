@@ -277,6 +277,20 @@ func (s *Service) Close() error {
 	return nil
 }
 
+// SetReleaseNotifier registers the one callback the reservation pool calls
+// after returning capture bytes, clearing an exclusive holder or dropping a
+// writer count, any of which can let an immediate reserve succeed. A later
+// call replaces it; nil removes it. The callback runs under workspace locks,
+// so it must not block, wait or call back into the Service.
+func (s *Service) SetReleaseNotifier(notify func()) {
+	if s == nil {
+		return
+	}
+	s.pool.mu.Lock()
+	defer s.pool.mu.Unlock()
+	s.pool.released = notify
+}
+
 // append holds mu through validation and acknowledgement. apply's undo journal
 // keeps failed commits invisible without cloning projections that grow forever.
 func (s *Service) append(ctx context.Context, drafts []ledger.Draft) error {

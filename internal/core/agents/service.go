@@ -45,6 +45,7 @@ type serviceDeps struct {
 	beforeHistoryFill       func(historyKey)
 	beforeReplayWait        func()
 	afterCloseFence         func()
+	beforeFinishCommit      func(turn uuid.UUID) error // Test seam: its error stands in for CommitObserved's.
 }
 type scopeKey struct{ agent, context uuid.UUID }
 type scopeGate struct {

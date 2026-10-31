@@ -888,6 +888,20 @@
 // turn never sent ends released_unsent; a sent one ends only on evidence, an
 // unknown ending keeps its hold, and nothing is resent automatically.
 //
+// A busy at turn end parks the turn the same way. When a writer's observation
+// meets workspace capture_budget, scratch_busy or context_busy, or a finish
+// step answers BusyError, the paid and tool records stay durable and the open
+// writers, live text and reservation are kept; the finish is retried after a
+// release, including each workspace release reported through
+// workspace.Service's release notifier, and redoes no completed step. A
+// parked turn is selected again only when a release follows its park or its
+// stop reason changes: cancellation, shutdown or a passing deadline reruns the
+// finish once under the new reason and parks it again while the capture stays
+// busy, and the ending then follows the order above (cancelled through
+// CancelTurn, shutdown interrupted, deadline failed). A busy never deletes a
+// turn without its recorded ending, and Service.Close waits for a parked
+// finish's release.
+//
 // F3-15 records every bound turn: loop.bind after the native admission,
 // tool.begin before any tool effect, tool.result after it and loop.end after
 // the native ending. loop.end appends one transcript manifest through

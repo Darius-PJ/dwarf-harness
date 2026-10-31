@@ -31,6 +31,7 @@ type loopRuntime struct {
 	wake       chan struct{}
 	changed    chan struct{}
 	generation atomic.Uint64
+	releases   atomic.Uint64 // workspace releases; see released.
 	completed  chan loopCompletion
 	done       chan struct{}
 	stopping   bool
@@ -56,6 +57,7 @@ type loopTurn struct {
 	state, reason         string
 	running               bool
 	waitGeneration        uint64
+	parkedReason          string
 	modelCalls, toolCalls int64
 	paid                  *loopPaidCall
 	tools                 []loopInvocation
@@ -74,6 +76,7 @@ type loopTurn struct {
 type loopCompletion struct {
 	turn           *loopTurn
 	busy           bool
+	finishing      bool
 	waitGeneration uint64
 	err            error
 }
@@ -140,6 +143,7 @@ func (s *Service) EnableTurnLoop(ctx context.Context, ws *workspace.Service, opt
 	}
 	r := &loopRuntime{service: s, workspace: ws, options: copy, settings: settings, turns: map[uuid.UUID]*loopTurn{}, contexts: map[uuid.UUID][]uuid.UUID{}, queued: map[uuid.UUID]bool{}, paidTokens: map[uuid.UUID]struct{}{}, wake: make(chan struct{}, 1), changed: make(chan struct{}), completed: make(chan loopCompletion, len(settings)), done: make(chan struct{})}
 	s.loop = r
+	ws.SetReleaseNotifier(r.released)
 	go r.run()
 	return nil
 }
@@ -155,6 +159,14 @@ func (r *loopRuntime) notify() {
 	case r.wake <- struct{}{}:
 	default:
 	}
+}
+
+// released is the workspace release notifier. It runs under workspace locks,
+// so like notify it only counts and signals; quantum compares the count across
+// a busy attempt so a release during the attempt is never lost.
+func (r *loopRuntime) released() {
+	r.releases.Add(1)
+	r.notify()
 }
 func (r *loopRuntime) changedLocked() {
 	close(r.changed)
@@ -195,7 +207,9 @@ func (r *loopRuntime) next() *loopTurn {
 		}
 		delete(r.queued, id)
 		t := r.turns[id]
-		if t.state == "waiting_resource" && t.waitGeneration >= r.generation.Load() && t.reason == "" && !r.stopping {
+		// A parked turn waits until a release follows its park or its stop
+		// reason changes, so a finish parked while stopping cannot spin.
+		if t.state == "waiting_resource" && t.waitGeneration >= r.generation.Load() && t.reason == t.parkedReason {
 			r.enqueue(t)
 			continue
 		}
@@ -248,7 +262,7 @@ func (r *loopRuntime) run() {
 		generation := r.generation.Load()
 		r.changedLocked()
 		for _, t := range r.turns {
-			if !t.running && (t.state != "waiting_resource" || t.waitGeneration < generation || t.reason != "" || r.stopping) {
+			if !t.running && (t.state != "waiting_resource" || t.waitGeneration < generation || t.reason != t.parkedReason) {
 				r.enqueue(t)
 			}
 		}
@@ -278,7 +292,9 @@ func (r *loopRuntime) run() {
 			if model {
 				if claimed, generation := r.claimPaid(t); !claimed {
 					r.mu.Lock()
-					t.state, t.waitGeneration = "waiting_resource", generation
+					// Park under the reason selection decided with, so a
+					// cancellation racing the claim still reselects the turn.
+					t.state, t.waitGeneration, t.parkedReason = "waiting_resource", generation, reason
 					r.enqueue(t)
 					r.changedLocked()
 					r.mu.Unlock()
@@ -359,8 +375,8 @@ func (r *loopRuntime) run() {
 				t.terminalError = completion.err
 				delete(r.turns, t.id)
 				close(t.done)
-			} else if completion.busy && t.reason == "" {
-				t.state, t.waitGeneration = "waiting_resource", completion.waitGeneration
+			} else if completion.busy && (t.reason == "" || completion.finishing) {
+				t.state, t.waitGeneration, t.parkedReason = "waiting_resource", completion.waitGeneration, t.reason
 				r.enqueue(t)
 			} else {
 				t.state = "ready"
@@ -382,6 +398,7 @@ func (r *loopRuntime) quantum(t *loopTurn, model bool) {
 	before := maps.Clone(s.p.book.preparing)
 	beforeThrough, beforePrepared, beforePreparing := s.p.through, len(s.paid.prepared), s.preparing
 	beforeSlots := len(s.paid.exchanges) + len(r.paidTokens)
+	beforeReleases := r.releases.Load()
 	var token uuid.UUID
 	if model {
 		r.mu.Lock()
@@ -409,18 +426,23 @@ func (r *loopRuntime) quantum(t *loopTurn, model bool) {
 		s.mu.Unlock()
 	}
 	busy := loopBusy(err)
+	if finishing {
+		busy = finishBusy(err)
+	}
 	var waitGeneration uint64
 	if busy {
 		s.mu.Lock()
-		changed := beforeThrough != s.p.through || beforePrepared != len(s.paid.prepared) || beforePreparing != s.preparing || beforeSlots != len(s.paid.exchanges)+len(r.paidTokens) || !maps.Equal(before, s.p.book.preparing)
+		// The generation is read before the release count: a release the
+		// comparison misses advances the generation past this park.
 		waitGeneration = r.generation.Load()
+		changed := beforeReleases != r.releases.Load() || beforeThrough != s.p.through || beforePrepared != len(s.paid.prepared) || beforePreparing != s.preparing || beforeSlots != len(s.paid.exchanges)+len(r.paidTokens) || !maps.Equal(before, s.p.book.preparing)
 		s.mu.Unlock()
 		if changed {
 			busy = false
 		}
 		err = nil
 	}
-	r.completed <- loopCompletion{turn: t, busy: busy, waitGeneration: waitGeneration, err: err}
+	r.completed <- loopCompletion{turn: t, busy: busy, finishing: finishing, waitGeneration: waitGeneration, err: err}
 }
 
 func loopFailureReason(err error) string {
@@ -507,4 +529,11 @@ func (r *loopRuntime) turnView(t *loopTurn) session.TurnView {
 func loopBusy(err error) bool {
 	var busy *BusyError
 	return errors.As(err, &busy)
+}
+
+// finishBusy adds the workspace's own busy: only turn end commits observations
+// directly, while a tool's workspace busy becomes its result.
+func finishBusy(err error) bool {
+	var busy *workspace.BusyError
+	return loopBusy(err) || errors.As(err, &busy)
 }
