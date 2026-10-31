@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: C3
-Blocked by: 12, 15
+Blocked by: 12, 15, 142
 
 ## What to build
 
@@ -56,3 +56,5 @@ Canonical sections: Core roadmap C3; its cited controlling Core design and lates
 2026-10-08 — Consolidation cross-link: Ticket [91](91-record-service-loss-and-restoration-for-every-agent.md) now records service loss for every agent, including execution failures from this ticket's restart and child-shutdown proofs, and is blocked by this ticket under [D102](../../../docs/DECISIONS.md#d102-officer-service-loss-moved-work-pre-router-onset-and-ticket-landing). These extensions add no blocker or criterion to this ticket.
 
 2026-10-24 — Consolidation cross-link: Ticket [140](140-bound-the-private-state-services-replay-and-lookup-cost.md) bounds the cost of opening the private-state service after a restart and of its turn start and local admission, which this ticket's restart proof and declared runtime resource profiles exercise. It reaches this ticket through ticket [15](15-run-bounded-context-bound-model-and-tool-turns.md), which it now blocks ([D142](../../../docs/DECISIONS.md#d142-tickets-139-and-140-published-with-three-blocker-changes)). These extensions add no blocker or criterion to this ticket.
+
+2026-10-31 — Ticket [15](15-run-bounded-context-bound-model-and-tool-turns.md) is resolved, and ticket [12](12-accept-only-exact-subject-review-and-failure-results.md) already was. By the owner's decision, ticket [142](142-read-only-the-ledger-tail-in-cores-agent-service.md) goes before this ticket and is added to its blockers, so this ticket now waits for 142, which bounds the agent service's scan and reopening cost that this ticket's restart proof exercises. The criteria are unchanged. Ticket 15 supplies the bound turn loop and leaves its restart work here: `Open` reports unmatched loop metadata as `PendingLoops` and such turns as `recovery_pending`, but restart never resumes a turn or re-executes a started tool, and mid-turn crash and cancellation-race proof belongs to this ticket. No runtime, production-delivery or other start-gate approval is inferred.

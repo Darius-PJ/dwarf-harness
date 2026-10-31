@@ -1024,9 +1024,11 @@
 // re-executes a started tool; mid-turn crash and cancellation-race proof
 // belongs to ticket 16.
 //
-// No live provider request has been made through the turn loop, a Session or
-// the terminal: every turn ran against loopback TLS/SSE with synthetic
-// profiles, credentials and fixture usage counters, which are not provider
+// One owner-authorized live OpenAI drill ran one tool turn through the turn
+// loop and a Session (gpt-6-luna; two model calls; one tool dispatch). No live
+// Anthropic request has been made, and none through the terminal: every other
+// turn ran against loopback TLS/SSE with synthetic profiles, credentials and
+// fixture usage counters, which are not provider
 // tokenization. This is neither C3 exit evidence nor a capacity, latency,
 // isolation or usefulness result; turn-loop timings are loopback mechanics
 // under the PaidLimits in force (MaxActivePaid 3, MaxPreparedPaid 16 by

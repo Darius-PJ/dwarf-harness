@@ -38,6 +38,8 @@
 // unended or unfinished one, is refused alike. Closing a Session detaches its
 // views; it neither cancels turns nor stops Core.
 //
-// The seam has been exercised only in process, by the terminal and tests
-// against loopback providers; no live provider call has gone through it.
+// The seam has been exercised in process, by the terminal and tests against
+// loopback providers, and by one owner-authorized live OpenAI drill (one tool
+// turn; gpt-6-luna; two calls; one tool); no live Anthropic call has gone
+// through it.
 package session

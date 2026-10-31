@@ -112,8 +112,10 @@
 // artifact encoding limits. This package performs no artifact publication,
 // settlement, retry, tool execution or network call beyond an explicit Do.
 //
-// The bound turn loop has driven both adapters only against loopback TLS/SSE
-// with synthetic profiles; its multi-call tool loops have made no live
-// provider request. Loopback usage counters are fixture values, not provider
-// tokenization, and loopback latency is not provider latency.
+// The bound turn loop has driven the OpenAI adapter live once, in one
+// owner-authorized drill (gpt-6-luna; one tool turn; two calls; one tool);
+// otherwise both adapters, and the Anthropic adapter always, have run only
+// against loopback TLS/SSE with synthetic profiles. Loopback usage counters
+// are fixture values, not provider tokenization, and loopback latency is not
+// provider latency.
 package providers

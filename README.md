@@ -20,7 +20,7 @@ The terminal program needs a colony that is already initialized, with its agents
 GOTOOLCHAIN=local CGO_ENABLED=0 go run ./cmd/dwarf-harness -colony-dir <colony> -settings <settings.json>
 ```
 
-The settings file is strict, nonsecret JSON kept outside the repository; `internal/core/terminal` documents it. Core alone reads each credential source the settings name, and the program never prints a source locator. It initializes and installs nothing, and refuses to start, with a typed reason, on an uninitialized colony. Its turns have run only against local loopback providers: no live provider call has gone through it, and it proves neither step C3's exit nor any capacity, latency or isolation figure.
+The settings file is strict, nonsecret JSON kept outside the repository; `internal/core/terminal` documents it. Core alone reads each credential source the settings name, and the program never prints a source locator. It initializes and installs nothing, and refuses to start, with a typed reason, on an uninitialized colony. Its turns have run only against local loopback providers. One owner-authorized live OpenAI drill ran one tool turn through Core's Session in a test driver, not through this program (`gpt-6-luna`; two calls; one tool); Anthropic has run only against loopback. The program proves neither step C3's exit nor any capacity, latency or isolation figure.
 
 The first release needs only Windows. The code stays portable, and the check also runs on Linux and macOS.
 
@@ -77,7 +77,10 @@ The workflow [`.github/workflows/check.yml`](.github/workflows/check.yml) runs t
 | Path | Contents |
 |---|---|
 | `contract/` | Standard-library-only contract packages: the ledger format and reader, the ledger appender, and the law format |
+| `cmd/dwarf-harness/` | The terminal program: it opens an initialized colony's Core and runs a plain line terminal over its Sessions |
 | `internal/core/` | Core: agents, workspaces, the ledger store, durability, the Windows executor and the graph wiring |
+| `internal/core/session/` | Core's in-process Session seam: typed commands, durable-sequence results, events, live text and the durable final answer |
+| `internal/core/terminal/` | The terminal program's settings, commands and labelled live and final display |
 | `internal/undercurrent/` | Undercurrent's coupling graph service |
 | `helpers/go-analyzer/` | The separately built Go dependency resolver that the coupling graph uses |
 | `tools/check/` | The check |

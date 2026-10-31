@@ -7,7 +7,7 @@ This file describes DwarfHarness's components, the one-way import layers, the pa
 | Component | Role | In this repository |
 |---|---|---|
 | Core | One authoritative Core per colony. It owns durable history, execution authority, workspaces, validated promotion, tasks, grants, accounting and communication. | In part: the packages under `internal/core/` |
-| Launchers | `dwarf-harness` is the colony's host process and terminal program. One host runs per active colony and is the sole writer of its ledger. The GUI, `dwarf-harness-GUI`, attaches to it as a display client and starts it first when no host is running. Views talk to the host through the launcher protocol. | Not yet: `cmd/dwarf-harness/` and `contract/launcher/` do not exist |
+| Launchers | `dwarf-harness` is the colony's host process and terminal program. One host runs per active colony and is the sole writer of its ledger. The GUI, `dwarf-harness-GUI`, attaches to it as a display client and starts it first when no host is running. Views talk to the host through the launcher protocol. | In part: `cmd/dwarf-harness/` runs Core and a plain line terminal in one process; the GUI and `contract/launcher/` do not exist |
 | Undercurrent | The environmental field layer. It derives a bounded, deterministic field from authorized evidence and gives agents permission-scoped impressions, never hidden content or instructions. | In part: the law format (`contract/law`) and the coupling graph (`internal/undercurrent/graph`, with `helpers/go-analyzer`). The field engine does not exist. |
 | Routing layer | The Router prepares and prices model requests without becoming a second authority. It starts in shadow mode, observing requests without changing them. | Not yet: `internal/router/` and `contract/module/` do not exist |
 | Native GUI | A native Fyne v2.8.1 display client with the fortress and RPG views. It sends only typed commands through the launcher protocol and never reads colony files. It will live in a nested `gui/` module, whose build may use cgo. | Not yet: `gui/` does not exist. `tools/artgen` generates its art sample. |
@@ -39,7 +39,7 @@ No test-only dependency is recorded yet.
 
 | Package | What it is |
 |---|---|
-| `cmd/` | Not created yet. D45 reserves `cmd/dwarf-harness` for the host and terminal program. |
+| `cmd/dwarf-harness` | The host and terminal program (D45): it opens an initialized colony's ledger store, agent and workspace services, binds the configured credentials, enables the turn loop and runs `internal/core/terminal`, then drains Core on exit. |
 | `contract/ledger` | The `ledger-format` and `ledger-reader` contract: the on-disk encoding of a colony's history, the rules that verify it, and the read-only Reader through which every consumer replays it. |
 | `contract/ledger/appender` | The `ledger-appender` contract (D50): the restricted way a producer adds records to one colony's ledger. Core's writer is its only implementation. |
 | `contract/law` | Loads and identifies the shared field law and the local validation policy (D47), independently of field execution. |
@@ -47,6 +47,8 @@ No test-only dependency is recorded yet.
 | `internal/core/durable` | Core's narrow adapter to the operating system's file locking and directory durability (B3). |
 | `internal/core/graphfoundation` | The explicit Core-to-graph wiring boundary: its artifact reader reads Git objects through the workspace service, and its appender is the ledger store itself. |
 | `internal/core/ledgerstore` | Core's store for one colony's ledger (D50): the colony directory and its `colony.json`, the writer lock, the sequencer, the writer and recovery behind `appender.Appender`, the body store with its pins and explicit collection, and command identities. |
+| `internal/core/session` | Core's in-process Session seam (ticket 15): a closed command union with durable-sequence results, `Since`/`Wake` events carrying recorded identities, bounded live text and `FinalText` for a finished turn's durable answer. Closing a Session detaches its views; it neither cancels turns nor stops Core. |
+| `internal/core/terminal` | The terminal program's strict settings and command parsers and its line terminal over Core's Sessions: every line is labelled from the turn's bound IDs, provisional live text is shown before the durable final answer, and exit drains Core. It imports only `internal/core/session`, `contract/...` and the standard library. |
 | `internal/core/winexec` | Runs one authorized Windows executable in a fresh AppContainer with zero capabilities and in a non-breakaway Job. A Core-internal OS adapter; on other platforms it refuses without effects. |
 | `internal/core/workspace` | Core's registered Git workspaces, bound private scratches, exact capture, bounded checkpoints and integration generations. It writes the F2-05 to F2-09 records through the colony store and accepts no promotion. |
 | `internal/undercurrent/graph` | U3's artifact and module analysis, strict replay and explicitly driven durable worker. It depends on contracts, never on Core. |
