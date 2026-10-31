@@ -22,9 +22,20 @@ type loopInvocation struct {
 	correction       *modelToolCorrection
 	rawSHA256        ledger.Digest
 	started          *loopGroup
+	executed         *loopToolExecution // retained from the effect until tool.result commits
 	grant            uuid.UUID
 	effectID, workID uuid.UUID
 	counted          bool
+}
+
+// loopToolExecution is a started tool's executed result, kept so that a
+// re-run after tool.result met a moved ledger tail journals this result
+// instead of running the tool again.
+type loopToolExecution struct {
+	data       any
+	receipt    uint64
+	outcome    string
+	correction *modelToolCorrection
 }
 
 func (s *Service) loopGrantLocked(ctx context.Context, origin ledger.Origin, operation string, targets []ledger.Resource, size int64) (uuid.UUID, error) {

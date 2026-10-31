@@ -17,6 +17,7 @@ import (
 
 type privateStore interface {
 	Submit(context.Context, ledger.Draft, []ledger.Draft) (ledgerstore.Receipt, error)
+	SubmitAt(context.Context, uint64, ledger.Draft, []ledger.Draft) (ledgerstore.Receipt, error)
 	PublishBody(context.Context, io.Reader) (ledger.Digest, int64, error)
 	ReadBody(context.Context, ledger.Digest) ([]byte, error)
 	LogDir() string

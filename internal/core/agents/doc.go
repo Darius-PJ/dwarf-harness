@@ -289,7 +289,11 @@
 // time, then the kernel transition and its charge; and one Submit. A caller
 // already past the head that lacks subject rights and is late therefore gets
 // ErrReviewExpired; the deadline is a member of its own binding, so that
-// discloses nothing.
+// discloses nothing. The group carries its sample, so it is written only at
+// the prefix of the second pass, as paid admissions are: when another
+// writer's commit lands first, the second pass repeats at the new prefix with
+// a fresh sample and the same witnesses, and the third refusal answers
+// BusyError{ledger_tail} with nothing written.
 //
 // A result naming a replaced or terminal request is ErrReviewStale for its
 // named reviewer. Any other caller gets ErrDenied for replaced, terminal and
@@ -545,6 +549,20 @@
 // committed envelope/observation times plus the incarnation's highest successful
 // sample, including samples from refused calls. Historical replay uses only its
 // prefix's committed floor and never consults a later live sample.
+//
+// The ledger has another writer: workspace.Service commits through the same
+// store outside the service lock. A paid admission, a dispatch intent and an
+// enabled route configuration carry a clock sample that replay judges against
+// the floor at the group's actual position, which such a commit can raise.
+// They are written with ledgerstore.SubmitAt, only at the tail their guards
+// and the reducer's preflight saw. When another commit lands first, the
+// producer re-enters at its refresh without leaving the lock: it searches
+// the new commits for the command, repeats authority and every guard with a
+// fresh sample, and builds and preflights the group again. The third refusal
+// answers BusyError{ledger_tail}: nothing was written or sent, and the
+// preparation and the command ID can be used again. Reconciliation,
+// observation, settlement, scoped, private and registration groups tolerate
+// such a commit and keep plain Submit.
 //
 // # Paid caller sequence
 //
@@ -898,9 +916,12 @@
 // stop reason changes: cancellation, shutdown or a passing deadline reruns the
 // finish once under the new reason and parks it again while the capture stays
 // busy, and the ending then follows the order above (cancelled through
-// CancelTurn, shutdown interrupted, deadline failed). A busy never deletes a
-// turn without its recorded ending, and Service.Close waits for a parked
-// finish's release.
+// CancelTurn, shutdown interrupted, deadline failed). That order applies only
+// until the native ending commits: the turn keeps its committed ending, a
+// finish re-entered after it skips that step, and a stop reason that arrives
+// later changes neither the ending nor the recorded outcome, so turn.cancel
+// then answers ErrUnavailable. A busy never deletes a turn without its
+// recorded ending, and Service.Close waits for a parked finish's release.
 //
 // F3-15 records every bound turn: loop.bind after the native admission,
 // tool.begin before any tool effect, tool.result after it and loop.end after
@@ -912,6 +933,19 @@
 // read back, never predicted, and command IDs are unique across all six
 // submission families. Later turns render earlier manifests only as prior
 // owner input and completed answers.
+//
+// Each loop group predicts its receipt's effect sequence from the tail, so,
+// like a paid admission, it is written only at the tail it was planned at.
+// commitLoop re-plans after each refusal at a moved tail, and the third
+// refusal answers BusyError{ledger_tail}. That busy, like the same busy from
+// AdmitPaid or the dispatch inside a model quantum, never parks: the tail it
+// moved past makes the scheduler select the turn again in ring order, and
+// the quantum resumes at the pending write. tool.begin publishes its
+// content-addressed request again under fresh IDs; a tool whose tool.result
+// was refused keeps its executed result until tool.result commits, so it
+// never runs twice; loop.end reruns the finish after the committed ending;
+// and message.send answers loop.bind's busy after ending its native turn
+// released, as for any start that fails before loop.bind.
 //
 // Each new turn's input names the display titles of the agent's other admitted
 // active contexts, sorted by context ID, and nothing else about them.

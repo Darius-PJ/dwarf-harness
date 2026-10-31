@@ -86,9 +86,11 @@ func finishBusyStatus(t *testing.T, view session.Session, contextID, turn uuid.U
 }
 
 // finishGate holds the stranding row's turn-end commit attempts: each turn's
-// first attempt waits for its round, and every retry waits to be released.
+// first attempt waits for its round, and every retry waits to be released
+// unless the gate is free.
 type finishGate struct {
 	mu       sync.Mutex
+	free     bool // retries proceed at once
 	attempts map[uuid.UUID]int
 	held     map[uuid.UUID]chan struct{}
 	round    chan struct{}
@@ -102,7 +104,11 @@ func (g *finishGate) attempt(turn uuid.UUID) error {
 	wait := g.round
 	if g.attempts[turn] > 1 {
 		wait = make(chan struct{})
-		g.held[turn] = wait
+		if g.free {
+			close(wait)
+		} else {
+			g.held[turn] = wait
+		}
 	}
 	close(g.arrival)
 	g.arrival = make(chan struct{})
@@ -133,10 +139,9 @@ func (g *finishGate) arrived(round map[uuid.UUID]uuid.UUID) {
 	}
 }
 
-// results waits on the owner's view for every turn's turn_result. A retry is
-// released only while every unfinished turn is held, one at a time, so no
-// retried observation lands inside another turn's loop.end submission: that
-// interleaving is S6's defect, not this row's.
+// results waits on the owner's view for every turn's turn_result. A held
+// retry is released only while every unfinished turn is held, one at a time,
+// so no retried observation lands inside another turn's loop.end submission.
 func (g *finishGate) results(t *testing.T, view session.Session, cursor uint64, round map[uuid.UUID]uuid.UUID) map[uuid.UUID]ledger.RuntimeTurnResult {
 	t.Helper()
 	results := map[uuid.UUID]ledger.RuntimeTurnResult{}
@@ -253,7 +258,8 @@ func finishBusyLedger(t *testing.T, f *turnFixture) (map[uuid.UUID]int, map[uuid
 
 func TestTurnLoopFinishBusy(t *testing.T) {
 	t.Parallel()
-	t.Run("concurrent_captures_park_not_strand", testLoopFinishBusyStranding)
+	t.Run("concurrent_captures_park_not_strand", func(t *testing.T) { testLoopFinishBusyStranding(t, true) })
+	t.Run("concurrent_captures_and_ledger_writes", func(t *testing.T) { testLoopFinishBusyStranding(t, false) })
 	t.Run("cancel_while_parked", testLoopFinishBusyCancel)
 }
 
@@ -261,16 +267,18 @@ func TestTurnLoopFinishBusy(t *testing.T) {
 // released together into a workspace that admits one capture at a time. Real
 // captures collide; a collision cannot be scheduled from this package, so up
 // to eight rounds run until one does, and every round must end every turn.
-// Retries are held and released one at a time (finishGate.results), so S6's
-// loop.end interleaving stays out; a first attempt that reserves only after
-// the winner's capture can still overlap the winner's loop.end until S6.
-func testLoopFinishBusyStranding(t *testing.T) {
+// Gated, retries are held and released one at a time (finishGate.results),
+// which isolates the capture busy from the ledger's two writers. Ungated,
+// every retry proceeds at once, so the turns' captures, native endings and
+// loop.end writes overlap freely; the conditional Submit keeps every group
+// valid where it lands.
+func testLoopFinishBusyStranding(t *testing.T, gated bool) {
 	t.Parallel()
 	const maxRounds, turns = 8, 3
 	var mu sync.Mutex
 	labels := map[string]string{}
 	posts := map[string]int{}
-	gate := &finishGate{attempts: map[uuid.UUID]int{}, held: map[uuid.UUID]chan struct{}{}, arrival: make(chan struct{}), stop: make(chan struct{})}
+	gate := &finishGate{free: !gated, attempts: map[uuid.UUID]int{}, held: map[uuid.UUID]chan struct{}{}, arrival: make(chan struct{}), stop: make(chan struct{})}
 	f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
 		model, raw := turnRequest(t, r)
 		w.Header().Set("Content-Type", "text/event-stream")

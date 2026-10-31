@@ -68,6 +68,7 @@ type loopTurn struct {
 	cancelID              uuid.UUID
 	cancelReceipt         *ScopedReceipt
 	endingID              uuid.UUID
+	ending                *loopEnding // the committed native ending; see endNative
 	endCommandID          uuid.UUID
 	done                  chan struct{}
 	terminalError         error

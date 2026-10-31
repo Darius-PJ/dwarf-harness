@@ -2,8 +2,10 @@ package agents
 
 import (
 	"context"
+	"errors"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
 func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidReceipt, *BoundCall, error) {
@@ -105,37 +107,51 @@ func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidRecei
 
 	match, err = s.lookupPaid(ctx, request.CommandID, authority)
 	defer s.mu.Unlock()
-	if err == nil && match.found {
-		r, e := s.matchPaid(match, sub, digest)
-		if e != nil {
-			return PaidReceipt{}, nil, e
+	// The admission carries its clock sample, which another writer's later
+	// commit time would raise the review floor above. A refusal at a moved tail
+	// re-enters at the refresh and samples again; nothing was written.
+	for attempt := 1; ; attempt++ {
+		if attempt > 1 {
+			match, err = s.relookupPaidLocked(ctx, request.CommandID, authority)
 		}
-		if !p.consumed {
-			s.releasePaidPreparation(p)
+		if err == nil && match.found {
+			r, e := s.matchPaid(match, sub, digest)
+			if e != nil {
+				return PaidReceipt{}, nil, e
+			}
+			if !p.consumed {
+				s.releasePaidPreparation(p)
+			}
+			return r, &BoundCall{service: s, admission: *match.paid.reserved}, nil
 		}
-		return r, &BoundCall{service: s, admission: *match.paid.reserved}, nil
+		if err == nil && p.closeRequested {
+			err = ErrClosed
+		}
+		if err == nil {
+			err = s.admissionGuardsLocked(ctx, p)
+		}
+		var drafts []ledger.Draft
+		if err == nil {
+			drafts, err = paidDrafts(request.CommandID, sub, p.admission, ledger.TypeRuntimePaidReserved, "reserved", 1, request.AttemptID, request.ParentTurnID, nil)
+		}
+		var receipt PaidReceipt
+		if err == nil {
+			receipt, err = s.submitPaidGroupLocked(ctx, drafts, true)
+		}
+		if errors.Is(err, ledgerstore.ErrTailMoved) {
+			if attempt == tailAttempts {
+				return PaidReceipt{}, nil, &BusyError{Reason: "ledger_tail"}
+			}
+			continue
+		}
+		if err != nil {
+			return PaidReceipt{}, nil, err
+		}
+		p.consumed = true
+		delete(s.paid.prepared, p)
+		s.paid.calls[request.AttemptID] = p
+		return receipt, &BoundCall{service: s, admission: p.admission}, nil
 	}
-	if err == nil && p.closeRequested {
-		err = ErrClosed
-	}
-	if err == nil {
-		err = s.admissionGuardsLocked(ctx, p)
-	}
-	if err != nil {
-		return PaidReceipt{}, nil, err
-	}
-	drafts, err := paidDrafts(request.CommandID, sub, p.admission, ledger.TypeRuntimePaidReserved, "reserved", 1, request.AttemptID, request.ParentTurnID, nil)
-	if err != nil {
-		return PaidReceipt{}, nil, err
-	}
-	receipt, err := s.submitPaidLocked(ctx, drafts)
-	if err != nil {
-		return PaidReceipt{}, nil, err
-	}
-	p.consumed = true
-	delete(s.paid.prepared, p)
-	s.paid.calls[request.AttemptID] = p
-	return receipt, &BoundCall{service: s, admission: p.admission}, nil
 }
 
 func (s *Service) admissionGuardsLocked(ctx context.Context, p *preparedPaid) error {

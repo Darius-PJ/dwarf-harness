@@ -73,35 +73,54 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 	// prefix, the clock is sampled a second time, and Open's reducer judges
 	// the exact group this Submit writes.
 	l, err = s.lookupReview(ctx, input, through, true)
-	if err == nil && l.match.found {
-		r, err := s.retryReviewLocked(ctx, input, l)
-		s.mu.Unlock()
-		return r, err
-	}
-	var sample int64
-	if err == nil {
-		sample, err = s.reviewGuardsLocked(ctx, input, l.sourceErr)
-	}
+	// The group carries its clock sample, which another writer's later commit
+	// time would raise the review floor above, so it is written only at the
+	// tail it was planned at. A refusal at a moved tail re-enters at the
+	// refresh: the caller check, the new commits searched for the command,
+	// every guard with a fresh sample and the reducer again. The witnesses are
+	// immutable records and are kept. Nothing was written.
 	var drafts []ledger.Draft
 	var group *reviewGroup
 	var plan reviewPlan
-	if err == nil {
-		drafts, group, plan, err = s.prepareReviewLocked(ctx, input, l.sources, sample)
+	var committed ledgerstore.Receipt
+	for attempt := 1; ; attempt++ {
+		if attempt > 1 {
+			l.match, err = s.relookupReviewLocked(ctx, input)
+		}
+		if err == nil && l.match.found {
+			r, err := s.retryReviewLocked(ctx, input, l)
+			s.mu.Unlock()
+			return r, err
+		}
+		var sample int64
+		if err == nil {
+			sample, err = s.reviewGuardsLocked(ctx, input, l.sourceErr)
+		}
+		if err == nil {
+			drafts, group, plan, err = s.prepareReviewLocked(ctx, input, l.sources, sample)
+		}
+		if err == nil {
+			err = s.reviewProducerGuards(input, group.receipt.Usage)
+		}
+		if err == nil && len(reservation.scopes) != 0 {
+			err = s.p.book.checkPreparation(reservation.scopes, reservation.budget, false)
+		}
+		if err == nil {
+			err = s.usableLocked(ctx)
+		}
+		if err != nil {
+			s.mu.Unlock()
+			return ReviewReceipt{}, reviewDenied(err)
+		}
+		committed, err = s.store.SubmitAt(ctx, s.p.through, drafts[0], drafts[1:])
+		if !errors.Is(err, ledgerstore.ErrTailMoved) {
+			break
+		}
+		if attempt == tailAttempts {
+			s.mu.Unlock()
+			return ReviewReceipt{}, &BusyError{Reason: "ledger_tail"}
+		}
 	}
-	if err == nil {
-		err = s.reviewProducerGuards(input, group.receipt.Usage)
-	}
-	if err == nil && len(reservation.scopes) != 0 {
-		err = s.p.book.checkPreparation(reservation.scopes, reservation.budget, false)
-	}
-	if err == nil {
-		err = s.usableLocked(ctx)
-	}
-	if err != nil {
-		s.mu.Unlock()
-		return ReviewReceipt{}, reviewDenied(err)
-	}
-	committed, err := s.store.Submit(ctx, drafts[0], drafts[1:])
 	if err != nil {
 		if errors.Is(err, appender.ErrUncertain) || errors.Is(err, appender.ErrPoisoned) {
 			s.poisoned = true
@@ -214,6 +233,20 @@ func (s *Service) lookupReview(ctx context.Context, input reviewInput, after uin
 		l.match, err = s.findCommand(ctx, input.id, through, s.p.through)
 	}
 	return l, err
+}
+
+// relookupReviewLocked re-enters after the store refused the group at a moved
+// tail. Under mu throughout, it repeats the caller check at the refreshed
+// prefix and searches only the commits after the prefix already searched.
+func (s *Service) relookupReviewLocked(ctx context.Context, input reviewInput) (commandMatch, error) {
+	searched := s.p.through
+	if err := s.refreshReviewCaller(ctx, input); err != nil {
+		return commandMatch{}, err
+	}
+	if searched < s.p.through {
+		return s.findCommand(ctx, input.id, searched, s.p.through)
+	}
+	return commandMatch{}, nil
 }
 
 // retryReviewLocked answers a matched command with its immutable receipt. The

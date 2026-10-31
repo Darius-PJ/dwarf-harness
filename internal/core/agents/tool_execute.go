@@ -160,28 +160,36 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 	} else if inv.correction != nil {
 		outcome, correction = "invalid_argument", inv.correction
 	} else {
-		if reason := r.service.loopBoundary(t); reason != "" {
-			return r.stopTool(t, inv)
+		// A re-run after tool.result met a moved ledger tail resumes at the
+		// journal write: the executed result is retained until tool.result
+		// commits, and the tool never runs twice.
+		if inv.executed == nil {
+			if reason := r.service.loopBoundary(t); reason != "" {
+				return r.stopTool(t, inv)
+			}
+			if strings.HasPrefix(inv.normalized.Operation, "file.") {
+				data, receipt, err = r.file(t, inv)
+			} else {
+				data, receipt, err = r.coreTool(t, inv)
+			}
+			if loopBusy(err) {
+				r.mu.Lock()
+				t.toolCalls--
+				inv.counted = false
+				r.mu.Unlock()
+				return err
+			}
+			executed := loopToolExecution{data: data, receipt: receipt, outcome: "ok"}
+			if err != nil {
+				executed.outcome = loopToolError(err)
+				executed.correction = &modelToolCorrection{Code: executed.outcome}
+			}
+			inv.executed = &executed
 		}
-		if strings.HasPrefix(inv.normalized.Operation, "file.") {
-			data, receipt, err = r.file(t, inv)
-		} else {
-			data, receipt, err = r.coreTool(t, inv)
-		}
-		if loopBusy(err) {
-			r.mu.Lock()
-			t.toolCalls--
-			inv.counted = false
-			r.mu.Unlock()
-			return err
-		}
-		if err != nil {
-			outcome = loopToolError(err)
-			correction = &modelToolCorrection{Code: outcome}
-		}
+		data, receipt, outcome, correction = inv.executed.data, inv.executed.receipt, inv.executed.outcome, inv.executed.correction
 		// Native effects and reads already checked their own authority. This
 		// final gate also covers unlocked result formatting/catalogue disclosure.
-		if err == nil {
+		if outcome == "ok" {
 			if e := r.recheckTool(t, inv); e != nil {
 				data = nil
 				outcome, correction = "denied", &modelToolCorrection{Code: "denied"}
@@ -308,7 +316,7 @@ func (r *loopRuntime) recordToolResult(t *loopTurn, inv *loopInvocation, outcome
 	}
 	_, err = r.service.commitLoop(context.Background(), uuid.NewV7(), ledger.LoopSubmission{Schema: 6, Actor: "core", Origin: t.origin, TurnID: t.id, Operation: "tool.result", ExpectedVersion: 1, Arguments: ledger.LoopToolResultArguments{ToolID: id, StartedSequence: int64(inv.started.first + 1), Outcome: outcome, ResultObject: ref, EffectReceiptSequence: int64(receipt)}}, nil)
 	if err == nil {
-		inv.started = nil
+		inv.started, inv.executed = nil, nil
 	}
 	return raw, err
 }

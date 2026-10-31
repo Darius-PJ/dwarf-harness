@@ -246,6 +246,70 @@ func TestSubmitDuplicateIgnoresCurrentDrafts(t *testing.T) {
 	assertSnapshot(t, s.LogDir(), before)
 }
 
+func TestSubmitAtWritesOnlyAtTheExpectedTail(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newColony(t, testDeps(nil))
+	id1, id2, id3 := commandID(clockMS(0), 1), commandID(clockMS(0), 2), commandID(clockMS(0), 3)
+	a, b := submissionOf("a"), submissionOf("b")
+
+	// At the log's tail SubmitAt is Submit.
+	first, err := s.SubmitAt(ctx, s.Durable(), commandDraft(t, id1, a), []ledger.Draft{sample("effect")})
+	if want := (Receipt{Committed: appender.Committed{First: 1, Last: 2}}); err != nil || first != want {
+		t.Fatalf("SubmitAt at the tail = %+v, %v; want %+v", first, err, want)
+	}
+	if got := commandsOnce(t, s); len(got) != 1 || got[id1] != first.Committed {
+		t.Errorf("commands in the log = %v, want %s at %+v", got, id1, first.Committed)
+	}
+
+	// Another writer's commit moves the tail. A group planned at the old tail
+	// is refused before its drafts are judged, even drafts that Submit would
+	// refuse, and so is a tail the log has not reached; nothing is written.
+	planned := s.Durable()
+	mustAppend(t, s, sample("another writer"))
+	durable := s.Durable()
+	before := snapshot(t, s.LogDir())
+	for _, row := range []struct {
+		name   string
+		tail   uint64
+		drafts []ledger.Draft
+	}{
+		{"behind", planned, []ledger.Draft{sample("effect")}},
+		{"ahead", durable + 1, []ledger.Draft{sample("effect")}},
+		{"behind with a refused draft", planned, []ledger.Draft{padded(ledger.MaxRecordBytes)}},
+	} {
+		_, err := s.SubmitAt(ctx, row.tail, commandDraft(t, id2, a), row.drafts)
+		if !errors.Is(err, ErrTailMoved) || errors.Is(err, appender.ErrRefused) {
+			t.Errorf("%s: SubmitAt = %v, want ErrTailMoved without ErrRefused", row.name, err)
+		}
+	}
+	assertSnapshot(t, s.LogDir(), before)
+	if s.Durable() != durable {
+		t.Errorf("Durable after the refusals = %d, want %d", s.Durable(), durable)
+	}
+	// The refusal recorded no identity: Submit writes the same command anew.
+	if got, want := mustSubmit(t, s, commandDraft(t, id2, a), sample("effect")), (Receipt{Committed: appender.Committed{First: durable + 1, Last: durable + 2}}); got != want {
+		t.Errorf("Submit after the refusal = %+v, want %+v", got, want)
+	}
+
+	// A logged command answers as for Submit whatever the tail.
+	before = snapshot(t, s.LogDir())
+	if got, err := s.SubmitAt(ctx, planned, commandDraft(t, id1, a), nil); err != nil || got != (Receipt{Committed: first.Committed, Duplicate: true}) {
+		t.Errorf("SubmitAt of a logged command at an old tail = %+v, %v; want a duplicate of %+v", got, err, first.Committed)
+	}
+	if _, err := s.SubmitAt(ctx, planned, commandDraft(t, id1, b), nil); !errors.Is(err, appender.ErrRefused) || !errors.Is(err, ErrCommandMismatch) || errors.Is(err, ErrTailMoved) {
+		t.Errorf("SubmitAt of another digest under a logged ID at an old tail = %v, want ErrRefused and ErrCommandMismatch", err)
+	}
+
+	// A ctx that ended before the writer turn answers its own error.
+	ended, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := s.SubmitAt(ended, planned, commandDraft(t, id3, a), nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("SubmitAt with an ended ctx = %v, want context.Canceled", err)
+	}
+	assertSnapshot(t, s.LogDir(), before)
+}
+
 func TestSubmitRefusesFutureCommandID(t *testing.T) {
 	ctx := context.Background()
 	// The clock reads a time with a part of a millisecond, so that the limit

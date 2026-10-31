@@ -38,6 +38,11 @@ var (
 	// the one refusal that depends on the clock: the same request may
 	// succeed later.
 	ErrCommandTime = errors.New("ledgerstore: command ID is dated after the commit time allows")
+	// ErrTailMoved reports a SubmitAt whose expected tail is no longer the
+	// log's tail: another writer committed first. Unlike appender.ErrRefused
+	// it says nothing about the request, which may succeed once the caller
+	// has planned it again at the new tail. Nothing was written.
+	ErrTailMoved = errors.New("ledgerstore: the log's tail moved")
 )
 
 // Receipt is Submit's result.
@@ -130,8 +135,9 @@ func segmentCatalogue(logDir string) ([]segInfo, error) {
 
 // Submit commits command, a ledger.command v1 draft, and drafts, the draft
 // records of the command's effect, as one commit with the command record
-// first, unless the log already holds the command's ID. It is the only way to
-// write a ledger.command record: Append refuses one.
+// first, unless the log already holds the command's ID. It and its
+// conditional form SubmitAt are the only way to write a ledger.command
+// record: Append refuses one.
 //
 // The command ID is the caller's immutable UUIDv7, and the record keeps a
 // digest of the caller's canonical submission bytes, which must cover
@@ -157,7 +163,27 @@ func segmentCatalogue(logDir string) ([]segInfo, error) {
 // old ID, and ends either with ctx's error and nothing written. Once the
 // commit is being written it completes whatever ctx does. Any other error
 // from reading the log also means that nothing was written.
+//
+// Submit appends at whatever the tail is when it gets the turn. A caller
+// whose drafts hold a fact that a later commit can falsify, such as a
+// predicted sequence or a clock sample that another writer's commit time may
+// overtake, uses SubmitAt instead.
 func (s *Store) Submit(ctx context.Context, command ledger.Draft, drafts []ledger.Draft) (Receipt, error) {
+	return s.submit(ctx, command, drafts, nil)
+}
+
+// SubmitAt is Submit, except that it writes only while the log's tail is the
+// sequence tail. Under the writer turn, after the command lookup and before
+// it validates any draft, it refuses with ErrTailMoved, which names the
+// actual tail, if another commit has landed since. A duplicate or a
+// mismatched command therefore answers as for Submit whatever the tail. The
+// refusal writes nothing, uses no sequence and leaves the command ID free.
+func (s *Store) SubmitAt(ctx context.Context, tail uint64, command ledger.Draft, drafts []ledger.Draft) (Receipt, error) {
+	return s.submit(ctx, command, drafts, &tail)
+}
+
+// submit is Submit, and with a tail SubmitAt.
+func (s *Store) submit(ctx context.Context, command ledger.Draft, drafts []ledger.Draft, tail *uint64) (Receipt, error) {
 	cmd, err := s.checkCommand(command)
 	if err != nil {
 		return Receipt{}, err
@@ -188,6 +214,8 @@ func (s *Store) Submit(ctx context.Context, command ledger.Draft, drafts []ledge
 		return Receipt{}, fmt.Errorf("%w: %w: %s", appender.ErrRefused, ErrCommandMismatch, cmd.CommandID)
 	case found:
 		return Receipt{Committed: appender.Committed{First: prior.first, Last: prior.last}, Duplicate: true}, nil
+	case tail != nil && s.chain.Seq != *tail:
+		return Receipt{}, fmt.Errorf("%w: expected tail %d, log tail %d", ErrTailMoved, *tail, s.chain.Seq)
 	}
 
 	if err := s.checkCatalogue(drafts); err != nil {

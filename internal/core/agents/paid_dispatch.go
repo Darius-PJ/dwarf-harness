@@ -8,6 +8,7 @@ import (
 	"net"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 )
 
@@ -140,33 +141,48 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 			present = gate.text
 		}
 		s.mu.Lock()
-		if e := s.paidUsableLocked(exchangeCtx); e != nil {
-			s.mu.Unlock()
-			return e
-		}
-		current, found, e := s.loadPaid(exchangeCtx, request.AttemptID, s.p.through, ledger.Digest{})
-		if e == nil && (!found || current.version != request.ExpectedVersion) {
-			e = ErrRevision
-		}
-		var sample int64
-		if e == nil {
-			sample, e = s.dispatchGuardsLocked(exchangeCtx, current, p)
-		}
-		if e == nil && paidContainsSecret(p.body, key) {
-			e = ErrInvalid
-		}
-		if e != nil {
-			s.mu.Unlock()
-			return e
-		}
-		effect := ledger.RuntimePaidDispatchIntent{AttemptID: request.AttemptID, ExpectedVersion: current.version, Version: current.version + 1, AuthorityVersion: s.p.authority, RequestSHA256: current.admission.Quote.RequestSHA256, QuoteSHA256: current.admission.Quote.QuoteSHA256, Credential: current.admission.Request.Credential, ObservedUTCNS: sample}
-		drafts, e := paidDrafts(request.CommandID, sub, effect, ledger.TypeRuntimePaidDispatchIntent, "sent", effect.Version, request.AttemptID, current.admission.ParentTurnID, nil)
-		before := s.p.through
-		if e == nil {
-			out.IntentReceipt, e = s.submitPaidLocked(exchangeCtx, drafts)
-		}
-		if e == nil {
-			sent = out.IntentReceipt.EffectSequence > before
+		// The intent carries its clock sample, which another writer's later
+		// commit time would raise the review floor above. A refusal at a moved
+		// tail re-plans from the refresh with a fresh sample, inside this
+		// borrow and exchange; nothing was written and nothing was sent.
+		var current paidAttempt
+		var e error
+		for attempt := 1; ; attempt++ {
+			if e = s.paidUsableLocked(exchangeCtx); e != nil {
+				break
+			}
+			var found bool
+			current, found, e = s.loadPaid(exchangeCtx, request.AttemptID, s.p.through, ledger.Digest{})
+			if e == nil && (!found || current.version != request.ExpectedVersion) {
+				e = ErrRevision
+			}
+			var sample int64
+			if e == nil {
+				sample, e = s.dispatchGuardsLocked(exchangeCtx, current, p)
+			}
+			if e == nil && paidContainsSecret(p.body, key) {
+				e = ErrInvalid
+			}
+			if e != nil {
+				break
+			}
+			effect := ledger.RuntimePaidDispatchIntent{AttemptID: request.AttemptID, ExpectedVersion: current.version, Version: current.version + 1, AuthorityVersion: s.p.authority, RequestSHA256: current.admission.Quote.RequestSHA256, QuoteSHA256: current.admission.Quote.QuoteSHA256, Credential: current.admission.Request.Credential, ObservedUTCNS: sample}
+			var drafts []ledger.Draft
+			drafts, e = paidDrafts(request.CommandID, sub, effect, ledger.TypeRuntimePaidDispatchIntent, "sent", effect.Version, request.AttemptID, current.admission.ParentTurnID, nil)
+			before := s.p.through
+			if e == nil {
+				out.IntentReceipt, e = s.submitPaidGroupLocked(exchangeCtx, drafts, true)
+			}
+			if e == nil {
+				sent = out.IntentReceipt.EffectSequence > before
+			}
+			if !errors.Is(e, ledgerstore.ErrTailMoved) {
+				break
+			}
+			if attempt == tailAttempts {
+				e = &BusyError{Reason: "ledger_tail"}
+				break
+			}
 		}
 		s.mu.Unlock()
 		if e != nil || !sent {

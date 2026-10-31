@@ -177,6 +177,30 @@ func (s *Service) lookupPaid(ctx context.Context, id uuid.UUID, authorize func()
 	return match, err
 }
 
+// relookupPaidLocked re-enters a paid producer at its refresh after the store
+// refused its group at a moved tail. Under mu throughout, it refreshes,
+// searches only the commits after the prefix already searched for id, and
+// repeats the caller's authority check. The caller then repeats its guards
+// with a fresh clock sample and builds its drafts again.
+func (s *Service) relookupPaidLocked(ctx context.Context, id uuid.UUID, authorize func() error) (commandMatch, error) {
+	var match commandMatch
+	searched := s.p.through
+	if err := s.usableLocked(ctx); err != nil {
+		return match, err
+	}
+	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+		return match, err
+	}
+	var err error
+	if searched < s.p.through {
+		match, err = s.findCommand(ctx, id, searched, s.p.through)
+	}
+	if err == nil {
+		err = authorize()
+	}
+	return match, err
+}
+
 type paidEncoding interface {
 	Encode() (json.RawMessage, error)
 }
@@ -223,9 +247,25 @@ func paidDrafts(id uuid.UUID, sub ledger.PaidSubmission, effect paidEncoding, ty
 	return drafts, nil
 }
 
-// submitPaidLocked preflights the exact bytes with Open's reducer, then installs
-// only through refreshLocked after the whole group has become durable.
+// tailAttempts bounds a producer's submissions of one group whose facts the
+// ledger's tail can falsify: each refusal at a moved tail re-plans at the new
+// tail, and the last one answers BusyError{ledger_tail} with nothing written.
+const tailAttempts = 3
+
+// submitPaidLocked writes a group that no later commit can falsify:
+// reconciliation, observation and settlement tolerate commits between their
+// refresh and their write.
 func (s *Service) submitPaidLocked(ctx context.Context, drafts []ledger.Draft) (PaidReceipt, error) {
+	return s.submitPaidGroupLocked(ctx, drafts, false)
+}
+
+// submitPaidGroupLocked preflights the exact bytes with Open's reducer, then
+// installs only through refreshLocked after the whole group has become
+// durable. A conditional group, one that carries a clock sample judged
+// against the review floor, is written only at the tail it was planned at: at
+// a moved tail it returns the store's ledgerstore.ErrTailMoved and writes
+// nothing.
+func (s *Service) submitPaidGroupLocked(ctx context.Context, drafts []ledger.Draft, conditional bool) (PaidReceipt, error) {
 	_, _, _, original, _, _, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil || original == nil {
 		return PaidReceipt{}, ErrInvalid
@@ -246,7 +286,12 @@ func (s *Service) submitPaidLocked(ctx context.Context, drafts []ledger.Draft) (
 	if err != nil {
 		return PaidReceipt{}, err
 	}
-	committed, err := s.store.Submit(ctx, drafts[0], drafts[1:])
+	var committed ledgerstore.Receipt
+	if conditional {
+		committed, err = s.store.SubmitAt(ctx, s.p.through, drafts[0], drafts[1:])
+	} else {
+		committed, err = s.store.Submit(ctx, drafts[0], drafts[1:])
+	}
 	if err != nil {
 		if errors.Is(err, appender.ErrUncertain) || errors.Is(err, appender.ErrPoisoned) {
 			s.poisoned = true

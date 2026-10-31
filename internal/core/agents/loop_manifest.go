@@ -297,43 +297,11 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 			}
 		}
 	}
-	if reason := s.loopBoundary(t); reason != "" {
-		r.noteStop(t, reason)
+	ending, err := r.endNative(t)
+	if err != nil {
+		return err
 	}
-	r.mu.Lock()
-	reason, final := t.reason, t.answer
-	cancelID := t.cancelID
-	r.mu.Unlock()
-	outcome, native := "finished", "released"
-	if reason == "" {
-		reason = "natural_stop"
-	} else {
-		final = nil
-		outcome = "failed"
-		if reason == "cancelled" {
-			outcome, native = "cancelled", "cancelled"
-		} else if reason == "shutdown" {
-			outcome, native = "interrupted", "interrupted"
-		}
-	}
-	endingID := t.endingID
-	if native == "cancelled" {
-		if cancelID == (uuid.UUID{}) {
-			return ErrIntegrity
-		}
-		endingID = cancelID
-		receipt, err := s.CancelTurn(context.Background(), bindingOf(t.origin), TurnCancellation{CommandID: cancelID, TurnID: t.id, ExpectedVersion: 1})
-		if err != nil {
-			return err
-		}
-		r.mu.Lock()
-		t.cancelReceipt = &receipt
-		r.mu.Unlock()
-	} else {
-		if _, err := s.EndTurn(context.Background(), TurnEnding{CommandID: endingID, TurnID: t.id, ExpectedVersion: 1, Outcome: native}); err != nil {
-			return err
-		}
-	}
+	outcome, reason, final, endingID := ending.outcome, ending.reason, ending.final, ending.endingID
 	manifest, err := r.manifest(t, outcome, reason, final)
 	if err != nil {
 		return err
@@ -369,6 +337,70 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 	}
 	t.live.close(liveState, final, nil)
 	return nil
+}
+
+// loopEnding is a finishing turn's committed native ending, as loop.end and
+// the turn's manifest record it.
+type loopEnding struct {
+	outcome, reason string
+	final           *ledger.ObjectRef
+	endingID        uuid.UUID
+}
+
+// endNative returns the turn's committed native ending, first committing it
+// unless an earlier attempt of this finish already has. The ending is kept on
+// the turn and decides the outcome from then on: a finish re-entered after a
+// busy step skips this step, and a stop reason that arrives after the ending
+// changes nothing.
+func (r *loopRuntime) endNative(t *loopTurn) (loopEnding, error) {
+	r.mu.Lock()
+	committed := t.ending
+	r.mu.Unlock()
+	if committed != nil {
+		return *committed, nil
+	}
+	s := r.service
+	if reason := s.loopBoundary(t); reason != "" {
+		r.noteStop(t, reason)
+	}
+	r.mu.Lock()
+	reason, final := t.reason, t.answer
+	cancelID := t.cancelID
+	r.mu.Unlock()
+	outcome, native := "finished", "released"
+	if reason == "" {
+		reason = "natural_stop"
+	} else {
+		final = nil
+		outcome = "failed"
+		if reason == "cancelled" {
+			outcome, native = "cancelled", "cancelled"
+		} else if reason == "shutdown" {
+			outcome, native = "interrupted", "interrupted"
+		}
+	}
+	ending := loopEnding{outcome: outcome, reason: reason, final: final, endingID: t.endingID}
+	var receipt *ScopedReceipt
+	if native == "cancelled" {
+		if cancelID == (uuid.UUID{}) {
+			return loopEnding{}, ErrIntegrity
+		}
+		ending.endingID = cancelID
+		cancelled, err := s.CancelTurn(context.Background(), bindingOf(t.origin), TurnCancellation{CommandID: cancelID, TurnID: t.id, ExpectedVersion: 1})
+		if err != nil {
+			return loopEnding{}, err
+		}
+		receipt = &cancelled
+	} else if _, err := s.EndTurn(context.Background(), TurnEnding{CommandID: ending.endingID, TurnID: t.id, ExpectedVersion: 1, Outcome: native}); err != nil {
+		return loopEnding{}, err
+	}
+	r.mu.Lock()
+	if receipt != nil {
+		t.cancelReceipt = receipt
+	}
+	t.ending = &ending
+	r.mu.Unlock()
+	return ending, nil
 }
 
 func decodeLoopJSON(raw []byte, out any) error {
