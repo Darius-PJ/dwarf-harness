@@ -141,6 +141,10 @@ func (s *Service) reviewSources(b ledger.ReviewBinding, sources map[int64]ledger
 			var scoped ledger.PrivateScopedRevision
 			scoped, err = ledger.DecodePrivateScopedRevision(source.Payload)
 			revision = ledger.PrivateRevision(scoped)
+		case ledger.TypePrivateTurnRevision:
+			var turn ledger.PrivateTurnRevision
+			turn, err = ledger.DecodePrivateTurnRevision(source.Payload)
+			revision = ledger.PrivateRevision(turn)
 		default:
 			return ErrInvalid
 		}

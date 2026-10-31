@@ -652,7 +652,7 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 				return commandMatch{found: true, command: command}, true
 			}
 			if uint64(len(v.Drafts)) == e.last-e.first+1 {
-				g, scoped, review, paid, _, err := decodeFamily(v.Drafts, e.first)
+				g, scoped, review, paid, _, loop, err := decodeFamily(v.Drafts, e.first)
 				occurrences := 0
 				for _, draft := range v.Drafts {
 					if draft.Type == ledger.TypeCommand {
@@ -664,8 +664,8 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 						}
 					}
 				}
-				if err == nil && occurrences == 1 && (g != nil || scoped != nil || review != nil || paid != nil) {
-					return commandMatch{found: true, command: command, group: g, scoped: scoped, review: review, paid: paid}, true
+				if err == nil && occurrences == 1 && (g != nil || scoped != nil || review != nil || paid != nil || loop != nil) {
+					return commandMatch{found: true, command: command, group: g, scoped: scoped, review: review, paid: paid, loop: loop}, true
 				}
 			}
 		}
@@ -687,7 +687,7 @@ func (h *historyIndex) putCommand(id uuid.UUID, after, through uint64, match com
 		v := historyCommandValue{Command: command}
 		// Unconsumed families need only the F0 identity, not arbitrary
 		// payloads that this service neither interprets nor retains.
-		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil {
+		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil || match.loop != nil {
 			v.Drafts = draftsOf(commit)
 		}
 		e.first, e.last = commit.First, commit.Last
@@ -732,6 +732,8 @@ func (h *historyIndex) source(sequence int64, through uint64, colony uuid.UUID) 
 			_, err = ledger.DecodePrivateRevision(record.Payload)
 		case ledger.TypePrivateScopedRevision:
 			_, err = ledger.DecodePrivateScopedRevision(record.Payload)
+		case ledger.TypePrivateTurnRevision:
+			_, err = ledger.DecodePrivateTurnRevision(record.Payload)
 		case ledger.TypeRuntimeTaskChanged:
 			_, err = ledger.DecodeRuntimeTaskChanged(record.Payload)
 		}
@@ -776,7 +778,7 @@ func (h *historyIndex) warmSources(commit ledger.Commit) {
 		return
 	}
 	for _, record := range commit.Records {
-		if record.Type == ledger.TypePrivateRevision || record.Type == ledger.TypePrivateScopedRevision || len(record.BodyRefs) != 0 {
+		if record.Type == ledger.TypePrivateRevision || record.Type == ledger.TypePrivateScopedRevision || record.Type == ledger.TypePrivateTurnRevision || len(record.BodyRefs) != 0 {
 			h.putSource(record, commit.First, commit.Last, commit.Last)
 		}
 	}

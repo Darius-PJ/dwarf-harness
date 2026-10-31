@@ -40,6 +40,7 @@ type paidObservationObject struct {
 	OutputStarted            bool                 `json:"output_started"`
 	Complete                 bool                 `json:"complete"`
 	MessageObjects           []ledger.ObjectRef   `json:"message_objects"`
+	ReplayObject             *ledger.ObjectRef    `json:"replay_object,omitempty"`
 	Error                    *paidResponseError   `json:"error,omitempty"`
 	UnknownEventTypes        []string             `json:"unknown_event_types"`
 	UnknownEventTypeOverflow int                  `json:"unknown_event_type_overflow"`
@@ -103,6 +104,10 @@ func (o *paidObservationObject) UnmarshalJSON(raw []byte) error {
 			SHA256 string `json:"sha256"`
 			Bytes  int64  `json:"bytes"`
 		} `json:"message_objects"`
+		ReplayObject *struct {
+			SHA256 string `json:"sha256"`
+			Bytes  int64  `json:"bytes"`
+		} `json:"replay_object"`
 	}
 	wire.plain = (*plain)(o)
 	if err := json.Unmarshal(raw, &wire); err != nil {
@@ -120,6 +125,14 @@ func (o *paidObservationObject) UnmarshalJSON(raw []byte) error {
 			return ErrIntegrity
 		}
 		o.MessageObjects = append(o.MessageObjects, ledger.ObjectRef{SHA256: digest, Bytes: ref.Bytes})
+	}
+	o.ReplayObject = nil
+	if ref := wire.ReplayObject; ref != nil {
+		digest, err := ledger.ParseDigest(ref.SHA256)
+		if err != nil || ref.Bytes <= 0 || ref.Bytes > maxObjectBytes {
+			return ErrIntegrity
+		}
+		o.ReplayObject = &ledger.ObjectRef{SHA256: digest, Bytes: ref.Bytes}
 	}
 	return nil
 }
@@ -293,7 +306,7 @@ func (s *Service) publishPaidObservation(ctx context.Context, a paidAttempt, evi
 		return nil, err
 	}
 	o := paidObservation(a, evidence)
-	if !paidCaptureAllowed(o, evidence.Stream.Blocks, key) {
+	if !paidCaptureAllowed(o, evidence.Stream.Blocks, key) || len(evidence.Stream.Replay) > maxObjectBytes || evidence.Stream.Replay != nil && len(key) > 0 && (bytes.Contains(evidence.Stream.Replay, key) || paidContainsSecret(evidence.Stream.Replay, key)) {
 		o = paidCaptureFailure(a, o.OutputStarted, "capture_refused")
 	} else {
 		result := derivePaidResult(a, o)
@@ -303,6 +316,14 @@ func (s *Service) publishPaidObservation(ctx context.Context, a paidAttempt, evi
 				o = paidCaptureFailure(a, o.OutputStarted, "output_capture_failed")
 			} else {
 				o.MessageObjects = objects
+				if evidence.Stream.Replay != nil {
+					digest, err := scope.publishObject(evidence.Stream.Replay)
+					if err != nil {
+						o = paidCaptureFailure(a, o.OutputStarted, "output_capture_failed")
+					} else {
+						o.ReplayObject = &ledger.ObjectRef{SHA256: digest, Bytes: int64(len(evidence.Stream.Replay))}
+					}
+				}
 			}
 		}
 	}

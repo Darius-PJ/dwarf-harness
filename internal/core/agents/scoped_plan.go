@@ -166,13 +166,17 @@ func (p *projection) pruneScoped() {
 	}
 }
 
-func scopedRevisions(g *privateGroup, scoped *scopedGroup) (submissionIDs, []ledger.PrivateRevision, []int) {
+func scopedRevisions(g *privateGroup, scoped *scopedGroup, loop *loopGroup) (submissionIDs, []ledger.PrivateRevision, []int) {
 	if g != nil {
 		return g.ids, g.revisions, g.revisionIndexes
 	}
 	if scoped != nil && scoped.revision != nil {
 		p := *scoped.revision
 		return scoped.ids, []ledger.PrivateRevision{{Scope: p.Scope, ExpectedVersion: p.ExpectedVersion, Revision: p.Revision, Changes: slices.Clone(p.Changes)}}, []int{scoped.effectIndex}
+	}
+	if loop != nil && loop.revision != nil {
+		p := *loop.revision
+		return loop.ids, []ledger.PrivateRevision{{Scope: p.Scope, ExpectedVersion: p.ExpectedVersion, Revision: p.Revision, Changes: slices.Clone(p.Changes)}}, []int{1}
 	}
 	return submissionIDs{}, nil, nil
 }

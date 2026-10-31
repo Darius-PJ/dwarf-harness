@@ -21,7 +21,7 @@ func (s *Service) loadReview(ctx context.Context, id uuid.UUID, through uint64) 
 	var slot reviewSlot
 	found := false
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		_, scoped, g, _, _, err := decodeFamily(draftsOf(c), c.First)
+		_, scoped, g, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return err
 		}

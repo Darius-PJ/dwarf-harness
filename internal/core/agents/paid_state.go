@@ -178,7 +178,7 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 	var a paidAttempt
 	routes := map[uuid.UUID]ledger.Profile{}
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		_, _, _, g, _, err := decodeFamily(draftsOf(c), c.First)
+		_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil || g == nil {
 			return err
 		}
@@ -218,7 +218,7 @@ func (s *Service) paidHistoryTotal(ctx context.Context, scope ledger.PaidScope, 
 	attempts := map[uuid.UUID]paidAttempt{}
 	routes := map[uuid.UUID]ledger.Profile{}
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		_, _, _, g, _, err := decodeFamily(draftsOf(c), c.First)
+		_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil || g == nil {
 			return err
 		}

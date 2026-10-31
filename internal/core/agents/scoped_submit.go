@@ -404,11 +404,11 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 }
 
 func (s *Service) preflightScoped(ctx context.Context, input scopedInput, drafts []ledger.Draft) (*scopedGroup, error) {
-	private, group, review, paid, registration, err := decodeFamily(drafts, s.p.through+1)
+	private, group, review, paid, registration, loop, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil {
 		return nil, err
 	}
-	if private != nil || review != nil || paid != nil || registration != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin {
+	if private != nil || review != nil || paid != nil || registration != nil || loop != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin {
 		return nil, ErrInvalid
 	}
 	if _, err := s.planScoped(ctx, group, s.p.through+1); err != nil {

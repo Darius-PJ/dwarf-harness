@@ -236,6 +236,15 @@ func modelSchemaJSON(s *modelSchema) json.RawMessage {
 		}{"object", properties, required, false})
 	}
 	switch s.kind {
+	case "boolean":
+		return json.RawMessage(`{"type":"boolean"}`)
+	case "array":
+		// Result-only containers; argument normalization keeps its existing
+		// explicitly declared sorted-ID array rules.
+		return modelJSON(struct {
+			Type  string          `json:"type"`
+			Items json.RawMessage `json:"items"`
+		}{"array", modelSchemaJSON(s.element)})
 	case "version":
 		return json.RawMessage(`{"type":"integer","const":1}`)
 	case "integer":

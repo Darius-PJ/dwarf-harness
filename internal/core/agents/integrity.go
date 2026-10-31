@@ -70,11 +70,11 @@ func refuseInitialMarkdown(path privateScope) error {
 func (s *Service) scopeHistory(ctx context.Context, ids submissionIDs, scope string, through, revision uint64, visit func(string, Head, string) error) (uint64, error) {
 	var current uint64
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		g, scoped, _, _, _, err := decodeFamily(draftsOf(c), c.First)
+		g, scoped, _, _, _, loop, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return err
 		}
-		origin, revisions, indexes := scopedRevisions(g, scoped)
+		origin, revisions, indexes := scopedRevisions(g, scoped, loop)
 		if origin.agent != ids.agent || origin.session != ids.session || scope == "context" && origin.context != ids.context {
 			return nil
 		}
@@ -160,14 +160,14 @@ func (s *Service) inspectOpen(ctx context.Context) (Reconciliation, error) {
 		}
 		scopes[k] = check
 	}
-	// One global traversal preserves every occurrence in both revision families.
+	// One global traversal preserves every occurrence in all revision families.
 	// Reports are collected per scope to retain sorted-scope/occurrence order.
 	err := s.scan(ctx, 0, s.p.through, func(c ledger.Commit) error {
-		g, scoped, _, _, _, err := decodeFamily(draftsOf(c), c.First)
+		g, scoped, _, _, _, loop, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return err
 		}
-		ids, revisions, indexes := scopedRevisions(g, scoped)
+		ids, revisions, indexes := scopedRevisions(g, scoped, loop)
 		for i, rev := range revisions {
 			k := keyFor(ids, rev.Scope)
 			st, check := s.p.scopes[k], scopes[k]

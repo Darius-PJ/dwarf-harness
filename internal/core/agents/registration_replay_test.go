@@ -229,7 +229,7 @@ func TestRegistrationOriginalRequestPreflight(t *testing.T) {
 	}
 	// The attack is valid on its own: only the original-request binding can
 	// refuse it. A malformed codec or unrelated state guard is not this proof.
-	_, _, _, _, g, err := decodeFamily(changed, before+1)
+	_, _, _, _, g, _, err := decodeFamily(changed, before+1)
 	if err != nil || g == nil {
 		t.Fatalf("mutation was not codec-valid: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestRegistrationGroupRules(t *testing.T) {
 			f, commits := openRegistrationFixture(t, row.prefix)
 			before := f.store.Durable()
 			d := row.mutate(t, scopedGoldenDrafts(commits[row.prefix]))
-			_, _, _, _, g, err := decodeFamily(d, before+1)
+			_, _, _, _, g, _, err := decodeFamily(d, before+1)
 			if err == nil && g != nil {
 				_, err = f.service.planRegistration(ctx, g, before+1)
 			}

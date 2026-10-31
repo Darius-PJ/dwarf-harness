@@ -92,7 +92,7 @@ func FuzzPaidGroupReplay(f *testing.F) {
 			valid = byte(value) == 0
 		}
 		fixture.service.mu.Lock()
-		_, _, _, g, _, err := decodeFamily(d, before+1)
+		_, _, _, g, _, _, err := decodeFamily(d, before+1)
 		if err == nil {
 			_, err = fixture.service.planPaid(context.Background(), g, before+1)
 		}

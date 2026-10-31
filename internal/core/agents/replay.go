@@ -317,11 +317,11 @@ func (s *Service) readCommittedRange(ctx context.Context, first, last uint64, ch
 // It never turns that single occurrence into a global command-search proof.
 func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expected *scopedInput) (commandMatch, error) {
 	d := draftsOf(c)
-	g, scoped, review, paid, registration, err := decodeFamily(d, c.First)
+	g, scoped, review, paid, registration, loop, err := decodeFamily(d, c.First)
 	if err != nil {
 		return commandMatch{}, err
 	}
-	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration}
+	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}
 	switch {
 	case g != nil:
 		match.command, match.found = g.command, true
@@ -333,6 +333,8 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 		match.command, match.found = paid.command, true
 	case registration != nil:
 		match.command, match.found = registration.command, true
+	case loop != nil:
+		match.command, match.found = loop.command, true
 	}
 	if expected != nil {
 		if !match.found || match.command.CommandID != expected.id || match.scoped == nil {
@@ -351,11 +353,17 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 			return commandMatch{}, inconsistent(c.First, "reused command ID")
 		}
 	}
+	if match.found {
+		if err := s.loopEffectAvailable(ctx, match.command.CommandID, c.First-1); err != nil {
+			return commandMatch{}, err
+		}
+	}
 	var privateNext map[scopeKey]*scopeState
 	var scopedNext scopedPlan
 	var reviewNext reviewPlan
 	var paidNext paidPlan
 	var registrationNext registrationPlan
+	var loopNext loopPlan
 	if g != nil {
 		privateNext, err = s.p.planGroup(g, c.First)
 		if err != nil {
@@ -396,6 +404,15 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 				return commandMatch{}, err
 			}
 			return commandMatch{}, inconsistent(c.First, "invalid registration transition: "+err.Error())
+		}
+	}
+	if loop != nil {
+		loopNext, err = s.planLoop(ctx, loop, c.First)
+		if err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, err
+			}
+			return commandMatch{}, inconsistent(c.First, "invalid loop transition")
 		}
 	}
 	// Stage the shared envelope effects too: a later invalid closure in an
@@ -458,6 +475,9 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 	if registration != nil {
 		s.p.installRegistration(registrationNext)
 	}
+	if loop != nil {
+		s.p.installLoop(loopNext)
+	}
 	s.p.maxCommand = maxCommand
 	maps.Copy(s.p.scratches, scratches)
 	for _, record := range c.Records {
@@ -467,6 +487,7 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 	s.history.advance(s.p.through, c.Last, d)
 	s.history.warmSources(c)
 	s.p.through = c.Last
+	s.loop.notify()
 	return match, nil
 }
 
@@ -478,6 +499,7 @@ type commandMatch struct {
 	review       *reviewGroup
 	paid         *paidGroup
 	registration *registrationGroup
+	loop         *loopGroup
 }
 
 func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
@@ -504,11 +526,11 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 			if found.found {
 				return inconsistent(c.First, "duplicate command")
 			}
-			g, scoped, review, paid, registration, err := decodeFamily(draftsOf(c), c.First)
+			g, scoped, review, paid, registration, loop, err := decodeFamily(draftsOf(c), c.First)
 			if err != nil {
 				return err
 			}
-			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration}
+			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}
 			matched = c
 		}
 		return nil

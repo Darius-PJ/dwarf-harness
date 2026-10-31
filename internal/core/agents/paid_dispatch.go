@@ -14,6 +14,18 @@ import (
 // DispatchPaid grants a send only to this invocation's freshly committed intent.
 // Receipt lookup, recovery and BoundCall never reconstruct that permission.
 func (s *Service) DispatchPaid(ctx context.Context, request PaidDispatch) (PaidDispatchOutcome, error) {
+	return s.dispatchPaid(ctx, request, nil, false)
+}
+
+// DispatchPaidStreaming shares the one-shot dispatch and settlement path. The
+// observer runs inside the pinned credential borrow, after literal protection.
+// Only this entrance, the bound turn loop's, also persists the provider's
+// replay object at capture; DispatchPaid's observations stay unchanged.
+func (s *Service) DispatchPaidStreaming(ctx context.Context, request PaidDispatch, observe TextObserver) (PaidDispatchOutcome, error) {
+	return s.dispatchPaid(ctx, request, observe, true)
+}
+
+func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observe TextObserver, retainReplay bool) (PaidDispatchOutcome, error) {
 	var out PaidDispatchOutcome
 	if s == nil {
 		return out, ErrNotBound
@@ -63,11 +75,17 @@ func (s *Service) DispatchPaid(ctx context.Context, request PaidDispatch) (PaidD
 		err = ErrUnavailable
 	}
 	var p *preparedPaid
+	reserved := 0
+	ownsToken := false
+	if s.loop != nil {
+		reserved = len(s.loop.paidTokens)
+		_, ownsToken = s.loop.paidTokens[request.AttemptID]
+	}
 	if err == nil {
 		p = s.paid.calls[request.AttemptID]
 		if p == nil || p.closed || a.sequence <= s.openedThrough {
 			err = ErrUnavailable
-		} else if p.inUse || len(s.paid.exchanges) >= s.paid.limits.MaxActivePaid {
+		} else if p.inUse || !ownsToken && len(s.paid.exchanges)+reserved >= s.paid.limits.MaxActivePaid {
 			err = &BusyError{Reason: "paid_active"}
 		}
 	}
@@ -92,6 +110,9 @@ func (s *Service) DispatchPaid(ctx context.Context, request PaidDispatch) (PaidD
 		return out, err
 	}
 	exchangeCtx, cancel := context.WithTimeout(ctx, s.paid.limits.DispatchTimeout)
+	if s.loop != nil {
+		delete(s.loop.paidTokens, request.AttemptID)
+	}
 	s.paid.exchanges[request.AttemptID] = cancel
 	p.inUse = true
 	s.mu.Unlock()
@@ -101,6 +122,7 @@ func (s *Service) DispatchPaid(ctx context.Context, request PaidDispatch) (PaidD
 		s.mu.Lock()
 		delete(s.paid.exchanges, request.AttemptID)
 		s.p.book.releasePreparation(a.origin, p.reservation.scopes, buffer)
+		s.loop.notify()
 		p.inUse = false
 		if sent || p.closeRequested {
 			s.releasePaidPreparation(p)
@@ -111,6 +133,12 @@ func (s *Service) DispatchPaid(ctx context.Context, request PaidDispatch) (PaidD
 	// Borrow before the final transition. Revocation removes authorization under
 	// mu, then releases the secret outside it, avoiding a lock-order inversion.
 	err = secret.WithBytes(func(key []byte) error {
+		gate := pinnedTextGate{value: key, observe: observe}
+		defer gate.close()
+		var present func(string) error
+		if observe != nil {
+			present = gate.text
+		}
 		s.mu.Lock()
 		if e := s.paidUsableLocked(exchangeCtx); e != nil {
 			s.mu.Unlock()
@@ -152,9 +180,9 @@ func (s *Service) DispatchPaid(ctx context.Context, request PaidDispatch) (PaidD
 		if response != nil {
 			switch current.profile.Provider {
 			case "anthropic":
-				evidence, e = providers.ReadAnthropicResponse(response, providerProfile(current.profile), p.compiled)
+				evidence, e = providers.ReadAnthropicResponseStreaming(response, providerProfile(current.profile), p.compiled, present)
 			case "openai":
-				evidence, e = providers.ReadOpenAIResponse(response, providerProfile(current.profile), p.compiled)
+				evidence, e = providers.ReadOpenAIResponseStreaming(response, providerProfile(current.profile), p.compiled, present)
 			default:
 				e = providers.ErrUnsupported
 			}
@@ -169,6 +197,21 @@ func (s *Service) DispatchPaid(ctx context.Context, request PaidDispatch) (PaidD
 		}
 		if !evidence.Stream.Complete && exchangeCtx.Err() != nil {
 			evidence.ErrorClass = providers.ClassifyTransportError(exchangeCtx.Err())
+		}
+		if evidence.Stream.Complete && !evidence.Stream.ContentError && e == nil {
+			if gate.finish() != nil {
+				evidence.Stream.ContentError = true
+			}
+		}
+		if gate.failed {
+			evidence.Stream.ContentError = true
+			evidence.Stream.Blocks = nil
+			evidence.Stream.Replay = nil
+			evidence.ErrorClass = "protocol_error"
+			evidence.ErrorBody = []byte(`{"error":{"type":"capture_refused","message":"Provider detail unavailable at the capture boundary."}}`)
+		}
+		if !retainReplay {
+			evidence.Stream.Replay = nil
 		}
 		out.ObservedPaidCall, e = s.publishPaidObservation(context.Background(), current, evidence, key)
 		return e

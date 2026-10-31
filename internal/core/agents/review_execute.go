@@ -325,8 +325,9 @@ func (s *Service) prepareReviewLocked(ctx context.Context, input reviewInput, so
 		var scoped *scopedGroup
 		var paid *paidGroup
 		var registration *registrationGroup
-		private, scoped, group, paid, registration, err = decodeFamily(drafts, s.p.through+1)
-		if err == nil && (private != nil || scoped != nil || paid != nil || registration != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin) {
+		var loop *loopGroup
+		private, scoped, group, paid, registration, loop, err = decodeFamily(drafts, s.p.through+1)
+		if err == nil && (private != nil || scoped != nil || paid != nil || registration != nil || loop != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin) {
 			err = ErrInvalid
 		}
 	}

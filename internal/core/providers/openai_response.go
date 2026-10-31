@@ -16,6 +16,12 @@ func ReadOpenAIResponse(response *http.Response, p Profile, c Compiled) (Respons
 	return readOpenAIResponse(response, p, c, nil)
 }
 
+// ReadOpenAIResponseStreaming emits decoded text through observe while
+// independently draining usage. Credential protection belongs to the caller.
+func ReadOpenAIResponseStreaming(response *http.Response, p Profile, c Compiled, observe func(string) error) (ResponseEvidence, error) {
+	return readOpenAIResponse(response, p, c, observe)
+}
+
 func readOpenAIResponse(response *http.Response, p Profile, c Compiled, observe func(string) error) (ResponseEvidence, error) {
 	var result ResponseEvidence
 	if p.Provider != "openai" {

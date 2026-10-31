@@ -24,17 +24,19 @@
 //
 // Open consumes complete committed groups, including intervening workspace
 // records, and reconstructs identities, private heads, scratch state, grants,
-// tasks, capacity, usage, occupied work and review request slots. F3-10, F3-11
-// and F3-12 are decoded as distinct families before applying private changes
-// to the same scope head.
+// tasks, capacity, usage, occupied work and review request slots. F3-10, F3-11,
+// F3-12 and F3-15 are decoded as distinct families before applying private
+// changes to the same scope head.
 // Initial replay uses checked Reader closure: Open and OpenPaid return actual
 // replay-close failures, including at EOF or segment transitions, possibly
 // joined with a read or reducer error. Normal EOF alone remains success.
 // Open verifies ledger-selected objects and inspects materializations. It reads
 // no clock, appends no record and dispatches no work. Reconciliation.PendingWork
 // reports unreleased admissions as recovery_pending without inferring an
-// outcome or releasing their holds. The reserved core/state.json path is
-// neither read nor written, and directory contents confer no identity.
+// outcome or releasing their holds; Reconciliation.PendingLoops reports
+// unmatched F3-15 turn bindings and tool starts the same way, as metadata only.
+// The reserved core/state.json path is neither read nor written, and directory
+// contents confer no identity.
 //
 // # Transitions and receipts
 //
@@ -191,14 +193,15 @@
 // AdmitLocal holds a local slot, bytes and one unit for a concrete file effect.
 // BeginLocal rechecks current authority, assignment and dedicated scratch at
 // dispatch and consumes that held unit once. External classes have no producer.
-// BeginLocal, EndLocal and EndTurn have no production caller yet; ticket 15's
-// executor will supply dispatch and proven effect endings.
+// The bound turn loop below is the production caller of BeginLocal, EndLocal
+// and EndTurn; no other entrance dispatches local work.
 //
 // Host endings bind the original work, not a replacement origin or target.
 // Agent CancelTurn selects its own current turn.cancel chain, which may differ
 // from the admission grant; the owner derives that grant and accepts no supplied
 // selection. Reassignment fences the old Agent entrance but does not prevent
-// owner or host endings. A turn may end once every child has an ending record:
+// owner or host endings. A turn may end once every child has an ending record,
+// counting F3-11 local work, F3-13 paid attempts and F3-15 tool starts:
 // unknown is an ending, but retains its existing local and unit accounting.
 // Unknown may also end undispatched local work; it releases nothing.
 // TurnStatus distinguishes dispatched and ended work and exposes no executor.
@@ -483,11 +486,12 @@
 // cannot release a hold or clear a violation. Acknowledgement retires the pinned
 // profile for the colony's lifetime without refunding actual cost.
 //
-// Every paid child needs an ending before its turn can end. An unknown result
-// ends that child but keeps its hold. Reconciliation lists held attempts and all
-// credential versions still authorized without in-memory bytes, including their
-// nonsecret source locators. An unfamiliar financial interpretation preserves
-// exposure instead of inventing a zero charge or making historical Open fail.
+// Every paid child, like every F3-15 tool child, needs an ending before its
+// turn can end. An unknown result ends that child but keeps its hold.
+// Reconciliation lists held attempts and all credential versions still
+// authorized without in-memory bytes, including their nonsecret source
+// locators. An unfamiliar financial interpretation preserves exposure instead
+// of inventing a zero charge or making historical Open fail.
 //
 // PaidAttemptStatus, PaidCommandStatus and PaidBudgetStatus return owned
 // snapshots through a declared ledger sequence, never a permit to send. Agent
@@ -678,7 +682,9 @@
 //
 // Output field order is schema:1, kind:"paid_output", attempt_id, origin,
 // parent_turn_id, block_index, chunk_index, block. Text blocks are {kind:"text",
-// text}; local tools are {kind:"local_tool_call",id,name,input}; opaque blocks are
+// text}; local tools are {kind:"local_tool_call",id,name,input}, or the
+// untrusted {kind:"local_tool_request",id,name,arguments_text} the turn loop
+// normalizes before any effect; opaque blocks are
 // {kind:"opaque_provider",provider,model,artifact_kind,payload}. Thinking joins
 // thinking/signature exactly; redacted_thinking retains the complete raw JSON
 // block, including extensions. OpenAI reasoning uses responses_reasoning opaque
@@ -692,11 +698,12 @@
 // parent_turn_id, request_sha256, provider_request_id?, provider_message_id?,
 // model?, http_status, headers, stop_reason?, stop_sequence?, stop_details?,
 // served_tier?, tool_usage?, raw_usage_start?, raw_usage_final?, raw_usage_merged?,
-// output_started, complete, message_objects, error?, unknown_event_types,
-// unknown_event_type_overflow, content_blocks, content_error, profile_violation,
-// error_class?. Question marks mark omitted empty fields. Raw usage preserves
-// null/absence and merged map keys sort lexically. Headers are sorted lowercase
-// {name,values} from the provider allowlist only; errors are
+// output_started, complete, message_objects, replay_object?, error?,
+// unknown_event_types, unknown_event_type_overflow, content_blocks,
+// content_error, profile_violation, error_class?. Question marks mark omitted
+// empty fields. Raw usage preserves null/absence and merged map keys sort
+// lexically. Headers are sorted lowercase {name,values} from the provider
+// allowlist only; errors are
 // {type,message,details?,request_id?,code?,param?}. OpenAI request identity comes
 // from x-request-id, not Anthropic's request-id; published summaries disclose
 // only its presence, not account or header values.
@@ -718,13 +725,23 @@
 // header, arbitrary response header, raw SSE or partial/refused text is persisted.
 //
 // ReadPaidObject selects only the recorded input or result objects of an attempt,
-// including prior corrected evidence. Owner reads are passive; Agent reads need
-// the exact originating agent/session/context and current private.read covering
-// all four context slots (continuation, handoff, memory, transcript) as one target.
+// including prior corrected evidence, and the replay object a verified selected
+// observation of that attempt names. That observation must match the attempt's
+// origin, parent turn, request digest and model and be complete without a
+// content error. Owner reads are passive; Agent reads need the exact
+// originating agent/session/context and current private.read covering all
+// four context slots (continuation, handoff, memory, transcript) as one target.
 // A memory-only grant cannot read a whole exchange. Missing, unrelated and
 // other-origin objects have the same denial. MaxBytes is at most 1 MiB; physical
 // read reservations bound allocation. Authority is rechecked after I/O, returned
 // bytes are owned, and no read samples a clock, charges or appends a record.
+//
+// The replay object is StreamResult.Replay as the provider reader assembled it.
+// Only DispatchPaidStreaming, the bound turn loop's entrance, publishes it at
+// capture, after the pinned-secret scan and the 1 MiB object bound and before
+// hashing; it is omitted when the reader produced none, and DispatchPaid's
+// observations stay unchanged. It is never re-serialized from output or opaque
+// display blocks.
 //
 // # Paid operating and measured-cost limits
 //
@@ -736,8 +753,9 @@
 // seven days after verification unless installation chooses otherwise. A stale
 // keep-alive connection leaves unknown exposure, without retry. The default
 // 120-second dispatch deadline is for a small drill, not maximal generation.
-// Haiku 4.5 refusals never infer zero charge; Opus/Sonnet prior-tool history is
-// refused before admission because its thinking-artifact replay is unsupported.
+// Haiku 4.5 refusals never infer zero charge. Opus/Sonnet structured prior-tool
+// history is still refused before admission; only the stored replay form of
+// the bound turn loop carries their prior tool calls.
 // Core's PaidLimits.MaxRequestBytes has a default and hard maximum of 512 KiB
 // for every provider's sealed body, below the providers compiler's 1 MiB guard.
 // The shared 1 MiB SSE line/event cap includes the entire OpenAI terminal response
@@ -811,4 +829,135 @@
 // MaxDeclarations (default 1024) counts all declarations, including withdrawals.
 // Revisions need no new slot; lowered producer limits do not impede replay or
 // matching retries. These are admission bounds, not measured heap capacity.
+//
+// # Bound turn loop
+//
+// EnableTurnLoop starts this incarnation's single scheduler for the host's
+// immutable LoopContextSettings: binding, route and expected version,
+// credential scope, output ceiling, display title, task binding, timeout and a
+// TurnPolicy template. The host supplies every policy value; none defaults and
+// none is model-controlled. Repeating identical options is a no-op; different
+// options return ErrCommandMismatch. Bindings recovered by Open stay in
+// Reconciliation.PendingLoops and are never scheduled, resumed or executed.
+//
+// OpenSession returns the session.Session of one registered agent and
+// execution session; its commands may name any context of that pair.
+// message.send is StartTurn's admitted-or-busy entrance: a busy start retains
+// nothing, and a start that fails before loop.bind ends its native turn
+// released and binds nothing. Its result names the loop.bind receipt and the
+// runtime.turn_bound effect. turn.cancel acknowledges only after the turn's
+// recorded ending and names the native turn.cancel receipt and its
+// runtime.work_ended effect; retrying the command returns the same sequences.
+// turn.status and context.status are queries without receipts, and
+// promotion.request stays the owner's unavailable RequestPromotion path.
+// Closing a Session detaches only its views; Service.Close stops the scheduler
+// after draining every running turn to a recorded ending, interrupted unless a
+// cancellation was already requested.
+//
+// One scheduler goroutine visits de-duplicated rings of ready agents, then
+// their ready contexts, and runs one model call or one tool call per selection
+// outside Service.mu. Workers are bounded by admitted turns; a dormant context
+// has no goroutine, timer or channel, and one timer tracks the earliest active
+// deadline from the guarded clock. Before each selection and each effect the
+// order is: cancellation, shutdown, lost authority (turn, model call, route,
+// credential or a selected source) or integrity; then the deadline or an
+// exhausted counter; then unresolved required results; then a natural finish.
+// A response requesting more tools than remain, or leaving no model call to
+// return their results, stops loop_limit before any of them runs.
+//
+// The scheduler claims a paid-exchange token, shared with ordinary dispatch
+// under PaidLimits.MaxActivePaid, in ring order before Prepare and AdmitPaid,
+// so a paid hold exists only where a send can proceed. Busy from a local or
+// paid entrance parks the turn as waiting_resource, with no tool result,
+// model-visible error or counter use, until a release wakes it. Each model call
+// is its own prepared, admitted and sealed attempt with a full inclusive hold:
+// tool definitions, replayed history and retained thinking count once as
+// input, and reasoning stays inside output. A reserved attempt that a stopping
+// turn never sent ends released_unsent; a sent one ends only on evidence, an
+// unknown ending keeps its hold, and nothing is resent automatically.
+//
+// F3-15 records every bound turn: loop.bind after the native admission,
+// tool.begin before any tool effect, tool.result after it and loop.end after
+// the native ending. loop.end appends one transcript manifest through
+// private.turn_revision on the context's shared private head, so every
+// private-head consumer reads all three revision types. finished and failed
+// end the native turn released, cancelled ends it through CancelTurn and
+// interrupted (shutdown) ends it interrupted. Receipt and effect sequences are
+// read back, never predicted, and command IDs are unique across all six
+// submission families. Later turns render earlier manifests only as prior
+// owner input and completed answers.
+//
+// Each new turn's input names the display titles of the agent's other admitted
+// active contexts, sorted by context ID, and nothing else about them.
+//
+// # Model tools and catalogue
+//
+// The model sees nine fixed versioned functions, including tools_discover_v1
+// and tools_invoke_v1 over a closed ten-entry catalogue without promotion.
+// Every call is normalized first: a renderable correction is a static result
+// using one tool count and no model call, while unrenderable arguments stop
+// the turn. The authorizing chain is the byte-smallest qualifying current leaf;
+// it is rechecked after unlocked work and immediately before disclosure, so a
+// revoked chain yields the fixed denied result even after its native effect
+// committed. Unknown or inaccessible operations and targets, and passive
+// requests without a qualifying chain, are journaled as unrecognized with the
+// same fixed denied result. Discovery filters, counts and pages with one chain
+// and records it as grant_id; an entry only another chain authorizes is not
+// listed, although exact invocation checks its own chain.
+//
+// tool_result names the actual native receipt: local.end for file tools, and
+// the one native command's receipt for atomic operations and reads. A definite
+// refusal before commit (denied, unavailable, conflict, too_large, workspace
+// busy or native invalid_argument) omits it only when a global command lookup
+// proves the pre-minted command absent; Core never submits that command later,
+// and Open reports one that appears as an integrity issue. Results are closed
+// {schema,tool_id,status,data|error} objects within MaxResultBytes, and errors
+// carry only a code, field and allowed form.
+//
+// File tools open os.Root on the freshly validated writer or task scratch,
+// then a root at the authorized prefix. Path components named .git in any
+// case, links, reparse points and irregular entries are refused. Writes use a
+// same-directory exclusive temporary file, flush, a rooted rename and a digest
+// readback; new files are owner-only and existing modes are kept. A turn's
+// writer holds Writer.Lease for each write; at turn end Core commits the
+// observed scratch and merges a temporary scratch back, recording
+// scratch_pending if that fails. This is a scoped trusted-host tool, not
+// containment against a hostile same-user process.
+//
+// # Live text, secrets and replay
+//
+// DispatchPaidStreaming shares DispatchPaid's single dispatcher and adds a
+// TextObserver for decoded text deltas only. Inside the pinned credential
+// borrow an incremental gate holds back up to len(secret)-1 bytes across
+// deltas, so a literal split over any number of callbacks never reaches a
+// view; on a match it closes presentation, refuses capture with a fixed
+// nonsecret reason and keeps the billing evidence. Live text is provisional,
+// bounded by MaxLiveBytes per turn, attached atomically at its high-water mark
+// and copied to at most eight nonblocking subscriptions of 64 chunks of at most
+// 4 KiB; a full subscription closes with reattach_required. It never becomes
+// the durable answer: a finished turn selects a final-message manifest of its
+// last complete validated answer's text objects.
+//
+// After credential revocation releases the pinned secret, only closed producer
+// metadata (fixed refusals, reference manifests and the final-message manifest)
+// is published without a live scan. Content-bearing objects, such as owner
+// input and tool requests and results, are refused, and a started turn ends
+// failed with authority_lost rather than recovery_pending.
+//
+// A continuation sends the stored replay bytes once, byte exact, as the
+// assistant replay member, followed by one tool_result per call in call order.
+// Core first reads the replay object through ReadPaidObject for the same
+// attempt and checks its observation's origin, parent turn, request digest,
+// provider and model against the source record.
+//
+// # Turn loop limits
+//
+// providers.Request has no thinking or effort controls, so the static C3 route
+// sends none. Replay of Anthropic signed or redacted thinking and of OpenAI
+// encrypted reasoning is proven only against loopback streams carrying those
+// artifacts; whether the providers accept the replayed bytes is unproved.
+// TurnPolicy values are host safety settings, not performance bounds, and
+// loopback runs prove local mechanics only. Restart never resumes a turn or
+// re-executes a started tool; mid-turn crash and cancellation-race proof
+// belongs to ticket 16.
 package agents

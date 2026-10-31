@@ -64,6 +64,12 @@ func ReadAnthropicResponse(response *http.Response, p Profile, c Compiled) (Resp
 	return readAnthropicResponse(response, p, c, nil)
 }
 
+// ReadAnthropicResponseStreaming emits decoded text through observe while
+// independently draining usage. Credential protection belongs to the caller.
+func ReadAnthropicResponseStreaming(response *http.Response, p Profile, c Compiled, observe func(string) error) (ResponseEvidence, error) {
+	return readAnthropicResponse(response, p, c, observe)
+}
+
 func readAnthropicResponse(response *http.Response, p Profile, c Compiled, observe func(string) error) (ResponseEvidence, error) {
 	var result ResponseEvidence
 	if p.Provider != "anthropic" {

@@ -77,7 +77,7 @@ func FuzzReviewGroupReplay(f *testing.F) {
 			valid = byte(value) == 0
 		}
 		fixture.service.mu.Lock()
-		_, _, g, _, _, err := decodeFamily(d, before+1)
+		_, _, g, _, _, _, err := decodeFamily(d, before+1)
 		if err == nil {
 			_, err = fixture.service.planReview(context.Background(), g, before+1)
 		}

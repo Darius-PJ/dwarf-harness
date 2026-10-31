@@ -384,7 +384,7 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 		sequence := prior.evidence[ref.SHA256]
 		var receipt PaidReceipt
 		err = s.scan(ctx, sequence-3, sequence, func(c ledger.Commit) error {
-			_, _, _, g, _, e := decodeFamily(draftsOf(c), c.First)
+			_, _, _, g, _, _, e := decodeFamily(draftsOf(c), c.First)
 			if e == nil && g != nil && c.Last == sequence {
 				receipt, e = copyPaidReceipt(g, s.p.through)
 			}

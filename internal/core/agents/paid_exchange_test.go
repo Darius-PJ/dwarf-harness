@@ -39,7 +39,7 @@ func paidSSE(model, start, final, text, stop, details string, complete bool) str
 	return b.String()
 }
 
-func paidServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+func paidServer(t testing.TB, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	server := httptest.NewUnstartedServer(handler)
 	server.EnableHTTP2 = true

@@ -75,11 +75,11 @@ func decodeRegistrationGroup(d []ledger.Draft, first uint64) (*registrationGroup
 }
 
 func (s *Service) preflightRegistration(ctx context.Context, input registrationInput, drafts []ledger.Draft) error {
-	private, scoped, review, paid, g, err := decodeFamily(drafts, s.p.through+1)
+	private, scoped, review, paid, g, loop, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil {
 		return err
 	}
-	if private != nil || scoped != nil || review != nil || paid != nil || g == nil || g.command.CommandID != input.id || g.command.SubmissionSHA256 != input.digest || !sameScopedValue(g.receipt.Submission, input.sub) {
+	if private != nil || scoped != nil || review != nil || paid != nil || loop != nil || g == nil || g.command.CommandID != input.id || g.command.SubmissionSHA256 != input.digest || !sameScopedValue(g.receipt.Submission, input.sub) {
 		return inconsistent(s.p.through+1, "registration preflight request binding")
 	}
 	_, err = s.planRegistration(ctx, g, s.p.through+1)

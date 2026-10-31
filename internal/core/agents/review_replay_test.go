@@ -64,7 +64,7 @@ func reviewPreflight(t *testing.T, f *serviceFixture, d []ledger.Draft) error {
 		t.Fatal(err)
 	}
 	defer baseline.Close()
-	_, _, g, _, _, err := decodeFamily(d, f.service.p.through+1)
+	_, _, g, _, _, _, err := decodeFamily(d, f.service.p.through+1)
 	if err == nil && g == nil {
 		err = ErrInvalid
 	}

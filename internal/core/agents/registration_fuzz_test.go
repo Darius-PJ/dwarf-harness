@@ -81,7 +81,7 @@ func FuzzRegistrationGroupReplay(f *testing.F) {
 			rewriteRegistrationReceipt(t, d, r)
 		}
 		fixture.service.service.mu.Lock()
-		_, _, _, _, group, err := decodeFamily(d, fixture.before+1)
+		_, _, _, _, group, _, err := decodeFamily(d, fixture.before+1)
 		if err == nil && group != nil {
 			_, err = fixture.service.service.planRegistration(context.Background(), group, fixture.before+1)
 		}

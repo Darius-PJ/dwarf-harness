@@ -63,7 +63,7 @@ func (s *Service) selectRegistration(ctx context.Context, kind string, id uuid.U
 		}
 	}
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		_, _, _, _, g, err := decodeFamily(draftsOf(c), c.First)
+		_, _, _, _, g, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil || g == nil {
 			return err
 		}

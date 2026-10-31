@@ -34,6 +34,7 @@ func normalizeFixture(t testing.TB, name, raw string) modelToolInvocation {
 
 func TestModelToolNormalizationIdentity(t *testing.T) {
 	t.Parallel()
+	t.Run("native_identity", testLoopNormalizationIdentity)
 	base := normalizeFixture(t, "file_read_v1", modelReadArguments())
 	for _, raw := range []string{
 		strings.Replace(modelReadArguments(), `"max_bytes":64`, `"max_bytes":"64"`, 1),

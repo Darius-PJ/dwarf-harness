@@ -68,9 +68,9 @@
 // types also retain the hold and mark a profile violation. Unknown
 // null/plain-zero usage extensions and zero-only tool-usage objects do not
 // introduce charges.
-// Private observer-aware readers emit decoded text only; observer failure
-// disables presentation and content publication but still drains independent
-// terminal usage. Existing exported reader entrances pass no observer.
+// Streaming response entrances emit decoded text deltas before any credential
+// check; callers supply that gate. Observer errors disable presentation and
+// content publication while independent terminal usage still drains.
 //
 // OpenAI's eight classes split cached, uncached, write and generated units into
 // short/long bands. The versioned kguard schema selects short through 272000 and

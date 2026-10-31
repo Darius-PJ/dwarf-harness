@@ -57,6 +57,7 @@ func (s *Service) reserveScopedBudgetLocked(reservation *scopedReservation, inpu
 }
 
 func (s *Service) releaseScopedLocked(reservation *scopedReservation) {
+	released := len(reservation.scopes) != 0 || reservation.process
 	if len(reservation.scopes) != 0 {
 		s.p.book.releasePreparation(reservation.origin, reservation.scopes, reservation.budget)
 	}
@@ -64,6 +65,9 @@ func (s *Service) releaseScopedLocked(reservation *scopedReservation) {
 		s.preparing--
 	}
 	*reservation = scopedReservation{origin: reservation.origin}
+	if released {
+		s.loop.notify()
+	}
 }
 
 func (s *Service) consumeScopedReservationLocked(reservation *scopedReservation) {
@@ -71,6 +75,7 @@ func (s *Service) consumeScopedReservationLocked(reservation *scopedReservation)
 		unit := budgetPreparation{hold: [4]int64{0, 0, 0, reservation.budget.hold[unitExposure]}}
 		s.p.book.releasePreparation(reservation.origin, reservation.scopes, unit)
 		reservation.budget.hold[unitExposure] = 0
+		s.loop.notify()
 	}
 	reservation.budget.operationBytes = nil
 }

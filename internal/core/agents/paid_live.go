@@ -226,15 +226,15 @@ func paidDrafts(id uuid.UUID, sub ledger.PaidSubmission, effect paidEncoding, ty
 // submitPaidLocked preflights the exact bytes with Open's reducer, then installs
 // only through refreshLocked after the whole group has become durable.
 func (s *Service) submitPaidLocked(ctx context.Context, drafts []ledger.Draft) (PaidReceipt, error) {
-	_, _, _, original, _, err := decodeFamily(drafts, s.p.through+1)
+	_, _, _, original, _, _, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil || original == nil {
 		return PaidReceipt{}, ErrInvalid
 	}
 	if s.deps.beforeSubmit != nil {
 		drafts = s.deps.beforeSubmit(drafts)
 	}
-	p, scoped, review, g, registration, err := decodeFamily(drafts, s.p.through+1)
-	if err == nil && (p != nil || scoped != nil || review != nil || registration != nil || g == nil || g.command != original.command || !sameScopedValue(g.receipt.Submission, original.receipt.Submission)) {
+	p, scoped, review, g, registration, loop, err := decodeFamily(drafts, s.p.through+1)
+	if err == nil && (p != nil || scoped != nil || review != nil || registration != nil || loop != nil || g == nil || g.command != original.command || !sameScopedValue(g.receipt.Submission, original.receipt.Submission)) {
 		err = ErrInvalid
 	}
 	if err == nil {

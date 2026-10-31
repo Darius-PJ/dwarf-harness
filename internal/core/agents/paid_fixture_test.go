@@ -187,7 +187,7 @@ func (f *paidFixture) drafts(t testing.TB, effect paidPayload) []ledger.Draft {
 func (f *paidFixture) append(t testing.TB, effect paidPayload) ledger.RuntimePaidReceipt {
 	t.Helper()
 	d := f.drafts(t, effect)
-	_, _, _, g, _, err := decodeFamily(d, f.store.Durable()+1)
+	_, _, _, g, _, _, err := decodeFamily(d, f.store.Durable()+1)
 	if err == nil {
 		_, err = f.service.planPaid(context.Background(), g, f.store.Durable()+1)
 	}
@@ -280,7 +280,7 @@ func (f *paidFixture) refuse(t *testing.T, d []ledger.Draft) {
 	defer baseline.Close()
 	baseline.p.paidHotLimit = f.service.p.paidHotLimit
 	baseline.p.prunePaid()
-	_, _, _, g, _, err := decodeFamily(d, before+1)
+	_, _, _, g, _, _, err := decodeFamily(d, before+1)
 	if err == nil {
 		_, err = f.service.planPaid(context.Background(), g, before+1)
 	}

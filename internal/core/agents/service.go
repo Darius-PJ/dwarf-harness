@@ -32,6 +32,7 @@ type serviceDeps struct {
 	afterCommit             func(Receipt)
 	afterScopedSubmit       func()
 	afterScopedCommit       func(ScopedReceipt) error
+	afterLoopCommit         func(ledger.RuntimeLoopReceipt)
 	afterReviewCommit       func(ReviewReceipt) error
 	afterRegistrationCommit func(RegistrationReceipt) error
 	reviewClock             func() (int64, error)
@@ -90,6 +91,11 @@ type projection struct {
 	paidAttempts         map[uuid.UUID]paidAttempt
 	paidHotLimit         int
 	paidChildren         map[uuid.UUID]int
+	toolChildren         map[uuid.UUID]int
+	loopTurns            map[uuid.UUID]loopTurnState
+	loopTools            map[uuid.UUID]loopToolState
+	maxLoopEffect        uuid.UUID
+	maxLoopTool          uuid.UUID
 	paidCapabilities     map[string]ledger.Digest
 	paidTariffs          map[string]ledger.Digest
 	retiredProfiles      map[ledger.Digest]bool
@@ -114,6 +120,7 @@ func newProjection() projection {
 		paidRoutes:   map[uuid.UUID]ledger.RuntimePaidRouteConfigured{}, paidCredentialScopes: map[uuid.UUID]paidCredentialScope{},
 		paidCredentials: map[uuid.UUID]ledger.RuntimeCredentialChanged{},
 		paidAttempts:    map[uuid.UUID]paidAttempt{}, paidChildren: map[uuid.UUID]int{},
+		toolChildren: map[uuid.UUID]int{}, loopTurns: map[uuid.UUID]loopTurnState{}, loopTools: map[uuid.UUID]loopToolState{},
 		paidHotLimit:     128,
 		paidCapabilities: map[string]ledger.Digest{}, paidTariffs: map[string]ledger.Digest{}, retiredProfiles: map[ledger.Digest]bool{},
 	}
@@ -138,6 +145,8 @@ type Service struct {
 	openedThrough uint64
 	reviewSample  int64
 	paid          *paidRuntime
+	loop          *loopRuntime
+	loopClosing   bool
 }
 
 func Open(ctx context.Context, store privateStore, colonyDir string, limits Limits) (*Service, Reconciliation, error) {
@@ -200,10 +209,18 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 		return nil, report, err
 	}
 	report.UnboundCredentials = s.unboundCredentialViews()
+	report.PendingLoops = s.p.pendingLoopViews()
 	s.history.putAckCheckpoint(s.openedThrough, checkpoint)
 	return s, report, nil
 }
 func (s *Service) Close() error {
+	s.mu.Lock()
+	s.loopClosing = true
+	runtime := s.loop
+	s.mu.Unlock()
+	if runtime != nil {
+		runtime.shutdown()
+	}
 	s.mu.Lock()
 	first := !s.closed
 	s.closed = true
@@ -332,6 +349,9 @@ func privateConsumption() ledger.Consumption {
 		ledger.TypeRuntimePaidOverrunAcknowledged: {1}, ledger.TypeRuntimePaidReceipt: {1},
 		ledger.TypeRuntimeResourceRegistered: {1}, ledger.TypeRuntimeWorkDomainRegistered: {1},
 		ledger.TypeRuntimeDeclarationChanged: {1}, ledger.TypeRuntimeRegistrationReceipt: {1},
+		ledger.TypePrivateTurnRevision: {1}, ledger.TypeRuntimeTurnBound: {1},
+		ledger.TypeRuntimeToolStarted: {1}, ledger.TypeRuntimeToolResult: {1},
+		ledger.TypeRuntimeTurnResult: {1}, ledger.TypeRuntimeLoopReceipt: {1},
 	}
 }
 func isPrivateType(t string) bool {

@@ -165,6 +165,7 @@ type Reconciliation struct {
 	Issues, Completed  []IntegrityIssue
 	PendingWork        []WorkView
 	PendingPaid        []PaidAttemptView
+	PendingLoops       []LoopRecovery
 	UnboundCredentials []UnboundCredential
 }
 type RevisionError struct{ Expected, Current uint64 }
