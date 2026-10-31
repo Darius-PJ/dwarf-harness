@@ -2926,7 +2926,9 @@
 // when effect_command_id is absent and operation is neither invalid_argument
 // nor unrecognized: it is the leaf of the one current chain authorizing that
 // passive/catalogue disclosure. Those two invalid operations omit target,
-// grant_id and effect_command_id. Native mutating/accounted entrances require
+// grant_id and effect_command_id. A well-formed passive or catalogue request
+// that no current chain authorizes is recorded as unrecognized, like an
+// unknown one (D166). Native mutating/accounted entrances require
 // effect_command_id and omit grant_id, relying on the native authorization
 // record instead. Codec history-free checks cannot establish current authority.
 //
@@ -2935,7 +2937,11 @@
 // verifies that ending's work was admitted by that command. For atomic and
 // accounted read operations both name the one native command and its receipt.
 // Passive/correction results omit effect_receipt_sequence; when present it is
-// positive. A result's started_sequence selects its exact unmatched tool start.
+// positive. A result whose start carries effect_command_id omits it only for a
+// definite pre-commit refusal (never ok or unknown_effect), when that native
+// command was never committed; a native receipt later found for that command
+// ID is an integrity issue (D166). A result's started_sequence selects its
+// exact unmatched tool start.
 // No native command reuses the outer loop command ID.
 //
 // Current tool-result writer outcomes: ok, invalid_argument, denied, busy,
