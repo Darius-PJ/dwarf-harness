@@ -33,6 +33,11 @@
 // ErrFinished; an implementation error ends them when the turn's live limit is
 // exceeded or its ending cannot be recorded. Once a turn has ended, LiveText
 // returns its outcome and durable final-message reference, never the
-// provisional text. Closing a Session detaches its views; it neither cancels
-// turns nor stops Core.
+// provisional text. FinalText returns the durable answer text of a finished
+// turn of the view's own agent and session; every other turn, including an
+// unended or unfinished one, is refused alike. Closing a Session detaches its
+// views; it neither cancels turns nor stops Core.
+//
+// The seam has been exercised only in process, by the terminal and tests
+// against loopback providers; no live provider call has gone through it.
 package session

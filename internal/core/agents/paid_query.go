@@ -215,6 +215,27 @@ func (s *Service) paidCommandStatus(ctx context.Context, bound *submissionIDs, r
 func (s *Service) PaidBudgetStatus(ctx context.Context, request PaidBudgetLookup) (PaidBudgetView, error) {
 	return s.paidBudgetStatus(ctx, nil, request)
 }
+
+// CredentialScopeStatus is the owner's read of one scope's binding CAS state.
+func (s *Service) CredentialScopeStatus(ctx context.Context, request CredentialScopeLookup) (CredentialScopeView, error) {
+	if !validID(request.ScopeID) {
+		return CredentialScopeView{}, ErrInvalid
+	}
+	done, err := s.scopedQuery(ctx, nil)
+	if err != nil {
+		return CredentialScopeView{}, err
+	}
+	defer done()
+	scope := s.p.paidCredentialScopes[request.ScopeID]
+	view := CredentialScopeView{ScopeID: request.ScopeID, Provider: scope.provider, Version: scope.version, ActiveVersions: []uuid.UUID{}, ThroughSequence: s.p.through}
+	for id, credential := range s.p.paidCredentials {
+		if credential.ScopeID == request.ScopeID {
+			view.ActiveVersions = append(view.ActiveVersions, id)
+		}
+	}
+	slices.SortFunc(view.ActiveVersions, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	return view, nil
+}
 func (a *Agent) PaidBudgetStatus(ctx context.Context, request PaidBudgetLookup) (PaidBudgetView, error) {
 	if a == nil || a.service == nil {
 		return PaidBudgetView{}, ErrNotBound

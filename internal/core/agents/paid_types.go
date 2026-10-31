@@ -70,6 +70,21 @@ type CredentialRevocation struct {
 	ExpectedVersion                                int64
 	Provider                                       string
 }
+
+// CredentialScopeLookup names one credential scope for the owner's binding CAS.
+type CredentialScopeLookup struct{ ScopeID uuid.UUID }
+
+// CredentialScopeView reports what BindCredential checks: Version is the
+// ExpectedVersion a bind must name (zero for a scope with no history) and
+// ActiveVersions are the bound, unrevoked versions, sorted. It never carries a
+// source kind or locator.
+type CredentialScopeView struct {
+	ScopeID         uuid.UUID
+	Provider        string
+	Version         int64
+	ActiveVersions  []uuid.UUID
+	ThroughSequence uint64
+}
 type SpendTermsInput struct {
 	Enabled               bool
 	Mode, USD, PeriodKind string

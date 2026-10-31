@@ -111,4 +111,9 @@
 // its Core caller must apply the pinned-secret capture policy and the context's
 // artifact encoding limits. This package performs no artifact publication,
 // settlement, retry, tool execution or network call beyond an explicit Do.
+//
+// The bound turn loop has driven both adapters only against loopback TLS/SSE
+// with synthetic profiles; its multi-call tool loops have made no live
+// provider request. Loopback usage counters are fixture values, not provider
+// tokenization, and loopback latency is not provider latency.
 package providers

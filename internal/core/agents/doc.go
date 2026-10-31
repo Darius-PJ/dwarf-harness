@@ -521,6 +521,13 @@
 // in-flight borrows (at most DispatchTimeout for paid exchanges). After every
 // Core start the owner must bind a fresh version per scope; replay never
 // rehydrates a source. Repeated rotations in one start are allowed.
+// CredentialScopeStatus is the owner's read of one scope's binding CAS state:
+// provider, the version a bind must name as ExpectedVersion (zero for a scope
+// without history) and the sorted active versions, never a source kind or
+// locator. The dwarf-harness executable binds a fresh version at that version
+// on every launch and refuses a concurrent change without retrying; unless
+// revoke_previous_version names one, versions accumulate until
+// MaxCredentialVersions (colony-wide, default 64), beyond which a bind is busy.
 //
 // PrepareAnthropic and PrepareOpenAI take an explicit route, credential version,
 // parent turn and task binding. They select only their named provider and share
@@ -850,6 +857,11 @@
 // runtime.work_ended effect; retrying the command returns the same sequences.
 // turn.status and context.status are queries without receipts, and
 // promotion.request stays the owner's unavailable RequestPromotion path.
+// FinalText reads a finished turn's durable answer through the loop's own
+// final-message read, only for a turn result recorded for the Session's agent
+// and session and only with its context's current private.read chain;
+// another agent's turn, an unknown or unended turn, a turn without a final
+// message and a revoked source all return ErrDenied.
 // Closing a Session detaches only its views; Service.Close stops the scheduler
 // after draining every running turn to a recorded ending, interrupted unless a
 // cancellation was already requested.
@@ -960,4 +972,16 @@
 // loopback runs prove local mechanics only. Restart never resumes a turn or
 // re-executes a started tool; mid-turn crash and cancellation-race proof
 // belongs to ticket 16.
+//
+// No live provider request has been made through the turn loop, a Session or
+// the terminal: every turn ran against loopback TLS/SSE with synthetic
+// profiles, credentials and fixture usage counters, which are not provider
+// tokenization. This is neither C3 exit evidence nor a capacity, latency,
+// isolation or usefulness result; turn-loop timings are loopback mechanics
+// under the PaidLimits in force (MaxActivePaid 3, MaxPreparedPaid 16 by
+// default), with authority rechecked at every selection, effect and disclosure.
+// A MergeBack failure at turn end records failed with scratch_pending and no
+// final message, although the answer's paid text objects persist. A tool
+// result can be unavailable while its native effect committed, when
+// revocation refused publication; the model never sees that effect's facts.
 package agents

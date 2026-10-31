@@ -20,6 +20,7 @@ type Session interface {
 	Do(context.Context, Command) (CommandResult, error)
 	Since(context.Context, uint64, int) (EventPage, error)
 	LiveText(context.Context, uuid.UUID) (TextSnapshot, *TextSubscription, error)
+	FinalText(context.Context, uuid.UUID) (string, error)
 	Close()
 }
 

@@ -58,13 +58,13 @@ func (s *Service) loopGrant(ctx context.Context, origin ledger.Origin, operation
 func loopPrivateTarget(origin ledger.Origin) ledger.Resource {
 	return ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{"continuation", "handoff", "memory", "transcript"}}
 }
-func (r *loopRuntime) readPaid(t *loopTurn, attempt uuid.UUID, ref ledger.ObjectRef) ([]byte, error) {
-	grant, err := r.service.loopGrant(t.ctx, t.origin, "private.read", []ledger.Resource{loopPrivateTarget(t.origin)}, ref.Bytes)
+func (r *loopRuntime) readPaid(ctx context.Context, origin ledger.Origin, attempt uuid.UUID, ref ledger.ObjectRef) ([]byte, error) {
+	grant, err := r.service.loopGrant(ctx, origin, "private.read", []ledger.Resource{loopPrivateTarget(origin)}, ref.Bytes)
 	if err != nil {
 		return nil, err
 	}
-	agent := &Agent{service: r.service, ids: submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}}
-	return agent.ReadPaidObject(t.ctx, PaidObjectLookup{AttemptID: attempt, GrantID: grant, Object: ref, MaxBytes: maxObjectBytes})
+	agent := &Agent{service: r.service, ids: submissionIDs{origin.AgentID, origin.SessionID, origin.ContextID}}
+	return agent.ReadPaidObject(ctx, PaidObjectLookup{AttemptID: attempt, GrantID: grant, Object: ref, MaxBytes: maxObjectBytes})
 }
 
 func (r *loopRuntime) model(t *loopTurn) error {
@@ -143,7 +143,7 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	if !found || a.origin != t.origin || a.admission.ParentTurnID != t.id || a.profile.Provider != t.profile.Provider || a.profile.ModelID != t.profile.ModelID || a.result == nil || a.result.Kind != "usage" || a.result.EvidenceObject == nil {
 		return errLoopContent
 	}
-	raw, err := r.readPaid(t, call.id, *a.result.EvidenceObject)
+	raw, err := r.readPaid(t.ctx, t.origin, call.id, *a.result.EvidenceObject)
 	if err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	if json.Unmarshal(raw, &observation) != nil || observation.AttemptID != call.id || observation.Origin != t.origin || observation.ParentTurnID != t.id || observation.RequestSHA256 != a.admission.Quote.RequestSHA256 || observation.Model != t.profile.ModelID || !observation.Complete || observation.ContentError || observation.ReplayObject == nil {
 		return errLoopContent
 	}
-	replay, err := r.readPaid(t, call.id, *observation.ReplayObject)
+	replay, err := r.readPaid(t.ctx, t.origin, call.id, *observation.ReplayObject)
 	if err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	texts := []ledger.ObjectRef{}
 	lastBlock, lastChunk := -1, -1
 	for _, ref := range a.result.MessageObjects {
-		raw, err := r.readPaid(t, call.id, ref)
+		raw, err := r.readPaid(t.ctx, t.origin, call.id, ref)
 		if err != nil {
 			return err
 		}

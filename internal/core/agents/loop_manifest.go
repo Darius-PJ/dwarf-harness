@@ -477,7 +477,7 @@ func (r *loopRuntime) renderTranscript(ctx context.Context, t *loopTurn, raw []b
 				if err != nil {
 					return "", err
 				}
-				text, err := r.finalText(ctx, t, turn, ref)
+				text, err := r.finalText(ctx, t.origin, turn, ref)
 				if err != nil {
 					return "", err
 				}
@@ -493,7 +493,7 @@ func (r *loopRuntime) renderTranscript(ctx context.Context, t *loopTurn, raw []b
 	return rendered.String(), nil
 }
 
-func (r *loopRuntime) finalText(ctx context.Context, t *loopTurn, turn uuid.UUID, ref ledger.ObjectRef) (string, error) {
+func (r *loopRuntime) finalText(ctx context.Context, origin ledger.Origin, turn uuid.UUID, ref ledger.ObjectRef) (string, error) {
 	s := r.service
 	s.mu.Lock()
 	through := s.p.through
@@ -501,7 +501,7 @@ func (r *loopRuntime) finalText(ctx context.Context, t *loopTurn, turn uuid.UUID
 	selected := false
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
 		for _, record := range c.Records {
-			if record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == turn && record.AgentID == t.origin.AgentID && record.ExecutionSessionID == t.origin.SessionID && record.ContextID == t.origin.ContextID {
+			if record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == turn && record.AgentID == origin.AgentID && record.ExecutionSessionID == origin.SessionID && record.ContextID == origin.ContextID {
 				result, err := ledger.DecodeRuntimeTurnResult(record.Payload)
 				if err != nil {
 					return err
@@ -517,7 +517,7 @@ func (r *loopRuntime) finalText(ctx context.Context, t *loopTurn, turn uuid.UUID
 	if !selected {
 		return "", ErrDenied
 	}
-	raw, err := s.readLoopObject(ctx, t.origin, ref)
+	raw, err := s.readLoopObject(ctx, origin, ref)
 	if err != nil {
 		return "", err
 	}
@@ -530,7 +530,7 @@ func (r *loopRuntime) finalText(ctx context.Context, t *loopTurn, turn uuid.UUID
 		Model       string            `json:"model"`
 		TextObjects []json.RawMessage `json:"text_objects"`
 	}
-	if decodeLoopJSON(raw, &manifest) != nil || manifest.Schema != 1 || manifest.Kind != "final_message" || manifest.Origin != t.origin || manifest.TurnID != turn {
+	if decodeLoopJSON(raw, &manifest) != nil || manifest.Schema != 1 || manifest.Kind != "final_message" || manifest.Origin != origin || manifest.TurnID != turn {
 		return "", ErrIntegrity
 	}
 	var text strings.Builder
@@ -539,7 +539,7 @@ func (r *loopRuntime) finalText(ctx context.Context, t *loopTurn, turn uuid.UUID
 		if err != nil {
 			return "", err
 		}
-		raw, err := s.readLoopObject(ctx, t.origin, object)
+		raw, err := s.readLoopObject(ctx, origin, object)
 		if err != nil {
 			return "", err
 		}
@@ -553,7 +553,7 @@ func (r *loopRuntime) finalText(ctx context.Context, t *loopTurn, turn uuid.UUID
 			ChunkIndex   int           `json:"chunk_index"`
 			Block        paidTextBlock `json:"block"`
 		}
-		if decodeLoopJSON(raw, &output) != nil || output.Schema != 1 || output.Kind != "paid_output" || output.Origin != t.origin || output.ParentTurnID != turn || output.Block.Kind != "text" {
+		if decodeLoopJSON(raw, &output) != nil || output.Schema != 1 || output.Kind != "paid_output" || output.Origin != origin || output.ParentTurnID != turn || output.Block.Kind != "text" {
 			return "", ErrIntegrity
 		}
 		s.mu.Lock()
@@ -562,10 +562,10 @@ func (r *loopRuntime) finalText(ctx context.Context, t *loopTurn, turn uuid.UUID
 		if err != nil {
 			return "", err
 		}
-		if !found || attempt.origin != t.origin || attempt.admission.ParentTurnID != turn || attempt.profile.Provider != manifest.Provider || attempt.profile.ModelID != manifest.Model || attempt.result == nil || !slices.Contains(attempt.result.MessageObjects, object) {
+		if !found || attempt.origin != origin || attempt.admission.ParentTurnID != turn || attempt.profile.Provider != manifest.Provider || attempt.profile.ModelID != manifest.Model || attempt.result == nil || !slices.Contains(attempt.result.MessageObjects, object) {
 			return "", ErrDenied
 		}
-		if _, err := r.readPaid(t, output.AttemptID, object); err != nil {
+		if _, err := r.readPaid(ctx, origin, output.AttemptID, object); err != nil {
 			return "", err
 		}
 		text.WriteString(output.Block.Text)

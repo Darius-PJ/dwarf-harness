@@ -10,9 +10,17 @@ The aim is a colony that can deliver real work without giving up private context
 
 ## Status
 
-DwarfHarness is pre-release. Nothing has been released, and there is no program to run yet: the `dwarf-harness` host and terminal program and the native GUI do not exist. This repository holds the contract packages, part of Core and of Undercurrent, a Go dependency resolver and the development tools, each tested on its own.
+DwarfHarness is pre-release. Nothing has been released. The `dwarf-harness` host and terminal program runs bounded test turns on an existing colony; no program initializes a colony yet, and the native GUI does not exist. This repository holds the contract packages, part of Core and of Undercurrent, the terminal program, a Go dependency resolver and the development tools, each tested on its own.
 
 Everything here is for testing only. Do not use it for real work: real assignments begin only after the validation runner and promotion gate (step C4) pass their end-to-end gate. Each step's status is on the [status board](docs/ROADMAPS.md#status-board).
+
+The terminal program needs a colony that is already initialized, with its agents, provider routes, grants, spend terms and capacity configured:
+
+```sh
+GOTOOLCHAIN=local CGO_ENABLED=0 go run ./cmd/dwarf-harness -colony-dir <colony> -settings <settings.json>
+```
+
+The settings file is strict, nonsecret JSON kept outside the repository; `internal/core/terminal` documents it. Core alone reads each credential source the settings name, and the program never prints a source locator. It initializes and installs nothing, and refuses to start, with a typed reason, on an uninitialized colony. Its turns have run only against local loopback providers: no live provider call has gone through it, and it proves neither step C3's exit nor any capacity, latency or isolation figure.
 
 The first release needs only Windows. The code stays portable, and the check also runs on Linux and macOS.
 

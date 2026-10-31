@@ -399,3 +399,59 @@ func (v *loopSession) lateText(ctx context.Context, id uuid.UUID) (session.TextS
 	}
 	return session.TextSnapshot{State: result.Outcome, FinalMessageObject: result.FinalMessageObject}, nil, nil
 }
+
+// FinalText reads a finished turn's durable answer through the loop's own
+// final-message path. Only a turn result recorded for this view's agent and
+// session selects the origin; every other turn, an unended turn, a turn with
+// no final message and a source without a current private.read chain are
+// refused alike with ErrDenied.
+func (v *loopSession) FinalText(ctx context.Context, id uuid.UUID) (string, error) {
+	if err := v.usable(); err != nil {
+		return "", err
+	}
+	if !validID(id) {
+		return "", ErrInvalid
+	}
+	s := v.service
+	if err := s.enter(ctx); err != nil {
+		return "", err
+	}
+	defer s.active.Done()
+	s.mu.Lock()
+	err := s.refreshLocked(ctx, s.store.Durable())
+	through := s.p.through
+	s.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	var origin ledger.Origin
+	var final *ledger.ObjectRef
+	err = s.scan(ctx, 0, through, func(c ledger.Commit) error {
+		for _, record := range c.Records {
+			if record.Type != ledger.TypeRuntimeTurnResult || record.TurnID != id || record.AgentID != v.ids.agent || record.ExecutionSessionID != v.ids.session {
+				continue
+			}
+			result, err := ledger.DecodeRuntimeTurnResult(record.Payload)
+			if err != nil {
+				return err
+			}
+			origin, final = ledger.Origin{AgentID: record.AgentID, SessionID: record.ExecutionSessionID, ContextID: record.ContextID}, nil
+			if result.Outcome == "finished" {
+				final = result.FinalMessageObject
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if final == nil {
+		return "", ErrDenied
+	}
+	// The manifest read itself carries no grant; an empty answer must still
+	// require the source context's current private.read chain.
+	if _, err := s.loopGrant(ctx, origin, "private.read", []ledger.Resource{loopPrivateTarget(origin)}, final.Bytes); err != nil {
+		return "", err
+	}
+	return s.loop.finalText(ctx, origin, id, *final)
+}
