@@ -13,7 +13,11 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 )
 
-var errLoopContent = errors.New("agents: invalid continuation content")
+var (
+	errLoopContent    = errors.New("agents: invalid continuation content")
+	errLoopUnresolved = errors.New("agents: unresolved paid result")
+	errLoopProvider   = errors.New("agents: paid call ended without output")
+)
 
 type loopInvocation struct {
 	attempt          uuid.UUID
@@ -151,7 +155,19 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	if err != nil {
 		return err
 	}
-	if !found || a.origin != t.origin || a.admission.ParentTurnID != t.id || a.profile.Provider != t.profile.Provider || a.profile.ModelID != t.profile.ModelID || a.result == nil || a.result.Kind != "usage" || a.result.EvidenceObject == nil {
+	if !found || a.origin != t.origin || a.admission.ParentTurnID != t.id || a.profile.Provider != t.profile.Provider || a.profile.ModelID != t.profile.ModelID || a.result == nil {
+		return errLoopContent
+	}
+	// The F3-13 result kind decides the stop before any content check: an
+	// unknown ending is no answer, and a provider terminal without output is not
+	// invalid content. Neither is retried; the attempt keeps its own ending.
+	switch a.result.Kind {
+	case "unknown":
+		return errLoopUnresolved
+	case "no_charge", "released_unsent":
+		return errLoopProvider
+	}
+	if a.result.Kind != "usage" || a.result.EvidenceObject == nil {
 		return errLoopContent
 	}
 	raw, err := r.readPaid(t.ctx, t.origin, call.id, *a.result.EvidenceObject)

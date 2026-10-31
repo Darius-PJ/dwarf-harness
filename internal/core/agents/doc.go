@@ -904,7 +904,10 @@
 // tool definitions, replayed history and retained thinking count once as
 // input, and reasoning stays inside output. A reserved attempt that a stopping
 // turn never sent ends released_unsent; a sent one ends only on evidence, an
-// unknown ending keeps its hold, and nothing is resent automatically.
+// unknown ending keeps its hold, and nothing is resent automatically. A sent
+// call whose result stays unknown fails its turn unresolved_result and a
+// no_charge result fails it provider_error; a usage result with incomplete
+// output, a content error or invalid content fails it content_invalid.
 //
 // A busy at turn end parks the turn the same way. When a writer's observation
 // meets workspace capture_budget, scratch_busy or context_busy, or a finish

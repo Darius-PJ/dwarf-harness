@@ -454,6 +454,10 @@ func loopFailureReason(err error) string {
 		return "integrity"
 	case errors.Is(err, errLoopContent):
 		return "content_invalid"
+	case errors.Is(err, errLoopUnresolved):
+		return "unresolved_result"
+	case errors.Is(err, errLoopProvider):
+		return "provider_error"
 	case errors.Is(err, ErrTooLarge):
 		return "request_too_large"
 	default:
