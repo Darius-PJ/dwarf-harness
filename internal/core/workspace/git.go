@@ -10,8 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+
 	"strings"
-	"time"
+
+	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 )
 
 type gitRunner struct {
@@ -19,14 +21,16 @@ type gitRunner struct {
 	unavailable        error
 	environ            func() []string
 	beforeAnchorDelete func()
-	afterStart         func(*exec.Cmd)
+	owner              *gitprocess.Owner
+	afterStart         func(args []string, pid int)
+	afterRun           func(gitprocess.Result)
 }
 
-func newGitRunner(environ func() []string) *gitRunner {
+func newGitRunner(owner *gitprocess.Owner, environ func() []string) *gitRunner {
 	if environ == nil {
 		environ = os.Environ
 	}
-	g := &gitRunner{environ: environ}
+	g := &gitRunner{owner: owner, environ: environ}
 	path, err := exec.LookPath("git")
 	if err == nil {
 		path, err = filepath.Abs(path)
@@ -110,31 +114,18 @@ func (g *gitRunner) runOutput(ctx context.Context, dir string, env []string, in 
 	if g.unavailable != nil {
 		return -1, g.unavailable
 	}
-	cmd := exec.CommandContext(ctx, g.path, args...)
-	cmd.Dir = dir
-	cmd.Env = env
-	cmd.Stdin = in
-	cmd.WaitDelay = 5 * time.Second
 	var stderr limitedStderr
-	cmd.Stdout = out
-	cmd.Stderr = &stderr
-	err := cmd.Start()
-	if err == nil {
-		if g.afterStart != nil {
-			g.afterStart(cmd)
-		}
-		err = cmd.Wait()
+	spec := gitprocess.Spec{Program: g.path, Args: args, Env: env, Dir: dir, Stdin: in, Stdout: out, Stderr: &stderr}
+	if g.afterStart != nil {
+		spec.Started = func(pid int) { g.afterStart(append([]string{g.path}, args...), pid) }
 	}
-	exit := 0
-	if err != nil {
-		exit = -1
-		if cmd.ProcessState != nil {
-			exit = cmd.ProcessState.ExitCode()
-		}
+	result, err := g.owner.Run(ctx, spec)
+	if g.afterRun != nil {
+		g.afterRun(result)
 	}
-	// Start, cancellation and WaitDelay failures are never expected exits.
-	var exitError *exec.ExitError
-	if ctx.Err() == nil && (err == nil || errors.As(err, &exitError)) {
+	exit := result.ExitCode
+	// Setup, cancellation and unconfirmed closure are never expected exits.
+	if ctx.Err() == nil && (err == nil || errors.Is(err, gitprocess.ErrExit)) && !errors.Is(err, gitprocess.ErrUnconfirmed) {
 		for _, want := range exits {
 			if exit == want {
 				return exit, nil
@@ -147,7 +138,7 @@ func (g *gitRunner) runOutput(ctx context.Context, dir string, env []string, in 
 	}
 	cause := err
 	if ctx.Err() != nil {
-		cause = ctx.Err()
+		cause = errors.Join(cause, ctx.Err())
 	}
 	return exit, &GitError{Args: append([]string(nil), args...), Exit: exit, Stderr: detail, Err: cause}
 }

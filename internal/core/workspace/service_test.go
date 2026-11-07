@@ -771,6 +771,10 @@ func TestWriterCloseAndServiceClose(t *testing.T) {
 	release()
 	release()
 	writer = mustWriter(t, f, b)
+	defer writer.Close()
+	launches := 0
+	f.svc.git.afterStart = func([]string, int) { launches++ }
+	beforeClose := f.store.Durable()
 	started := make(chan struct{})
 	f.svc.deps.afterCloseStart = func() { close(started) }
 	done := make(chan error, 1)
@@ -790,12 +794,20 @@ func TestWriterCloseAndServiceClose(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(task.Dir, "finished.txt"), []byte("finished while closing\n"))
 	release()
-	observation := mustObserve(t, writer)
-	if got := string(gitCommand(t, f.env, f.root, nil, "show", observation.Commit+":finished.txt")); got != "finished while closing\n" {
-		t.Fatal("shutdown lost the writer's observation")
+	observation, err := writer.CommitObserved(ctx)
+	if launches != 0 {
+		t.Fatalf("shutdown launched %d Git children for a new observation", launches)
 	}
+	assertUnavailable(t, err, "workspace_unverified")
+	if observation != (Observation{}) || f.store.Durable() != beforeClose {
+		t.Fatalf("shutdown committed an observation or effect: %+v, sequence %d -> %d", observation, beforeClose, f.store.Durable())
+	}
+	writer.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	if got := string(readTestFile(t, filepath.Join(task.Dir, "finished.txt"))); got != "finished while closing\n" {
+		t.Fatal("shutdown lost the writer's scratch edits")
 	}
 	for _, mode := range []string{"cancelled_append", "uncertain_absent", "uncertain_committed"} {
 		t.Run(mode, func(t *testing.T) {

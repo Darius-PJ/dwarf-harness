@@ -77,6 +77,7 @@ var xSysUsers = []string{
 	"internal/core/durable",     // B3, B18 item 7.
 	"internal/core/winexec",     // B30 item 4.
 	"internal/core/credentials", // D151.
+	"internal/core/gitprocess",  // D168.
 }
 
 var xSysTestUsers = []string{

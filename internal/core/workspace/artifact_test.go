@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"os/exec"
 	"reflect"
 	"slices"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 )
 
 func artifactBlob(t *testing.T, f *serviceFixture, data []byte) string {
@@ -133,10 +133,11 @@ func TestReadArtifactsMissingOversizeAndCancellation(t *testing.T) {
 	request.Tree = tree
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var child *exec.Cmd
-	f.svc.git.afterStart = func(cmd *exec.Cmd) { child = cmd; cancel() }
+	var child gitprocess.Result
+	f.svc.git.afterStart = func(_ []string, _ int) { cancel() }
+	f.svc.git.afterRun = func(result gitprocess.Result) { child = result }
 	out, err = f.svc.ReadArtifacts(ctx, request)
-	if !errors.Is(err, context.Canceled) || out.Complete || child == nil || child.ProcessState == nil {
+	if !errors.Is(err, context.Canceled) || out.Complete || !child.RootExited || !child.IOJoined {
 		t.Fatalf("cancel did not join child %+v %v", out, err)
 	}
 	f.svc.git.afterStart = nil
@@ -210,7 +211,7 @@ func TestReadArtifactsListOnlyAndPathFilter(t *testing.T) {
 	fmt.Fprintf(&rows, "040000 tree %s\t-\x00"+"040000 tree %s\tdirectory\x00"+"120000 blob %s\tlink\x00", child, child, link)
 	request := ArtifactRequest{WorkspaceID: f.w.ID, Tree: artifactTree(t, f, rows.String()), MaxBytes: 1, WorkAllowance: 10000, ListOnly: true}
 	starts := 0
-	f.svc.git.afterStart = func(*exec.Cmd) { starts++ }
+	f.svc.git.afterStart = func(_ []string, _ int) { starts++ }
 	listed, err := f.svc.ReadArtifacts(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)

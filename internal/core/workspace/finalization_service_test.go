@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -38,8 +37,8 @@ func mustFinalize(t *testing.T, f *serviceFixture, r Request) RequestState {
 
 func countMainUpdates(g *gitRunner) *int {
 	count := new(int)
-	g.afterStart = func(cmd *exec.Cmd) {
-		if slices.Contains(cmd.Args, "update-ref") && slices.Contains(cmd.Args, "refs/heads/main") {
+	g.afterStart = func(args []string, _ int) {
+		if slices.Contains(args, "update-ref") && slices.Contains(args, "refs/heads/main") {
 			*count++
 		}
 	}

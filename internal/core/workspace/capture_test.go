@@ -743,7 +743,7 @@ func TestCaptureUnavailable(t *testing.T) {
 func TestCaptureGitUnavailable(t *testing.T) {
 	f := newCaptureFixture(t)
 	t.Setenv("PATH", t.TempDir())
-	f.engine.git = newGitRunner(func() []string { return f.f.env })
+	f.engine.git = testGitRunner(t, func() []string { return f.f.env })
 	result, err := f.capture(context.Background(), sealCapture)
 	var unavailable *UnavailableError
 	if !errors.Is(err, ErrUnavailable) || !errors.As(err, &unavailable) || unavailable.Reason != "git_unavailable" || result.Tree != "" {
