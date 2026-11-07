@@ -19,7 +19,7 @@ func paidReceiptEffect(g *paidGroup, version int64, attempt uuid.UUID, outcome s
 
 // planPaid is shared by replay and subsequent paid producers. Nothing is
 // installed until all identities, authority, arithmetic and receipt agree.
-func (s *Service) planPaid(ctx context.Context, g *paidGroup, first uint64) (paidPlan, error) {
+func (s *Service) planPaid(ctx context.Context, reads *historyReadSet, g *paidGroup, first uint64) (paidPlan, error) {
 	if !s.p.registeredOrigin(originOf(g.ids)) {
 		return paidPlan{}, ErrNotBound
 	}
@@ -27,11 +27,11 @@ func (s *Service) planPaid(ctx context.Context, g *paidGroup, first uint64) (pai
 	case g.route != nil:
 		return s.planPaidRoute(g)
 	case g.credential != nil:
-		return s.planPaidCredential(ctx, g, first-1)
+		return s.planPaidCredential(ctx, reads, g, first-1)
 	case g.spend != nil:
-		return s.planPaidSpend(ctx, g, first-1)
+		return s.planPaidSpend(ctx, reads, g, first-1)
 	default:
-		return s.planPaidAttempt(ctx, g, first)
+		return s.planPaidAttempt(ctx, reads, g, first)
 	}
 }
 
@@ -70,7 +70,7 @@ func (s *Service) planPaidRoute(g *paidGroup) (paidPlan, error) {
 	return paidPlan{route: &p, observed: p.ObservedUTCNS}, nil
 }
 
-func (s *Service) planPaidCredential(ctx context.Context, g *paidGroup, through uint64) (paidPlan, error) {
+func (s *Service) planPaidCredential(ctx context.Context, reads *historyReadSet, g *paidGroup, through uint64) (paidPlan, error) {
 	p := *g.credential
 	scope := s.p.paidCredentialScopes[p.ScopeID]
 	if p.ExpectedVersion != scope.version || scope.version != 0 && scope.provider != p.Provider {
@@ -86,7 +86,7 @@ func (s *Service) planPaidCredential(ctx context.Context, g *paidGroup, through 
 		if g.receipt.Submission.Operation != "paid.credential.bind" || !sameScopedValue(g.receipt.Submission.Arguments, ledger.PaidCredentialBindArguments{ScopeID: p.ScopeID, ExpectedVersion: p.ExpectedVersion, Provider: p.Provider, CredentialVersion: p.CredentialVersion, SourceKind: p.SourceKind, SourceLocator: p.SourceLocator, RevokePreviousVersion: p.RevokePreviousVersion}) {
 			return paidPlan{}, ErrInvalid
 		}
-		exists, err := s.credentialVersionExists(ctx, p.CredentialVersion, through)
+		exists, err := s.credentialVersionExists(ctx, reads, p.CredentialVersion, through)
 		if err != nil {
 			return paidPlan{}, err
 		}
@@ -112,7 +112,7 @@ func (s *Service) planPaidCredential(ctx context.Context, g *paidGroup, through 
 	return paidPlan{credential: &p}, nil
 }
 
-func (s *Service) planPaidSpend(ctx context.Context, g *paidGroup, through uint64) (paidPlan, error) {
+func (s *Service) planPaidSpend(ctx context.Context, reads *historyReadSet, g *paidGroup, through uint64) (paidPlan, error) {
 	p, sub := *g.spend, g.receipt.Submission
 	plan := paidPlan{spend: &p}
 	a := s.p.book.paid[p.Scope]
@@ -134,7 +134,7 @@ func (s *Service) planPaidSpend(ctx context.Context, g *paidGroup, through uint6
 			return plan, ErrNotBound
 		}
 	case "task":
-		task, found, err := s.loadTask(ctx, p.Scope.ID, through)
+		task, found, err := s.loadTask(ctx, reads, p.Scope.ID, through)
 		if err != nil {
 			return plan, err
 		}
@@ -143,7 +143,7 @@ func (s *Service) planPaidSpend(ctx context.Context, g *paidGroup, through uint6
 		}
 		plan.tasks = append(plan.tasks, task)
 	case "grant":
-		grant, found, err := s.loadGrant(ctx, p.Scope.ID, through)
+		grant, found, err := s.loadGrant(ctx, reads, p.Scope.ID, through)
 		if err != nil {
 			return plan, err
 		}
@@ -154,7 +154,7 @@ func (s *Service) planPaidSpend(ctx context.Context, g *paidGroup, through uint6
 		if p.Terms.Enabled {
 			grantee := grant.definition.Grantee
 			origin := ledger.Origin{AgentID: grantee.AgentID, ContextID: grantee.ContextID, SessionID: s.p.agents[grantee.AgentID].session}
-			chain, err := s.currentChain(ctx, origin, p.Scope.ID, through)
+			chain, err := s.currentChain(ctx, reads, origin, p.Scope.ID, through)
 			if err != nil {
 				return plan, err
 			}
@@ -178,7 +178,7 @@ func (s *Service) planPaidSpend(ctx context.Context, g *paidGroup, through uint6
 			if grant.issuer != "agent" || grant.origin != sub.Origin || sub.GrantID != p.ParentGrantID {
 				return plan, ErrDenied
 			}
-			chain, err := s.authorize(ctx, sub.Origin, sub.GrantID, "grant.issue", grant.definition.Resources, grant.rules().recipients, 0, through)
+			chain, err := s.authorize(ctx, reads, sub.Origin, sub.GrantID, "grant.issue", grant.definition.Resources, grant.rules().recipients, 0, through)
 			if err != nil {
 				return plan, err
 			}
@@ -207,7 +207,7 @@ func (s *Service) planPaidSpend(ctx context.Context, g *paidGroup, through uint6
 		return plan, ErrDenied
 	}
 	if a.version == 0 && p.Scope.Kind == "task" {
-		settled, held, _, err := s.paidHistoryTotal(ctx, p.Scope, s.p.book.paidPeriod, nil, through)
+		settled, held, _, err := s.paidHistoryTotal(ctx, reads, p.Scope, s.p.book.paidPeriod, nil, through)
 		if err != nil {
 			return plan, err
 		}

@@ -283,14 +283,14 @@ func scanReader(ctx context.Context, r *ledger.Reader, visit func(ledger.Commit)
 
 // refreshLocked returns with mu held on every path. Only the performing
 // caller owns a Reader; waiters resume at the installed frontier.
-func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
+func (s *Service) refreshLocked(ctx context.Context, reads *historyReadSet, through uint64) error {
 	for {
 		if err := s.usableLocked(ctx); err != nil {
 			return err
 		}
 		if s.refreshDone == nil {
 			if through <= s.p.through {
-				return nil
+				return s.rebuildDirectoryLocked(ctx)
 			}
 			break
 		}
@@ -309,13 +309,12 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 			return err
 		}
 		if through <= s.p.through {
-			return nil
+			return s.rebuildDirectoryLocked(ctx)
 		}
 	}
 	after := s.p.through
 	checkpoint := s.history.checkpoint(after)
 	s.refreshDone = make(chan struct{})
-	s.refreshTarget = through
 	// Some internal callers are not public entrants. Close must still drain
 	// the performing read before releasing the history and runtime.
 	s.active.Add(1)
@@ -335,8 +334,7 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 		if c.First != s.p.through+1 {
 			return inconsistent(c.First, "noncontiguous refresh")
 		}
-		_, err := s.acceptCommitLocked(ctx, c, nil)
-		return err
+		return s.prepareCommitLocked(ctx, reads, c)
 	})
 	s.mu.Lock()
 	if err == nil {
@@ -349,9 +347,38 @@ func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
 	}
 	close(s.refreshDone)
 	s.refreshDone = nil
-	s.refreshTarget = 0
 	s.active.Done()
 	return err
+}
+
+// Rebuilding is independent of the refresh flight. Other callers keep using
+// legacy scans while this reader constructs a replacement from ledger bytes.
+func (s *Service) rebuildDirectoryLocked(ctx context.Context) error {
+	through := s.p.through
+	generation, needed := s.history.directoryState(through)
+	if !needed || s.rebuilding {
+		return nil
+	}
+	s.rebuilding = true
+	s.active.Add(1)
+	s.mu.Unlock()
+	directory := newCommandDirectory(0)
+	_, err := s.readRange(ctx, 0, through, nil, func(c ledger.Commit) error {
+		directory.advance(c, directory.generation+1)
+		return nil
+	})
+	s.mu.Lock()
+	s.rebuilding = false
+	s.active.Done()
+	if usable := s.usableLocked(ctx); usable != nil {
+		return usable
+	}
+	if err == nil && s.p.through == through {
+		s.history.installDirectory(directory, through, generation)
+	}
+	// Failed acceleration never clears a projection or adds a refusal. The
+	// subsequent authoritative lookup still takes the checked legacy path.
+	return nil
 }
 
 // acknowledgeLocked preserves the successful submitter's lock through its
@@ -400,13 +427,43 @@ func (s *Service) readCommittedRange(ctx context.Context, first, last uint64, ch
 	return accepted, checkpoint, nil
 }
 
-// acceptCommitLocked is shared by refresh and a contiguous scoped acknowledgement.
-// expected binds the latter to its actual command before any effect is installed.
+// The durable acknowledgement path never suspends: its caller's completion
+// must stay atomic with installation. Refresh uses prepareCommitLocked instead.
 func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expected *scopedInput) (commandMatch, error) {
+	match, install, err := s.stageCommitLocked(ctx, nil, c, expected)
+	if err == nil {
+		install()
+	}
+	return match, err
+}
+
+func (s *Service) prepareCommitLocked(ctx context.Context, reads *historyReadSet, c ledger.Commit) error {
+	var install func()
+	err := s.prepareHistoryLocked(ctx, reads, nil, false, func(reads *historyReadSet) error {
+		install = nil
+		if c.Last <= s.p.through {
+			return nil
+		}
+		if c.First != s.p.through+1 {
+			return inconsistent(c.First, "noncontiguous refresh")
+		}
+		var err error
+		_, install, err = s.stageCommitLocked(ctx, reads, c, nil)
+		return err
+	})
+	if err == nil && install != nil {
+		install()
+	}
+	return err
+}
+
+// No installer exists until all decoding and planning succeeds. On a need the
+// caller discards every local plan and reruns this function from its top.
+func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, c ledger.Commit, expected *scopedInput) (commandMatch, func(), error) {
 	d := draftsOf(c)
 	g, scoped, review, paid, registration, loop, err := decodeFamily(d, c.First)
 	if err != nil {
-		return commandMatch{}, err
+		return commandMatch{}, nil, err
 	}
 	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}
 	switch {
@@ -425,24 +482,24 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 	}
 	if expected != nil {
 		if !match.found || match.command.CommandID != expected.id || match.scoped == nil {
-			return commandMatch{}, inconsistent(c.First, "acknowledgement command or family")
+			return commandMatch{}, nil, inconsistent(c.First, "acknowledgement command or family")
 		}
 		if _, err := matchScopedReceipt(match, *expected); err != nil {
-			return commandMatch{}, err
+			return commandMatch{}, nil, err
 		}
 	}
 	if match.found {
-		used, err := s.commandUsed(ctx, match.command.CommandID, c.First-1)
+		used, err := s.commandUsed(ctx, reads, match.command.CommandID, c.First-1)
 		if err != nil {
-			return commandMatch{}, err
+			return commandMatch{}, nil, err
 		}
 		if used {
-			return commandMatch{}, inconsistent(c.First, "reused command ID")
+			return commandMatch{}, nil, inconsistent(c.First, "reused command ID")
 		}
 	}
 	if match.found {
-		if err := s.loopEffectAvailable(ctx, match.command.CommandID, c.First-1); err != nil {
-			return commandMatch{}, err
+		if err := s.loopEffectAvailable(ctx, reads, match.command.CommandID, c.First-1); err != nil {
+			return commandMatch{}, nil, err
 		}
 	}
 	var privateNext map[scopeKey]*scopeState
@@ -454,52 +511,52 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 	if g != nil {
 		privateNext, err = s.p.planGroup(g, c.First)
 		if err != nil {
-			return commandMatch{}, inconsistent(c.First, "invalid private transition")
+			return commandMatch{}, nil, inconsistent(c.First, "invalid private transition")
 		}
 	}
 	if scoped != nil {
-		scopedNext, err = s.planScoped(ctx, scoped, c.First)
+		scopedNext, err = s.planScoped(ctx, reads, scoped, c.First)
 		if err != nil {
-			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-				return commandMatch{}, err
+			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, nil, err
 			}
-			return commandMatch{}, inconsistent(c.First, "invalid scoped transition: "+err.Error())
+			return commandMatch{}, nil, inconsistent(c.First, "invalid scoped transition: "+err.Error())
 		}
 	}
 	if review != nil {
-		reviewNext, err = s.planReview(ctx, review, c.First)
+		reviewNext, err = s.planReview(ctx, reads, review, c.First)
 		if err != nil {
-			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-				return commandMatch{}, err
+			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, nil, err
 			}
-			return commandMatch{}, inconsistent(c.First, "invalid review transition: "+err.Error())
+			return commandMatch{}, nil, inconsistent(c.First, "invalid review transition: "+err.Error())
 		}
 	}
 	if paid != nil {
-		paidNext, err = s.planPaid(ctx, paid, c.First)
+		paidNext, err = s.planPaid(ctx, reads, paid, c.First)
 		if err != nil {
-			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-				return commandMatch{}, err
+			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, nil, err
 			}
-			return commandMatch{}, inconsistent(c.First, "invalid paid transition: "+err.Error())
+			return commandMatch{}, nil, inconsistent(c.First, "invalid paid transition: "+err.Error())
 		}
 	}
 	if registration != nil {
-		registrationNext, err = s.planRegistration(ctx, registration, c.First)
+		registrationNext, err = s.planRegistration(ctx, reads, registration, c.First)
 		if err != nil {
-			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-				return commandMatch{}, err
+			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, nil, err
 			}
-			return commandMatch{}, inconsistent(c.First, "invalid registration transition: "+err.Error())
+			return commandMatch{}, nil, inconsistent(c.First, "invalid registration transition: "+err.Error())
 		}
 	}
 	if loop != nil {
-		loopNext, err = s.planLoop(ctx, loop, c.First)
+		loopNext, err = s.planLoop(ctx, reads, loop, c.First)
 		if err != nil {
-			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-				return commandMatch{}, err
+			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, nil, err
 			}
-			return commandMatch{}, inconsistent(c.First, "invalid loop transition")
+			return commandMatch{}, nil, inconsistent(c.First, "invalid loop transition")
 		}
 	}
 	// Stage the shared envelope effects too: a later invalid closure in an
@@ -511,7 +568,7 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 		case ledger.TypeCommand:
 			p, err := ledger.DecodeCommand(r.Payload)
 			if err != nil {
-				return commandMatch{}, err
+				return commandMatch{}, nil, err
 			}
 			if bytes.Compare(p.CommandID[:], maxCommand[:]) > 0 {
 				maxCommand = p.CommandID
@@ -519,10 +576,10 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 		case ledger.TypeScratchCreated:
 			p, err := ledger.DecodeScratchCreated(r.Payload)
 			if err != nil {
-				return commandMatch{}, err
+				return commandMatch{}, nil, err
 			}
 			if p.ContextID != r.ContextID {
-				return commandMatch{}, inconsistent(c.First, "scratch context")
+				return commandMatch{}, nil, inconsistent(c.First, "scratch context")
 			}
 			if scratches == nil {
 				scratches = make(map[uuid.UUID]scratchState)
@@ -531,14 +588,14 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 		case ledger.TypeScratchClosed:
 			p, err := ledger.DecodeScratchClosed(r.Payload)
 			if err != nil {
-				return commandMatch{}, err
+				return commandMatch{}, nil, err
 			}
 			old, ok := scratches[p.ScratchID]
 			if !ok {
 				old, ok = s.p.scratches[p.ScratchID]
 			}
 			if !ok || old.ContextID != p.ContextID || (r.Actor != ledger.ActorOwner && (r.Actor != ledger.ActorAgent || p.ContextID != r.ContextID)) {
-				return commandMatch{}, inconsistent(c.First, "scratch closure")
+				return commandMatch{}, nil, inconsistent(c.First, "scratch closure")
 			}
 			old.closed = true
 			if scratches == nil {
@@ -547,33 +604,34 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 			scratches[p.ScratchID] = old
 		}
 	}
-	if g != nil {
-		s.p.install(g, privateNext)
-	}
-	if scoped != nil {
-		s.p.installScoped(scopedNext)
-	}
-	if review != nil {
-		s.p.installReview(reviewNext)
-	}
-	if paid != nil {
-		s.p.installPaid(paidNext)
-	}
-	if registration != nil {
-		s.p.installRegistration(registrationNext)
-	}
-	if loop != nil {
-		s.p.installLoop(loopNext)
-	}
-	s.p.maxCommand = maxCommand
-	maps.Copy(s.p.scratches, scratches)
-	for _, record := range c.Records {
-		s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
-	}
-	s.publishCommitLocked(c, g, scoped)
-	s.p.through = c.Last
-	s.loop.notify()
-	return match, nil
+	return match, func() {
+		if g != nil {
+			s.p.install(g, privateNext)
+		}
+		if scoped != nil {
+			s.p.installScoped(scopedNext)
+		}
+		if review != nil {
+			s.p.installReview(reviewNext)
+		}
+		if paid != nil {
+			s.p.installPaid(paidNext)
+		}
+		if registration != nil {
+			s.p.installRegistration(registrationNext)
+		}
+		if loop != nil {
+			s.p.installLoop(loopNext)
+		}
+		s.p.maxCommand = maxCommand
+		maps.Copy(s.p.scratches, scratches)
+		for _, record := range c.Records {
+			s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
+		}
+		s.publishCommitLocked(c, g, scoped)
+		s.p.through = c.Last
+		s.loop.notify()
+	}, nil
 }
 
 type commandMatch struct {
@@ -587,7 +645,7 @@ type commandMatch struct {
 	loop         *loopGroup
 }
 
-func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
+func (s *Service) findCommand(ctx context.Context, reads *historyReadSet, id uuid.UUID, after, through uint64) (commandMatch, error) {
 	if err := ctx.Err(); err != nil {
 		return commandMatch{}, err
 	}
@@ -608,52 +666,60 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 		if match, cached := s.history.command(id, after, through); cached && match.found {
 			return match, nil
 		}
-		commit, err := s.directoryCommit(ctx, rows[0], through)
+		commit, err := s.directoryCommit(ctx, reads, rows[0], through)
 		if err != nil {
 			return commandMatch{}, err
 		}
-		return s.commandFromCommit(ctx, id, after, through, commit)
+		return s.commandFromCommit(ctx, reads, id, after, through, commit)
 	}
-	return s.findCommandLegacy(ctx, id, after, through)
+	return s.findCommandLegacy(ctx, reads, id, after, through)
 }
 
-func (s *Service) findCommandLegacy(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
-	var matched ledger.Commit
-	var found commandMatch
-	err := s.scan(ctx, after, through, func(c ledger.Commit) error {
-		for _, r := range c.Records {
-			if r.Type != ledger.TypeCommand {
-				continue
+func (s *Service) findCommandLegacy(ctx context.Context, reads *historyReadSet, id uuid.UUID, after, through uint64) (commandMatch, error) {
+	value, err := readHistory(ctx, reads, after, through, commandHistoryKey{id}, func(ctx context.Context) (historyCommitValue, error) {
+		var matched ledger.Commit
+		err := s.scan(ctx, after, through, func(c ledger.Commit) error {
+			for _, r := range c.Records {
+				if r.Type != ledger.TypeCommand {
+					continue
+				}
+				cmd, err := ledger.DecodeCommand(r.Payload)
+				if err != nil {
+					return err
+				}
+				if cmd.CommandID != id {
+					continue
+				}
+				if matched.First != 0 {
+					return inconsistent(c.First, "duplicate command")
+				}
+				if _, _, _, _, _, _, err := decodeFamily(draftsOf(c), c.First); err != nil {
+					return err
+				}
+				matched = c
 			}
-			cmd, err := ledger.DecodeCommand(r.Payload)
-			if err != nil {
-				return err
-			}
-			if cmd.CommandID != id {
-				continue
-			}
-			if found.found {
-				return inconsistent(c.First, "duplicate command")
-			}
-			g, scoped, review, paid, registration, loop, err := decodeFamily(draftsOf(c), c.First)
-			if err != nil {
-				return err
-			}
-			found = commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}
-			matched = c
-		}
-		return nil
-	})
-	if err == nil {
-		if s.deps.beforeHistoryFill != nil {
+			return nil
+		})
+		if err == nil && s.deps.beforeHistoryFill != nil {
 			s.deps.beforeHistoryFill(historyKey{kind: historyCommand, id: id})
 		}
-		s.history.putCommand(id, after, through, found, matched)
+		return encodeHistoryCommit(matched), err
+	})
+	if err != nil {
+		return commandMatch{}, err
 	}
-	return found, err
+	if value.First == 0 {
+		s.history.putCommand(id, after, through, commandMatch{}, ledger.Commit{})
+		return commandMatch{}, nil
+	}
+	commit, err := decodeHistoryCommit(value)
+	if err != nil {
+		return commandMatch{}, err
+	}
+	return s.commandFromCommit(ctx, reads, id, after, through, commit)
 }
 
-func (s *Service) commandFromCommit(ctx context.Context, id uuid.UUID, after, through uint64, c ledger.Commit) (commandMatch, error) {
+func (s *Service) commandFromCommit(ctx context.Context, reads *historyReadSet, id uuid.UUID, after, through uint64, c ledger.Commit) (commandMatch, error) {
 	for _, r := range c.Records {
 		if r.Type != ledger.TypeCommand {
 			continue
@@ -677,17 +743,17 @@ func (s *Service) commandFromCommit(ctx context.Context, id uuid.UUID, after, th
 		return match, nil
 	}
 	// A damaged position cannot manufacture absence.
-	return s.findCommandLegacy(ctx, id, after, through)
+	return s.findCommandLegacy(ctx, reads, id, after, through)
 }
 
-func (s *Service) commandUsed(ctx context.Context, id uuid.UUID, through uint64) (bool, error) {
+func (s *Service) commandUsed(ctx context.Context, reads *historyReadSet, id uuid.UUID, through uint64) (bool, error) {
 	if _, found, hit := s.history.membership(directoryKey{kind: directoryCommand, id: id}, through); hit {
 		return found, nil
 	}
 	if bytes.Compare(id[:], s.p.maxCommand[:]) > 0 {
 		return false, nil
 	}
-	old, err := s.findCommandLegacy(ctx, id, 0, through)
+	old, err := s.findCommandLegacy(ctx, reads, id, 0, through)
 	return old.found, err
 }
 
@@ -701,7 +767,7 @@ func (s *Service) publishCommitLocked(c ledger.Commit, g *privateGroup, scoped *
 
 // directoryCommit shares the existing charged source LRU. A partial payload
 // hit needs only one containing-commit read; no index mutex spans that read.
-func (s *Service) directoryCommit(ctx context.Context, row directoryRow, through uint64) (ledger.Commit, error) {
+func (s *Service) directoryCommit(ctx context.Context, reads *historyReadSet, row directoryRow, through uint64) (ledger.Commit, error) {
 	if err := ctx.Err(); err != nil {
 		return ledger.Commit{}, err
 	}
@@ -709,7 +775,16 @@ func (s *Service) directoryCommit(ctx context.Context, row directoryRow, through
 	for seq := row.first; seq <= row.last; seq++ {
 		record, hit := s.history.acceptedRecord(int64(seq), through, s.store.Colony())
 		if !hit {
-			accepted, _, err := s.readCommittedRange(ctx, row.first, row.last, s.history.checkpoint(row.first-1))
+			first, last := row.first, row.last
+			checkpoint := s.history.checkpoint(first - 1)
+			value, err := readHistory(ctx, reads, first-1, last, commitHistoryKey{first, last}, func(ctx context.Context) (historyCommitValue, error) {
+				accepted, _, err := s.readCommittedRange(ctx, first, last, checkpoint)
+				return encodeHistoryCommit(accepted), err
+			})
+			if err != nil {
+				return ledger.Commit{}, err
+			}
+			accepted, err := decodeHistoryCommit(value)
 			if err == nil {
 				s.history.warmSources(accepted)
 			}
@@ -738,7 +813,7 @@ func (s *Service) scanDirectory(ctx context.Context, key directoryKey, after, th
 		if row.last == last {
 			continue
 		}
-		c, err := s.directoryCommit(ctx, row, through)
+		c, err := s.directoryCommit(ctx, nil, row, through)
 		if err != nil {
 			return err
 		}

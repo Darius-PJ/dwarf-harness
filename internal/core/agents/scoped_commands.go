@@ -59,7 +59,7 @@ func (s *Service) BindAgent(ctx context.Context, binding Binding) (*Agent, error
 		return nil, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, binding, false)
+	ids, err := s.initialIDs(ctx, &historyReadSet{}, binding, false)
 	if err != nil {
 		return nil, err
 	}
@@ -336,12 +336,12 @@ func makeScopedInput(actor string, ids submissionIDs, operation string, request 
 	return input, nil
 }
 
-func (s *Service) resolveScopedTarget(ctx context.Context, input *scopedInput) error {
+func (s *Service) resolveScopedTarget(ctx context.Context, reads *historyReadSet, input *scopedInput) error {
 	sub := &input.sub
 	switch args := sub.Arguments.(type) {
 	case ledger.GrantRevokeArguments:
 		if sub.Actor == "agent" {
-			chain, err := s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+			chain, err := s.currentChain(ctx, reads, sub.Origin, sub.GrantID, s.p.through)
 			if err != nil {
 				return err
 			}
@@ -349,7 +349,7 @@ func (s *Service) resolveScopedTarget(ctx context.Context, input *scopedInput) e
 				return ErrDenied
 			}
 		}
-		grant, found, err := s.loadGrant(ctx, args.GrantID, s.p.through)
+		grant, found, err := s.loadGrant(ctx, reads, args.GrantID, s.p.through)
 		if err != nil {
 			return err
 		}
@@ -371,20 +371,20 @@ func (s *Service) resolveScopedTarget(ctx context.Context, input *scopedInput) e
 		}
 		sub.Target = ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}}
 	case ledger.WorkDispatchArguments:
-		return s.resolveWorkTarget(ctx, input, args.WorkID)
+		return s.resolveWorkTarget(ctx, reads, input, args.WorkID)
 	case ledger.WorkEndArguments:
-		return s.resolveWorkTarget(ctx, input, args.WorkID)
+		return s.resolveWorkTarget(ctx, reads, input, args.WorkID)
 	}
 	return nil
 }
 
-func (s *Service) resolveWorkTarget(ctx context.Context, input *scopedInput, id uuid.UUID) error {
+func (s *Service) resolveWorkTarget(ctx context.Context, reads *historyReadSet, input *scopedInput, id uuid.UUID) error {
 	sub := &input.sub
 	if !validID(id) {
 		return ErrInvalid
 	}
 	if sub.Actor == "agent" {
-		chain, err := s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+		chain, err := s.currentChain(ctx, reads, sub.Origin, sub.GrantID, s.p.through)
 		if err != nil {
 			return err
 		}
@@ -392,7 +392,7 @@ func (s *Service) resolveWorkTarget(ctx context.Context, input *scopedInput, id 
 			return ErrDenied
 		}
 	}
-	work, found, err := s.loadWork(ctx, id, s.p.through)
+	work, found, err := s.loadWork(ctx, reads, id, s.p.through)
 	if err != nil {
 		return err
 	}

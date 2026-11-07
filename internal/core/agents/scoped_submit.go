@@ -9,7 +9,7 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmission) error {
+func (s *Service) scopedAuthority(ctx context.Context, reads *historyReadSet, sub ledger.ScopedSubmission) error {
 	if !s.p.registeredOrigin(sub.Origin) {
 		return ErrNotBound
 	}
@@ -21,14 +21,14 @@ func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmissi
 		if !ok {
 			return ErrInvalid
 		}
-		work, found, err := s.loadWork(ctx, args.WorkID, s.p.through)
+		work, found, err := s.loadWork(ctx, reads, args.WorkID, s.p.through)
 		if err != nil {
 			return err
 		}
 		if !found || work.admission.Kind != "local" {
 			return ErrUnavailable
 		}
-		_, err = s.authorize(ctx, work.origin, work.admission.GrantID, work.admission.Operation, []ledger.Resource{work.admission.Target}, nil, *work.admission.MaxBytes, s.p.through)
+		_, err = s.authorize(ctx, reads, work.origin, work.admission.GrantID, work.admission.Operation, []ledger.Resource{work.admission.Target}, nil, *work.admission.MaxBytes, s.p.through)
 		return err
 	}
 	if sub.Actor != "agent" {
@@ -43,7 +43,7 @@ func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmissi
 			recipients = append(recipients, Binding(recipient))
 		}
 	case ledger.GrantRevokeArguments:
-		grant, found, err := s.loadGrant(ctx, args.GrantID, s.p.through)
+		grant, found, err := s.loadGrant(ctx, reads, args.GrantID, s.p.through)
 		if err != nil {
 			return err
 		}
@@ -67,10 +67,10 @@ func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmissi
 			size += change.Bytes
 		}
 	case ledger.ArtifactReadArguments:
-		_, err := s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, s.p.through, nil)
+		_, err := s.artifactAuthority(ctx, reads, sub.Origin, args.Artifact, sub.GrantID, s.p.through, nil)
 		return err
 	}
-	chain, err := s.authorize(ctx, sub.Origin, sub.GrantID, operation, targets, recipients, size, s.p.through)
+	chain, err := s.authorize(ctx, reads, sub.Origin, sub.GrantID, operation, targets, recipients, size, s.p.through)
 	if err != nil {
 		return err
 	}
@@ -80,21 +80,18 @@ func (s *Service) scopedAuthority(ctx context.Context, sub ledger.ScopedSubmissi
 	return nil
 }
 
-func (s *Service) refreshScopedLocked(ctx context.Context, sub ledger.ScopedSubmission) error {
-	if err := s.usableLocked(ctx); err != nil {
-		return err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return err
-	}
-	return s.scopedAuthority(ctx, sub)
+func (s *Service) refreshScopedLocked(ctx context.Context, reads *historyReadSet, sub ledger.ScopedSubmission) error {
+	ids := submissionIDs{sub.Origin.AgentID, sub.Origin.SessionID, sub.Origin.ContextID}
+	return s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		return s.scopedAuthority(ctx, reads, sub)
+	})
 }
 
 // Like the owner private path, this returns with mu held. The authoritative old
 // prefix is scanned without mu; refresh and a tail scan close duplicate races.
-func (s *Service) lookupScoped(ctx context.Context, input scopedInput) (commandMatch, error) {
+func (s *Service) lookupScoped(ctx context.Context, reads *historyReadSet, input scopedInput) (commandMatch, error) {
 	s.mu.Lock()
-	if err := s.refreshScopedLocked(ctx, input.sub); err != nil {
+	if err := s.refreshScopedLocked(ctx, reads, input.sub); err != nil {
 		return commandMatch{}, err
 	}
 	through := s.p.through
@@ -106,18 +103,26 @@ func (s *Service) lookupScoped(ctx context.Context, input scopedInput) (commandM
 	var match commandMatch
 	var err error
 	if old {
-		match, err = s.findCommand(ctx, input.id, 0, through)
+		match, err = s.findCommand(ctx, nil, input.id, 0, through)
 	}
 	s.mu.Lock()
 	if err != nil {
 		return match, err
 	}
-	if err := s.refreshScopedLocked(ctx, input.sub); err != nil {
-		return match, err
-	}
-	if !match.found && through < s.p.through {
-		match, err = s.findCommand(ctx, input.id, through, s.p.through)
-	}
+	base := match
+	ids := submissionIDs{input.sub.Origin.AgentID, input.sub.Origin.SessionID, input.sub.Origin.ContextID}
+	err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		match = base
+		if err := s.scopedAuthority(ctx, reads, input.sub); err != nil {
+			return err
+		}
+		if !match.found && through < s.p.through {
+			var err error
+			match, err = s.findCommand(ctx, reads, input.id, through, s.p.through)
+			return err
+		}
+		return nil
+	})
 	return match, err
 }
 
@@ -218,7 +223,7 @@ func (s *Service) scopedProducerGuards(input scopedInput) error {
 	return nil
 }
 
-func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger.Draft, error) {
+func (s *Service) scopedDrafts(ctx context.Context, reads *historyReadSet, input scopedInput) ([]ledger.Draft, error) {
 	sub := input.sub
 	var drafts []ledger.Draft
 	appendPayload := func(typ string, actor ledger.Actor, payload []byte, refs ...ledger.Digest) {
@@ -245,7 +250,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 		}
 		appendPayload(ledger.TypeRuntimeGrantIssued, ledger.Actor(sub.Actor), payload)
 		if sub.Actor == "agent" {
-			chain, err = s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+			chain, err = s.currentChain(ctx, reads, sub.Origin, sub.GrantID, s.p.through)
 			if err != nil {
 				return nil, err
 			}
@@ -265,7 +270,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 		}
 		appendPayload(ledger.TypeRuntimeCapacityConfigured, ledger.ActorOwner, payload)
 	case ledger.TaskCreateArguments, ledger.TaskMutationArguments:
-		plan, taskChain, taskErr := s.deriveTask(ctx, sub, s.p.through+1)
+		plan, taskChain, taskErr := s.deriveTask(ctx, reads, sub, s.p.through+1)
 		if taskErr != nil {
 			return nil, taskErr
 		}
@@ -297,7 +302,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 			appendPayload(ledger.TypeBodyUnpin, ledger.ActorCore, payload)
 		}
 	case ledger.TurnStartArguments, ledger.LocalAdmissionArguments:
-		chain, err = s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+		chain, err = s.currentChain(ctx, reads, sub.Origin, sub.GrantID, s.p.through)
 		if err != nil {
 			return nil, err
 		}
@@ -338,7 +343,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 		}
 		appendPayload(ledger.TypeRuntimeWorkEnded, ledger.ActorCore, payload)
 	case ledger.PrivateWriteArguments:
-		chain, err = s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+		chain, err = s.currentChain(ctx, reads, sub.Origin, sub.GrantID, s.p.through)
 		if err != nil {
 			return nil, err
 		}
@@ -361,7 +366,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 		}
 		appendPayload(ledger.TypePrivateScopedRevision, ledger.ActorCore, payload)
 	case ledger.PrivateReadArguments:
-		chain, err = s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+		chain, err = s.currentChain(ctx, reads, sub.Origin, sub.GrantID, s.p.through)
 		if err != nil {
 			return nil, err
 		}
@@ -372,7 +377,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 			usage.NextCursor = &next
 		}
 	case ledger.ArtifactReadArguments:
-		chain, err = s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, s.p.through, nil)
+		chain, err = s.artifactAuthority(ctx, reads, sub.Origin, args.Artifact, sub.GrantID, s.p.through, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -403,7 +408,7 @@ func (s *Service) scopedDrafts(ctx context.Context, input scopedInput) ([]ledger
 	return drafts, nil
 }
 
-func (s *Service) preflightScoped(ctx context.Context, input scopedInput, drafts []ledger.Draft) (*scopedGroup, error) {
+func (s *Service) preflightScoped(ctx context.Context, reads *historyReadSet, input scopedInput, drafts []ledger.Draft) (*scopedGroup, error) {
 	private, group, review, paid, registration, loop, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil {
 		return nil, err
@@ -411,7 +416,7 @@ func (s *Service) preflightScoped(ctx context.Context, input scopedInput, drafts
 	if private != nil || review != nil || paid != nil || registration != nil || loop != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin {
 		return nil, ErrInvalid
 	}
-	if _, err := s.planScoped(ctx, group, s.p.through+1); err != nil {
+	if _, err := s.planScoped(ctx, reads, group, s.p.through+1); err != nil {
 		return nil, err
 	}
 	return group, nil

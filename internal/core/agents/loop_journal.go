@@ -47,6 +47,8 @@ func (s *Service) commitLoop(ctx context.Context, id uuid.UUID, sub ledger.LoopS
 		return nil, ErrInvalid
 	}
 	digest := ledger.Digest(sha256.Sum256(raw))
+	reads := &historyReadSet{}
+	ids := submissionIDs{sub.Origin.AgentID, sub.Origin.SessionID, sub.Origin.ContextID}
 	s.mu.Lock()
 	applied := false
 	defer func() {
@@ -57,39 +59,39 @@ func (s *Service) commitLoop(ctx context.Context, id uuid.UUID, sub ledger.LoopS
 	}()
 	// The group predicts its receipt's effect sequence from the tail, so it is
 	// written only at the tail it was planned at. Another writer's commit in
-	// between re-enters here: refresh, search only the new commits for id,
-	// and plan again, up to tailAttempts, then busy. Nothing was written.
+	// between re-enters here: refresh, search and plan again, up to
+	// tailAttempts, then busy. Nothing was written.
 	var committed ledgerstore.Receipt
-	var searched uint64
 	for attempt := 1; ; attempt++ {
-		if err := s.usableLocked(ctx); err != nil {
-			return nil, err
-		}
-		if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-			return nil, err
-		}
-		if !s.p.registeredOrigin(sub.Origin) {
-			return nil, ErrNotBound
-		}
-		if searched < s.p.through && bytes.Compare(id[:], s.p.maxCommand[:]) <= 0 {
-			m, err := s.findCommand(ctx, id, searched, s.p.through)
-			if err != nil {
-				return nil, err
+		var drafts []ledger.Draft
+		var prior *loopGroup
+		err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+			drafts, prior = nil, nil
+			if !s.p.registeredOrigin(sub.Origin) {
+				return ErrNotBound
 			}
-			if m.found {
-				if m.loop == nil || m.command.SubmissionSHA256 != digest {
-					return nil, ErrCommandMismatch
+			if bytes.Compare(id[:], s.p.maxCommand[:]) <= 0 {
+				m, err := s.findCommand(ctx, reads, id, 0, s.p.through)
+				if err != nil {
+					return err
 				}
-				if m.loop.receipt.Submission.Origin != sub.Origin {
-					return nil, ErrDenied
+				if m.found {
+					if m.loop == nil || m.command.SubmissionSHA256 != digest {
+						return ErrCommandMismatch
+					}
+					if m.loop.receipt.Submission.Origin != sub.Origin {
+						return ErrDenied
+					}
+					prior = m.loop
+					return nil
 				}
-				return m.loop, nil
 			}
-		}
-		searched = s.p.through
-		drafts, e := s.planLoopDraftsLocked(ctx, id, digest, sub, revision)
-		if e != nil {
-			return nil, e
+			var err error
+			drafts, err = s.planLoopDraftsLocked(ctx, reads, id, digest, sub, revision)
+			return err
+		})
+		if err != nil || prior != nil {
+			return prior, err
 		}
 		committed, err = s.store.SubmitAt(ctx, s.p.through, drafts[0], drafts[1:])
 		if !errors.Is(err, ledgerstore.ErrTailMoved) {
@@ -115,7 +117,7 @@ func (s *Service) commitLoop(ctx context.Context, id uuid.UUID, sub ledger.LoopS
 		s.poisoned = true
 		return nil, err
 	}
-	m, err := s.findCommand(context.Background(), id, committed.First-1, committed.Last)
+	m, err := s.findCommand(context.Background(), nil, id, committed.First-1, committed.Last)
 	if err != nil {
 		return nil, err
 	}
@@ -129,12 +131,12 @@ func (s *Service) commitLoop(ctx context.Context, id uuid.UUID, sub ledger.LoopS
 
 // planLoopDraftsLocked builds the group of sub at the projection's tail and
 // preflights it with Open's reducer.
-func (s *Service) planLoopDraftsLocked(ctx context.Context, id uuid.UUID, digest ledger.Digest, sub ledger.LoopSubmission, revision *ledger.PrivateTurnRevision) ([]ledger.Draft, error) {
+func (s *Service) planLoopDraftsLocked(ctx context.Context, reads *historyReadSet, id uuid.UUID, digest ledger.Digest, sub ledger.LoopSubmission, revision *ledger.PrivateTurnRevision) ([]ledger.Draft, error) {
 	var effects []paidEncoding
 	var types []string
 	switch a := sub.Arguments.(type) {
 	case ledger.LoopBindArguments:
-		native, err := s.loopNative(ctx, a.AdmissionCommandID, sub.Origin, s.p.through)
+		native, err := s.loopNative(ctx, reads, a.AdmissionCommandID, sub.Origin, s.p.through)
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +150,7 @@ func (s *Service) planLoopDraftsLocked(ctx context.Context, id uuid.UUID, digest
 		if revision == nil {
 			return nil, ErrInvalid
 		}
-		native, err := s.loopNative(ctx, a.EndingCommandID, sub.Origin, s.p.through)
+		native, err := s.loopNative(ctx, reads, a.EndingCommandID, sub.Origin, s.p.through)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +171,7 @@ func (s *Service) planLoopDraftsLocked(ctx context.Context, id uuid.UUID, digest
 		err = ErrInvalid
 	}
 	if err == nil {
-		_, err = s.planLoop(ctx, g, s.p.through+1)
+		_, err = s.planLoop(ctx, reads, g, s.p.through+1)
 	}
 	if err != nil {
 		return nil, err

@@ -271,16 +271,17 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 	}
 	defer s.active.Done()
 	var a paidAttempt
-	load := func() error {
+	reads := &historyReadSet{}
+	load := func(reads *historyReadSet) error {
 		var found bool
 		var err error
-		a, found, err = s.loadPaid(ctx, request.AttemptID, s.p.through, ledger.Digest{})
+		a, found, err = s.loadPaid(ctx, reads, request.AttemptID, s.p.through, ledger.Digest{})
 		if err == nil && (!found || a.intent == nil) {
 			err = ErrDenied
 		}
 		return err
 	}
-	match, err := s.lookupPaid(ctx, request.CommandID, load)
+	match, err := s.lookupPaid(ctx, reads, nil, request.CommandID, load)
 	if err != nil {
 		s.mu.Unlock()
 		return PaidReceipt{}, err
@@ -371,7 +372,7 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 		}
 		previousBlock, previousChunk = output.BlockIndex, output.ChunkIndex
 	}
-	match, err = s.lookupPaid(ctx, request.CommandID, load)
+	match, err = s.lookupPaid(ctx, reads, nil, request.CommandID, load)
 	defer s.mu.Unlock()
 	if err != nil {
 		return PaidReceipt{}, err
@@ -379,42 +380,68 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 	if match.found {
 		return s.matchPaidObservation(match, a, request, ref, correction)
 	}
-	prior, _, err := s.loadPaid(ctx, request.AttemptID, s.p.through, ref.SHA256)
-	if errors.Is(err, ErrNoEffect) {
-		sequence := prior.evidence[ref.SHA256]
-		var receipt PaidReceipt
-		err = s.scanDirectory(ctx, directoryKey{kind: directoryPaid, id: request.AttemptID}, sequence-3, sequence, func(c ledger.Commit) error {
-			_, _, _, g, _, _, e := decodeFamily(draftsOf(c), c.First)
-			if e == nil && g != nil && c.Last == sequence {
-				receipt, e = copyPaidReceipt(g, s.p.through)
+	var drafts []ledger.Draft
+	var group *paidGroup
+	var receipt PaidReceipt
+	var foundReceipt bool
+	ids := submissionIDs{a.origin.AgentID, a.origin.SessionID, a.origin.ContextID}
+	err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		drafts, group, receipt, foundReceipt = nil, nil, PaidReceipt{}, false
+		if err := load(reads); err != nil {
+			return err
+		}
+		var err error
+		match, err = s.findCommand(ctx, reads, request.CommandID, 0, s.p.through)
+		if err != nil {
+			return err
+		}
+		if match.found {
+			foundReceipt = true
+			receipt, err = s.matchPaidObservation(match, a, request, ref, correction)
+			return err
+		}
+		prior, _, err := s.loadPaid(ctx, reads, request.AttemptID, s.p.through, ref.SHA256)
+		if errors.Is(err, ErrNoEffect) {
+			sequence := prior.evidence[ref.SHA256]
+			c, err := s.directoryCommit(ctx, reads, directoryRow{first: sequence - 2, last: sequence}, s.p.through)
+			if err != nil {
+				return err
 			}
-			return e
-		})
+			_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
+			if err == nil && g != nil && c.Last == sequence {
+				receipt, err = copyPaidReceipt(g, s.p.through)
+			}
+			foundReceipt = true
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		result := derivePaidResult(a, object)
+		result.ExpectedVersion, result.Version = request.ExpectedVersion, request.ExpectedVersion+1
+		result.EvidenceSHA256, result.EvidenceObject = ref.SHA256, &ref
+		sub := paidObservationSubmission(a, request, ref, result.Kind, result.MessageObjects, correction)
+		outcome := map[string]string{"unknown": "unknown", "usage": "settled", "no_charge": "no_charge"}[result.Kind]
+		if correction != nil {
+			if result.Kind == "unknown" {
+				return ErrInvalid
+			}
+			result.Kind, result.PreviousResultSequence, result.PreviousEvidenceSHA256 = "correction", correction.PreviousResultSequence, correction.PreviousEvidenceSHA256
+			outcome = "corrected"
+		}
+		if a.version != request.ExpectedVersion {
+			return ErrRevision
+		}
+		drafts, err = paidDrafts(request.CommandID, sub, result, ledger.TypeRuntimePaidResult, outcome, result.Version, request.AttemptID, a.admission.ParentTurnID, nil)
+		if err == nil {
+			drafts, group, err = s.preflightPaidLocked(ctx, reads, drafts)
+		}
+		return err
+	})
+	if err != nil || foundReceipt {
 		return receipt, err
 	}
-	if err != nil {
-		return PaidReceipt{}, err
-	}
-	result := derivePaidResult(a, object)
-	result.ExpectedVersion, result.Version = request.ExpectedVersion, request.ExpectedVersion+1
-	result.EvidenceSHA256, result.EvidenceObject = ref.SHA256, &ref
-	sub := paidObservationSubmission(a, request, ref, result.Kind, result.MessageObjects, correction)
-	outcome := map[string]string{"unknown": "unknown", "usage": "settled", "no_charge": "no_charge"}[result.Kind]
-	if correction != nil {
-		if result.Kind == "unknown" {
-			return PaidReceipt{}, ErrInvalid
-		}
-		result.Kind, result.PreviousResultSequence, result.PreviousEvidenceSHA256 = "correction", correction.PreviousResultSequence, correction.PreviousEvidenceSHA256
-		outcome = "corrected"
-	}
-	if a.version != request.ExpectedVersion {
-		return PaidReceipt{}, ErrRevision
-	}
-	drafts, err := paidDrafts(request.CommandID, sub, result, ledger.TypeRuntimePaidResult, outcome, result.Version, request.AttemptID, a.admission.ParentTurnID, nil)
-	if err != nil {
-		return PaidReceipt{}, err
-	}
-	return s.submitPaidLocked(ctx, drafts)
+	return s.submitPaidGroupLocked(ctx, drafts, group, false)
 }
 
 func paidObservationSubmission(a paidAttempt, request PaidObservation, ref ledger.ObjectRef, kind string, messages []ledger.ObjectRef, correction *PaidCorrection) ledger.PaidSubmission {

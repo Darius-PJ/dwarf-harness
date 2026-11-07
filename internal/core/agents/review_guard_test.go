@@ -106,7 +106,7 @@ func TestReviewDirectGuard(t *testing.T) {
 		f, _ := openReviewFixture(t, 18)
 		ctx := context.Background()
 		r := reviewTaskMutation(t, f.service, "complete")
-		current, _, err := f.service.loadTask(ctx, r.TaskID, f.service.p.through)
+		current, _, err := f.service.loadTask(ctx, nil, r.TaskID, f.service.p.through)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -164,11 +164,12 @@ func (r *loopRuntime) coreTool(t *loopTurn, inv *loopInvocation) (data any, sequ
 			// Select the actual receipt rather than guessing from a return error.
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			if e := s.refreshLocked(context.Background(), s.store.Durable()); e != nil {
-				err = e
-				return
-			}
-			match, e := s.findCommand(context.Background(), inv.effectID, 0, s.p.through)
+			var match commandMatch
+			e := s.prepareHistoryLocked(context.Background(), &historyReadSet{}, &agent.ids, true, func(reads *historyReadSet) error {
+				var err error
+				match, err = s.findCommand(context.Background(), reads, inv.effectID, 0, s.p.through)
+				return err
+			})
 			if e != nil {
 				err = e
 				return

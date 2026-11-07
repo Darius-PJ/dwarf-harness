@@ -92,7 +92,7 @@ func paidOpenAITier(units []providers.Units) string {
 	return "default_short"
 }
 
-func (s *Service) paidAuthority(ctx context.Context, a paidAttempt, through uint64) ([]grantRules, *scopedTaskState, error) {
+func (s *Service) paidAuthority(ctx context.Context, reads *historyReadSet, a paidAttempt, through uint64) ([]grantRules, *scopedTaskState, error) {
 	p := a.admission
 	route, found := s.p.paidRoutes[p.RouteID]
 	digest, _ := route.Profile.SHA256()
@@ -103,18 +103,18 @@ func (s *Service) paidAuthority(ctx context.Context, a paidAttempt, through uint
 	if !found || credential.ScopeID != route.CredentialScopeID || credential.Provider != p.Request.Provider {
 		return nil, nil, ErrDenied
 	}
-	chain, err := s.authorize(ctx, a.origin, p.GrantID, "model.call", []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + p.RouteID.String()}}, nil, 0, through)
+	chain, err := s.authorize(ctx, reads, a.origin, p.GrantID, "model.call", []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + p.RouteID.String()}}, nil, 0, through)
 	if err != nil {
 		return nil, nil, err
 	}
 	if chain[0].task != (ledger.TaskBinding{}) && (p.TaskBinding == nil || *p.TaskBinding != chain[0].task) {
 		return nil, nil, ErrDenied
 	}
-	task, err := s.activeWorkTask(ctx, a.origin, p.TaskBinding, through)
+	task, err := s.activeWorkTask(ctx, reads, a.origin, p.TaskBinding, through)
 	if err != nil {
 		return nil, nil, err
 	}
-	parent, found, err := s.loadWork(ctx, p.ParentTurnID, through)
+	parent, found, err := s.loadWork(ctx, reads, p.ParentTurnID, through)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -130,8 +130,8 @@ func (s *Service) paidAuthority(ctx context.Context, a paidAttempt, through uint
 	return chain, task, nil
 }
 
-func (s *Service) paidCurrent(ctx context.Context, a paidAttempt, observed int64, through uint64, extra int64) ([]grantRules, *scopedTaskState, error) {
-	chain, task, err := s.paidAuthority(ctx, a, through)
+func (s *Service) paidCurrent(ctx context.Context, reads *historyReadSet, a paidAttempt, observed int64, through uint64, extra int64) ([]grantRules, *scopedTaskState, error) {
+	chain, task, err := s.paidAuthority(ctx, reads, a, through)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -149,14 +149,14 @@ func (s *Service) paidCurrent(ctx context.Context, a paidAttempt, observed int64
 	return chain, task, nil
 }
 
-func (s *Service) planPaidAttempt(ctx context.Context, g *paidGroup, first uint64) (paidPlan, error) {
+func (s *Service) planPaidAttempt(ctx context.Context, reads *historyReadSet, g *paidGroup, first uint64) (paidPlan, error) {
 	plan := paidPlan{}
 	sub, through := g.receipt.Submission, first-1
 	var a paidAttempt
 	var err error
 	if p := g.reserved; p != nil {
 		if bytes.Compare(p.AttemptID[:], s.p.maxAttempt[:]) <= 0 {
-			_, found, err := s.loadPaid(ctx, p.AttemptID, through, ledger.Digest{})
+			_, found, err := s.loadPaid(ctx, reads, p.AttemptID, through, ledger.Digest{})
 			if err != nil {
 				return plan, err
 			}
@@ -172,7 +172,7 @@ func (s *Service) planPaidAttempt(ctx context.Context, g *paidGroup, first uint6
 		if err := checkPaidQuote(*p, a.profile); err != nil {
 			return plan, err
 		}
-		_, task, err := s.paidCurrent(ctx, a, p.AdmissionUTCNS, through, p.Quote.MaximumMicros)
+		_, task, err := s.paidCurrent(ctx, reads, a, p.AdmissionUTCNS, through, p.Quote.MaximumMicros)
 		if err != nil {
 			return plan, err
 		}
@@ -189,7 +189,7 @@ func (s *Service) planPaidAttempt(ctx context.Context, g *paidGroup, first uint6
 		if g.result != nil {
 			evidence = g.result.EvidenceSHA256
 		}
-		a, found, err = s.loadPaid(ctx, g.receipt.AttemptID, through, evidence)
+		a, found, err = s.loadPaid(ctx, reads, g.receipt.AttemptID, through, evidence)
 		if err != nil {
 			return plan, err
 		}
@@ -206,7 +206,7 @@ func (s *Service) planPaidAttempt(ctx context.Context, g *paidGroup, first uint6
 			if a.version != 1 || a.ended || a.intent != nil || v.ExpectedVersion != a.version || v.AttemptID != a.admission.AttemptID || v.AuthorityVersion != s.p.authority || v.RequestSHA256 != a.admission.Quote.RequestSHA256 || v.QuoteSHA256 != a.admission.Quote.QuoteSHA256 || v.Credential != a.admission.Request.Credential || !sameScopedValue(sub.Arguments, ledger.PaidAttemptArguments{AttemptID: v.AttemptID, ExpectedVersion: v.ExpectedVersion}) {
 				return plan, ErrInvalid
 			}
-			_, task, err := s.paidCurrent(ctx, a, v.ObservedUTCNS, through, 0)
+			_, task, err := s.paidCurrent(ctx, reads, a, v.ObservedUTCNS, through, 0)
 			if err != nil {
 				return plan, err
 			}

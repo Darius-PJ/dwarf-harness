@@ -59,7 +59,7 @@ func testReviewResultRechecksPrefixChains(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.service.mu.Lock()
-			err = f.service.refreshLocked(ctx, f.store.Durable())
+			err = f.service.refreshLocked(ctx, &historyReadSet{}, f.store.Durable())
 			f.service.mu.Unlock()
 			if err != nil {
 				t.Fatal(err)
@@ -82,7 +82,7 @@ func testReviewResultRechecksPrefixChains(t *testing.T) {
 					t.Fatal(err)
 				}
 				f.service.mu.Lock()
-				err = f.service.refreshLocked(ctx, f.store.Durable())
+				err = f.service.refreshLocked(ctx, &historyReadSet{}, f.store.Durable())
 				f.service.mu.Unlock()
 				if err != nil {
 					t.Fatal(err)

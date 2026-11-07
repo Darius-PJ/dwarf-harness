@@ -16,7 +16,7 @@ func reviewOperation(kind string) string {
 	return "task.complete"
 }
 
-func (s *Service) reviewParticipant(ctx context.Context, principal ledger.ReviewPrincipal, b ledger.ReviewBinding, kind string, requester bool, task ledger.RuntimeTaskChanged, through uint64) ([]grantRules, error) {
+func (s *Service) reviewParticipant(ctx context.Context, reads *historyReadSet, principal ledger.ReviewPrincipal, b ledger.ReviewBinding, kind string, requester bool, task ledger.RuntimeTaskChanged, through uint64) ([]grantRules, error) {
 	if !s.p.registeredOrigin(principal.Origin) {
 		return nil, ErrDenied
 	}
@@ -30,7 +30,7 @@ func (s *Service) reviewParticipant(ctx context.Context, principal ledger.Review
 			recipients = []Binding{bindingOf(b.Reviewer.Origin)}
 		}
 		var err error
-		chain, err = s.authorize(ctx, principal.Origin, principal.GrantID, reviewOperation(kind), []ledger.Resource{{Kind: "task", TaskID: b.TaskID}}, recipients, 0, through)
+		chain, err = s.authorize(ctx, reads, principal.Origin, principal.GrantID, reviewOperation(kind), []ledger.Resource{{Kind: "task", TaskID: b.TaskID}}, recipients, 0, through)
 		if err != nil {
 			return nil, err
 		}
@@ -40,7 +40,7 @@ func (s *Service) reviewParticipant(ctx context.Context, principal ledger.Review
 	return chain, nil
 }
 
-func (s *Service) reviewReadRights(ctx context.Context, principal ledger.ReviewPrincipal, b ledger.ReviewBinding, through uint64, sources map[int64]ledger.Record) error {
+func (s *Service) reviewReadRights(ctx context.Context, reads *historyReadSet, principal ledger.ReviewPrincipal, b ledger.ReviewBinding, through uint64, sources map[int64]ledger.Record) error {
 	refs := append([]ledger.SubjectRef{b.Subject}, b.RequiredEvidence...)
 	for _, subject := range refs {
 		if _, err := subject.MarshalJSON(); err != nil {
@@ -49,7 +49,7 @@ func (s *Service) reviewReadRights(ctx context.Context, principal ledger.ReviewP
 		switch subject.Kind {
 		case "artifact":
 			if principal.Actor != "owner" {
-				if _, err := s.artifactAuthority(ctx, principal.Origin, subject.Artifact, uuid.UUID{}, through, sources); err != nil {
+				if _, err := s.artifactAuthority(ctx, reads, principal.Origin, subject.Artifact, uuid.UUID{}, through, sources); err != nil {
 					return err
 				}
 			}
@@ -64,7 +64,7 @@ func (s *Service) reviewReadRights(ctx context.Context, principal ledger.ReviewP
 			}
 			allowed := false
 			for _, id := range s.ownGrantIDs(principal.Origin) {
-				_, err := s.authorize(ctx, principal.Origin, id, "private.read", []ledger.Resource{{Kind: "context", Binding: caller, Scope: ref.Scope, Slots: []string{ref.Slot}}}, nil, ref.Bytes, through)
+				_, err := s.authorize(ctx, reads, principal.Origin, id, "private.read", []ledger.Resource{{Kind: "context", Binding: caller, Scope: ref.Scope, Slots: []string{ref.Slot}}}, nil, ref.Bytes, through)
 				if err == nil {
 					allowed = true
 					break
@@ -85,7 +85,7 @@ func (s *Service) reviewReadRights(ctx context.Context, principal ledger.ReviewP
 
 // Metadata witnesses are bounded by the distinct references in this operation;
 // neither body bytes nor materialized Markdown are consulted.
-func (s *Service) reviewWitnesses(ctx context.Context, b ledger.ReviewBinding, through uint64) (map[int64]ledger.Record, error) {
+func (s *Service) reviewWitnesses(ctx context.Context, reads *historyReadSet, b ledger.ReviewBinding, through uint64) (map[int64]ledger.Record, error) {
 	refs := append([]ledger.SubjectRef{b.Subject}, b.RequiredEvidence...)
 	sequences := make([]int64, 0, len(refs))
 	for _, subject := range refs {
@@ -101,7 +101,7 @@ func (s *Service) reviewWitnesses(ctx context.Context, b ledger.ReviewBinding, t
 			return nil, ErrDenied
 		}
 	}
-	return s.sourceRecords(ctx, sequences, through)
+	return s.sourceRecords(ctx, reads, sequences, through)
 }
 
 func (s *Service) reviewSources(b ledger.ReviewBinding, sources map[int64]ledger.Record) error {

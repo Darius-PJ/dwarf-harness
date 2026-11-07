@@ -44,9 +44,9 @@ func (s *Service) ownGrantIDs(origin ledger.Origin) []uuid.UUID {
 	return ids
 }
 
-func (s *Service) anyPermission(ctx context.Context, origin ledger.Origin, operation string, target ledger.Resource, through uint64) (bool, error) {
+func (s *Service) anyPermission(ctx context.Context, reads *historyReadSet, origin ledger.Origin, operation string, target ledger.Resource, through uint64) (bool, error) {
 	for _, id := range s.ownGrantIDs(origin) {
-		_, err := s.authorize(ctx, origin, id, operation, []ledger.Resource{target}, nil, 0, through)
+		_, err := s.authorize(ctx, reads, origin, id, operation, []ledger.Resource{target}, nil, 0, through)
 		if err == nil {
 			return true, nil
 		}
@@ -57,23 +57,23 @@ func (s *Service) anyPermission(ctx context.Context, origin ledger.Origin, opera
 	return false, nil
 }
 
-func (s *Service) executionAuthorized(ctx context.Context, task ledger.RuntimeTaskChanged, actor string, through uint64) (bool, error) {
+func (s *Service) executionAuthorized(ctx context.Context, reads *historyReadSet, task ledger.RuntimeTaskChanged, actor string, through uint64) (bool, error) {
 	if task.Assignment == nil {
 		return false, nil
 	}
 	binding := task.Assignment.Assignee
 	origin := ledger.Origin{AgentID: binding.AgentID, SessionID: s.p.agents[binding.AgentID].session, ContextID: binding.ContextID}
 	if actor != "owner" {
-		allowed, err := s.anyPermission(ctx, origin, "task.start", ledger.Resource{Kind: "task", TaskID: task.TaskID}, through)
+		allowed, err := s.anyPermission(ctx, reads, origin, "task.start", ledger.Resource{Kind: "task", TaskID: task.TaskID}, through)
 		if err != nil || !allowed {
 			return false, err
 		}
 	}
-	return s.anyPermission(ctx, origin, "turn.start", ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}}, through)
+	return s.anyPermission(ctx, reads, origin, "turn.start", ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}}, through)
 }
 
-func (s *Service) planTask(ctx context.Context, g *scopedGroup, first uint64) (scopedPlan, []grantRules, error) {
-	plan, chain, err := s.deriveTask(ctx, g.receipt.Submission, first)
+func (s *Service) planTask(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64) (scopedPlan, []grantRules, error) {
+	plan, chain, err := s.deriveTask(ctx, reads, g.receipt.Submission, first)
 	if err != nil {
 		return scopedPlan{}, nil, err
 	}
@@ -83,7 +83,7 @@ func (s *Service) planTask(ctx context.Context, g *scopedGroup, first uint64) (s
 	return plan, chain, nil
 }
 
-func (s *Service) deriveTask(ctx context.Context, sub ledger.ScopedSubmission, first uint64) (scopedPlan, []grantRules, error) {
+func (s *Service) deriveTask(ctx context.Context, reads *historyReadSet, sub ledger.ScopedSubmission, first uint64) (scopedPlan, []grantRules, error) {
 	plan := scopedPlan{authority: s.p.authority}
 	through := first - 1
 	var action taskAction
@@ -116,14 +116,14 @@ func (s *Service) deriveTask(ctx context.Context, sub ledger.ScopedSubmission, f
 		if creation != nil {
 			size = creation.Description.Bytes
 		}
-		chain, err = s.authorize(ctx, sub.Origin, sub.GrantID, sub.Operation, []ledger.Resource{sub.Target}, nil, size, through)
+		chain, err = s.authorize(ctx, reads, sub.Origin, sub.GrantID, sub.Operation, []ledger.Resource{sub.Target}, nil, size, through)
 		if err != nil {
 			return plan, nil, err
 		}
 	} else if sub.GrantID != (uuid.UUID{}) {
 		return plan, nil, ErrInvalid
 	}
-	previous, found, err := s.loadTask(ctx, action.task, through)
+	previous, found, err := s.loadTask(ctx, reads, action.task, through)
 	if err != nil {
 		return plan, nil, err
 	}
@@ -143,7 +143,7 @@ func (s *Service) deriveTask(ctx context.Context, sub ledger.ScopedSubmission, f
 		dependencies = creation.Dependencies
 	}
 	for _, id := range dependencies {
-		dependency, exists, err := s.loadTask(ctx, id, through)
+		dependency, exists, err := s.loadTask(ctx, reads, id, through)
 		if err != nil {
 			return plan, nil, err
 		}
@@ -153,7 +153,7 @@ func (s *Service) deriveTask(ctx context.Context, sub ledger.ScopedSubmission, f
 		}
 	}
 	if action.action == "start" || action.action == "resume" {
-		facts.executionAuthorized, err = s.executionAuthorized(ctx, previous.record, sub.Actor, through)
+		facts.executionAuthorized, err = s.executionAuthorized(ctx, reads, previous.record, sub.Actor, through)
 		if err != nil {
 			return plan, nil, err
 		}
@@ -164,13 +164,13 @@ func (s *Service) deriveTask(ctx context.Context, sub ledger.ScopedSubmission, f
 		if facts.registeredContext && s.p.agents[binding.AgentID].general != binding.ContextID {
 			facts.contextKind = "work"
 		}
-		facts.newAssignmentUnused, facts.freshContext, err = s.assignmentUnused(ctx, action.assignment, through)
+		facts.newAssignmentUnused, facts.freshContext, err = s.assignmentUnused(ctx, reads, action.assignment, through)
 		if err != nil {
 			return plan, nil, err
 		}
 	}
 	for _, subject := range []*ledger.SubjectRef{subjectPointer(action.waitSubject), subjectPointer(action.submission), subjectPointer(action.failureEvidence)} {
-		if err := s.subjectAuthorized(ctx, sub.Actor, sub.Origin, subject, through); err != nil {
+		if err := s.subjectAuthorized(ctx, reads, sub.Actor, sub.Origin, subject, through); err != nil {
 			return plan, nil, err
 		}
 	}

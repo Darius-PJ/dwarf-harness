@@ -80,7 +80,7 @@ func TestReviewProseCannotDecideTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := f.store.Durable()
-	ids, err := f.service.initialIDs(ctx, worker, false)
+	ids, err := f.service.initialIDs(ctx, &historyReadSet{}, worker, false)
 	if err != nil {
 		t.Fatal(err)
 	}

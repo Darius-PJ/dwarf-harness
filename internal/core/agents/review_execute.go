@@ -23,7 +23,8 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 		return ReviewReceipt{}, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, caller.binding, false)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, caller.binding, false)
 	if err != nil {
 		return ReviewReceipt{}, err
 	}
@@ -38,23 +39,42 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 	defer func() { s.mu.Lock(); s.releaseScopedLocked(&reservation); s.mu.Unlock() }()
 	// Steps 2 and 3: the caller's current authority, then the command. A
 	// retry answers before any step-4 guard, limit or clock.
-	l, err := s.lookupReview(ctx, input, 0, false)
+	l, err := s.lookupReview(ctx, reads, input, 0, false)
 	if err == nil && l.match.found {
-		r, err := s.retryReviewLocked(ctx, input, l)
+		r, err := s.retryReviewLocked(ctx, reads, input, l)
 		s.mu.Unlock()
 		return r, err
 	}
 	// Steps 4 and 5: the new command's guards, then its bounds and
 	// reservation, all before any witness is read.
-	if err == nil {
-		_, err = s.reviewGuardsLocked(ctx, input, nil)
-	}
 	var usage *ledger.ReviewUsage
 	if err == nil {
-		usage, err = s.reviewUsage(ctx, input.sub)
+		err = s.prepareReviewHistoryLocked(ctx, reads, input, func(reads *historyReadSet) error {
+			if err := s.refreshReviewCaller(ctx, reads, input); err != nil {
+				return err
+			}
+			l.match = commandMatch{}
+			var err error
+			if bytes.Compare(input.id[:], s.p.maxCommand[:]) <= 0 {
+				l.match, err = s.findCommand(ctx, reads, input.id, 0, s.p.through)
+			}
+			if err != nil || l.match.found {
+				return err
+			}
+			if _, err := s.reviewGuardsLocked(ctx, reads, input, nil); err != nil {
+				return err
+			}
+			usage, err = s.reviewUsage(ctx, reads, input.sub)
+			if err != nil {
+				return err
+			}
+			return s.reviewProducerGuards(input, usage)
+		})
 	}
-	if err == nil {
-		err = s.reviewProducerGuards(input, usage)
+	if err == nil && l.match.found {
+		r, err := s.retryReviewLocked(ctx, reads, input, l)
+		s.mu.Unlock()
+		return r, err
 	}
 	if err == nil {
 		err = s.reserveScopedProcessLocked(&reservation)
@@ -72,7 +92,7 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 	// concurrent winner. Every guard then repeats under mu at the refreshed
 	// prefix, the clock is sampled a second time, and Open's reducer judges
 	// the exact group this Submit writes.
-	l, err = s.lookupReview(ctx, input, through, true)
+	l, err = s.lookupReview(ctx, reads, input, through, true)
 	// The group carries its clock sample, which another writer's later commit
 	// time would raise the review floor above, so it is written only at the
 	// tail it was planned at. A refusal at a moved tail re-enters at the
@@ -84,29 +104,47 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 	var plan reviewPlan
 	var committed ledgerstore.Receipt
 	for attempt := 1; ; attempt++ {
-		if attempt > 1 {
-			l.match, err = s.relookupReviewLocked(ctx, input)
+		if err == nil {
+			err = s.prepareReviewHistoryLocked(ctx, reads, input, func(reads *historyReadSet) error {
+				drafts, group, plan = nil, nil, reviewPlan{}
+				if err := s.refreshReviewCaller(ctx, reads, input); err != nil {
+					return err
+				}
+				var err error
+				l.match = commandMatch{}
+				if bytes.Compare(input.id[:], s.p.maxCommand[:]) <= 0 {
+					l.match, err = s.findCommand(ctx, reads, input.id, 0, s.p.through)
+				}
+				if err != nil || l.match.found {
+					return err
+				}
+				sources, sourceErr := l.sources, l.sourceErr
+				if l.sourceThrough != s.p.through {
+					sources, sourceErr = s.reviewWitnesses(ctx, reads, input.binding, s.p.through)
+				}
+				sample, err := s.reviewGuardsLocked(ctx, reads, input, sourceErr)
+				if err != nil {
+					return err
+				}
+				drafts, group, plan, err = s.prepareReviewLocked(ctx, reads, input, sources, sample)
+				if err != nil {
+					return err
+				}
+				if err := s.reviewProducerGuards(input, group.receipt.Usage); err != nil {
+					return err
+				}
+				if len(reservation.scopes) != 0 {
+					if err := s.p.book.checkPreparation(reservation.scopes, reservation.budget, false); err != nil {
+						return err
+					}
+				}
+				return s.usableLocked(ctx)
+			})
 		}
 		if err == nil && l.match.found {
-			r, err := s.retryReviewLocked(ctx, input, l)
+			r, err := s.retryReviewLocked(ctx, reads, input, l)
 			s.mu.Unlock()
 			return r, err
-		}
-		var sample int64
-		if err == nil {
-			sample, err = s.reviewGuardsLocked(ctx, input, l.sourceErr)
-		}
-		if err == nil {
-			drafts, group, plan, err = s.prepareReviewLocked(ctx, input, l.sources, sample)
-		}
-		if err == nil {
-			err = s.reviewProducerGuards(input, group.receipt.Usage)
-		}
-		if err == nil && len(reservation.scopes) != 0 {
-			err = s.p.book.checkPreparation(reservation.scopes, reservation.budget, false)
-		}
-		if err == nil {
-			err = s.usableLocked(ctx)
 		}
 		if err != nil {
 			s.mu.Unlock()
@@ -120,6 +158,7 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 			s.mu.Unlock()
 			return ReviewReceipt{}, &BusyError{Reason: "ledger_tail"}
 		}
+		err = nil
 	}
 	if err != nil {
 		if errors.Is(err, appender.ErrUncertain) || errors.Is(err, appender.ErrPoisoned) {
@@ -159,7 +198,7 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 		err = s.acknowledgeLocked(max(s.p.through, committed.Last))
 		if err == nil {
 			var match commandMatch
-			match, err = s.findCommand(context.Background(), input.id, committed.First-1, committed.Last)
+			match, err = s.findCommand(context.Background(), nil, input.id, committed.First-1, committed.Last)
 			if err == nil && match.review == nil {
 				err = ErrInconsistent
 			}
@@ -195,9 +234,10 @@ func (input reviewInput) principal() ledger.ReviewPrincipal {
 }
 
 type reviewLookup struct {
-	match     commandMatch
-	sources   map[int64]ledger.Record
-	sourceErr error
+	match         commandMatch
+	sources       map[int64]ledger.Record
+	sourceErr     error
+	sourceThrough uint64
 }
 
 // lookupReview proves the caller's current authority, then searches the
@@ -205,10 +245,12 @@ type reviewLookup struct {
 // prepares the binding's metadata witnesses there. It returns with mu held,
 // even on error, after repeating the caller check and searching the tail. A
 // witness batch is immutable metadata, never a permit.
-func (s *Service) lookupReview(ctx context.Context, input reviewInput, after uint64, witnesses bool) (reviewLookup, error) {
+func (s *Service) lookupReview(ctx context.Context, reads *historyReadSet, input reviewInput, after uint64, witnesses bool) (reviewLookup, error) {
 	var l reviewLookup
 	s.mu.Lock()
-	if err := s.refreshReviewCaller(ctx, input); err != nil {
+	if err := s.prepareReviewHistoryLocked(ctx, reads, input, func(reads *historyReadSet) error {
+		return s.refreshReviewCaller(ctx, reads, input)
+	}); err != nil {
 		return l, err
 	}
 	through := s.p.through
@@ -220,43 +262,55 @@ func (s *Service) lookupReview(ctx context.Context, input reviewInput, after uin
 	}
 	var err error
 	if old {
-		l.match, err = s.findCommand(ctx, input.id, after, through)
+		l.match, err = s.findCommand(ctx, nil, input.id, after, through)
 	}
 	if witnesses {
-		l.sources, l.sourceErr = s.reviewWitnesses(ctx, input.binding, through)
+		l.sources, l.sourceErr = s.reviewWitnesses(ctx, nil, input.binding, through)
+		l.sourceThrough = through
 	}
 	s.mu.Lock()
-	if e := s.refreshReviewCaller(ctx, input); e != nil {
+	base := l.match
+	if e := s.prepareReviewHistoryLocked(ctx, reads, input, func(reads *historyReadSet) error {
+		l.match = base
+		if e := s.refreshReviewCaller(ctx, reads, input); e != nil {
+			return e
+		}
+		if err == nil && !l.match.found && through < s.p.through {
+			var e error
+			l.match, e = s.findCommand(ctx, reads, input.id, through, s.p.through)
+			return e
+		}
+		return nil
+	}); e != nil {
 		return l, e
 	}
-	if err == nil && !l.match.found && through < s.p.through {
-		l.match, err = s.findCommand(ctx, input.id, through, s.p.through)
-	}
 	return l, err
-}
-
-// relookupReviewLocked re-enters after the store refused the group at a moved
-// tail. Under mu throughout, it repeats the caller check at the refreshed
-// prefix and searches only the commits after the prefix already searched.
-func (s *Service) relookupReviewLocked(ctx context.Context, input reviewInput) (commandMatch, error) {
-	searched := s.p.through
-	if err := s.refreshReviewCaller(ctx, input); err != nil {
-		return commandMatch{}, err
-	}
-	if searched < s.p.through {
-		return s.findCommand(ctx, input.id, searched, s.p.through)
-	}
-	return commandMatch{}, nil
 }
 
 // retryReviewLocked answers a matched command with its immutable receipt. The
 // caller's current read access to every reference it names still applies, as
 // for scoped retries; no step-4 guard, limit or clock is consulted.
-func (s *Service) retryReviewLocked(ctx context.Context, input reviewInput, l reviewLookup) (ReviewReceipt, error) {
-	if err := s.reviewReadRights(ctx, input.principal(), input.binding, s.p.through, l.sources); err != nil {
-		return ReviewReceipt{}, reviewDenied(err)
-	}
-	return matchReviewReceipt(l.match, input)
+func (s *Service) retryReviewLocked(ctx context.Context, reads *historyReadSet, input reviewInput, l reviewLookup) (ReviewReceipt, error) {
+	var receipt ReviewReceipt
+	err := s.prepareReviewHistoryLocked(ctx, reads, input, func(reads *historyReadSet) error {
+		if err := s.refreshReviewCaller(ctx, reads, input); err != nil {
+			return err
+		}
+		if err := s.reviewReadRights(ctx, reads, input.principal(), input.binding, s.p.through, l.sources); err != nil {
+			return reviewDenied(err)
+		}
+		var err error
+		receipt, err = matchReviewReceipt(l.match, input)
+		return err
+	})
+	return receipt, err
+}
+
+// Review phases bind the shared history protocol to the request's origin.
+func (s *Service) prepareReviewHistoryLocked(ctx context.Context, reads *historyReadSet, input reviewInput, phase func(*historyReadSet) error) error {
+	origin := input.sub.Origin
+	ids := submissionIDs{origin.AgentID, origin.SessionID, origin.ContextID}
+	return s.prepareHistoryLocked(ctx, reads, &ids, true, phase)
 }
 
 // reviewGuardsLocked is step 4 for a new command, in planReview's order: the
@@ -264,9 +318,9 @@ func (s *Service) retryReviewLocked(ctx context.Context, input reviewInput, l re
 // failure, then trusted time. The clock is read after dedup and judged last,
 // but every successfully read sample raises this incarnation's floor before
 // the head, even when a later guard refuses the call; a failed sample cannot.
-func (s *Service) reviewGuardsLocked(ctx context.Context, input reviewInput, witnessErr error) (int64, error) {
+func (s *Service) reviewGuardsLocked(ctx context.Context, reads *historyReadSet, input reviewInput, witnessErr error) (int64, error) {
 	if input.result {
-		slot, found, err := s.loadReview(ctx, input.requestID, s.p.through)
+		slot, found, err := s.loadReview(ctx, reads, input.requestID, s.p.through)
 		if err != nil {
 			return 0, err
 		}
@@ -279,7 +333,7 @@ func (s *Service) reviewGuardsLocked(ctx context.Context, input reviewInput, wit
 		s.reviewSample = max(s.reviewSample, sample)
 	}
 	request, result := reviewRecords(input, sample)
-	if _, err := s.reviewHeadAt(ctx, request, result, s.p.through+1); err != nil {
+	if _, err := s.reviewHeadAt(ctx, reads, request, result, s.p.through+1); err != nil {
 		return 0, err
 	}
 	if witnessErr != nil {
@@ -290,11 +344,8 @@ func (s *Service) reviewGuardsLocked(ctx context.Context, input reviewInput, wit
 	return sample, err
 }
 
-func (s *Service) refreshReviewCaller(ctx context.Context, input reviewInput) error {
+func (s *Service) refreshReviewCaller(ctx context.Context, reads *historyReadSet, input reviewInput) error {
 	if err := s.usableLocked(ctx); err != nil {
-		return err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
 		return err
 	}
 	principal := input.principal()
@@ -302,18 +353,18 @@ func (s *Service) refreshReviewCaller(ctx context.Context, input reviewInput) er
 		return ErrDenied
 	}
 	if input.sub.Actor == "agent" {
-		if _, err := s.currentChain(ctx, input.sub.Origin, input.sub.GrantID, s.p.through); err != nil {
+		if _, err := s.currentChain(ctx, reads, input.sub.Origin, input.sub.GrantID, s.p.through); err != nil {
 			return err
 		}
 	}
-	task, found, err := s.loadTask(ctx, input.binding.TaskID, s.p.through)
+	task, found, err := s.loadTask(ctx, reads, input.binding.TaskID, s.p.through)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return ErrDenied
 	}
-	_, err = s.reviewParticipant(ctx, principal, input.binding, input.kind, !input.result, task.record, s.p.through)
+	_, err = s.reviewParticipant(ctx, reads, principal, input.binding, input.kind, !input.result, task.record, s.p.through)
 	return err
 }
 
@@ -346,8 +397,8 @@ func (s *Service) reviewProducerGuards(input reviewInput, usage *ledger.ReviewUs
 	return nil
 }
 
-func (s *Service) prepareReviewLocked(ctx context.Context, input reviewInput, sources map[int64]ledger.Record, sample int64) ([]ledger.Draft, *reviewGroup, reviewPlan, error) {
-	drafts, err := s.reviewDrafts(ctx, input, sample)
+func (s *Service) prepareReviewLocked(ctx context.Context, reads *historyReadSet, input reviewInput, sources map[int64]ledger.Record, sample int64) ([]ledger.Draft, *reviewGroup, reviewPlan, error) {
+	drafts, err := s.reviewDrafts(ctx, reads, input, sample)
 	if err == nil && s.deps.beforeSubmit != nil {
 		drafts = s.deps.beforeSubmit(drafts)
 	}
@@ -366,7 +417,7 @@ func (s *Service) prepareReviewLocked(ctx context.Context, input reviewInput, so
 	}
 	if err == nil {
 		group.sources = sources
-		plan, err = s.planReview(ctx, group, s.p.through+1)
+		plan, err = s.planReview(ctx, reads, group, s.p.through+1)
 	}
 	return drafts, group, plan, err
 }

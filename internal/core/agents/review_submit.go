@@ -27,11 +27,11 @@ func reviewRecords(input reviewInput, sample int64) (*ledger.RuntimeReviewReques
 
 // reviewUsage is an agent command's one charged unit across its grant chain's
 // scopes; an owner command charges nothing.
-func (s *Service) reviewUsage(ctx context.Context, sub ledger.ReviewSubmission) (*ledger.ReviewUsage, error) {
+func (s *Service) reviewUsage(ctx context.Context, reads *historyReadSet, sub ledger.ReviewSubmission) (*ledger.ReviewUsage, error) {
 	if sub.Actor != "agent" {
 		return nil, nil
 	}
-	chain, err := s.currentChain(ctx, sub.Origin, sub.GrantID, s.p.through)
+	chain, err := s.currentChain(ctx, reads, sub.Origin, sub.GrantID, s.p.through)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func (s *Service) reviewUsage(ctx context.Context, sub ledger.ReviewSubmission) 
 	return &ledger.ReviewUsage{AuthorityVersion: s.p.authority, GrantID: sub.GrantID, Scopes: scopes, Units: 1}, nil
 }
 
-func (s *Service) reviewDrafts(ctx context.Context, input reviewInput, sample int64) ([]ledger.Draft, error) {
+func (s *Service) reviewDrafts(ctx context.Context, reads *historyReadSet, input reviewInput, sample int64) ([]ledger.Draft, error) {
 	sub, b := input.sub, input.binding
 	drafts := make([]ledger.Draft, 0, 4)
 	appendPayload := func(typ string, actor ledger.Actor, payload []byte) {
@@ -76,7 +76,7 @@ func (s *Service) reviewDrafts(ctx context.Context, input reviewInput, sample in
 		}
 		receipt.Outcome, receipt.Version, receipt.TaskVersion = reviewOutcome(result.Verdict), 2, result.TaskVersion
 	}
-	if receipt.Usage, err = s.reviewUsage(ctx, sub); err != nil {
+	if receipt.Usage, err = s.reviewUsage(ctx, reads, sub); err != nil {
 		return nil, err
 	}
 	payload, err := receipt.Encode()

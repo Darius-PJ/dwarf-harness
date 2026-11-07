@@ -479,8 +479,8 @@ func testLoopFinishBusyCancel(t *testing.T) {
 		t.Fatalf("cancellation did not acknowledge its recorded ending: %v", reply.err)
 	}
 	f.service.mu.Lock()
-	effect, effectFound, effectErr := f.service.sourceRecord(context.Background(), int64(reply.result.EffectSequence), f.service.p.through)
-	receipt, receiptFound, receiptErr := f.service.sourceRecord(context.Background(), int64(reply.result.ReceiptSequence), f.service.p.through)
+	effect, effectFound, effectErr := f.service.sourceRecord(context.Background(), nil, int64(reply.result.EffectSequence), f.service.p.through)
+	receipt, receiptFound, receiptErr := f.service.sourceRecord(context.Background(), nil, int64(reply.result.ReceiptSequence), f.service.p.through)
 	f.service.mu.Unlock()
 	if effectErr != nil || receiptErr != nil || !effectFound || !receiptFound || effect.Type != ledger.TypeRuntimeWorkEnded || receipt.Type != ledger.TypeRuntimeScopedReceipt {
 		t.Fatal("cancellation acknowledgement did not name CancelTurn's effect and receipt")

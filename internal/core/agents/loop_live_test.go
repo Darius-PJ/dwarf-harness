@@ -206,7 +206,7 @@ func TestTurnLoopLiveSecretCapture(t *testing.T) {
 			t.Fatal("content publication after revocation did not refuse the start")
 		}
 		f.service.mu.Lock()
-		work, found, err := f.service.loadWork(context.Background(), turn, f.service.p.through)
+		work, found, err := f.service.loadWork(context.Background(), nil, turn, f.service.p.through)
 		bound := false
 		if err == nil {
 			err = f.service.scan(context.Background(), 0, f.service.p.through, func(c ledger.Commit) error {

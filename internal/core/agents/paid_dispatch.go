@@ -39,20 +39,21 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 	}
 	defer s.active.Done()
 	var a paidAttempt
-	authority := func() error {
+	reads := &historyReadSet{}
+	authority := func(reads *historyReadSet) error {
 		var found bool
 		var err error
-		a, found, err = s.loadPaid(ctx, request.AttemptID, s.p.through, ledger.Digest{})
+		a, found, err = s.loadPaid(ctx, reads, request.AttemptID, s.p.through, ledger.Digest{})
 		if err != nil {
 			return err
 		}
 		if !found {
 			return ErrDenied
 		}
-		_, _, err = s.paidAuthority(ctx, a, s.p.through)
+		_, _, err = s.paidAuthority(ctx, reads, a, s.p.through)
 		return err
 	}
-	match, err := s.lookupPaid(ctx, request.CommandID, authority)
+	match, err := s.lookupPaid(ctx, reads, nil, request.CommandID, authority)
 	sub := ledger.PaidSubmission{Schema: 4, Actor: "core", Origin: a.origin, Operation: "paid.dispatch", GrantID: a.admission.GrantID, Arguments: ledger.PaidAttemptArguments{AttemptID: request.AttemptID, ExpectedVersion: request.ExpectedVersion}}
 	if err == nil && match.found {
 		digest, e := paidDigest(sub)
@@ -66,32 +67,54 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 		s.mu.Unlock()
 		return out, e
 	}
-	if err == nil && (a.intent != nil || a.ended) {
-		err = ErrPaidSent
-	}
-	if err == nil && a.version != request.ExpectedVersion {
-		err = ErrRevision
-	}
-	if err == nil && s.paid == nil {
-		err = ErrUnavailable
-	}
 	var p *preparedPaid
-	reserved := 0
-	ownsToken := false
-	if s.loop != nil {
-		reserved = len(s.loop.paidTokens)
-		_, ownsToken = s.loop.paidTokens[request.AttemptID]
-	}
 	if err == nil {
-		p = s.paid.calls[request.AttemptID]
-		if p == nil || p.closed || a.sequence <= s.openedThrough {
-			err = ErrUnavailable
-		} else if p.inUse || !ownsToken && len(s.paid.exchanges)+reserved >= s.paid.limits.MaxActivePaid {
-			err = &BusyError{Reason: "paid_active"}
+		ids := submissionIDs{a.origin.AgentID, a.origin.SessionID, a.origin.ContextID}
+		err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+			if err := authority(reads); err != nil {
+				return err
+			}
+			var err error
+			match, err = s.findCommand(ctx, reads, request.CommandID, 0, s.p.through)
+			if err != nil || match.found {
+				return err
+			}
+			if a.intent != nil || a.ended {
+				return ErrPaidSent
+			}
+			if a.version != request.ExpectedVersion {
+				return ErrRevision
+			}
+			if s.paid == nil {
+				return ErrUnavailable
+			}
+			reserved, ownsToken := 0, false
+			if s.loop != nil {
+				reserved = len(s.loop.paidTokens)
+				_, ownsToken = s.loop.paidTokens[request.AttemptID]
+			}
+			p = s.paid.calls[request.AttemptID]
+			if p == nil || p.closed || a.sequence <= s.openedThrough {
+				return ErrUnavailable
+			}
+			if p.inUse || !ownsToken && len(s.paid.exchanges)+reserved >= s.paid.limits.MaxActivePaid {
+				return &BusyError{Reason: "paid_active"}
+			}
+			_, err = s.dispatchGuardsLocked(ctx, reads, a, p)
+			return err
+		})
+	}
+	if err == nil && match.found {
+		digest, e := paidDigest(sub)
+		if e == nil {
+			out.IntentReceipt, e = s.matchPaid(match, sub, digest)
 		}
-	}
-	if err == nil {
-		_, err = s.dispatchGuardsLocked(ctx, a, p)
+		if e == nil && a.result != nil {
+			view, viewErr := s.paidView(a)
+			out.Result, e = &view, viewErr
+		}
+		s.mu.Unlock()
+		return out, e
 	}
 	if err != nil {
 		s.mu.Unlock()
@@ -148,30 +171,40 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 		var current paidAttempt
 		var e error
 		for attempt := 1; ; attempt++ {
-			if e = s.paidUsableLocked(exchangeCtx); e != nil {
-				break
-			}
-			var found bool
-			current, found, e = s.loadPaid(exchangeCtx, request.AttemptID, s.p.through, ledger.Digest{})
-			if e == nil && (!found || current.version != request.ExpectedVersion) {
-				e = ErrRevision
-			}
-			var sample int64
-			if e == nil {
-				sample, e = s.dispatchGuardsLocked(exchangeCtx, current, p)
-			}
-			if e == nil && paidContainsSecret(p.body, key) {
-				e = ErrInvalid
-			}
-			if e != nil {
-				break
-			}
-			effect := ledger.RuntimePaidDispatchIntent{AttemptID: request.AttemptID, ExpectedVersion: current.version, Version: current.version + 1, AuthorityVersion: s.p.authority, RequestSHA256: current.admission.Quote.RequestSHA256, QuoteSHA256: current.admission.Quote.QuoteSHA256, Credential: current.admission.Request.Credential, ObservedUTCNS: sample}
 			var drafts []ledger.Draft
-			drafts, e = paidDrafts(request.CommandID, sub, effect, ledger.TypeRuntimePaidDispatchIntent, "sent", effect.Version, request.AttemptID, current.admission.ParentTurnID, nil)
+			var group *paidGroup
+			ids := submissionIDs{a.origin.AgentID, a.origin.SessionID, a.origin.ContextID}
+			e = s.prepareHistoryLocked(exchangeCtx, reads, &ids, true, func(reads *historyReadSet) error {
+				drafts, group = nil, nil
+				if s.paid == nil {
+					return ErrUnavailable
+				}
+				var found bool
+				var err error
+				current, found, err = s.loadPaid(exchangeCtx, reads, request.AttemptID, s.p.through, ledger.Digest{})
+				if err != nil {
+					return err
+				}
+				if !found || current.version != request.ExpectedVersion {
+					return ErrRevision
+				}
+				sample, err := s.dispatchGuardsLocked(exchangeCtx, reads, current, p)
+				if err != nil {
+					return err
+				}
+				if paidContainsSecret(p.body, key) {
+					return ErrInvalid
+				}
+				effect := ledger.RuntimePaidDispatchIntent{AttemptID: request.AttemptID, ExpectedVersion: current.version, Version: current.version + 1, AuthorityVersion: s.p.authority, RequestSHA256: current.admission.Quote.RequestSHA256, QuoteSHA256: current.admission.Quote.QuoteSHA256, Credential: current.admission.Request.Credential, ObservedUTCNS: sample}
+				drafts, err = paidDrafts(request.CommandID, sub, effect, ledger.TypeRuntimePaidDispatchIntent, "sent", effect.Version, request.AttemptID, current.admission.ParentTurnID, nil)
+				if err == nil {
+					drafts, group, err = s.preflightPaidLocked(exchangeCtx, reads, drafts)
+				}
+				return err
+			})
 			before := s.p.through
 			if e == nil {
-				out.IntentReceipt, e = s.submitPaidGroupLocked(exchangeCtx, drafts, true)
+				out.IntentReceipt, e = s.submitPaidGroupLocked(exchangeCtx, drafts, group, true)
 			}
 			if e == nil {
 				sent = out.IntentReceipt.EffectSequence > before
@@ -235,14 +268,14 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 	return out, err
 }
 
-func (s *Service) dispatchGuardsLocked(ctx context.Context, a paidAttempt, p *preparedPaid) (int64, error) {
+func (s *Service) dispatchGuardsLocked(ctx context.Context, reads *historyReadSet, a paidAttempt, p *preparedPaid) (int64, error) {
 	if a.intent != nil || a.ended || a.version != 1 {
 		return 0, ErrPaidSent
 	}
 	if p.closed || p.closeRequested || !p.consumed || !sameScopedValue(p.admission, a.admission) {
 		return 0, ErrInvalid
 	}
-	if _, err := s.livePaidAuthority(ctx, p); err != nil {
+	if _, err := s.livePaidAuthority(ctx, reads, p); err != nil {
 		return 0, err
 	}
 	if err := s.p.book.checkPreparation(p.reservation.scopes, p.reservation.budget, false); err != nil {
@@ -265,7 +298,7 @@ func (s *Service) dispatchGuardsLocked(ctx context.Context, a paidAttempt, p *pr
 	}
 	if err == nil {
 		// The existing hold is counted once; extra is deliberately zero.
-		_, _, err = s.paidCurrent(ctx, a, sample, s.p.through, 0)
+		_, _, err = s.paidCurrent(ctx, reads, a, sample, s.p.through, 0)
 	}
 	return sample, err
 }

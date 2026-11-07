@@ -31,7 +31,7 @@ func registrationAudienceWithin(audience, source []uuid.UUID) bool {
 	return true
 }
 
-func (s *Service) deriveRegistration(ctx context.Context, sub ledger.RegistrationSubmission, first uint64) (registrationPlan, error) {
+func (s *Service) deriveRegistration(ctx context.Context, reads *historyReadSet, sub ledger.RegistrationSubmission, first uint64) (registrationPlan, error) {
 	var plan registrationPlan
 	if sub.Actor != "owner" {
 		return plan, ErrDenied
@@ -101,7 +101,7 @@ func (s *Service) deriveRegistration(ctx context.Context, sub ledger.Registratio
 		for _, consumer := range a.Consumers {
 			switch consumer.Kind {
 			case "task":
-				task, found, err := s.loadTask(ctx, consumer.TaskID, s.p.through)
+				task, found, err := s.loadTask(ctx, reads, consumer.TaskID, s.p.through)
 				if err != nil {
 					return plan, err
 				}
@@ -138,8 +138,8 @@ func (s *Service) deriveRegistration(ctx context.Context, sub ledger.Registratio
 	return plan, nil
 }
 
-func (s *Service) planRegistration(ctx context.Context, g *registrationGroup, first uint64) (registrationPlan, error) {
-	plan, err := s.deriveRegistration(ctx, g.receipt.Submission, first)
+func (s *Service) planRegistration(ctx context.Context, reads *historyReadSet, g *registrationGroup, first uint64) (registrationPlan, error) {
+	plan, err := s.deriveRegistration(ctx, reads, g.receipt.Submission, first)
 	if err != nil {
 		return registrationPlan{}, err
 	}

@@ -234,7 +234,7 @@ func TestRegistrationOriginalRequestPreflight(t *testing.T) {
 		t.Fatalf("mutation was not codec-valid: %v", err)
 	}
 	f.service.mu.Lock()
-	_, err = f.service.planRegistration(ctx, g, before+1)
+	_, err = f.service.planRegistration(ctx, nil, g, before+1)
 	f.service.mu.Unlock()
 	if err != nil {
 		t.Fatalf("mutation did not reach original-request guard: %v", err)
@@ -376,7 +376,7 @@ func TestRegistrationGroupRules(t *testing.T) {
 			d := row.mutate(t, scopedGoldenDrafts(commits[row.prefix]))
 			_, _, _, _, g, _, err := decodeFamily(d, before+1)
 			if err == nil && g != nil {
-				_, err = f.service.planRegistration(ctx, g, before+1)
+				_, err = f.service.planRegistration(ctx, nil, g, before+1)
 			}
 			if err == nil {
 				t.Fatal("invalid complete group passed preflight planner")

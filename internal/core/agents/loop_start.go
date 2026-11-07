@@ -33,7 +33,7 @@ type loopSource struct {
 	Head     Head   `json:"head"`
 }
 
-func (r *loopRuntime) start(ctx context.Context, ids submissionIDs, id uuid.UUID, input session.MessageSend) (_ *loopGroup, err error) {
+func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids submissionIDs, id uuid.UUID, input session.MessageSend) (_ *loopGroup, err error) {
 	s := r.service
 	setting, ok := r.settings[Binding{ids.agent, ids.context}]
 	if !ok {
@@ -47,12 +47,75 @@ func (r *loopRuntime) start(ctx context.Context, ids submissionIDs, id uuid.UUID
 	r.starting++
 	r.mu.Unlock()
 	defer func() { r.mu.Lock(); r.starting--; r.mu.Unlock(); r.notify() }()
+	origin := originOf(ids)
+	var match commandMatch
+	var grant, credential uuid.UUID
+	var sample int64
+	var route ledger.RuntimePaidRouteConfigured
+	var scopes []ledger.ScopeKey
 	s.mu.Lock()
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	match, err := s.findCommand(ctx, id, 0, s.p.through)
+	err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		grant, credential, sample, scopes = uuid.UUID{}, uuid.UUID{}, 0, nil
+		var err error
+		match, err = s.findCommand(ctx, reads, id, 0, s.p.through)
+		if err != nil || match.found {
+			return err
+		}
+		work, found, err := s.loadWork(ctx, reads, input.TurnID, s.p.through)
+		if err != nil {
+			return err
+		}
+		if found {
+			if work.origin != origin {
+				return ErrDenied
+			}
+			return ErrUnavailable
+		}
+		target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{}}
+		grant, err = s.loopGrantLocked(ctx, reads, origin, "turn.start", []ledger.Resource{target}, 0)
+		if isHistoryNeed(err) {
+			return err
+		}
+		if err == nil {
+			sample, err = s.samplePaidLocked()
+		}
+		if err == nil && sample > math.MaxInt64-setting.TimeoutMS*int64(time.Millisecond) {
+			err = ErrInvalid
+		}
+		route = s.p.paidRoutes[setting.RouteID]
+		if err == nil && (!route.Enabled || route.Version != setting.ExpectedRouteVersion || route.CredentialScopeID != setting.CredentialScopeID || setting.MaxOutputTokens > route.Profile.OutputMax) {
+			err = ErrUnavailable
+		}
+		var credentialVersion int64
+		for id, c := range s.p.paidCredentials {
+			if c.ScopeID == setting.CredentialScopeID && c.Provider == route.Profile.Provider && c.Version > credentialVersion && s.paid.secrets[id] != nil {
+				credential, credentialVersion = id, c.Version
+			}
+		}
+		if err == nil && credential == (uuid.UUID{}) {
+			err = ErrUnavailable
+		}
+		if s.p.agents[ids.agent].general == ids.context {
+			if setting.DisplayTitle != "General work" || setting.TaskBinding != nil {
+				err = ErrInvalid
+			}
+		} else if setting.TaskBinding == nil {
+			err = ErrInvalid
+		}
+		// The bounded manifest retains refs rather than large output bodies.
+		manifestBound := int64(1024) + setting.Policy.MaxModelCalls*(320*128+1024) + setting.Policy.MaxToolCalls*1024
+		if manifestBound > maxObjectBytes {
+			err = ErrTooLarge
+		}
+		if err == nil {
+			var chain []grantRules
+			chain, err = s.currentChain(ctx, reads, origin, grant, s.p.through)
+			if err == nil {
+				scopes, err = chainScopes(origin, chain)
+			}
+		}
+		return err
+	})
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
@@ -75,72 +138,17 @@ func (r *loopRuntime) start(ctx context.Context, ids submissionIDs, id uuid.UUID
 		}
 		return match.loop, nil
 	}
-	if work, found, err := s.loadWork(ctx, input.TurnID, s.p.through); err != nil || found {
-		s.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		if work.origin != originOf(ids) {
-			return nil, ErrDenied
-		}
-		return nil, ErrUnavailable
-	}
-	origin := originOf(ids)
-	target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{}}
-	grant, err := s.loopGrantLocked(ctx, origin, "turn.start", []ledger.Resource{target}, 0)
-	var sample int64
-	if err == nil {
-		sample, err = s.samplePaidLocked()
-	}
-	if err == nil && sample > math.MaxInt64-setting.TimeoutMS*int64(time.Millisecond) {
-		err = ErrInvalid
-	}
-	route := s.p.paidRoutes[setting.RouteID]
-	if err == nil && (!route.Enabled || route.Version != setting.ExpectedRouteVersion || route.CredentialScopeID != setting.CredentialScopeID || setting.MaxOutputTokens > route.Profile.OutputMax) {
-		err = ErrUnavailable
-	}
-	var credential uuid.UUID
-	var credentialVersion int64
-	for id, c := range s.p.paidCredentials {
-		if c.ScopeID == setting.CredentialScopeID && c.Provider == route.Profile.Provider && c.Version > credentialVersion && s.paid.secrets[id] != nil {
-			credential, credentialVersion = id, c.Version
-		}
-	}
-	if err == nil && credential == (uuid.UUID{}) {
-		err = ErrUnavailable
-	}
-	if s.p.agents[ids.agent].general == ids.context {
-		if setting.DisplayTitle != "General work" || setting.TaskBinding != nil {
-			err = ErrInvalid
-		}
-	} else if setting.TaskBinding == nil {
-		err = ErrInvalid
-	}
-	// A bounded manifest retains refs, never large output bodies. The inherited
-	// 256 blocks plus bounded text splits fit within 320 output refs/call.
-	manifestBound := int64(1024) + setting.Policy.MaxModelCalls*(320*128+1024) + setting.Policy.MaxToolCalls*1024
-	if manifestBound > maxObjectBytes {
-		err = ErrTooLarge
-	}
 	policy := setting.Policy
 	policy.DeadlineUTCNS = sample + setting.TimeoutMS*int64(time.Millisecond)
 	t := &loopTurn{origin: origin, id: input.TurnID, settings: setting, policy: policy, credential: credential, profile: route.Profile, grant: grant, state: "admitted", writers: map[uuid.UUID]*workspace.Writer{}, live: newLoopLive(policy.MaxLiveBytes), done: make(chan struct{}), endingID: uuid.NewV7(), endCommandID: uuid.NewV7()}
 	t.reservation.origin = origin
-	if err == nil {
-		chain, e := s.currentChain(ctx, origin, grant, s.p.through)
-		err = e
-		if err == nil {
-			t.reservation.scopes, err = chainScopes(origin, chain)
-		}
-		if err == nil {
-			// Main live buffer, eight snapshots, queued copies, request/render and
-			// manifest/encoding scratch are separate physical retained memory.
-			t.reservation.budget = budgetPreparation{hold: [4]int64{0, 0, 10*policy.MaxLiveBytes + loopTextSubscribers*loopTextQueue*loopTextChunk + 24*providers.RequestLimit + 4*maxObjectBytes, 0}}
-			err = s.p.book.reservePreparation(origin, t.reservation.scopes, t.reservation.budget)
-			if err != nil {
-				t.reservation.scopes = nil
-			}
-		}
+	t.reservation.scopes = scopes
+	// Main live buffer, eight snapshots, queued copies, request/render and
+	// manifest/encoding scratch are separate physical retained memory.
+	t.reservation.budget = budgetPreparation{hold: [4]int64{0, 0, 10*policy.MaxLiveBytes + loopTextSubscribers*loopTextQueue*loopTextChunk + 24*providers.RequestLimit + 4*maxObjectBytes, 0}}
+	err = s.p.book.reservePreparation(origin, scopes, t.reservation.budget)
+	if err != nil {
+		t.reservation.scopes = nil
 	}
 	s.mu.Unlock()
 	if err != nil {
@@ -255,6 +263,7 @@ func (r *loopRuntime) render(ctx context.Context, t *loopTurn, input loopInputOb
 	s := r.service
 	agent := &Agent{service: s, ids: submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}}
 	request := providers.Request{MaxTokens: t.settings.MaxOutputTokens, Tools: modelToolDefinitions(), ToolChoice: &providers.ToolChoice{Type: "auto"}}
+	reads := &historyReadSet{}
 	var sources []loopSource
 	var contextText strings.Builder
 	for _, scope := range []string{"agent", "context"} {
@@ -287,7 +296,13 @@ func (r *loopRuntime) render(ctx context.Context, t *loopTurn, input loopInputOb
 			if slot == "transcript" {
 				for _, chunk := range page.Page.Chunks {
 					s.mu.Lock()
-					record, found, err := s.sourceRecord(ctx, int64(chunk.Sequence), s.p.through)
+					var record ledger.Record
+					var found bool
+					err := s.prepareHistoryLocked(ctx, reads, &agent.ids, true, func(reads *historyReadSet) error {
+						var err error
+						record, found, err = s.sourceRecord(ctx, reads, int64(chunk.Sequence), s.p.through)
+						return err
+					})
 					s.mu.Unlock()
 					if err != nil {
 						return request, nil, err
@@ -324,7 +339,12 @@ func (r *loopRuntime) render(ctx context.Context, t *loopTurn, input loopInputOb
 	}
 	for _, ref := range input.Artifacts {
 		s.mu.Lock()
-		chain, err := s.artifactAuthority(ctx, t.origin, ref, uuid.UUID{}, s.p.through, nil)
+		var chain []grantRules
+		err := s.prepareHistoryLocked(ctx, reads, &agent.ids, true, func(reads *historyReadSet) error {
+			var err error
+			chain, err = s.artifactAuthority(ctx, reads, t.origin, ref, uuid.UUID{}, s.p.through, nil)
+			return err
+		})
 		s.mu.Unlock()
 		if err != nil {
 			return request, nil, err

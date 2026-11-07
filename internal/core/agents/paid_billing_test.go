@@ -226,3 +226,291 @@ func paidLiveSettlementRows(t *testing.T) {
 		}
 	})
 }
+
+func TestAgentTailPaidSelectionRace(t *testing.T) {
+	t.Parallel()
+	t.Run("preparation_retry_during_read", testColdPaidPreparationRetry)
+	t.Run("preparation_failed_read", testColdPaidPreparationFailure)
+	for _, mode := range []string{"attempt_fold_revoke", "containing_commit_correction", "old_evidence_revoke", "post_read_revoke"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			posts := make(chan struct{}, 8)
+			server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+				posts <- struct{}{}
+				paidSuccess(t, w, r)
+			})
+			f := newLivePaidFixture(t, paidServerDeps(server, nil))
+			admission, dispatch, out := paidRun(t, f)
+			observation := PaidObservation{CommandID: f.id(), AttemptID: dispatch.AttemptID, ExpectedVersion: 2, Observed: out.ObservedPaidCall}
+			first, err := f.service.RecordPaidObservation(ctx, observation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view := f.view(t, dispatch.AttemptID)
+			binding := bindingOf(f.origin)
+			reader := privateScopedGrant(binding, 0xf00, paidPhysicalCapacity(), "private.read")
+			issueScopedRoot(t, f.service, binding, 0xf03, reader)
+			agent := scopedBound(t, f.service, binding)
+			request := PaidObjectLookup{AttemptID: dispatch.AttemptID, GrantID: reader.GrantID, Object: *view.Result.EvidenceObject, MaxBytes: maxObjectBytes}
+			original, err := agent.ReadPaidObject(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			late := paidLateEvidence(t, f, out, func(o *paidObservationObject) { o.RawUsageMerged["input_tokens"] = json.RawMessage(`9`) })
+			correction := PaidCorrection{PaidObservation: PaidObservation{CommandID: f.id(), AttemptID: dispatch.AttemptID, ExpectedVersion: 3, TrustedEvidence: &late}, PreviousResultSequence: int64(view.ResultSequence), PreviousEvidenceSHA256: view.Result.EvidenceSHA256}
+			kind := needPaid
+			wantSettled := "11"
+			if mode == "old_evidence_revoke" {
+				if _, err := f.service.CorrectPaidSettlement(ctx, correction); err != nil {
+					t.Fatal(err)
+				}
+				kind, wantSettled = needDirectoryScan, "13"
+			} else if mode != "post_read_revoke" {
+				f.service.mu.Lock()
+				f.service.p.paidHotLimit = 0
+				f.service.p.prunePaid()
+				f.service.mu.Unlock()
+			}
+			if mode == "containing_commit_correction" {
+				kind, wantSettled = needCommit, "13"
+				damageHistoryCache(f.service, "evicted")
+			} else {
+				damageHistoryCache(f.service, "disabled")
+			}
+			if mode == "post_read_revoke" {
+				f.service.deps.afterRead = func(_ Binding, operation string) {
+					if operation == "paid_object" {
+						f.service.mu.Lock()
+						f.service.p.paidHotLimit = 0
+						f.service.p.prunePaid()
+						f.service.mu.Unlock()
+					}
+				}
+			}
+			arrived, release := stopColdHistory(f.service, kind)
+			defer release()
+			type answer struct {
+				data []byte
+				err  error
+			}
+			done := make(chan answer, 1)
+			go func() { data, err := agent.ReadPaidObject(ctx, request); done <- answer{data, err} }()
+			select {
+			case <-arrived:
+			case got := <-done:
+				t.Fatalf("paid selection did not suspend: bytes=%d err=%v", len(got.data), got.err)
+			}
+			if mode == "containing_commit_correction" {
+				if _, err := f.service.CorrectPaidSettlement(ctx, correction); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				f.service.mu.Lock()
+				authority := f.service.p.authority
+				f.service.mu.Unlock()
+				if _, err := f.service.RevokeGrant(ctx, binding, GrantRevocation{CommandID: f.id(), RevokeGrantID: reader.GrantID, ExpectedVersion: 1, ExpectedAuthorityVersion: uint64(authority)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := f.store.Durable()
+			release()
+			got := <-done
+			if mode == "containing_commit_correction" {
+				if got.err != nil || string(got.data) != string(original) {
+					t.Fatalf("correction replaced selected historical evidence: bytes=%d err=%v", len(got.data), got.err)
+				}
+				retry, err := f.service.RecordPaidObservation(ctx, observation)
+				if err != nil || retry.Sequence != first.Sequence {
+					t.Fatalf("old observation lost its one receipt: %+v %v", retry, err)
+				}
+				foreign := request
+				foreign.AttemptID = f.id()
+				if data, err := agent.ReadPaidObject(ctx, foreign); data != nil || !errors.Is(err, ErrDenied) {
+					t.Fatalf("foreign attempt selected historical bytes: bytes=%d err=%v", len(data), err)
+				}
+			} else if got.data != nil || !errors.Is(got.err, ErrDenied) {
+				t.Fatalf("revoked selection disclosed bytes: bytes=%d err=%v", len(got.data), got.err)
+			}
+			budget := f.budget(t, admission.AdmissionPeriod)
+			if budget.SettledMicros != wantSettled || budget.HeldMicros != "0" || f.store.Durable() != before || len(posts) != 1 {
+				t.Fatalf("cold selection changed money or sent again: %+v posts=%d", budget, len(posts))
+			}
+		})
+	}
+}
+
+func testColdPaidTotals(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	posts := make(chan struct{}, 8)
+	server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
+		posts <- struct{}{}
+		paidSuccess(t, w, r)
+	})
+	f := newLivePaidFixture(t, paidServerDeps(server, nil))
+	admission, dispatch, out := paidRun(t, f)
+	observation := PaidObservation{CommandID: f.id(), AttemptID: dispatch.AttemptID, ExpectedVersion: 2, Observed: out.ObservedPaidCall}
+	if _, err := f.service.RecordPaidObservation(ctx, observation); err != nil {
+		t.Fatal(err)
+	}
+	view := f.view(t, dispatch.AttemptID)
+	binding := bindingOf(f.origin)
+	reader := privateScopedGrant(binding, 0xf00, paidPhysicalCapacity(), "turn.inspect")
+	issueScopedRoot(t, f.service, binding, 0xf03, reader)
+	agent := scopedBound(t, f.service, binding)
+	request := PaidBudgetLookup{Scope: ledger.PaidScope{Kind: "colony"}, Period: admission.AdmissionPeriod, GrantID: reader.GrantID}
+	late := paidLateEvidence(t, f, out, func(o *paidObservationObject) { o.RawUsageMerged["input_tokens"] = json.RawMessage(`9`) })
+	correction := PaidCorrection{PaidObservation: PaidObservation{CommandID: f.id(), AttemptID: dispatch.AttemptID, ExpectedVersion: 3, TrustedEvidence: &late}, PreviousResultSequence: int64(view.ResultSequence), PreviousEvidenceSHA256: view.Result.EvidenceSHA256}
+	damageHistoryCache(f.service, "evicted")
+	arrived, release := stopColdHistory(f.service, needPaidTotal)
+	defer release()
+	type answer struct {
+		view PaidBudgetView
+		err  error
+	}
+	done := make(chan answer, 1)
+	go func() { view, err := agent.PaidBudgetStatus(ctx, request); done <- answer{view, err} }()
+	select {
+	case <-arrived:
+	case got := <-done:
+		t.Fatalf("filtered totals did not suspend: %+v %v", got.view, got.err)
+	}
+	if _, err := f.service.CorrectPaidSettlement(ctx, correction); err != nil {
+		t.Fatal(err)
+	}
+	before := f.store.Durable()
+	release()
+	got := <-done
+	if got.err != nil || got.view.HeldMicros != "0" || got.view.SettledMicros != "13" || f.store.Durable() != before || len(posts) != 1 {
+		t.Fatalf("cold totals ignored concurrent correction or repeated a send: %+v %v posts=%d", got.view, got.err, len(posts))
+	}
+}
+
+func coldPaidPreparation(t *testing.T) (*paidFixture, *Agent, PaidAdmission) {
+	t.Helper()
+	ctx := context.Background()
+	f := newLivePaidFixture(t)
+	owner := bindingOf(f.origin)
+	work := scopedWorkContext(t, f.service, owner, 0xf100, 0xf101)
+	turnGrant := privateScopedGrant(work, 0xf110, paidPhysicalCapacity(), "turn.start")
+	issueScopedRoot(t, f.service, owner, 0xf111, turnGrant)
+	agent := scopedBound(t, f.service, work)
+	f.turn = privateID(0xf113)
+	if _, err := agent.StartTurn(ctx, TurnAdmission{CommandID: privateID(0xf112), TurnID: f.turn, GrantID: turnGrant.GrantID}); err != nil {
+		t.Fatal(err)
+	}
+	f.grant = privateID(0xf120)
+	spec := GrantSpec{GrantID: f.grant, Grantee: work, Operations: []string{"model.call"}, Resources: []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + f.route.RouteID.String()}}, DataClass: "external", Recipients: []Binding{work}, Limits: paidPhysicalCapacity(), Lifetime: "until_revoked"}
+	issueScopedRoot(t, f.service, owner, 0xf121, spec)
+	f.origin.ContextID = work.ContextID
+	f.liveSpend(t, ledger.PaidScope{Kind: "grant", ID: f.grant}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000120", PeriodKind: "utc_day"})
+	request := f.prepare(t)
+	damageContextAssociations(f.service, "missing")
+	return f, agent, request
+}
+
+func testColdPaidPreparationRetry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, agent, first := coldPaidPreparation(t)
+	second := first
+	second.CommandID = f.id()
+	arrived, release := stopColdHistory(f.service, needContextTask)
+	defer release()
+	done := make(chan error, 1)
+	go func() { _, _, err := agent.AdmitPaid(ctx, first); done <- err }()
+	select {
+	case <-arrived:
+	case err := <-done:
+		t.Fatalf("paid admission did not suspend: %v", err)
+	}
+	// Amendment 5 forbids a reservation before the pure phase completes
+	// under an unchanged prefix: the suspended retry owns no in-use claim.
+	winner, bound, err := agent.AdmitPaid(ctx, second)
+	if err != nil || bound == nil {
+		t.Fatalf("pure first round blocked its retry: %+v %v", winner, err)
+	}
+	release()
+	if err := <-done; err != ErrNoEffect {
+		t.Fatalf("consumed preparation retry: %v, want ErrNoEffect", err)
+	}
+	view := f.view(t, first.AttemptID)
+	budget := f.budget(t, view.Admission.AdmissionPeriod)
+	if view.State != "reserved" || view.Version != 1 || view.HeldMicros != "120" || budget.HeldMicros != "120" || budget.SettledMicros != "0" || f.store.Durable() != winner.Sequence {
+		t.Fatalf("cold retry acquired multiple holds: %+v %+v", view, budget)
+	}
+}
+
+func testColdPaidPreparationFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, agent, request := coldPaidPreparation(t)
+	readErr := errors.New("cold paid preparation read")
+	f.service.deps.historyResolveError = func(kind historyNeedKind) error {
+		if kind == needContextTask {
+			return readErr
+		}
+		return nil
+	}
+	before := f.store.Durable()
+	if _, _, err := agent.AdmitPaid(ctx, request); err != readErr || f.store.Durable() != before {
+		t.Fatalf("failed read changed its error or committed: %v", err)
+	}
+	f.service.deps.historyResolveError = nil
+	// Amendment 5 forbids a reservation before the pure phase completes
+	// under an unchanged prefix: an unsuccessful read cannot strand inUse.
+	receipt, bound, err := agent.AdmitPaid(ctx, request)
+	if err != nil || bound == nil {
+		t.Fatalf("failed read stranded its preparation: %+v %v", receipt, err)
+	}
+	view := f.view(t, request.AttemptID)
+	budget := f.budget(t, view.Admission.AdmissionPeriod)
+	if view.State != "reserved" || view.Version != 1 || view.HeldMicros != "120" || budget.HeldMicros != "120" || budget.SettledMicros != "0" || f.store.Durable() != receipt.Sequence {
+		t.Fatalf("read retry changed one-hold accounting: %+v %+v", view, budget)
+	}
+}
+
+func testColdCredential(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newLivePaidFixture(t)
+	owner := bindingOf(f.origin)
+	current, err := f.service.CredentialScopeStatus(ctx, CredentialScopeLookup{ScopeID: f.credential.ScopeID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CredentialBinding{CommandID: f.id(), ScopeID: f.credential.ScopeID, ExpectedVersion: current.Version, Provider: "anthropic", CredentialVersion: paidGoldenID(0x404), SourceKind: "environment", SourceLocator: paidTestEnvironment}
+	arrived, release := stopColdHistory(f.service, needCredential)
+	defer release()
+	done := make(chan error, 1)
+	go func() { _, err := f.service.BindCredential(ctx, owner, request); done <- err }()
+	select {
+	case <-arrived:
+	case err := <-done:
+		t.Fatalf("credential identity did not suspend: %v", err)
+	}
+	winner := request
+	winner.CommandID, winner.CredentialVersion = f.id(), f.id()
+	receipt, err := f.service.BindCredential(ctx, owner, winner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := <-done; !errors.Is(err, ErrRevision) || f.store.Durable() != receipt.Sequence {
+		t.Fatalf("cold credential bypassed current scope CAS: %v", err)
+	}
+	request.ExpectedVersion++
+	retry, err := f.service.BindCredential(ctx, owner, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := f.service.CredentialScopeStatus(ctx, CredentialScopeLookup{ScopeID: f.credential.ScopeID})
+	found := false
+	for _, version := range view.ActiveVersions {
+		found = found || version == request.CredentialVersion
+	}
+	if err != nil || !found || view.Version != current.Version+2 || f.store.Durable() != retry.Sequence {
+		t.Fatalf("refused cold bind consumed its unused credential ID: %+v %v", view, err)
+	}
+}

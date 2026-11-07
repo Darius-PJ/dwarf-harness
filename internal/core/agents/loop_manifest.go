@@ -237,7 +237,14 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 	if call != nil {
 		if call.admitted {
 			s.mu.Lock()
-			a, found, e := s.loadPaid(context.Background(), call.id, s.p.through, ledger.Digest{})
+			var a paidAttempt
+			var found bool
+			ids := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+			e := s.prepareHistoryLocked(context.Background(), &historyReadSet{}, &ids, true, func(reads *historyReadSet) error {
+				var err error
+				a, found, err = s.loadPaid(context.Background(), reads, call.id, s.p.through, ledger.Digest{})
+				return err
+			})
 			s.mu.Unlock()
 			if e != nil {
 				return e
@@ -579,6 +586,8 @@ func (r *loopRuntime) finalText(ctx context.Context, origin ledger.Origin, turn 
 		return "", ErrIntegrity
 	}
 	var text strings.Builder
+	reads := &historyReadSet{}
+	ids := submissionIDs{origin.AgentID, origin.SessionID, origin.ContextID}
 	for _, rawRef := range manifest.TextObjects {
 		object, err := loopObjectRef(rawRef)
 		if err != nil {
@@ -602,7 +611,13 @@ func (r *loopRuntime) finalText(ctx context.Context, origin ledger.Origin, turn 
 			return "", ErrIntegrity
 		}
 		s.mu.Lock()
-		attempt, found, err := s.loadPaid(ctx, output.AttemptID, s.p.through, ledger.Digest{})
+		var attempt paidAttempt
+		var found bool
+		err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+			var err error
+			attempt, found, err = s.loadPaid(ctx, reads, output.AttemptID, s.p.through, ledger.Digest{})
+			return err
+		})
 		s.mu.Unlock()
 		if err != nil {
 			return "", err

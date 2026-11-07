@@ -357,7 +357,7 @@ func testAgentTailConcurrentRefresh(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			f.service.mu.Lock()
-			err := f.service.refreshLocked(ctx, through)
+			err := f.service.refreshLocked(ctx, &historyReadSet{}, through)
 			f.service.mu.Unlock()
 			done <- err
 		}()
@@ -474,7 +474,7 @@ func testAgentTailCloseRefresh(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			f.service.mu.Lock()
-			err := f.service.refreshLocked(ctx, target)
+			err := f.service.refreshLocked(ctx, &historyReadSet{}, target)
 			f.service.mu.Unlock()
 			done <- err
 		}()

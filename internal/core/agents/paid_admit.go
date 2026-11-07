@@ -33,17 +33,18 @@ func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidRecei
 	if err != nil {
 		return PaidReceipt{}, nil, err
 	}
-	authority := func() error {
+	reads := &historyReadSet{}
+	authority := func(reads *historyReadSet) error {
 		if p.closed && !p.consumed {
 			return ErrClosed
 		}
 		if !s.p.registeredOrigin(originOf(a.ids)) {
 			return ErrDenied
 		}
-		_, err := s.livePaidAuthority(ctx, p)
+		_, err := s.livePaidAuthority(ctx, reads, p)
 		return err
 	}
-	match, err := s.lookupPaid(ctx, request.CommandID, authority)
+	match, err := s.lookupPaid(ctx, reads, &a.ids, request.CommandID, authority)
 	if err == nil && match.found {
 		r, e := s.matchPaid(match, sub, digest)
 		var bound *BoundCall
@@ -62,13 +63,43 @@ func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidRecei
 	if err == nil && p.inUse {
 		err = &BusyError{Reason: "paid_preparing"}
 	}
+	var admission ledger.RuntimePaidReserved
 	if err == nil {
-		err = s.admissionGuardsLocked(ctx, p)
+		err = s.prepareHistoryLocked(ctx, reads, &a.ids, true, func(reads *historyReadSet) error {
+			if err := authority(reads); err != nil {
+				return err
+			}
+			var err error
+			match, err = s.findCommand(ctx, reads, request.CommandID, 0, s.p.through)
+			if err != nil || match.found {
+				return err
+			}
+			if p.inUse {
+				return &BusyError{Reason: "paid_preparing"}
+			}
+			candidate := *p
+			err = s.admissionGuardsLocked(ctx, reads, &candidate)
+			admission = candidate.admission
+			return err
+		})
+	}
+	if err == nil && match.found {
+		r, e := s.matchPaid(match, sub, digest)
+		var bound *BoundCall
+		if e == nil {
+			bound = &BoundCall{service: s, admission: *match.paid.reserved}
+			if !p.consumed {
+				s.releasePaidPreparation(p)
+			}
+		}
+		s.mu.Unlock()
+		return r, bound, e
 	}
 	if err != nil {
 		s.mu.Unlock()
 		return PaidReceipt{}, nil, err
 	}
+	p.admission = admission
 	p.inUse = true
 	body := p.body
 	s.mu.Unlock()
@@ -106,14 +137,14 @@ func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidRecei
 		return PaidReceipt{}, nil, err
 	}
 
-	match, err = s.lookupPaid(ctx, request.CommandID, authority)
+	match, err = s.lookupPaid(ctx, reads, &a.ids, request.CommandID, authority)
 	defer s.mu.Unlock()
 	// The admission carries its clock sample, which another writer's later
 	// commit time would raise the review floor above. A refusal at a moved tail
 	// re-enters at the refresh and samples again; nothing was written.
 	for attempt := 1; ; attempt++ {
 		if attempt > 1 {
-			match, err = s.relookupPaidLocked(ctx, request.CommandID, authority)
+			match, err = s.relookupPaidLocked(ctx, reads, &a.ids, request.CommandID, authority)
 		}
 		if err == nil && match.found {
 			r, e := s.matchPaid(match, sub, digest)
@@ -125,19 +156,48 @@ func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidRecei
 			}
 			return r, &BoundCall{service: s, admission: *match.paid.reserved}, nil
 		}
-		if err == nil && p.closeRequested {
-			err = ErrClosed
-		}
-		if err == nil {
-			err = s.admissionGuardsLocked(ctx, p)
-		}
 		var drafts []ledger.Draft
+		var group *paidGroup
 		if err == nil {
-			drafts, err = paidDrafts(request.CommandID, sub, p.admission, ledger.TypeRuntimePaidReserved, "reserved", 1, request.AttemptID, request.ParentTurnID, nil)
+			err = s.prepareHistoryLocked(ctx, reads, &a.ids, true, func(reads *historyReadSet) error {
+				drafts, group = nil, nil
+				if err := authority(reads); err != nil {
+					return err
+				}
+				var err error
+				match, err = s.findCommand(ctx, reads, request.CommandID, 0, s.p.through)
+				if err != nil || match.found {
+					return err
+				}
+				if p.closeRequested {
+					return ErrClosed
+				}
+				candidate := *p
+				if err := s.admissionGuardsLocked(ctx, reads, &candidate); err != nil {
+					return err
+				}
+				admission = candidate.admission
+				drafts, err = paidDrafts(request.CommandID, sub, admission, ledger.TypeRuntimePaidReserved, "reserved", 1, request.AttemptID, request.ParentTurnID, nil)
+				if err == nil {
+					drafts, group, err = s.preflightPaidLocked(ctx, reads, drafts)
+				}
+				return err
+			})
+		}
+		if err == nil && match.found {
+			r, e := s.matchPaid(match, sub, digest)
+			if e != nil {
+				return PaidReceipt{}, nil, e
+			}
+			if !p.consumed {
+				s.releasePaidPreparation(p)
+			}
+			return r, &BoundCall{service: s, admission: *match.paid.reserved}, nil
 		}
 		var receipt PaidReceipt
 		if err == nil {
-			receipt, err = s.submitPaidGroupLocked(ctx, drafts, true)
+			p.admission = admission
+			receipt, err = s.submitPaidGroupLocked(ctx, drafts, group, true)
 		}
 		if errors.Is(err, ledgerstore.ErrTailMoved) {
 			if attempt == tailAttempts {
@@ -159,14 +219,14 @@ func (s *Service) completePaidAdmissionLocked(p *preparedPaid, attempt uuid.UUID
 	s.paid.calls[attempt] = p
 }
 
-func (s *Service) admissionGuardsLocked(ctx context.Context, p *preparedPaid) error {
+func (s *Service) admissionGuardsLocked(ctx context.Context, reads *historyReadSet, p *preparedPaid) error {
 	if p.closed {
 		return ErrClosed
 	}
 	if p.consumed {
 		return ErrNoEffect
 	}
-	if _, err := s.livePaidAuthority(ctx, p); err != nil {
+	if _, err := s.livePaidAuthority(ctx, reads, p); err != nil {
 		return err
 	}
 	sample, err := s.samplePaidLocked()
@@ -198,6 +258,6 @@ func (s *Service) admissionGuardsLocked(ctx context.Context, p *preparedPaid) er
 	p.admission.AuthorityVersion = s.p.authority
 	p.admission.AdmissionUTCNS = sample
 	p.admission.AdmissionPeriod = paidPeriod(s.p.book.paidPeriodKind, sample)
-	_, _, err = s.paidCurrent(ctx, paidAttempt{admission: p.admission, origin: p.origin}, sample, s.p.through, p.admission.Quote.MaximumMicros)
+	_, _, err = s.paidCurrent(ctx, reads, paidAttempt{admission: p.admission, origin: p.origin}, sample, s.p.through, p.admission.Quote.MaximumMicros)
 	return err
 }

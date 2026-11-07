@@ -21,13 +21,13 @@ type privateOperation struct {
 	changes                           []privateChange
 }
 
-func (s *Service) initialIDs(ctx context.Context, b Binding, creation bool) (submissionIDs, error) {
+func (s *Service) initialIDs(ctx context.Context, reads *historyReadSet, b Binding, creation bool) (submissionIDs, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.usableLocked(ctx); err != nil {
 		return submissionIDs{}, err
 	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+	if err := s.refreshLocked(ctx, reads, s.store.Durable()); err != nil {
 		return submissionIDs{}, err
 	}
 	return s.bindingLocked(b, creation)
@@ -45,14 +45,15 @@ func (s *Service) RegisterAgent(ctx context.Context, r AgentRegistration) (Recei
 	if err != nil {
 		return Receipt{}, err
 	}
-	return s.perform(ctx, privateOperation{ids: ids, id: r.CommandID, digest: digest, operation: "agent_register", scope: "agent", directory: r.Directory, changes: []privateChange{{slot: "instructions", mode: "replace", data: r.AgentMarkdown}, {slot: "memory", mode: "replace"}}})
+	return s.perform(ctx, &historyReadSet{}, privateOperation{ids: ids, id: r.CommandID, digest: digest, operation: "agent_register", scope: "agent", directory: r.Directory, changes: []privateChange{{slot: "instructions", mode: "replace", data: r.AgentMarkdown}, {slot: "memory", mode: "replace"}}})
 }
 func (s *Service) CreateContext(ctx context.Context, r ContextCreation) (Receipt, error) {
 	if err := s.enter(ctx); err != nil {
 		return Receipt{}, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, r.Binding, true)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, r.Binding, true)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -63,14 +64,15 @@ func (s *Service) CreateContext(ctx context.Context, r ContextCreation) (Receipt
 	if err != nil {
 		return Receipt{}, err
 	}
-	return s.perform(ctx, privateOperation{ids: ids, id: r.CommandID, digest: digest, operation: "context_create", scope: "context", kind: r.Kind, changes: []privateChange{{slot: "handoff", mode: "replace"}, {slot: "memory", mode: "replace"}}})
+	return s.perform(ctx, reads, privateOperation{ids: ids, id: r.CommandID, digest: digest, operation: "context_create", scope: "context", kind: r.Kind, changes: []privateChange{{slot: "handoff", mode: "replace"}, {slot: "memory", mode: "replace"}}})
 }
 func (s *Service) WritePrivate(ctx context.Context, r PrivateWrite) (Receipt, error) {
 	if err := s.enter(ctx); err != nil {
 		return Receipt{}, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, r.Binding, false)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, r.Binding, false)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -94,7 +96,7 @@ func (s *Service) WritePrivate(ctx context.Context, r PrivateWrite) (Receipt, er
 		}
 		return 0
 	})
-	return s.perform(ctx, privateOperation{ids: ids, id: r.CommandID, digest: digest, operation: "private_write", scope: r.Scope, expected: r.ExpectedVersion, changes: changes})
+	return s.perform(ctx, reads, privateOperation{ids: ids, id: r.CommandID, digest: digest, operation: "private_write", scope: r.Scope, expected: r.ExpectedVersion, changes: changes})
 }
 func (s *Service) checkOperationBindingLocked(op privateOperation) error {
 	if op.operation == "agent_register" {
@@ -116,53 +118,33 @@ func (s *Service) checkOperationBindingLocked(op privateOperation) error {
 	return nil
 }
 
-// lookupOperation leaves mu held. The expensive old-ID prefix scan is outside
-// it; refreshing and checking the newly ingested tail closes the race.
-func (s *Service) lookupOperation(ctx context.Context, op privateOperation) (commandMatch, error) {
-	s.mu.Lock()
-	if err := s.usableLocked(ctx); err != nil {
-		return commandMatch{}, err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return commandMatch{}, err
-	}
-	if err := s.checkOperationBindingLocked(op); err != nil {
-		return commandMatch{}, err
-	}
-	through := s.p.through
-	old := bytes.Compare(op.id[:], s.p.maxCommand[:]) <= 0
-	s.mu.Unlock()
+// lookupOperation leaves mu held after the whole binding/selection phase has
+// completed at one accepted prefix. Cold reads never carry authority with them.
+func (s *Service) lookupOperation(ctx context.Context, reads *historyReadSet, op privateOperation) (commandMatch, error) {
 	if s.deps.beforeLookup != nil {
 		s.deps.beforeLookup()
 	}
-	var m commandMatch
-	var err error
-	if old {
-		m, err = s.findCommand(ctx, op.id, 0, through)
-	}
 	s.mu.Lock()
-	if err != nil {
-		return m, err
-	}
-	if err := s.usableLocked(ctx); err != nil {
-		return m, err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return m, err
-	}
-	if err := s.checkOperationBindingLocked(op); err != nil {
-		return m, err
-	}
-	if !m.found && through < s.p.through {
-		m, err = s.findCommand(ctx, op.id, through, s.p.through)
-	}
-	return m, err
+	var match commandMatch
+	err := s.prepareHistoryLocked(ctx, reads, &op.ids, true, func(reads *historyReadSet) error {
+		match = commandMatch{}
+		if err := s.checkOperationBindingLocked(op); err != nil {
+			return err
+		}
+		if bytes.Compare(op.id[:], s.p.maxCommand[:]) > 0 {
+			return nil
+		}
+		var err error
+		match, err = s.findCommand(ctx, reads, op.id, 0, s.p.through)
+		return err
+	})
+	return match, err
 }
 
 // A historical receipt does not revalidate availability, but it must not race
 // ahead of an in-flight completion of the same private head. Both entrances use
 // this wait, without holding mu or taking a new byte/unit reservation.
-func (s *Service) awaitPrivateReplay(ctx context.Context, ids submissionIDs, scope string, sub *ledger.ScopedSubmission) error {
+func (s *Service) awaitPrivateReplay(ctx context.Context, reads *historyReadSet, ids submissionIDs, scope string, sub *ledger.ScopedSubmission) error {
 	if s.deps.beforeReplayWait != nil {
 		s.deps.beforeReplayWait()
 	}
@@ -173,26 +155,22 @@ func (s *Service) awaitPrivateReplay(ctx context.Context, ids submissionIDs, sco
 	defer unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.usableLocked(ctx); err != nil {
-		return err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return err
-	}
-	if sub != nil {
-		return s.scopedAuthority(ctx, *sub)
-	}
-	current, err := s.bindingLocked(Binding{ids.agent, ids.context}, false)
-	if err != nil {
-		return err
-	}
-	if current != ids {
-		return ErrNotBound
-	}
-	return nil
+	return s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		if sub != nil {
+			return s.scopedAuthority(ctx, reads, *sub)
+		}
+		current, err := s.bindingLocked(Binding{ids.agent, ids.context}, false)
+		if err != nil {
+			return err
+		}
+		if current != ids {
+			return ErrNotBound
+		}
+		return nil
+	})
 }
-func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, error) {
-	m, err := s.lookupOperation(ctx, op)
+func (s *Service) perform(ctx context.Context, reads *historyReadSet, op privateOperation) (Receipt, error) {
+	m, err := s.lookupOperation(ctx, reads, op)
 	if err != nil {
 		s.mu.Unlock()
 		return Receipt{}, err
@@ -201,7 +179,7 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, er
 		s.mu.Unlock()
 		result, err := matchReceipt(m, op.ids, op.digest)
 		if err == nil && op.operation == "private_write" {
-			err = s.awaitPrivateReplay(ctx, op.ids, op.scope, nil)
+			err = s.awaitPrivateReplay(ctx, reads, op.ids, op.scope, nil)
 		}
 		if err != nil {
 			return Receipt{}, err
@@ -245,7 +223,7 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, er
 		defer release()
 	}
 	// A waiting same-scope retry can now replay the winner before inspecting files.
-	m, err = s.lookupOperation(ctx, op)
+	m, err = s.lookupOperation(ctx, reads, op)
 	if err == nil && m.found {
 		s.mu.Unlock()
 		return matchReceipt(m, op.ids, op.digest)
@@ -292,7 +270,7 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, er
 	if s.deps.afterPublish != nil {
 		s.deps.afterPublish(b, op.scope)
 	}
-	m, err = s.lookupOperation(ctx, op)
+	m, err = s.lookupOperation(ctx, reads, op)
 	if err != nil {
 		s.mu.Unlock()
 		return Receipt{}, err
@@ -358,7 +336,7 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, er
 		s.mu.Unlock()
 		return Receipt{}, err
 	}
-	actual, err := s.findCommand(context.Background(), op.id, committed.First-1, committed.Last)
+	actual, err := s.findCommand(context.Background(), nil, op.id, committed.First-1, committed.Last)
 	if err != nil || !actual.found {
 		s.poisoned = true
 		s.mu.Unlock()
@@ -482,14 +460,15 @@ func (s *Service) CommandStatus(ctx context.Context, r CommandLookup) (Receipt, 
 		return Receipt{}, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, r.Binding, false)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, r.Binding, false)
 	if err != nil {
 		return Receipt{}, err
 	}
 	if !validID(r.CommandID) || r.SubmissionSHA256 == (ledger.Digest{}) {
 		return Receipt{}, ErrInvalid
 	}
-	m, err := s.lookupOperation(ctx, privateOperation{ids: ids, id: r.CommandID, digest: r.SubmissionSHA256})
+	m, err := s.lookupOperation(ctx, reads, privateOperation{ids: ids, id: r.CommandID, digest: r.SubmissionSHA256})
 	s.mu.Unlock()
 	if err != nil {
 		return Receipt{}, err

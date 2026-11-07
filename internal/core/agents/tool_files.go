@@ -190,36 +190,44 @@ func (r *loopRuntime) fileAuthority(t *loopTurn, inv *loopInvocation) (string, u
 	s, target := r.service, *inv.normalized.Target
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.refreshLocked(t.ctx, s.store.Durable()); err != nil {
-		return "", uuid.UUID{}, err
-	}
-	chain, err := s.authorize(t.ctx, t.origin, inv.grant, inv.normalized.Operation, []ledger.Resource{target}, nil, 0, s.p.through)
-	if err != nil {
-		return "", uuid.UUID{}, err
-	}
-	if target.Binding.AgentID != t.origin.AgentID {
-		return "", uuid.UUID{}, ErrDenied
-	}
-	if err := s.workspaceReady(t.ctx, target, s.p.through); err != nil {
-		return "", uuid.UUID{}, ErrDenied
-	}
-	prefix, found := "", false
-	for _, resource := range chain[0].resources {
-		if resource.Kind == "workspace" && resource.WorkspaceID == target.WorkspaceID && resource.Binding == target.Binding && (resource.PathPrefix == "" || target.PathPrefix == resource.PathPrefix || strings.HasPrefix(target.PathPrefix, resource.PathPrefix+"/")) {
-			if !found || len(resource.PathPrefix) > len(prefix) {
-				prefix, found = resource.PathPrefix, true
+	bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	var prefix string
+	var scratchID uuid.UUID
+	err := s.prepareHistoryLocked(t.ctx, &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
+		prefix, scratchID = "", uuid.UUID{}
+		chain, err := s.authorize(t.ctx, reads, t.origin, inv.grant, inv.normalized.Operation, []ledger.Resource{target}, nil, 0, s.p.through)
+		if err != nil {
+			return err
+		}
+		if target.Binding.AgentID != t.origin.AgentID {
+			return ErrDenied
+		}
+		if err := s.workspaceReady(t.ctx, reads, target, s.p.through); err != nil {
+			if isHistoryNeed(err) {
+				return err
+			}
+			return ErrDenied
+		}
+		found := false
+		for _, resource := range chain[0].resources {
+			if resource.Kind == "workspace" && resource.WorkspaceID == target.WorkspaceID && resource.Binding == target.Binding && (resource.PathPrefix == "" || target.PathPrefix == resource.PathPrefix || strings.HasPrefix(target.PathPrefix, resource.PathPrefix+"/")) {
+				if !found || len(resource.PathPrefix) > len(prefix) {
+					prefix, found = resource.PathPrefix, true
+				}
 			}
 		}
-	}
-	if !found {
-		return "", uuid.UUID{}, ErrDenied
-	}
-	for id, scratch := range s.p.scratches {
-		if scratch.WorkspaceID == target.WorkspaceID && scratch.ContextID == target.Binding.ContextID && scratch.ParentScratchID == (uuid.UUID{}) && !scratch.closed {
-			return prefix, id, nil
+		if !found {
+			return ErrDenied
 		}
-	}
-	return "", uuid.UUID{}, ErrDenied
+		for id, scratch := range s.p.scratches {
+			if scratch.WorkspaceID == target.WorkspaceID && scratch.ContextID == target.Binding.ContextID && scratch.ParentScratchID == (uuid.UUID{}) && !scratch.closed {
+				scratchID = id
+				return nil
+			}
+		}
+		return ErrDenied
+	})
+	return prefix, scratchID, err
 }
 
 func (r *loopRuntime) file(t *loopTurn, inv *loopInvocation) (data any, receipt uint64, err error) {
@@ -241,7 +249,13 @@ func (r *loopRuntime) file(t *loopTurn, inv *loopInvocation) (data any, receipt 
 	}
 	agent := &Agent{service: s, ids: submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}}
 	s.mu.Lock()
-	work, found, err := s.loadWork(t.ctx, inv.workID, s.p.through)
+	var work scopedWorkState
+	var found bool
+	err = s.prepareHistoryLocked(t.ctx, &historyReadSet{}, &agent.ids, true, func(reads *historyReadSet) error {
+		var err error
+		work, found, err = s.loadWork(t.ctx, reads, inv.workID, s.p.through)
+		return err
+	})
 	s.mu.Unlock()
 	if err != nil {
 		return nil, 0, err

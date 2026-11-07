@@ -30,24 +30,28 @@ func (r *loopRuntime) passiveGrant(t *loopTurn, operation string) (uuid.UUID, er
 	s := r.service
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.refreshLocked(t.ctx, s.store.Durable()); err != nil {
-		return uuid.UUID{}, err
-	}
-	ids := make([]uuid.UUID, 0, len(s.p.grants))
-	for id, g := range s.p.grants {
-		if g.definition.Grantee == ledger.Binding(bindingOf(t.origin)) {
-			ids = append(ids, id)
+	bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	var grant uuid.UUID
+	err := s.prepareHistoryLocked(t.ctx, &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
+		grant = uuid.UUID{}
+		ids := make([]uuid.UUID, 0, len(s.p.grants))
+		for id, g := range s.p.grants {
+			if g.definition.Grantee == ledger.Binding(bindingOf(t.origin)) {
+				ids = append(ids, id)
+			}
 		}
-	}
-	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-	for _, id := range ids {
-		if err := s.loopPassiveAuthority(t.ctx, t.origin, ledger.RuntimeToolStarted{Operation: operation, GrantID: id}, s.p.through); err == nil {
-			return id, nil
-		} else if !errors.Is(err, ErrDenied) {
-			return uuid.UUID{}, err
+		slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+		for _, id := range ids {
+			if err := s.loopPassiveAuthority(t.ctx, reads, t.origin, ledger.RuntimeToolStarted{Operation: operation, GrantID: id}, s.p.through); err == nil {
+				grant = id
+				return nil
+			} else if !errors.Is(err, ErrDenied) {
+				return err
+			}
 		}
-	}
-	return uuid.UUID{}, ErrDenied
+		return ErrDenied
+	})
+	return grant, err
 }
 func (r *loopRuntime) toolAuthority(t *loopTurn, inv *loopInvocation) error {
 	if inv.normalized.Operation == "tools.discover" || inv.normalized.Operation == "task.list" {
@@ -66,10 +70,13 @@ func (r *loopRuntime) toolAuthority(t *loopTurn, inv *loopInvocation) error {
 		s := r.service
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if err := s.refreshLocked(t.ctx, s.store.Durable()); err != nil {
+		bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+		var chain []grantRules
+		err := s.prepareHistoryLocked(t.ctx, &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
+			var err error
+			chain, err = s.artifactAuthority(t.ctx, reads, t.origin, target.Artifact, uuid.UUID{}, s.p.through, nil)
 			return err
-		}
-		chain, err := s.artifactAuthority(t.ctx, t.origin, target.Artifact, uuid.UUID{}, s.p.through, nil)
+		})
 		if err == nil {
 			inv.grant = chain[0].id
 		}
@@ -253,14 +260,14 @@ func (r *loopRuntime) recheckTool(t *loopTurn, inv *loopInvocation) error {
 	s := r.service
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.refreshLocked(t.ctx, s.store.Durable()); err != nil {
-		return err
-	}
-	if inv.normalized.Operation == "artifact.read" {
-		_, err := s.artifactAuthority(t.ctx, t.origin, inv.normalized.Target.Artifact, inv.grant, s.p.through, nil)
-		return err
-	}
-	return s.loopPassiveAuthority(t.ctx, t.origin, ledger.RuntimeToolStarted{Operation: inv.normalized.Operation, Target: inv.normalized.Target, GrantID: inv.grant}, s.p.through)
+	bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	return s.prepareHistoryLocked(t.ctx, &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
+		if inv.normalized.Operation == "artifact.read" {
+			_, err := s.artifactAuthority(t.ctx, reads, t.origin, inv.normalized.Target.Artifact, inv.grant, s.p.through, nil)
+			return err
+		}
+		return s.loopPassiveAuthority(t.ctx, reads, t.origin, ledger.RuntimeToolStarted{Operation: inv.normalized.Operation, Target: inv.normalized.Target, GrantID: inv.grant}, s.p.through)
+	})
 }
 func (r *loopRuntime) recordToolResult(t *loopTurn, inv *loopInvocation, outcome string, data any, correction *modelToolCorrection, receipt uint64) ([]byte, error) {
 	id := inv.started.start.ToolID
@@ -328,15 +335,18 @@ func (r *loopRuntime) stopTool(t *loopTurn, inv *loopInvocation) error {
 	var sequence uint64
 	if effect := inv.started.start.EffectCommandID; effect != (uuid.UUID{}) {
 		s.mu.Lock()
-		err := s.refreshLocked(context.Background(), s.store.Durable())
 		var match commandMatch
-		if err == nil {
-			match, err = s.findCommand(context.Background(), effect, 0, s.p.through)
-		}
 		var work scopedWorkState
-		if err == nil && match.scoped != nil && match.scoped.admission != nil {
-			work, _, err = s.loadWork(context.Background(), match.scoped.admission.WorkID, s.p.through)
-		}
+		bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+		err := s.prepareHistoryLocked(context.Background(), &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
+			work = scopedWorkState{}
+			var err error
+			match, err = s.findCommand(context.Background(), reads, effect, 0, s.p.through)
+			if err == nil && match.scoped != nil && match.scoped.admission != nil {
+				work, _, err = s.loadWork(context.Background(), reads, match.scoped.admission.WorkID, s.p.through)
+			}
+			return err
+		})
 		s.mu.Unlock()
 		if err != nil {
 			return err

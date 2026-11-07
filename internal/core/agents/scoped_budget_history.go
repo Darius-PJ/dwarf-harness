@@ -12,119 +12,141 @@ import (
 // This reads a validated prefix, not a second authorization/replay engine. It
 // reconstructs one cold account, or the originating share that may be disclosed
 // to an Agent, without retaining a lifetime per-origin accounting index.
-func (s *Service) budgetHistory(ctx context.Context, scope ledger.ScopeKey, origin *ledger.Origin) (budgetAccount, error) {
-	var account budgetAccount
-	work := map[uuid.UUID]scopedWorkState{}
-	apply := func(delta budgetDelta) error {
-		for i := range account.usage {
-			next, err := changeBudget(account.usage[i], delta.hold[i], delta.release[i], delta.charge[i], math.MaxInt64)
-			if err != nil {
-				return err
-			}
-			account.usage[i] = next
-		}
-		return nil
+func (s *Service) budgetHistory(ctx context.Context, reads *historyReadSet, scope ledger.ScopeKey, origin *ledger.Origin) (budgetAccount, error) {
+	type accountValue struct {
+		Version        int64
+		Configured     bool
+		Limits         ledger.Capacity
+		Held, Consumed [4]int64
 	}
-	err := s.scan(ctx, 0, s.p.through, func(commit ledger.Commit) error {
-		for _, record := range commit.Records {
-			own := origin == nil || *origin == (ledger.Origin{AgentID: record.AgentID, SessionID: record.ExecutionSessionID, ContextID: record.ContextID})
-			switch record.Type {
-			case ledger.TypeRuntimeGrantIssued:
-				grant, err := ledger.DecodeRuntimeGrantIssued(record.Payload)
+	through := s.p.through
+	selection := budgetHistoryKey{Scope: scope, Filtered: origin != nil}
+	if origin != nil {
+		selection.Origin = *origin
+	}
+	value, err := readHistory(ctx, reads, 0, through, selection, func(ctx context.Context) (accountValue, error) {
+		var account budgetAccount
+		work := map[uuid.UUID]scopedWorkState{}
+		apply := func(delta budgetDelta) error {
+			for i := range account.usage {
+				next, err := changeBudget(account.usage[i], delta.hold[i], delta.release[i], delta.charge[i], math.MaxInt64)
 				if err != nil {
 					return err
 				}
-				if scope == (ledger.ScopeKey{Kind: "grant", ID: grant.GrantID}) {
-					account.configured, account.version, account.limits = true, 1, grant.Limits
-				}
-			case ledger.TypeRuntimeCapacityConfigured:
-				configuration, err := ledger.DecodeRuntimeCapacityConfigured(record.Payload)
-				if err != nil {
-					return err
-				}
-				if configuration.Scope == scope {
-					account.configured, account.version, account.limits = true, configuration.Version, configuration.Limits
-				}
-			case ledger.TypeRuntimeLocalUsed:
-				if !own {
-					continue
-				}
-				usage, err := ledger.DecodeRuntimeLocalUsed(record.Payload)
-				if err != nil {
-					return err
-				}
-				if !slices.Contains(usage.Scopes, scope) {
-					continue
-				}
-				if err := apply(budgetDelta{hold: [4]int64{0, 0, 0, usage.Units}}); err != nil {
-					return err
-				}
-				if err := apply(budgetDelta{charge: [4]int64{0, 0, 0, usage.Units}}); err != nil {
-					return err
-				}
-			case ledger.TypeRuntimeWorkAdmitted:
-				if !own {
-					continue
-				}
-				admission, err := ledger.DecodeRuntimeWorkAdmitted(record.Payload)
-				if err != nil {
-					return err
-				}
-				if !slices.Contains(admission.Scopes, scope) {
-					continue
-				}
-				work[admission.WorkID] = scopedWorkState{admission: admission}
-				holds := [4]int64{1, 0, 0, 0}
-				if admission.Kind == "local" {
-					holds = [4]int64{0, 1, *admission.MaxBytes, 1}
-				}
-				if err := apply(budgetDelta{hold: holds}); err != nil {
-					return err
-				}
-			case ledger.TypeRuntimeWorkDispatched:
-				if !own {
-					continue
-				}
-				dispatch, err := ledger.DecodeRuntimeWorkDispatched(record.Payload)
-				if err != nil {
-					return err
-				}
-				item, found := work[dispatch.WorkID]
-				if !found {
-					continue
-				}
-				if err := apply(budgetDelta{charge: [4]int64{0, 0, 0, 1}}); err != nil {
-					return err
-				}
-				item.dispatched = true
-				work[dispatch.WorkID] = item
-			case ledger.TypeRuntimeWorkEnded:
-				if !own {
-					continue
-				}
-				ending, err := ledger.DecodeRuntimeWorkEnded(record.Payload)
-				if err != nil {
-					return err
-				}
-				item, found := work[ending.WorkID]
-				if !found || !releasesWork(item.admission.Kind, ending.Outcome) {
-					continue
-				}
-				releases := [4]int64{1, 0, 0, 0}
-				if item.admission.Kind == "local" {
-					releases = [4]int64{0, 1, *item.admission.MaxBytes, 0}
-					if !item.dispatched {
-						releases[unitExposure] = 1
-					}
-				}
-				if err := apply(budgetDelta{release: releases}); err != nil {
-					return err
-				}
-				delete(work, ending.WorkID)
+				account.usage[i] = next
 			}
+			return nil
 		}
-		return nil
+		err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
+			for _, record := range commit.Records {
+				own := !selection.Filtered || selection.Origin == (ledger.Origin{AgentID: record.AgentID, SessionID: record.ExecutionSessionID, ContextID: record.ContextID})
+				switch record.Type {
+				case ledger.TypeRuntimeGrantIssued:
+					grant, err := ledger.DecodeRuntimeGrantIssued(record.Payload)
+					if err != nil {
+						return err
+					}
+					if scope == (ledger.ScopeKey{Kind: "grant", ID: grant.GrantID}) {
+						account.configured, account.version, account.limits = true, 1, grant.Limits
+					}
+				case ledger.TypeRuntimeCapacityConfigured:
+					configuration, err := ledger.DecodeRuntimeCapacityConfigured(record.Payload)
+					if err != nil {
+						return err
+					}
+					if configuration.Scope == scope {
+						account.configured, account.version, account.limits = true, configuration.Version, configuration.Limits
+					}
+				case ledger.TypeRuntimeLocalUsed:
+					if !own {
+						continue
+					}
+					usage, err := ledger.DecodeRuntimeLocalUsed(record.Payload)
+					if err != nil {
+						return err
+					}
+					if !slices.Contains(usage.Scopes, scope) {
+						continue
+					}
+					if err := apply(budgetDelta{hold: [4]int64{0, 0, 0, usage.Units}}); err != nil {
+						return err
+					}
+					if err := apply(budgetDelta{charge: [4]int64{0, 0, 0, usage.Units}}); err != nil {
+						return err
+					}
+				case ledger.TypeRuntimeWorkAdmitted:
+					if !own {
+						continue
+					}
+					admission, err := ledger.DecodeRuntimeWorkAdmitted(record.Payload)
+					if err != nil {
+						return err
+					}
+					if !slices.Contains(admission.Scopes, scope) {
+						continue
+					}
+					work[admission.WorkID] = scopedWorkState{admission: admission}
+					holds := [4]int64{1, 0, 0, 0}
+					if admission.Kind == "local" {
+						holds = [4]int64{0, 1, *admission.MaxBytes, 1}
+					}
+					if err := apply(budgetDelta{hold: holds}); err != nil {
+						return err
+					}
+				case ledger.TypeRuntimeWorkDispatched:
+					if !own {
+						continue
+					}
+					dispatch, err := ledger.DecodeRuntimeWorkDispatched(record.Payload)
+					if err != nil {
+						return err
+					}
+					item, found := work[dispatch.WorkID]
+					if !found {
+						continue
+					}
+					if err := apply(budgetDelta{charge: [4]int64{0, 0, 0, 1}}); err != nil {
+						return err
+					}
+					item.dispatched = true
+					work[dispatch.WorkID] = item
+				case ledger.TypeRuntimeWorkEnded:
+					if !own {
+						continue
+					}
+					ending, err := ledger.DecodeRuntimeWorkEnded(record.Payload)
+					if err != nil {
+						return err
+					}
+					item, found := work[ending.WorkID]
+					if !found || !releasesWork(item.admission.Kind, ending.Outcome) {
+						continue
+					}
+					releases := [4]int64{1, 0, 0, 0}
+					if item.admission.Kind == "local" {
+						releases = [4]int64{0, 1, *item.admission.MaxBytes, 0}
+						if !item.dispatched {
+							releases[unitExposure] = 1
+						}
+					}
+					if err := apply(budgetDelta{release: releases}); err != nil {
+						return err
+					}
+					delete(work, ending.WorkID)
+				}
+			}
+			return nil
+		})
+		value := accountValue{Version: account.version, Configured: account.configured, Limits: account.limits}
+		for i, counter := range account.usage {
+			value.Held[i], value.Consumed[i] = counter.held, counter.consumed
+		}
+		return value, err
 	})
+	account := budgetAccount{version: value.Version, configured: value.Configured, limits: value.Limits}
+	for i := range account.usage {
+		account.usage[i] = budgetCounter{value.Held[i], value.Consumed[i]}
+	}
 	return account, err
 }
 

@@ -76,7 +76,7 @@ func TestTurnLoopRevocationAndRecords(t *testing.T) {
 					operation := map[string]string{"after_admission": "local.admit", "before_effect": "local.begin", "before_disclosure": "local.end"}[stage]
 					if operation != "" && receipt.Operation == operation {
 						f.service.mu.Lock()
-						work, _, err := f.service.loadWork(context.Background(), receipt.WorkID, f.service.p.through)
+						work, _, err := f.service.loadWork(context.Background(), nil, receipt.WorkID, f.service.p.through)
 						f.service.mu.Unlock()
 						if err != nil {
 							return err
@@ -125,7 +125,7 @@ func TestTurnLoopRevocationAndRecords(t *testing.T) {
 				t.Fatal("accepted native invocation lost its durable pair")
 			}
 			f.service.mu.Lock()
-			native, err := f.service.findCommand(context.Background(), started.EffectCommandID, 0, f.service.p.through)
+			native, err := f.service.findCommand(context.Background(), nil, started.EffectCommandID, 0, f.service.p.through)
 			f.service.mu.Unlock()
 			if err != nil {
 				t.Fatal(err)
@@ -139,7 +139,7 @@ func TestTurnLoopRevocationAndRecords(t *testing.T) {
 					t.Fatal("admitted native work lost its actual ending")
 				}
 				f.service.mu.Lock()
-				record, found, err := f.service.sourceRecord(context.Background(), finished.EffectReceiptSequence, f.service.p.through)
+				record, found, err := f.service.sourceRecord(context.Background(), nil, finished.EffectReceiptSequence, f.service.p.through)
 				f.service.mu.Unlock()
 				if err != nil || !found {
 					t.Fatal("native ending missing")
@@ -150,5 +150,85 @@ func TestTurnLoopRevocationAndRecords(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func testColdLoopCancel(t *testing.T) {
+	t.Parallel()
+	var f *turnFixture
+	var posts atomic.Int64
+	f = newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		model, _ := turnRequest(t, r)
+		_, _ = io.WriteString(w, turnAnthropic(model, nil, "must not dispatch"))
+	}, func(deps *serviceDeps) {
+		deps.afterLoopCommit = func(receipt ledger.RuntimeLoopReceipt) {
+			if receipt.Submission.Operation != "loop.bind" {
+				return
+			}
+			// A missing regeneratable live grant forces the same historical
+			// authority read as a pruned chain, without changing ledger facts.
+			f.service.mu.Lock()
+			delete(f.service.p.grants, f.privateGrant)
+			f.service.mu.Unlock()
+			damageHistoryCache(f.service, "evicted")
+		}
+	})
+	arrived, release := stopColdHistory(f.service, needGrant)
+	defer release()
+	f.enable(t)
+	_, start := f.send(t)
+	<-arrived
+	f.service.loop.mu.Lock()
+	cancelled := f.service.loop.turns[start.TurnID].ctx.Done()
+	f.service.loop.mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.view.Do(context.Background(), session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: start.TurnID}})
+		done <- err
+	}()
+	<-cancelled
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	result, _ := f.finished(t, start.TurnID)
+	if result.Outcome != "cancelled" || result.Reason != "cancelled" || result.ModelCalls != 0 || posts.Load() != 0 {
+		t.Fatalf("unlocked boundary lost cancellation: %s/%s calls=%d posts=%d", result.Outcome, result.Reason, result.ModelCalls, posts.Load())
+	}
+}
+
+func testColdLoopAuthorityError(t *testing.T) {
+	t.Parallel()
+	var f *turnFixture
+	var armed atomic.Bool
+	var posts atomic.Int64
+	f = newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		model, _ := turnRequest(t, r)
+		_, _ = io.WriteString(w, turnAnthropic(model, nil, "must not dispatch"))
+	}, func(deps *serviceDeps) {
+		deps.afterLoopCommit = func(receipt ledger.RuntimeLoopReceipt) {
+			if receipt.Submission.Operation != "loop.bind" {
+				return
+			}
+			f.service.mu.Lock()
+			delete(f.service.p.grants, f.privateGrant)
+			f.service.mu.Unlock()
+			damageHistoryCache(f.service, "evicted")
+			armed.Store(true)
+		}
+		deps.historyResolveError = func(kind historyNeedKind) error {
+			if kind == needGrant && armed.Load() {
+				return fmt.Errorf("synthetic historical authority: %w", ledger.ErrCorrupt)
+			}
+			return nil
+		}
+	})
+	f.enable(t)
+	_, start := f.send(t)
+	result, _ := f.finished(t, start.TurnID)
+	if result.Outcome != "failed" || result.Reason != "authority_lost" || result.ModelCalls != 0 || posts.Load() != 0 {
+		t.Fatalf("resolver error bypassed authority classification: %s/%s calls=%d posts=%d", result.Outcome, result.Reason, result.ModelCalls, posts.Load())
 	}
 }

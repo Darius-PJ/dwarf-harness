@@ -189,7 +189,7 @@ func (f *paidFixture) append(t testing.TB, effect paidPayload) ledger.RuntimePai
 	d := f.drafts(t, effect)
 	_, _, _, g, _, _, err := decodeFamily(d, f.store.Durable()+1)
 	if err == nil {
-		_, err = f.service.planPaid(context.Background(), g, f.store.Durable()+1)
+		_, err = f.service.planPaid(context.Background(), nil, g, f.store.Durable()+1)
 	}
 	if err != nil {
 		t.Fatalf("preflight %T: %v", effect, err)
@@ -198,7 +198,7 @@ func (f *paidFixture) append(t testing.TB, effect paidPayload) ledger.RuntimePai
 		t.Fatal(err)
 	}
 	f.service.mu.Lock()
-	err = f.service.refreshLocked(context.Background(), f.store.Durable())
+	err = f.service.refreshLocked(context.Background(), &historyReadSet{}, f.store.Durable())
 	f.service.mu.Unlock()
 	if err != nil {
 		t.Fatalf("replay %T: %v", effect, err)
@@ -282,7 +282,7 @@ func (f *paidFixture) refuse(t *testing.T, d []ledger.Draft) {
 	baseline.p.prunePaid()
 	_, _, _, g, _, _, err := decodeFamily(d, before+1)
 	if err == nil {
-		_, err = f.service.planPaid(context.Background(), g, before+1)
+		_, err = f.service.planPaid(context.Background(), nil, g, before+1)
 	}
 	if err == nil || !sameProjectionState(f.service.p, baseline.p) || f.store.Durable() != before {
 		t.Fatalf("invalid preflight changed state or succeeded: %v", err)

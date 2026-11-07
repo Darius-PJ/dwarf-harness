@@ -126,29 +126,14 @@ func (s *Service) samplePaidLocked() (int64, error) {
 	}
 	return sample, nil
 }
-func (s *Service) paidUsableLocked(ctx context.Context) error {
-	if err := s.usableLocked(ctx); err != nil {
-		return err
-	}
-	if s.paid == nil {
-		return ErrUnavailable
-	}
-	return s.refreshLocked(ctx, s.store.Durable())
-}
 
 // lookupPaid follows the existing watermark/tail-closure pattern. The caller's
 // current authority is checked before lookup and again at the refreshed tail.
 // It returns with mu held, including on error.
-func (s *Service) lookupPaid(ctx context.Context, id uuid.UUID, authorize func() error) (commandMatch, error) {
+func (s *Service) lookupPaid(ctx context.Context, reads *historyReadSet, bound *submissionIDs, id uuid.UUID, authorize func(*historyReadSet) error) (commandMatch, error) {
 	s.mu.Lock()
 	var match commandMatch
-	if err := s.usableLocked(ctx); err != nil {
-		return match, err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return match, err
-	}
-	if err := authorize(); err != nil {
+	if err := s.prepareHistoryLocked(ctx, reads, bound, true, authorize); err != nil {
 		return match, err
 	}
 	through := s.p.through
@@ -159,45 +144,42 @@ func (s *Service) lookupPaid(ctx context.Context, id uuid.UUID, authorize func()
 	}
 	var err error
 	if old {
-		match, err = s.findCommand(ctx, id, 0, through)
+		match, err = s.findCommand(ctx, nil, id, 0, through)
 	}
 	s.mu.Lock()
-	if e := s.usableLocked(ctx); e != nil {
-		return match, e
-	}
-	if e := s.refreshLocked(ctx, s.store.Durable()); e != nil {
-		return match, e
-	}
-	if e := authorize(); e != nil {
-		return match, e
-	}
-	if err == nil && !match.found && through < s.p.through {
-		match, err = s.findCommand(ctx, id, through, s.p.through)
-	}
+	prior := match
+	lookupErr := err
+	err = s.prepareHistoryLocked(ctx, reads, bound, true, func(reads *historyReadSet) error {
+		match = prior
+		if err := authorize(reads); err != nil {
+			return err
+		}
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if !match.found && through < s.p.through {
+			var err error
+			match, err = s.findCommand(ctx, reads, id, through, s.p.through)
+			return err
+		}
+		return nil
+	})
 	return match, err
 }
 
-// relookupPaidLocked re-enters a paid producer at its refresh after the store
-// refused its group at a moved tail. Under mu throughout, it refreshes,
-// searches only the commits after the prefix already searched for id, and
-// repeats the caller's authority check. The caller then repeats its guards
-// with a fresh clock sample and builds its drafts again.
-func (s *Service) relookupPaidLocked(ctx context.Context, id uuid.UUID, authorize func() error) (commandMatch, error) {
+// relookupPaidLocked repeats lookup and authority after a refused conditional
+// submission. Its caller reruns all guards before constructing the next group.
+func (s *Service) relookupPaidLocked(ctx context.Context, reads *historyReadSet, bound *submissionIDs, id uuid.UUID, authorize func(*historyReadSet) error) (commandMatch, error) {
 	var match commandMatch
-	searched := s.p.through
-	if err := s.usableLocked(ctx); err != nil {
-		return match, err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return match, err
-	}
-	var err error
-	if searched < s.p.through {
-		match, err = s.findCommand(ctx, id, searched, s.p.through)
-	}
-	if err == nil {
-		err = authorize()
-	}
+	err := s.prepareHistoryLocked(ctx, reads, bound, true, func(reads *historyReadSet) error {
+		match = commandMatch{}
+		var err error
+		match, err = s.findCommand(ctx, reads, id, 0, s.p.through)
+		if err == nil {
+			err = authorize(reads)
+		}
+		return err
+	})
 	return match, err
 }
 
@@ -252,23 +234,12 @@ func paidDrafts(id uuid.UUID, sub ledger.PaidSubmission, effect paidEncoding, ty
 // tail, and the last one answers BusyError{ledger_tail} with nothing written.
 const tailAttempts = 3
 
-// submitPaidLocked writes a group that no later commit can falsify:
-// reconciliation, observation and settlement tolerate commits between their
-// refresh and their write.
-func (s *Service) submitPaidLocked(ctx context.Context, drafts []ledger.Draft) (PaidReceipt, error) {
-	return s.submitPaidGroupLocked(ctx, drafts, false)
-}
-
-// submitPaidGroupLocked preflights the exact bytes with Open's reducer, then
-// installs through the locked acknowledgement reader after the whole group is
-// durable. A conditional group, one that carries a clock sample judged
-// against the review floor, is written only at the tail it was planned at: at
-// a moved tail it returns the store's ledgerstore.ErrTailMoved and writes
-// nothing.
-func (s *Service) submitPaidGroupLocked(ctx context.Context, drafts []ledger.Draft, conditional bool) (PaidReceipt, error) {
+// preflightPaidLocked validates only. The enclosing pure phase reruns its
+// authority, current guards and drafts whenever a historical read suspends it.
+func (s *Service) preflightPaidLocked(ctx context.Context, reads *historyReadSet, drafts []ledger.Draft) ([]ledger.Draft, *paidGroup, error) {
 	_, _, _, original, _, _, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil || original == nil {
-		return PaidReceipt{}, ErrInvalid
+		return nil, nil, ErrInvalid
 	}
 	if s.deps.beforeSubmit != nil {
 		drafts = s.deps.beforeSubmit(drafts)
@@ -278,14 +249,18 @@ func (s *Service) submitPaidGroupLocked(ctx context.Context, drafts []ledger.Dra
 		err = ErrInvalid
 	}
 	if err == nil {
-		_, err = s.planPaid(ctx, g, s.p.through+1)
+		_, err = s.planPaid(ctx, reads, g, s.p.through+1)
 	}
 	if err == nil {
 		err = s.usableLocked(ctx)
 	}
-	if err != nil {
-		return PaidReceipt{}, err
-	}
+	return drafts, g, err
+}
+
+// submitPaidGroupLocked installs through the locked acknowledgement reader.
+// Conditional groups retain the producer's existing SubmitAt attempt bound.
+func (s *Service) submitPaidGroupLocked(ctx context.Context, drafts []ledger.Draft, g *paidGroup, conditional bool) (PaidReceipt, error) {
+	var err error
 	var committed ledgerstore.Receipt
 	if conditional {
 		committed, err = s.store.SubmitAt(ctx, s.p.through, drafts[0], drafts[1:])
@@ -307,9 +282,9 @@ func (s *Service) submitPaidGroupLocked(ctx context.Context, drafts []ledger.Dra
 	err = s.acknowledgeLocked(max(s.p.through, committed.Last))
 	if err == nil && committed.Duplicate {
 		var m commandMatch
-		m, err = s.findCommand(context.Background(), original.command.CommandID, committed.First-1, committed.Last)
+		m, err = s.findCommand(context.Background(), nil, g.command.CommandID, committed.First-1, committed.Last)
 		if err == nil {
-			return s.matchPaid(m, original.receipt.Submission, original.command.SubmissionSHA256)
+			return s.matchPaid(m, g.receipt.Submission, g.command.SubmissionSHA256)
 		}
 	}
 	if err != nil {

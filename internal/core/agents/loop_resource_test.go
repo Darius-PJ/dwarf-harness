@@ -127,7 +127,7 @@ func testLoopPhysicalRelease(t *testing.T, cancelBeforeSend bool) {
 		}
 	}
 	f.service.mu.Lock()
-	match, err := f.service.findCommand(context.Background(), command, 0, f.service.p.through)
+	match, err := f.service.findCommand(context.Background(), nil, command, 0, f.service.p.through)
 	f.service.mu.Unlock()
 	if err != nil || match.found {
 		t.Fatal("the wakeup required a fabricated holder receipt")

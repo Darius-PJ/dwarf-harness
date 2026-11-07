@@ -59,7 +59,7 @@ func scopedPreflightAgainst(t *testing.T, service, baseline *Service, drafts []l
 	input := scopedInput{id: intent.CommandID, digest: intent.SubmissionSHA256, sub: intent.Submission}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	group, err := service.preflightScoped(context.Background(), input, drafts)
+	group, err := service.preflightScoped(context.Background(), nil, input, drafts)
 	if !sameProjectionState(service.p, baseline.p) {
 		t.Fatal("preflight installed part of a group before acceptance")
 	}

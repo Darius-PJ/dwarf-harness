@@ -63,7 +63,7 @@ func testLoopNativeConflicts(t *testing.T) {
 						t.Fatal("native conflict lacked its pre-minted command")
 					}
 					f.service.mu.Lock()
-					match, err := f.service.findCommand(context.Background(), value.EffectCommandID, 0, f.service.p.through)
+					match, err := f.service.findCommand(context.Background(), nil, value.EffectCommandID, 0, f.service.p.through)
 					f.service.mu.Unlock()
 					if err != nil || match.found {
 						t.Fatal("precommit conflict acquired a native effect")

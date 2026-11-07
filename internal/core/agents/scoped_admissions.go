@@ -35,15 +35,12 @@ func (a *Agent) AdmitLocal(ctx context.Context, request LocalAdmission) (ScopedR
 		return ScopedReceipt{}, ErrInvalid
 	}
 	s := a.service
-	done, err := s.scopedQuery(ctx, &a.ids)
-	if err != nil {
-		return ScopedReceipt{}, err
-	}
-	defer done()
-	if _, err := s.authorize(ctx, originOf(a.ids), request.GrantID, request.LocalOperation, []ledger.Resource{request.Target}, nil, request.MaxBytes, s.p.through); err != nil {
-		return ScopedReceipt{}, err
-	}
-	return ScopedReceipt{}, fmt.Errorf("%w: producer_absent", ErrUnavailable)
+	return queryHistory(ctx, s, &a.ids, func(reads *historyReadSet) (ScopedReceipt, error) {
+		if _, err := s.authorize(ctx, reads, originOf(a.ids), request.GrantID, request.LocalOperation, []ledger.Resource{request.Target}, nil, request.MaxBytes, s.p.through); err != nil {
+			return ScopedReceipt{}, err
+		}
+		return ScopedReceipt{}, fmt.Errorf("%w: producer_absent", ErrUnavailable)
+	})
 }
 
 // BeginLocal durably records the trusted host's dispatch boundary. Its receipt
@@ -68,25 +65,20 @@ func (s *Service) ReconcileAdmissions(ctx context.Context, request EndingRequest
 	if !validID(request.CommandID) || !validID(request.WorkID) || request.ExpectedVersion == 0 || request.ExpectedVersion >= math.MaxInt64 {
 		return ScopedReceipt{}, ErrInvalid
 	}
-	done, err := s.scopedQuery(ctx, nil)
+	work, err := queryHistory(ctx, s, nil, func(reads *historyReadSet) (scopedWorkState, error) {
+		work, found, err := s.loadWork(ctx, reads, request.WorkID, s.p.through)
+		if err == nil && !found {
+			err = ErrUnavailable
+		}
+		work.receipt.Target.Slots = slices.Clone(work.receipt.Target.Slots)
+		return work, err
+	})
 	if err != nil {
 		return ScopedReceipt{}, err
 	}
-	work, found, err := s.loadWork(ctx, request.WorkID, s.p.through)
-	if err != nil || !found {
-		done()
-		if err == nil {
-			err = ErrUnavailable
-		}
-		return ScopedReceipt{}, err
-	}
 	if work.ended {
-		receipt := work.receipt
-		receipt.Target.Slots = slices.Clone(receipt.Target.Slots)
-		done()
-		return receipt, nil
+		return work.receipt, nil
 	}
-	done()
 	if work.admission.Kind == "turn" {
 		return s.EndTurn(ctx, TurnEnding{CommandID: request.CommandID, TurnID: request.WorkID, ExpectedVersion: request.ExpectedVersion, Outcome: "interrupted"})
 	}
@@ -100,22 +92,19 @@ func (s *Service) ReconcileAdmissions(ctx context.Context, request EndingRequest
 // TurnStatus also accepts a local work ID so an ended-but-held child is not
 // confused with an undispatched admission. Agent views are session-exact.
 func (s *Service) TurnStatus(ctx context.Context, request WorkLookup) (WorkView, error) {
-	done, err := s.scopedQuery(ctx, nil)
-	if err != nil {
-		return WorkView{}, err
-	}
-	defer done()
-	if !validID(request.WorkID) || request.GrantID != (uuid.UUID{}) {
-		return WorkView{}, ErrInvalid
-	}
-	work, found, err := s.loadWork(ctx, request.WorkID, s.p.through)
-	if err != nil {
-		return WorkView{}, err
-	}
-	if !found {
-		return WorkView{}, ErrUnavailable
-	}
-	return s.workView(work)
+	return queryHistory(ctx, s, nil, func(reads *historyReadSet) (WorkView, error) {
+		if !validID(request.WorkID) || request.GrantID != (uuid.UUID{}) {
+			return WorkView{}, ErrInvalid
+		}
+		work, found, err := s.loadWork(ctx, reads, request.WorkID, s.p.through)
+		if err != nil {
+			return WorkView{}, err
+		}
+		if !found {
+			return WorkView{}, ErrUnavailable
+		}
+		return s.workView(work)
+	})
 }
 
 func (a *Agent) TurnStatus(ctx context.Context, request WorkLookup) (WorkView, error) {
@@ -123,25 +112,22 @@ func (a *Agent) TurnStatus(ctx context.Context, request WorkLookup) (WorkView, e
 		return WorkView{}, ErrNotBound
 	}
 	s := a.service
-	done, err := s.scopedQuery(ctx, &a.ids)
-	if err != nil {
-		return WorkView{}, err
-	}
-	defer done()
-	origin := originOf(a.ids)
-	target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{}}
-	if _, err := s.authorize(ctx, origin, request.GrantID, "turn.inspect", []ledger.Resource{target}, nil, 0, s.p.through); err != nil {
-		return WorkView{}, err
-	}
-	if !validID(request.WorkID) {
-		return WorkView{}, ErrInvalid
-	}
-	work, found, err := s.loadWork(ctx, request.WorkID, s.p.through)
-	if err != nil {
-		return WorkView{}, err
-	}
-	if !found || work.origin != origin {
-		return WorkView{}, ErrDenied
-	}
-	return s.workView(work)
+	return queryHistory(ctx, s, &a.ids, func(reads *historyReadSet) (WorkView, error) {
+		origin := originOf(a.ids)
+		target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{}}
+		if _, err := s.authorize(ctx, reads, origin, request.GrantID, "turn.inspect", []ledger.Resource{target}, nil, 0, s.p.through); err != nil {
+			return WorkView{}, err
+		}
+		if !validID(request.WorkID) {
+			return WorkView{}, ErrInvalid
+		}
+		work, found, err := s.loadWork(ctx, reads, request.WorkID, s.p.through)
+		if err != nil {
+			return WorkView{}, err
+		}
+		if !found || work.origin != origin {
+			return WorkView{}, ErrDenied
+		}
+		return s.workView(work)
+	})
 }

@@ -13,7 +13,8 @@ func (s *Service) readScope(ctx context.Context, b ReadBinding) (submissionIDs, 
 	if b.Scope != "agent" && b.Scope != "context" {
 		return submissionIDs{}, nil, ErrInvalid
 	}
-	ids, err := s.initialIDs(ctx, b.Binding, false)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, b.Binding, false)
 	if err != nil {
 		return ids, nil, err
 	}
@@ -24,7 +25,7 @@ func (s *Service) readScope(ctx context.Context, b ReadBinding) (submissionIDs, 
 	s.mu.Lock()
 	err = s.usableLocked(ctx)
 	if err == nil {
-		err = s.refreshLocked(ctx, s.store.Durable())
+		err = s.refreshLocked(ctx, reads, s.store.Durable())
 	}
 	if err == nil {
 		_, err = s.bindingLocked(b.Binding, false)
@@ -235,7 +236,7 @@ func (s *Service) ScratchBinding(ctx context.Context, r ScratchLookup) (ScratchB
 	if err := s.usableLocked(ctx); err != nil {
 		return ScratchBinding{}, err
 	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+	if err := s.refreshLocked(ctx, &historyReadSet{}, s.store.Durable()); err != nil {
 		return ScratchBinding{}, err
 	}
 	ids, err := s.bindingLocked(r.Binding, false)

@@ -53,7 +53,7 @@ func testLoopNormalizationIdentity(t *testing.T) {
 	}
 	for _, start := range starts {
 		f.service.mu.Lock()
-		match, err := f.service.findCommand(context.Background(), start.EffectCommandID, 0, f.service.p.through)
+		match, err := f.service.findCommand(context.Background(), nil, start.EffectCommandID, 0, f.service.p.through)
 		f.service.mu.Unlock()
 		if err != nil || match.scoped == nil || match.scoped.admission == nil || match.scoped.admission.ArgumentsSHA256 != start.RequestSHA256 {
 			t.Fatal("native local admission did not bind normalized bytes")

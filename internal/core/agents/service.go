@@ -45,6 +45,7 @@ type serviceDeps struct {
 	beforeLookup            func()
 	beforeHistoryFill       func(historyKey)
 	beforeRangeRead         func(after, through uint64)
+	historyResolveError     func(historyNeedKind) error
 	beforeRefreshWait       func()
 	beforeRefreshInstall    func(ledger.Commit)
 	beforeReplayWait        func()
@@ -140,7 +141,7 @@ type Service struct {
 	poisoned      bool
 	closeSignal   chan struct{}
 	refreshDone   chan struct{}
-	refreshTarget uint64
+	rebuilding    bool
 	store         privateStore
 	colony        string
 	limits        Limits

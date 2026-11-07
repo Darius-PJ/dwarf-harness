@@ -99,8 +99,8 @@ func testLoopDeadlinePrecedence(t *testing.T) {
 			// The live acknowledgement and a historical retry of the same
 			// command must both name the native cancellation's actual records.
 			host.mu.Lock()
-			effect, effectFound, effectErr := host.sourceRecord(context.Background(), int64(reply.result.EffectSequence), host.p.through)
-			receipt, receiptFound, receiptErr := host.sourceRecord(context.Background(), int64(reply.result.ReceiptSequence), host.p.through)
+			effect, effectFound, effectErr := host.sourceRecord(context.Background(), nil, int64(reply.result.EffectSequence), host.p.through)
+			receipt, receiptFound, receiptErr := host.sourceRecord(context.Background(), nil, int64(reply.result.ReceiptSequence), host.p.through)
 			host.mu.Unlock()
 			if effectErr != nil || receiptErr != nil || !effectFound || !receiptFound || effect.Type != ledger.TypeRuntimeWorkEnded || receipt.Type != ledger.TypeRuntimeScopedReceipt {
 				t.Fatal("live cancellation acknowledgement did not name its native effect and receipt")
@@ -162,7 +162,7 @@ func testLoopShutdownEnding(t *testing.T, f *turnFixture, turn uuid.UUID, closed
 	var native ledger.Record
 	var nativeFound bool
 	if err == nil && ending != nil {
-		native, nativeFound, err = reopened.sourceRecord(context.Background(), ending.EndingSequence, reopened.p.through)
+		native, nativeFound, err = reopened.sourceRecord(context.Background(), nil, ending.EndingSequence, reopened.p.through)
 	}
 	reopened.mu.Unlock()
 	if err != nil {

@@ -276,6 +276,39 @@ func (h *historyIndex) close() {
 	h.mu.Unlock()
 }
 
+// directoryState is sampled while Service.mu is held. The index mutex is
+// released before any caller starts I/O or drops Service.mu.
+func (h *historyIndex) directoryState(through uint64) (generation uint64, rebuild bool) {
+	if h == nil {
+		return 0, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.generation, !h.disabled && (h.through != through ||
+		h.checksum != historyCoverageSum(h.through) ||
+		!h.directory.valid(h.generation) || h.directory.through != through)
+}
+
+func (h *historyIndex) installDirectory(directory commandDirectory, through, generation uint64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.disabled || h.generation != generation || directory.through != through ||
+		!directory.valid(directory.generation) {
+		return
+	}
+	// Keep previously verified tokens; the invalid window published none.
+	for key := range h.entries {
+		if key.kind != historyCheckpoint {
+			h.removeLocked(key)
+		}
+	}
+	h.through, h.checksum = through, historyCoverageSum(through)
+	h.generation++
+	directory.generation = h.generation
+	directory.checksum = directory.sum()
+	h.directory = directory
+}
+
 func (h *historyIndex) get(key historyKey, after, through uint64) (historyEntry, bool) {
 	if h == nil {
 		return historyEntry{}, false
@@ -497,10 +530,26 @@ type historyWorkValue struct {
 	Dispatched, Ended, Released bool
 	Outcome                     string
 	Sequence                    uint64
-	Receipt                     ScopedReceipt
+	Receipt                     historyScopedReceipt
 }
+
+// Resource has a wire marshaler but no matching json.Unmarshal method. Keep
+// the in-memory target shape in cache answers instead of losing keyed fields.
+type historyResource ledger.Resource
+type historyScopedReceipt struct {
+	ScopedReceipt
+	Target historyResource
+}
+
+func (v historyScopedReceipt) receipt() ScopedReceipt {
+	r := v.ScopedReceipt
+	r.Target = ledger.Resource(v.Target)
+	return r
+}
+
 type historyReviewValue struct {
-	Request, Result          json.RawMessage
+	Request                  json.RawMessage
+	Result                   json.RawMessage `json:",omitempty"`
 	State                    string
 	SupersededBy             uuid.UUID
 	Sequence, ResultSequence uint64
@@ -589,7 +638,7 @@ func (h *historyIndex) work(id uuid.UUID, through uint64) (scopedWorkState, bool
 	if json.Unmarshal(e.data, &v) == nil && v.Sequence > 0 && v.Sequence <= e.from && v.Version > 0 && v.Receipt.Sequence > 0 && v.Receipt.Sequence <= e.from && v.Receipt.WorkID == id {
 		p, err := ledger.DecodeRuntimeWorkAdmitted(v.Admission)
 		if err == nil && p.WorkID == id && v.Version >= p.Version && validID(v.Origin.AgentID) && validID(v.Origin.SessionID) && validID(v.Origin.ContextID) {
-			return scopedWorkState{admission: p, origin: v.Origin, turn: v.Turn, version: v.Version, dispatched: v.Dispatched, ended: v.Ended, released: v.Released, outcome: v.Outcome, sequence: v.Sequence, receipt: v.Receipt}, true, true
+			return scopedWorkState{admission: p, origin: v.Origin, turn: v.Turn, version: v.Version, dispatched: v.Dispatched, ended: v.Ended, released: v.Released, outcome: v.Outcome, sequence: v.Sequence, receipt: v.Receipt.receipt()}, true, true
 		}
 	}
 	h.discard(key)
@@ -603,7 +652,7 @@ func (h *historyIndex) putWork(id uuid.UUID, through uint64, state scopedWorkSta
 		if err != nil {
 			return
 		}
-		e.data, err = json.Marshal(historyWorkValue{payload, state.origin, state.turn, state.version, state.dispatched, state.ended, state.released, state.outcome, state.sequence, state.receipt})
+		e.data, err = json.Marshal(historyWorkValue{payload, state.origin, state.turn, state.version, state.dispatched, state.ended, state.released, state.outcome, state.sequence, historyScopedReceipt{state.receipt, historyResource(state.receipt.Target)}})
 		if err != nil {
 			return
 		}
@@ -1073,6 +1122,7 @@ func (h *historyIndex) occurrences(key directoryKey, after, through uint64) ([]d
 	b, bOK := d.boundary(through)
 	if !aOK || !bOK {
 		d.known = false
+		h.generation++
 		return nil, false, nil
 	}
 	if after > through || !a || !b {
@@ -1081,6 +1131,7 @@ func (h *historyIndex) occurrences(key directoryKey, after, through uint64) ([]d
 	bucket := d.rows[key]
 	if bucket.count != len(bucket.rows) {
 		d.known = false
+		h.generation++
 		return nil, false, nil
 	}
 	var rows []directoryRow
@@ -1088,6 +1139,7 @@ func (h *historyIndex) occurrences(key directoryKey, after, through uint64) ([]d
 	for _, row := range bucket.rows {
 		if row.sequence <= previous || !d.validRow(key, row) {
 			d.known = false
+			h.generation++
 			return nil, false, nil
 		}
 		previous = row.sequence
@@ -1117,6 +1169,7 @@ func (h *historyIndex) membership(key directoryKey, through uint64) (directoryRo
 	bucket := d.rows[key]
 	if bucket.count != len(bucket.rows) {
 		d.known = false
+		h.generation++
 		return directoryRow{}, false, false
 	}
 	if len(bucket.rows) == 0 {
@@ -1125,6 +1178,7 @@ func (h *historyIndex) membership(key directoryKey, through uint64) (directoryRo
 	row := bucket.rows[0]
 	if !d.validRow(key, row) {
 		d.known = false
+		h.generation++
 		return directoryRow{}, false, false
 	}
 	return row, true, true

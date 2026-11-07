@@ -9,7 +9,7 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-func (s *Service) currentChain(ctx context.Context, origin ledger.Origin, id uuid.UUID, through uint64) ([]grantRules, error) {
+func (s *Service) currentChain(ctx context.Context, reads *historyReadSet, origin ledger.Origin, id uuid.UUID, through uint64) ([]grantRules, error) {
 	if !s.p.registeredOrigin(origin) {
 		return nil, ErrNotBound
 	}
@@ -20,7 +20,7 @@ func (s *Service) currentChain(ctx context.Context, origin ledger.Origin, id uui
 			return nil, ErrDenied
 		}
 		seen[id] = true
-		grant, found, err := s.loadGrant(ctx, id, through)
+		grant, found, err := s.loadGrant(ctx, reads, id, through)
 		if err != nil {
 			return nil, err
 		}
@@ -35,7 +35,7 @@ func (s *Service) currentChain(ctx context.Context, origin ledger.Origin, id uui
 			return nil, ErrDenied
 		}
 		if rule.task != (ledger.TaskBinding{}) {
-			task, found, err := s.loadTask(ctx, rule.task.TaskID, through)
+			task, found, err := s.loadTask(ctx, reads, rule.task.TaskID, through)
 			if err != nil {
 				return nil, err
 			}
@@ -55,8 +55,8 @@ func (s *Service) currentChain(ctx context.Context, origin ledger.Origin, id uui
 	return chain, nil
 }
 
-func (s *Service) authorize(ctx context.Context, origin ledger.Origin, grant uuid.UUID, operation string, targets []ledger.Resource, recipients []Binding, size int64, through uint64) ([]grantRules, error) {
-	chain, err := s.currentChain(ctx, origin, grant, through)
+func (s *Service) authorize(ctx context.Context, reads *historyReadSet, origin ledger.Origin, grant uuid.UUID, operation string, targets []ledger.Resource, recipients []Binding, size int64, through uint64) ([]grantRules, error) {
+	chain, err := s.currentChain(ctx, reads, origin, grant, through)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func (s *Service) authorize(ctx context.Context, origin ledger.Origin, grant uui
 		return nil, ErrDenied
 	}
 	if operation != "private.read" && operation != "context.inspect" && operation != "turn.inspect" {
-		task, bound, err := s.contextTask(ctx, origin, through)
+		task, bound, err := s.contextTask(ctx, reads, origin, through)
 		if err != nil {
 			return nil, err
 		}
@@ -87,19 +87,19 @@ func chainScopes(origin ledger.Origin, chain []grantRules) ([]ledger.ScopeKey, e
 	return budgetScopes(bindingOf(origin), ids)
 }
 
-func (s *Service) canInspectTask(ctx context.Context, origin ledger.Origin, id uuid.UUID, through uint64) (bool, error) {
+func (s *Service) canInspectTask(ctx context.Context, reads *historyReadSet, origin ledger.Origin, id uuid.UUID, through uint64) (bool, error) {
 	for grantID, grant := range s.p.grants {
 		if grant.definition.Grantee != ledger.Binding(bindingOf(origin)) || grant.definition.DataClass != "task" {
 			continue
 		}
-		_, err := s.authorize(ctx, origin, grantID, "task.inspect", []ledger.Resource{{Kind: "task", TaskID: id}}, nil, 0, through)
+		_, err := s.authorize(ctx, reads, origin, grantID, "task.inspect", []ledger.Resource{{Kind: "task", TaskID: id}}, nil, 0, through)
 		if err == ErrDenied {
 			continue
 		}
 		if err != nil {
 			return false, err
 		}
-		task, found, err := s.loadTask(ctx, id, through)
+		task, found, err := s.loadTask(ctx, reads, id, through)
 		return found && slices.Contains(task.record.Audience, origin.AgentID), err
 	}
 	return false, nil
@@ -110,7 +110,7 @@ func (s *Service) canInspectTask(ctx context.Context, origin ledger.Origin, id u
 // The artifact's source names its task: the source is resolved once, at the
 // first task resource the caller may inspect, and only a resource naming that
 // task loads the task.
-func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, artifact ledger.ArtifactRef, selected uuid.UUID, through uint64, sources map[int64]ledger.Record) ([]grantRules, error) {
+func (s *Service) artifactAuthority(ctx context.Context, reads *historyReadSet, origin ledger.Origin, artifact ledger.ArtifactRef, selected uuid.UUID, through uint64, sources map[int64]ledger.Record) ([]grantRules, error) {
 	var definition ledger.RuntimeTaskChanged // zero TaskID: the source names no task
 	resolved := false
 	for grantID, grant := range s.p.grants {
@@ -118,7 +118,7 @@ func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, a
 			continue
 		}
 		if grant.definition.DataClass == "artifact" {
-			chain, err := s.authorize(ctx, origin, grantID, "artifact.read", []ledger.Resource{{Kind: "artifact", Artifact: artifact}}, nil, artifact.Bytes, through)
+			chain, err := s.authorize(ctx, reads, origin, grantID, "artifact.read", []ledger.Resource{{Kind: "artifact", Artifact: artifact}}, nil, artifact.Bytes, through)
 			if err == nil {
 				return chain, nil
 			}
@@ -133,7 +133,7 @@ func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, a
 			if resource.Kind != "task" || resource.TaskID == (uuid.UUID{}) {
 				continue
 			}
-			chain, err := s.authorize(ctx, origin, grantID, "task.inspect", []ledger.Resource{resource}, nil, artifact.Bytes, through)
+			chain, err := s.authorize(ctx, reads, origin, grantID, "task.inspect", []ledger.Resource{resource}, nil, artifact.Bytes, through)
 			if err == ErrDenied {
 				continue
 			}
@@ -144,7 +144,7 @@ func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, a
 				resolved = true
 				source, found := sources[artifact.SourceSequence]
 				if sources == nil {
-					if source, found, err = s.sourceRecord(ctx, artifact.SourceSequence, through); err != nil {
+					if source, found, err = s.sourceRecord(ctx, reads, artifact.SourceSequence, through); err != nil {
 						return nil, err
 					}
 				}
@@ -157,7 +157,7 @@ func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, a
 			if definition.TaskID != resource.TaskID {
 				continue
 			}
-			task, found, err := s.loadTask(ctx, resource.TaskID, through)
+			task, found, err := s.loadTask(ctx, reads, resource.TaskID, through)
 			if err != nil {
 				return nil, err
 			}
@@ -172,7 +172,7 @@ func (s *Service) artifactAuthority(ctx context.Context, origin ledger.Origin, a
 	return nil, ErrDenied
 }
 
-func (s *Service) subjectAuthorized(ctx context.Context, actor string, origin ledger.Origin, subject *ledger.SubjectRef, through uint64) error {
+func (s *Service) subjectAuthorized(ctx context.Context, reads *historyReadSet, actor string, origin ledger.Origin, subject *ledger.SubjectRef, through uint64) error {
 	if subject == nil {
 		return nil
 	}
@@ -180,18 +180,18 @@ func (s *Service) subjectAuthorized(ctx context.Context, actor string, origin le
 		return ErrDenied
 	}
 	if actor != "owner" {
-		if _, err := s.artifactAuthority(ctx, origin, subject.Artifact, uuid.UUID{}, through, nil); err != nil {
+		if _, err := s.artifactAuthority(ctx, reads, origin, subject.Artifact, uuid.UUID{}, through, nil); err != nil {
 			return err
 		}
 	}
-	return s.verifyArtifactSource(ctx, subject.Artifact, through)
+	return s.verifyArtifactSource(ctx, reads, subject.Artifact, through)
 }
 
 func grantArguments(p ledger.RuntimeGrantIssued) ledger.GrantIssueArguments {
 	return ledger.GrantIssueArguments{GrantID: p.GrantID, Grantee: p.Grantee, ParentGrantID: p.ParentGrantID, Operations: p.Operations, Resources: p.Resources, DataClass: p.DataClass, Recipients: p.Recipients, Limits: p.Limits, DelegationDepth: p.DelegationDepth, Lifetime: p.Lifetime, TaskBinding: p.TaskBinding}
 }
 
-func (s *Service) planGrant(ctx context.Context, g *scopedGroup, first uint64) (scopedPlan, []grantRules, error) {
+func (s *Service) planGrant(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64) (scopedPlan, []grantRules, error) {
 	sub := g.receipt.Submission
 	plan := scopedPlan{authority: s.p.authority}
 	if sub.Expected.AuthorityVersion == nil {
@@ -208,7 +208,7 @@ func (s *Service) planGrant(ctx context.Context, g *scopedGroup, first uint64) (
 		if p.ExpectedAuthorityVersion != s.p.authority || p.AuthorityVersion != s.p.authority+1 || !sameScopedValue(grantArguments(p), sub.Arguments) || !sameScopedValue(sub.Target, p.Resources[0]) {
 			return plan, nil, ErrInvalid
 		}
-		if _, found, err := s.loadGrant(ctx, p.GrantID, through); err != nil {
+		if _, found, err := s.loadGrant(ctx, reads, p.GrantID, through); err != nil {
 			return plan, nil, err
 		} else if found {
 			return plan, nil, ErrInvalid
@@ -222,7 +222,7 @@ func (s *Service) planGrant(ctx context.Context, g *scopedGroup, first uint64) (
 			}
 		}
 		for _, resource := range p.Resources {
-			registered, err := s.registeredResource(ctx, resource, through)
+			registered, err := s.registeredResource(ctx, reads, resource, through)
 			if err != nil {
 				return plan, nil, err
 			}
@@ -231,7 +231,7 @@ func (s *Service) planGrant(ctx context.Context, g *scopedGroup, first uint64) (
 			}
 		}
 		if p.TaskBinding != nil {
-			task, found, err := s.loadTask(ctx, p.TaskBinding.TaskID, through)
+			task, found, err := s.loadTask(ctx, reads, p.TaskBinding.TaskID, through)
 			if err != nil {
 				return plan, nil, err
 			}
@@ -249,7 +249,7 @@ func (s *Service) planGrant(ctx context.Context, g *scopedGroup, first uint64) (
 			if p.ParentGrantID != sub.GrantID {
 				return plan, nil, ErrDenied
 			}
-			chain, err = s.authorize(ctx, sub.Origin, sub.GrantID, "grant.issue", p.Resources, grant.rules().recipients, 0, through)
+			chain, err = s.authorize(ctx, reads, sub.Origin, sub.GrantID, "grant.issue", p.Resources, grant.rules().recipients, 0, through)
 			if err != nil {
 				return plan, nil, err
 			}
@@ -264,7 +264,7 @@ func (s *Service) planGrant(ctx context.Context, g *scopedGroup, first uint64) (
 		if p.ExpectedAuthorityVersion != s.p.authority || p.AuthorityVersion != s.p.authority+1 || !sameScopedValue(sub.Arguments, ledger.GrantRevokeArguments{GrantID: p.GrantID}) {
 			return plan, nil, ErrInvalid
 		}
-		grant, found, err := s.loadGrant(ctx, p.GrantID, through)
+		grant, found, err := s.loadGrant(ctx, reads, p.GrantID, through)
 		if err != nil {
 			return plan, nil, err
 		}
@@ -281,7 +281,7 @@ func (s *Service) planGrant(ctx context.Context, g *scopedGroup, first uint64) (
 			if grant.issuer != "agent" || grant.origin != sub.Origin {
 				return plan, nil, ErrDenied
 			}
-			chain, err = s.authorize(ctx, sub.Origin, sub.GrantID, "grant.revoke", grant.definition.Resources, grant.rules().recipients, 0, through)
+			chain, err = s.authorize(ctx, reads, sub.Origin, sub.GrantID, "grant.revoke", grant.definition.Resources, grant.rules().recipients, 0, through)
 			if err != nil {
 				return plan, nil, err
 			}

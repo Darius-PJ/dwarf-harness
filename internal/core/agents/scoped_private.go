@@ -8,7 +8,7 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-func (s *Service) planScopedPrivate(ctx context.Context, g *scopedGroup, first uint64) (scopedPlan, []grantRules, int64, error) {
+func (s *Service) planScopedPrivate(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64) (scopedPlan, []grantRules, int64, error) {
 	plan := scopedPlan{authority: s.p.authority}
 	sub, through := g.receipt.Submission, first-1
 	var size int64
@@ -33,7 +33,7 @@ func (s *Service) planScopedPrivate(ctx context.Context, g *scopedGroup, first u
 		if !sameScopedValue(changes, args.Changes) || !slices.Equal(slots, sub.Target.Slots) {
 			return plan, nil, 0, ErrInvalid
 		}
-		chain, err = s.authorize(ctx, sub.Origin, sub.GrantID, "private.write", []ledger.Resource{sub.Target}, nil, size, through)
+		chain, err = s.authorize(ctx, reads, sub.Origin, sub.GrantID, "private.write", []ledger.Resource{sub.Target}, nil, size, through)
 		if err != nil {
 			return plan, nil, 0, err
 		}
@@ -46,11 +46,11 @@ func (s *Service) planScopedPrivate(ctx context.Context, g *scopedGroup, first u
 			return plan, nil, 0, ErrInvalid
 		}
 		size = g.usage.Bytes
-		chain, err = s.authorize(ctx, sub.Origin, sub.GrantID, "private.read", []ledger.Resource{sub.Target}, nil, size, through)
+		chain, err = s.authorize(ctx, reads, sub.Origin, sub.GrantID, "private.read", []ledger.Resource{sub.Target}, nil, size, through)
 		if err != nil {
 			return plan, nil, 0, err
 		}
-		if err := s.validatePrivateSelection(ctx, g.ids, *g.usage, through); err != nil {
+		if err := s.validatePrivateSelection(ctx, reads, g.ids, *g.usage, through); err != nil {
 			return plan, nil, 0, err
 		}
 	case ledger.ArtifactReadArguments:
@@ -58,11 +58,11 @@ func (s *Service) planScopedPrivate(ctx context.Context, g *scopedGroup, first u
 			return plan, nil, 0, ErrInvalid
 		}
 		size = args.Artifact.Bytes
-		chain, err = s.artifactAuthority(ctx, sub.Origin, args.Artifact, sub.GrantID, through, nil)
+		chain, err = s.artifactAuthority(ctx, reads, sub.Origin, args.Artifact, sub.GrantID, through, nil)
 		if err != nil {
 			return plan, nil, 0, err
 		}
-		if err := s.verifyArtifactSource(ctx, args.Artifact, through); err != nil {
+		if err := s.verifyArtifactSource(ctx, reads, args.Artifact, through); err != nil {
 			return plan, nil, 0, err
 		}
 	default:
@@ -74,7 +74,7 @@ func (s *Service) planScopedPrivate(ctx context.Context, g *scopedGroup, first u
 // Selection is historical metadata, not a body read. A transcript result is an
 // exact prefix after a real cursor. Its historical producer's chunk ceiling is
 // not replaced by today's Limits, so a bounded early stop is proved by cursor.
-func (s *Service) validatePrivateSelection(ctx context.Context, ids submissionIDs, usage ledger.RuntimeLocalUsed, through uint64) error {
+func (s *Service) validatePrivateSelection(ctx context.Context, reads *historyReadSet, ids submissionIDs, usage ledger.RuntimeLocalUsed, through uint64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -95,62 +95,70 @@ func (s *Service) validatePrivateSelection(ctx context.Context, ids submissionID
 		}
 		return nil
 	}
-	var head Head
-	index, used := 0, int64(0)
-	cursorFound, more := read.Cursor == 0, false
-	revision, err := s.scopeHistory(ctx, ids, read.Scope, through, uint64(read.Revision), func(slot string, next Head, mode string) error {
-		if slot != read.Slot {
-			return nil
-		}
-		if read.Slot != "transcript" {
-			head = next
-			if mode == "clear" {
-				head = Head{}
-			}
-			return nil
-		}
-		if !cursorFound {
-			if next.Sequence == uint64(read.Cursor) {
-				cursorFound = true
-			}
-			return nil
-		}
-		if index == len(usage.Selected) {
-			more = true
-			return nil
-		}
-		want := ledger.SelectedObject{SHA256: next.SHA256, Bytes: next.Bytes, Revision: int64(next.Revision), Sequence: int64(next.Sequence)}
-		if usage.Selected[index] != want || next.Bytes > read.MaxBytes-used {
-			return ErrInvalid
-		}
-		used += next.Bytes
-		index++
-		return nil
-	})
-	if err != nil {
-		return err
+	usage = ledger.RuntimeLocalUsed{Read: &read, Selected: slices.Clone(usage.Selected), Bytes: usage.Bytes, NextCursor: usage.NextCursor}
+	if usage.NextCursor != nil {
+		usage.NextCursor = new(*usage.NextCursor)
 	}
-	if revision != uint64(read.Revision) || !cursorFound {
-		return ErrInvalid
-	}
-	if read.Slot != "transcript" {
-		if head.SHA256 != (ledger.Digest{}) {
-			want := ledger.SelectedObject{SHA256: head.SHA256, Bytes: head.Bytes, Revision: int64(head.Revision), Sequence: int64(head.Sequence)}
-			if len(usage.Selected) != 1 || usage.Selected[0] != want || head.Bytes > read.MaxBytes {
+	key := scopeHistoryKey{ids.agent.String(), ids.session.String(), ids.context.String(), usage}
+	_, err := readHistory(ctx, reads, 0, through, key, func(ctx context.Context) (bool, error) {
+		var head Head
+		index, used := 0, int64(0)
+		cursorFound, more := read.Cursor == 0, false
+		revision, err := s.scopeHistory(ctx, ids, read.Scope, through, uint64(read.Revision), func(slot string, next Head, mode string) error {
+			if slot != read.Slot {
+				return nil
+			}
+			if read.Slot != "transcript" {
+				head = next
+				if mode == "clear" {
+					head = Head{}
+				}
+				return nil
+			}
+			if !cursorFound {
+				if next.Sequence == uint64(read.Cursor) {
+					cursorFound = true
+				}
+				return nil
+			}
+			if index == len(usage.Selected) {
+				more = true
+				return nil
+			}
+			want := ledger.SelectedObject{SHA256: next.SHA256, Bytes: next.Bytes, Revision: int64(next.Revision), Sequence: int64(next.Sequence)}
+			if usage.Selected[index] != want || next.Bytes > read.MaxBytes-used {
 				return ErrInvalid
 			}
-			used, index = head.Bytes, 1
+			used += next.Bytes
+			index++
+			return nil
+		})
+		if err != nil {
+			return false, err
 		}
-	}
-	if index != len(usage.Selected) || used != usage.Bytes {
-		return ErrInvalid
-	}
-	if more {
-		if index == 0 || usage.NextCursor == nil || *usage.NextCursor != usage.Selected[index-1].Sequence {
-			return ErrInvalid
+		if revision != uint64(read.Revision) || !cursorFound {
+			return false, ErrInvalid
 		}
-	} else if usage.NextCursor != nil {
-		return ErrInvalid
-	}
-	return nil
+		if read.Slot != "transcript" {
+			if head.SHA256 != (ledger.Digest{}) {
+				want := ledger.SelectedObject{SHA256: head.SHA256, Bytes: head.Bytes, Revision: int64(head.Revision), Sequence: int64(head.Sequence)}
+				if len(usage.Selected) != 1 || usage.Selected[0] != want || head.Bytes > read.MaxBytes {
+					return false, ErrInvalid
+				}
+				used, index = head.Bytes, 1
+			}
+		}
+		if index != len(usage.Selected) || used != usage.Bytes {
+			return false, ErrInvalid
+		}
+		if more {
+			if index == 0 || usage.NextCursor == nil || *usage.NextCursor != usage.Selected[index-1].Sequence {
+				return false, ErrInvalid
+			}
+		} else if usage.NextCursor != nil {
+			return false, ErrInvalid
+		}
+		return true, nil
+	})
+	return err
 }

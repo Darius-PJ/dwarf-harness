@@ -18,7 +18,8 @@ func (a *Agent) ScopedCommandStatus(ctx context.Context, request ScopedCommandLo
 	return a.service.scopedCommandStatus(ctx, &a.ids, request)
 }
 func (s *Service) scopedCommandStatus(ctx context.Context, bound *submissionIDs, request ScopedCommandLookup) (ScopedReceipt, error) {
-	done, err := s.scopedQuery(ctx, bound)
+	reads := &historyReadSet{}
+	done, err := s.scopedQuery(ctx, reads, bound)
 	if err != nil {
 		return ScopedReceipt{}, err
 	}
@@ -26,10 +27,18 @@ func (s *Service) scopedCommandStatus(ctx context.Context, bound *submissionIDs,
 	if !validID(request.CommandID) || request.SubmissionSHA256 == (ledger.Digest{}) || bound == nil && request.GrantID != (uuid.UUID{}) {
 		return ScopedReceipt{}, ErrInvalid
 	}
-	if bound != nil {
-		if _, err := s.currentChain(ctx, originOf(*bound), request.GrantID, s.p.through); err != nil {
-			return ScopedReceipt{}, err
+	authority := func(reads *historyReadSet) error {
+		if bound != nil {
+			if !s.p.registeredOrigin(originOf(*bound)) {
+				return ErrNotBound
+			}
+			_, err := s.currentChain(ctx, reads, originOf(*bound), request.GrantID, s.p.through)
+			return err
 		}
+		return nil
+	}
+	if err := s.prepareHistoryLocked(ctx, reads, bound, true, authority); err != nil {
+		return ScopedReceipt{}, err
 	}
 	through := s.p.through
 	old := bytes.Compare(request.CommandID[:], s.p.maxCommand[:]) <= 0
@@ -39,49 +48,48 @@ func (s *Service) scopedCommandStatus(ctx context.Context, bound *submissionIDs,
 	}
 	var match commandMatch
 	if old {
-		match, err = s.findCommand(ctx, request.CommandID, 0, through)
+		match, err = s.findCommand(ctx, nil, request.CommandID, 0, through)
 	}
 	s.mu.Lock()
 	if err != nil {
 		return ScopedReceipt{}, err
 	}
-	if err := s.usableLocked(ctx); err != nil {
-		return ScopedReceipt{}, err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return ScopedReceipt{}, err
-	}
-	if bound != nil {
-		if _, err := s.currentChain(ctx, originOf(*bound), request.GrantID, s.p.through); err != nil {
-			return ScopedReceipt{}, err
+	prior := match
+	var receipt ScopedReceipt
+	err = s.prepareHistoryLocked(ctx, reads, bound, true, func(reads *historyReadSet) error {
+		match, receipt = prior, ScopedReceipt{}
+		if err := authority(reads); err != nil {
+			return err
 		}
-	}
-	if !match.found && through < s.p.through {
-		match, err = s.findCommand(ctx, request.CommandID, through, s.p.through)
-		if err != nil {
-			return ScopedReceipt{}, err
+		if !match.found && through < s.p.through {
+			var err error
+			match, err = s.findCommand(ctx, reads, request.CommandID, through, s.p.through)
+			if err != nil {
+				return err
+			}
 		}
-	}
-	if match.scoped == nil {
+		if match.scoped == nil {
+			if bound != nil {
+				return ErrDenied
+			}
+			return ErrUnavailable
+		}
 		if bound != nil {
-			return ScopedReceipt{}, ErrDenied
+			sub := match.scoped.receipt.Submission
+			if sub.Actor != "agent" || sub.Origin != originOf(*bound) {
+				return ErrDenied
+			}
+			// Current authority permits disclosure, not a rewritten receipt.
+			sub.GrantID = request.GrantID
+			if err := s.scopedAuthority(ctx, reads, sub); err != nil {
+				return err
+			}
 		}
-		return ScopedReceipt{}, ErrUnavailable
-	}
-	if bound != nil {
-		sub := match.scoped.receipt.Submission
-		if sub.Actor != "agent" || sub.Origin != originOf(*bound) {
-			return ScopedReceipt{}, ErrDenied
+		if match.command.SubmissionSHA256 != request.SubmissionSHA256 {
+			return ErrCommandMismatch
 		}
-		// The caller selects current authority; the returned historical receipt
-		// retains the original grant and semantic digest, never a new permit.
-		sub.GrantID = request.GrantID
-		if err := s.scopedAuthority(ctx, sub); err != nil {
-			return ScopedReceipt{}, err
-		}
-	}
-	if match.command.SubmissionSHA256 != request.SubmissionSHA256 {
-		return ScopedReceipt{}, ErrCommandMismatch
-	}
-	return scopedReceipt(match.scoped), nil
+		receipt = scopedReceipt(match.scoped)
+		return nil
+	})
+	return receipt, err
 }

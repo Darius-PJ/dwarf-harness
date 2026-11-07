@@ -141,31 +141,33 @@ func (p *projection) prunePaid() {
 	}
 }
 
-func (s *Service) credentialVersionExists(ctx context.Context, id uuid.UUID, through uint64) (bool, error) {
+func (s *Service) credentialVersionExists(ctx context.Context, reads *historyReadSet, id uuid.UUID, through uint64) (bool, error) {
 	if bytes.Compare(id[:], s.p.maxCredentialVersion[:]) > 0 {
 		return false, nil
 	}
-	found := false
-	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		for _, r := range c.Records {
-			if r.Type != ledger.TypeRuntimeCredentialChanged {
-				continue
+	return readHistory(ctx, reads, 0, through, credentialHistoryKey{id}, func(ctx context.Context) (bool, error) {
+		found := false
+		err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
+			for _, r := range c.Records {
+				if r.Type != ledger.TypeRuntimeCredentialChanged {
+					continue
+				}
+				v, err := ledger.DecodeRuntimeCredentialChanged(r.Payload)
+				if err != nil {
+					return err
+				}
+				found = found || v.Action == "bind" && v.CredentialVersion == id
 			}
-			v, err := ledger.DecodeRuntimeCredentialChanged(r.Payload)
-			if err != nil {
-				return err
-			}
-			found = found || v.Action == "bind" && v.CredentialVersion == id
-		}
-		return nil
+			return nil
+		})
+		return found, err
 	})
-	return found, err
 }
 
 // loadPaid folds one attempt's ordered occurrences and its exact admission
 // route version. Missing directory metadata retains the original history scan;
 // neither path reads objects or re-authorizes an accepted fact.
-func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, evidence ledger.Digest) (paidAttempt, bool, error) {
+func (s *Service) loadPaid(ctx context.Context, reads *historyReadSet, id uuid.UUID, through uint64, evidence ledger.Digest) (paidAttempt, bool, error) {
 	if bytes.Compare(id[:], s.p.maxAttempt[:]) > 0 {
 		return paidAttempt{}, false, nil
 	}
@@ -226,7 +228,7 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 			hit = false
 		} else {
 			var c ledger.Commit
-			c, err = s.directoryCommit(ctx, routeRows[0], through)
+			c, err = s.directoryCommit(ctx, reads, routeRows[0], through)
 			if err == nil {
 				err = visit(c)
 			}
@@ -234,7 +236,7 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 				if err != nil {
 					break
 				}
-				c, err = s.directoryCommit(ctx, row, through)
+				c, err = s.directoryCommit(ctx, reads, row, through)
 				if err == nil {
 					err = visit(c)
 				}
@@ -242,7 +244,16 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 		}
 	}
 	if !hit {
-		err = s.scan(ctx, 0, through, visit)
+		var value historyPaidValue
+		value, err = readHistory(ctx, reads, 0, through, paidHistoryKey{id}, func(ctx context.Context) (historyPaidValue, error) {
+			if err := s.scan(ctx, 0, through, visit); err != nil {
+				return historyPaidValue{}, err
+			}
+			return encodeHistoryPaid(a)
+		})
+		if err == nil {
+			a, err = decodeHistoryPaid(value)
+		}
 	}
 	if err == nil && evidence != (ledger.Digest{}) && a.evidence[evidence] != 0 {
 		err = ErrNoEffect
@@ -252,47 +263,59 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 
 // Historical period queries and first enrollment rebuild one selected scope in
 // one cold pass. This operation-local map is never installed as a history index.
-func (s *Service) paidHistoryTotal(ctx context.Context, scope ledger.PaidScope, period string, origin *ledger.Origin, through uint64) (*big.Int, *big.Int, bool, error) {
-	attempts := map[uuid.UUID]paidAttempt{}
-	routes := map[uuid.UUID]ledger.Profile{}
-	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
-		if err != nil || g == nil {
-			return err
-		}
-		if g.route != nil {
-			routes[g.route.RouteID] = g.route.Profile
-		}
-		if v := g.reserved; v != nil && slices.Contains(v.Scopes, scope) && (origin == nil || *origin == originOf(g.ids)) {
-			attempts[v.AttemptID] = paidAttempt{admission: *v, profile: routes[v.RouteID], version: 1, held: true, state: "reserved"}
-		}
-		a, found := attempts[g.receipt.AttemptID]
-		if !found {
-			return nil
-		}
-		if g.intent != nil {
-			a.intent, a.version = g.intent, g.intent.Version
-		}
-		if g.result != nil {
-			a, err = paidResultState(a, *g.result, c.First+1, g.receipt.Outcome)
-			if err != nil {
+func (s *Service) paidHistoryTotal(ctx context.Context, reads *historyReadSet, scope ledger.PaidScope, period string, origin *ledger.Origin, through uint64) (*big.Int, *big.Int, bool, error) {
+	type totalValue struct {
+		Settled, Held *big.Int
+		Found         bool
+	}
+	// Copy an optional origin so the resolver never borrows a caller's pointer.
+	selection := paidTotalHistoryKey{Scope: scope, Period: period, Filtered: origin != nil}
+	if origin != nil {
+		selection.Origin = *origin
+	}
+	value, err := readHistory(ctx, reads, 0, through, selection, func(ctx context.Context) (totalValue, error) {
+		attempts := map[uuid.UUID]paidAttempt{}
+		routes := map[uuid.UUID]ledger.Profile{}
+		err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
+			_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
+			if err != nil || g == nil {
 				return err
 			}
+			if g.route != nil {
+				routes[g.route.RouteID] = g.route.Profile
+			}
+			if v := g.reserved; v != nil && slices.Contains(v.Scopes, scope) && (!selection.Filtered || selection.Origin == originOf(g.ids)) {
+				attempts[v.AttemptID] = paidAttempt{admission: *v, profile: routes[v.RouteID], version: 1, held: true, state: "reserved"}
+			}
+			a, found := attempts[g.receipt.AttemptID]
+			if !found {
+				return nil
+			}
+			if g.intent != nil {
+				a.intent, a.version = g.intent, g.intent.Version
+			}
+			if g.result != nil {
+				a, err = paidResultState(a, *g.result, c.First+1, g.receipt.Outcome)
+				if err != nil {
+					return err
+				}
+			}
+			if g.acknowledgement != nil {
+				a.version, a.fenced, a.acknowledged = g.acknowledgement.Version, false, true
+			}
+			attempts[g.receipt.AttemptID] = a
+			return nil
+		})
+		settled, held := new(big.Int), new(big.Int)
+		for _, a := range attempts {
+			if a.admission.AdmissionPeriod == period {
+				settled.Add(settled, big.NewInt(a.cost))
+			}
+			if a.held {
+				held.Add(held, big.NewInt(a.admission.Quote.MaximumMicros))
+			}
 		}
-		if g.acknowledgement != nil {
-			a.version, a.fenced, a.acknowledged = g.acknowledgement.Version, false, true
-		}
-		attempts[g.receipt.AttemptID] = a
-		return nil
+		return totalValue{settled, held, len(attempts) != 0}, err
 	})
-	settled, held := new(big.Int), new(big.Int)
-	for _, a := range attempts {
-		if a.admission.AdmissionPeriod == period {
-			settled.Add(settled, big.NewInt(a.cost))
-		}
-		if a.held {
-			held.Add(held, big.NewInt(a.admission.Quote.MaximumMicros))
-		}
-	}
-	return settled, held, len(attempts) != 0, err
+	return value.Settled, value.Held, value.Found, err
 }

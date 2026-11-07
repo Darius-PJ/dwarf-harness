@@ -29,7 +29,7 @@ func (a *Agent) ReadPaidObject(ctx context.Context, request PaidObjectLookup) ([
 	return a.service.readPaidObject(ctx, &a.ids, request)
 }
 
-func (s *Service) paidObjectSelected(ctx context.Context, a paidAttempt, ref ledger.ObjectRef) (bool, error) {
+func (s *Service) paidObjectSelected(ctx context.Context, reads *historyReadSet, a paidAttempt, ref ledger.ObjectRef) (bool, error) {
 	if a.admission.InputObject == ref {
 		return true, nil
 	}
@@ -41,15 +41,14 @@ func (s *Service) paidObjectSelected(ctx context.Context, a paidAttempt, ref led
 	}
 	// Prior evidence remains selectable after a correction. This is an explicit
 	// historical query, not a scan in dispatch or an ordinary settlement.
-	found := false
-	err := s.scanDirectory(ctx, directoryKey{kind: directoryPaid, id: a.admission.AttemptID}, a.sequence-2, s.p.through, func(c ledger.Commit) error {
+	id, after, through := a.admission.AttemptID, a.sequence-2, s.p.through
+	return foldDirectory(ctx, s, reads, directoryKey{kind: directoryPaid, id: id}, after, through, directoryReadSelection{Purpose: "paid_object_selected", Object: ref}, func(found *bool, c ledger.Commit) error {
 		_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
-		if err == nil && g != nil && g.receipt.AttemptID == a.admission.AttemptID && selected(g.result) {
-			found = true
+		if err == nil && g != nil && g.receipt.AttemptID == id && selected(g.result) {
+			*found = true
 		}
 		return err
 	})
-	return found, err
 }
 
 func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, request PaidObjectLookup) ([]byte, error) {
@@ -72,16 +71,12 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 	var replayRequired bool
 	var selectedThrough uint64
 	var evidenceBytes int64
-	check := func() error {
-		if err := s.usableLocked(ctx); err != nil {
-			return err
-		}
-		if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-			return err
-		}
+	reads := &historyReadSet{}
+	check := func(reads *historyReadSet) error {
+		replayRequired, selectedThrough, evidenceBytes, chain = false, 0, 0, nil
 		var found bool
 		var err error
-		a, found, err = s.loadPaid(ctx, request.AttemptID, s.p.through, ledger.Digest{})
+		a, found, err = s.loadPaid(ctx, reads, request.AttemptID, s.p.through, ledger.Digest{})
 		if err != nil {
 			return err
 		}
@@ -90,17 +85,17 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 		}
 		if bound != nil {
 			target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(a.origin)), Scope: "context", Slots: []string{"continuation", "handoff", "memory", "transcript"}}
-			chain, err = s.authorize(ctx, a.origin, request.GrantID, "private.read", []ledger.Resource{target}, nil, request.Object.Bytes, s.p.through)
+			chain, err = s.authorize(ctx, reads, a.origin, request.GrantID, "private.read", []ledger.Resource{target}, nil, request.Object.Bytes, s.p.through)
 			if err != nil {
 				return reviewDenied(err)
 			}
 		}
-		found, err = s.paidObjectSelected(ctx, a, request.Object)
+		found, err = s.paidObjectSelected(ctx, reads, a, request.Object)
 		if err == nil && !found {
 			replayRequired = true
 			selectedThrough = s.p.through
 			if replayEvidence != (ledger.ObjectRef{}) {
-				selected, err := s.paidObjectSelected(ctx, a, replayEvidence)
+				selected, err := s.paidObjectSelected(ctx, reads, a, replayEvidence)
 				if err != nil {
 					return err
 				}
@@ -109,10 +104,11 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 				}
 			}
 			if replayEvidence == (ledger.ObjectRef{}) {
-				err = s.scanDirectory(ctx, directoryKey{kind: directoryPaid, id: a.admission.AttemptID}, a.sequence-2, selectedThrough, func(c ledger.Commit) error {
+				id := a.admission.AttemptID
+				evidenceBytes, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryPaid, id: id}, a.sequence-2, selectedThrough, directoryReadSelection{Purpose: "paid_evidence_bound"}, func(size *int64, c ledger.Commit) error {
 					_, _, _, group, _, _, err := decodeFamily(draftsOf(c), c.First)
-					if err == nil && group != nil && group.result != nil && group.receipt.AttemptID == a.admission.AttemptID && group.result.EvidenceObject != nil {
-						evidenceBytes = max(evidenceBytes, group.result.EvidenceObject.Bytes)
+					if err == nil && group != nil && group.result != nil && group.receipt.AttemptID == id && group.result.EvidenceObject != nil {
+						*size = max(*size, group.result.EvidenceObject.Bytes)
 					}
 					return err
 				})
@@ -127,7 +123,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 		return err
 	}
 	s.mu.Lock()
-	err := check()
+	err := s.prepareHistoryLocked(ctx, reads, bound, true, check)
 	reservation := scopedReservation{origin: a.origin}
 	if err == nil {
 		err = s.reserveScopedProcessLocked(&reservation)
@@ -195,7 +191,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 		s.deps.afterRead(bindingOf(a.origin), "paid_object")
 	}
 	s.mu.Lock()
-	authorityErr := check()
+	authorityErr := s.prepareHistoryLocked(ctx, reads, bound, true, check)
 	s.mu.Unlock()
 	if authorityErr != nil {
 		return nil, authorityErr

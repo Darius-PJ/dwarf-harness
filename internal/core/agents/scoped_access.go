@@ -61,37 +61,34 @@ func (a *Agent) Snapshot(ctx context.Context, request ScopedSnapshotLookup) (Sna
 		return Snapshot{}, ErrNotBound
 	}
 	s := a.service
-	done, err := s.scopedQuery(ctx, &a.ids)
-	if err != nil {
-		return Snapshot{}, agentError(err)
-	}
-	defer done()
-	var slots []string
-	switch request.Scope {
-	case "agent":
-		slots = []string{"instructions", "memory"}
-	case "context":
-		slots = []string{"continuation", "handoff", "memory", "transcript"}
-	default:
-		return Snapshot{}, ErrDenied
-	}
-	binding := Binding{a.ids.agent, a.ids.context}
-	target := ledger.Resource{Kind: "context", Binding: ledger.Binding(binding), Scope: request.Scope, Slots: slots}
-	if _, err := s.authorize(ctx, originOf(a.ids), request.GrantID, "context.inspect", []ledger.Resource{target}, nil, 0, s.p.through); err != nil {
-		return Snapshot{}, agentError(err)
-	}
-	state := s.p.scopes[keyFor(a.ids, request.Scope)]
-	if state == nil {
-		return Snapshot{}, ErrDenied
-	}
-	result := s.snapshotLocked(a.ids, ReadBinding{Binding: binding, Scope: request.Scope})
-	if request.Scope == "context" {
-		result.Issues = slices.Clone(state.issues)
-		if len(s.p.scopes[keyFor(a.ids, "agent")].issues) != 0 {
-			result.Issues = append(result.Issues, IntegrityIssue{ReadBinding: ReadBinding{Binding: binding, Scope: "agent"}, Reason: "agent_integrity"})
+	return queryHistory(ctx, s, &a.ids, func(reads *historyReadSet) (Snapshot, error) {
+		var slots []string
+		switch request.Scope {
+		case "agent":
+			slots = []string{"instructions", "memory"}
+		case "context":
+			slots = []string{"continuation", "handoff", "memory", "transcript"}
+		default:
+			return Snapshot{}, ErrDenied
 		}
-	}
-	return result, nil
+		binding := Binding{a.ids.agent, a.ids.context}
+		target := ledger.Resource{Kind: "context", Binding: ledger.Binding(binding), Scope: request.Scope, Slots: slots}
+		if _, err := s.authorize(ctx, reads, originOf(a.ids), request.GrantID, "context.inspect", []ledger.Resource{target}, nil, 0, s.p.through); err != nil {
+			return Snapshot{}, agentError(err)
+		}
+		state := s.p.scopes[keyFor(a.ids, request.Scope)]
+		if state == nil {
+			return Snapshot{}, ErrDenied
+		}
+		result := s.snapshotLocked(a.ids, ReadBinding{Binding: binding, Scope: request.Scope})
+		if request.Scope == "context" {
+			result.Issues = slices.Clone(state.issues)
+			if len(s.p.scopes[keyFor(a.ids, "agent")].issues) != 0 {
+				result.Issues = append(result.Issues, IntegrityIssue{ReadBinding: ReadBinding{Binding: binding, Scope: "agent"}, Reason: "agent_integrity"})
+			}
+		}
+		return result, nil
+	})
 }
 
 func (a *Agent) ScratchBinding(ctx context.Context, request ScopedScratchLookup) (ScratchBinding, error) {
@@ -102,24 +99,21 @@ func (a *Agent) ScratchBinding(ctx context.Context, request ScopedScratchLookup)
 		return ScratchBinding{}, ErrInvalid
 	}
 	s := a.service
-	done, err := s.scopedQuery(ctx, &a.ids)
-	if err != nil {
-		return ScratchBinding{}, agentError(err)
-	}
-	defer done()
-	binding := Binding{a.ids.agent, a.ids.context}
-	target := ledger.Resource{Kind: "workspace", WorkspaceID: request.WorkspaceID, Binding: ledger.Binding(binding), PathPrefix: ""}
-	if _, err := s.authorize(ctx, originOf(a.ids), request.GrantID, "file.read", []ledger.Resource{target}, nil, 0, s.p.through); err != nil {
-		return ScratchBinding{}, agentError(err)
-	}
-	if err := s.scopeIssuesLocked(a.ids, "context"); err != nil {
-		return ScratchBinding{}, agentError(err)
-	}
-	result := s.scratchBindingLocked(ScratchLookup{Binding: binding, WorkspaceID: request.WorkspaceID, ExpectedScratchID: request.ExpectedScratchID})
-	if result.State == "mismatch" {
-		return ScratchBinding{}, ErrDenied
-	}
-	return result, nil
+	return queryHistory(ctx, s, &a.ids, func(reads *historyReadSet) (ScratchBinding, error) {
+		binding := Binding{a.ids.agent, a.ids.context}
+		target := ledger.Resource{Kind: "workspace", WorkspaceID: request.WorkspaceID, Binding: ledger.Binding(binding), PathPrefix: ""}
+		if _, err := s.authorize(ctx, reads, originOf(a.ids), request.GrantID, "file.read", []ledger.Resource{target}, nil, 0, s.p.through); err != nil {
+			return ScratchBinding{}, agentError(err)
+		}
+		if err := s.scopeIssuesLocked(a.ids, "context"); err != nil {
+			return ScratchBinding{}, agentError(err)
+		}
+		result := s.scratchBindingLocked(ScratchLookup{Binding: binding, WorkspaceID: request.WorkspaceID, ExpectedScratchID: request.ExpectedScratchID})
+		if result.State == "mismatch" {
+			return ScratchBinding{}, ErrDenied
+		}
+		return result, nil
+	})
 }
 
 // ReadArtifact is the owner's passive, verified body query. Its process slot
@@ -133,7 +127,8 @@ func (s *Service) ReadArtifact(ctx context.Context, origin Binding, request Arti
 		return nil, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, origin, false)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, origin, false)
 	if err != nil {
 		return nil, err
 	}
@@ -145,13 +140,18 @@ func (s *Service) ReadArtifact(ctx context.Context, origin Binding, request Arti
 	}
 	sub := ledger.ScopedSubmission{Actor: "owner", Origin: originOf(ids)}
 	s.mu.Lock()
-	err = s.refreshScopedLocked(ctx, sub)
-	if err == nil {
-		err = s.verifyArtifactSource(ctx, request.Artifact, s.p.through)
-	}
-	if err == nil && s.preparing >= s.limits.MaxConcurrentWrites {
-		err = &BusyError{Reason: "preparing"}
-	}
+	err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		if err := s.scopedAuthority(ctx, reads, sub); err != nil {
+			return err
+		}
+		if err := s.verifyArtifactSource(ctx, reads, request.Artifact, s.p.through); err != nil {
+			return err
+		}
+		if s.preparing >= s.limits.MaxConcurrentWrites {
+			return &BusyError{Reason: "preparing"}
+		}
+		return nil
+	})
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
@@ -169,7 +169,7 @@ func (s *Service) ReadArtifact(ctx context.Context, origin Binding, request Arti
 		s.deps.afterRead(origin, "artifact")
 	}
 	s.mu.Lock()
-	err = s.refreshScopedLocked(ctx, sub)
+	err = s.refreshScopedLocked(ctx, reads, sub)
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err

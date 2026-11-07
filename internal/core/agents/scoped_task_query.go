@@ -21,30 +21,27 @@ func (a *Agent) TaskStatus(ctx context.Context, request TaskLookup) (TaskView, e
 	return a.service.taskStatus(ctx, &a.ids, request)
 }
 func (s *Service) taskStatus(ctx context.Context, bound *submissionIDs, request TaskLookup) (TaskView, error) {
-	done, err := s.scopedQuery(ctx, bound)
-	if err != nil {
-		return TaskView{}, err
-	}
-	defer done()
-	if !validID(request.TaskID) || bound == nil && request.GrantID != (uuid.UUID{}) {
-		return TaskView{}, ErrInvalid
-	}
-	if bound != nil {
-		if _, err := s.authorize(ctx, originOf(*bound), request.GrantID, "task.inspect", []ledger.Resource{{Kind: "task", TaskID: request.TaskID}}, nil, 0, s.p.through); err != nil {
+	return queryHistory(ctx, s, bound, func(reads *historyReadSet) (TaskView, error) {
+		if !validID(request.TaskID) || bound == nil && request.GrantID != (uuid.UUID{}) {
+			return TaskView{}, ErrInvalid
+		}
+		if bound != nil {
+			if _, err := s.authorize(ctx, reads, originOf(*bound), request.GrantID, "task.inspect", []ledger.Resource{{Kind: "task", TaskID: request.TaskID}}, nil, 0, s.p.through); err != nil {
+				return TaskView{}, err
+			}
+		}
+		task, found, err := s.loadTask(ctx, reads, request.TaskID, s.p.through)
+		if err != nil {
 			return TaskView{}, err
 		}
-	}
-	task, found, err := s.loadTask(ctx, request.TaskID, s.p.through)
-	if err != nil {
-		return TaskView{}, err
-	}
-	if bound != nil && (!found || !slices.Contains(task.record.Audience, bound.agent)) {
-		return TaskView{}, ErrDenied
-	}
-	if !found {
-		return TaskView{}, ErrUnavailable
-	}
-	return s.taskView(ctx, task, bound)
+		if bound != nil && (!found || !slices.Contains(task.record.Audience, bound.agent)) {
+			return TaskView{}, ErrDenied
+		}
+		if !found {
+			return TaskView{}, ErrUnavailable
+		}
+		return s.taskView(ctx, reads, task, bound)
+	})
 }
 
 func (s *Service) ListTasks(ctx context.Context, request TaskList) (TaskPage, error) {
@@ -57,71 +54,68 @@ func (a *Agent) ListTasks(ctx context.Context, request TaskList) (TaskPage, erro
 	return a.service.listTasks(ctx, &a.ids, request)
 }
 func (s *Service) listTasks(ctx context.Context, bound *submissionIDs, request TaskList) (TaskPage, error) {
-	done, err := s.scopedQuery(ctx, bound)
-	if err != nil {
-		return TaskPage{}, err
-	}
-	defer done()
-	if request.Limit <= 0 || request.AfterTaskID != (uuid.UUID{}) && !validID(request.AfterTaskID) || bound == nil && request.GrantID != (uuid.UUID{}) {
-		return TaskPage{}, ErrInvalid
-	}
-	if request.Limit > s.limits.MaxLiveTasks {
-		return TaskPage{}, ErrTooLarge
-	}
-	if err := s.taskListingPrecheck(ctx, bound, request.GrantID); err != nil {
-		return TaskPage{}, err
-	}
-	// Terminal dependency facts may remain hot, but never enter the live list.
-	// Keep only the next page and one authorized look-ahead, not a skipped-ID
-	// cursor or a second unbounded task index.
-	ids := []uuid.UUID{}
-	for id, task := range s.p.tasks {
-		if terminalTask(task.record.State) || bytes.Compare(id[:], request.AfterTaskID[:]) <= 0 {
-			continue
+	return queryHistory(ctx, s, bound, func(reads *historyReadSet) (TaskPage, error) {
+		if request.Limit <= 0 || request.AfterTaskID != (uuid.UUID{}) && !validID(request.AfterTaskID) || bound == nil && request.GrantID != (uuid.UUID{}) {
+			return TaskPage{}, ErrInvalid
 		}
-		if bound != nil {
-			_, err := s.authorize(ctx, originOf(*bound), request.GrantID, "task.inspect", []ledger.Resource{{Kind: "task", TaskID: id}}, nil, 0, s.p.through)
-			if errors.Is(err, ErrDenied) {
+		if request.Limit > s.limits.MaxLiveTasks {
+			return TaskPage{}, ErrTooLarge
+		}
+		if err := s.taskListingPrecheck(ctx, reads, bound, request.GrantID); err != nil {
+			return TaskPage{}, err
+		}
+		// Terminal dependency facts may remain hot, but never enter the live list.
+		// Keep only the next page and one authorized look-ahead, not a skipped-ID
+		// cursor or a second unbounded task index.
+		ids := []uuid.UUID{}
+		for id, task := range s.p.tasks {
+			if terminalTask(task.record.State) || bytes.Compare(id[:], request.AfterTaskID[:]) <= 0 {
 				continue
 			}
+			if bound != nil {
+				_, err := s.authorize(ctx, reads, originOf(*bound), request.GrantID, "task.inspect", []ledger.Resource{{Kind: "task", TaskID: id}}, nil, 0, s.p.through)
+				if errors.Is(err, ErrDenied) {
+					continue
+				}
+				if err != nil {
+					return TaskPage{}, err
+				}
+				if !slices.Contains(task.record.Audience, bound.agent) {
+					continue
+				}
+			}
+			at, _ := slices.BinarySearchFunc(ids, id, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+			if at > request.Limit {
+				continue
+			}
+			ids = slices.Insert(ids, at, id)
+			if len(ids)-1 > request.Limit {
+				ids = ids[:request.Limit+1]
+			}
+		}
+		page := TaskPage{Tasks: make([]TaskView, 0, min(len(ids), request.Limit)), ThroughSequence: s.p.through}
+		if len(ids) > request.Limit {
+			ids = ids[:request.Limit]
+			page.AfterTaskID = ids[len(ids)-1]
+		}
+		for _, id := range ids {
+			view, err := s.taskView(ctx, reads, s.p.tasks[id], bound)
 			if err != nil {
 				return TaskPage{}, err
 			}
-			if !slices.Contains(task.record.Audience, bound.agent) {
-				continue
-			}
+			page.Tasks = append(page.Tasks, view)
 		}
-		at, _ := slices.BinarySearchFunc(ids, id, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-		if at > request.Limit {
-			continue
-		}
-		ids = slices.Insert(ids, at, id)
-		if len(ids)-1 > request.Limit {
-			ids = ids[:request.Limit+1]
-		}
-	}
-	page := TaskPage{Tasks: make([]TaskView, 0, min(len(ids), request.Limit)), ThroughSequence: s.p.through}
-	if len(ids) > request.Limit {
-		ids = ids[:request.Limit]
-		page.AfterTaskID = ids[len(ids)-1]
-	}
-	for _, id := range ids {
-		view, err := s.taskView(ctx, s.p.tasks[id], bound)
-		if err != nil {
-			return TaskPage{}, err
-		}
-		page.Tasks = append(page.Tasks, view)
-	}
-	return page, nil
+		return page, nil
+	})
 }
 
 // taskListingPrecheck proves that the selected chain can inspect at least one
 // concrete task resource. Each candidate still needs its own authorization.
-func (s *Service) taskListingPrecheck(ctx context.Context, bound *submissionIDs, grantID uuid.UUID) error {
+func (s *Service) taskListingPrecheck(ctx context.Context, reads *historyReadSet, bound *submissionIDs, grantID uuid.UUID) error {
 	if bound == nil {
 		return nil
 	}
-	chain, err := s.currentChain(ctx, originOf(*bound), grantID, s.p.through)
+	chain, err := s.currentChain(ctx, reads, originOf(*bound), grantID, s.p.through)
 	if err != nil {
 		return err
 	}
@@ -129,7 +123,7 @@ func (s *Service) taskListingPrecheck(ctx context.Context, bound *submissionIDs,
 		if resource.Kind != "task" || !validID(resource.TaskID) {
 			continue
 		}
-		_, err := s.authorize(ctx, originOf(*bound), grantID, "task.inspect", []ledger.Resource{resource}, nil, 0, s.p.through)
+		_, err := s.authorize(ctx, reads, originOf(*bound), grantID, "task.inspect", []ledger.Resource{resource}, nil, 0, s.p.through)
 		if err == nil {
 			return nil
 		}
@@ -140,7 +134,7 @@ func (s *Service) taskListingPrecheck(ctx context.Context, bound *submissionIDs,
 	return ErrDenied
 }
 
-func (s *Service) taskView(ctx context.Context, task scopedTaskState, viewer *submissionIDs) (TaskView, error) {
+func (s *Service) taskView(ctx context.Context, reads *historyReadSet, task scopedTaskState, viewer *submissionIDs) (TaskView, error) {
 	encoded, err := task.record.Encode()
 	if err != nil {
 		return TaskView{}, err
@@ -152,14 +146,14 @@ func (s *Service) taskView(ctx context.Context, task scopedTaskState, viewer *su
 	if task.descriptionSequence == 0 || task.descriptionSequence > math.MaxInt64 {
 		return TaskView{}, ErrUnavailable
 	}
-	state, reason, err := s.taskReadiness(ctx, task.record, viewer, true)
+	state, reason, err := s.taskReadiness(ctx, reads, task.record, viewer, true)
 	if err != nil {
 		return TaskView{}, err
 	}
 	return TaskView{Task: copy, DescriptionRef: ledger.ArtifactRef{SourceSequence: int64(task.descriptionSequence), SHA256: copy.Description.SHA256, Bytes: copy.Description.Bytes}, Sequence: task.sequence, Readiness: state, Reason: reason, ThroughSequence: s.p.through}, nil
 }
 
-func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChanged, viewer *submissionIDs, includePreparing bool) (string, string, error) {
+func (s *Service) taskReadiness(ctx context.Context, reads *historyReadSet, task ledger.RuntimeTaskChanged, viewer *submissionIDs, includePreparing bool) (string, string, error) {
 	if task.State != "waiting" {
 		return task.State, "", nil
 	}
@@ -169,7 +163,7 @@ func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChan
 	incomplete := false
 	for _, id := range task.Dependencies {
 		if viewer != nil {
-			visible, err := s.canInspectTask(ctx, originOf(*viewer), id, s.p.through)
+			visible, err := s.canInspectTask(ctx, reads, originOf(*viewer), id, s.p.through)
 			if err != nil {
 				return "", "", err
 			}
@@ -177,7 +171,7 @@ func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChan
 				return "waiting_blocked", "dependency_unavailable", nil
 			}
 		}
-		dependency, found, err := s.loadTask(ctx, id, s.p.through)
+		dependency, found, err := s.loadTask(ctx, reads, id, s.p.through)
 		if err != nil {
 			return "", "", err
 		}
@@ -194,11 +188,11 @@ func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChan
 	}
 	binding := task.Assignment.Assignee
 	origin := ledger.Origin{AgentID: binding.AgentID, SessionID: s.p.agents[binding.AgentID].session, ContextID: binding.ContextID}
-	start, startReason, err := s.operationReadiness(ctx, origin, "task.start", ledger.Resource{Kind: "task", TaskID: task.TaskID}, includePreparing)
+	start, startReason, err := s.operationReadiness(ctx, reads, origin, "task.start", ledger.Resource{Kind: "task", TaskID: task.TaskID}, includePreparing)
 	if err != nil {
 		return "", "", err
 	}
-	turn, turnReason, err := s.operationReadiness(ctx, origin, "turn.start", ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}}, includePreparing)
+	turn, turnReason, err := s.operationReadiness(ctx, reads, origin, "turn.start", ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}}, includePreparing)
 	if err != nil {
 		return "", "", err
 	}
@@ -219,10 +213,10 @@ func (s *Service) taskReadiness(ctx context.Context, task ledger.RuntimeTaskChan
 
 // Each candidate is a whole chain for one operation. In particular, a partial
 // task grant and a partial turn grant cannot be combined into either authority.
-func (s *Service) operationReadiness(ctx context.Context, origin ledger.Origin, operation string, target ledger.Resource, includePreparing bool) (string, string, error) {
+func (s *Service) operationReadiness(ctx context.Context, reads *historyReadSet, origin ledger.Origin, operation string, target ledger.Resource, includePreparing bool) (string, string, error) {
 	permission, enrolled, enabled, queued := false, false, false, false
 	for _, id := range s.ownGrantIDs(origin) {
-		chain, err := s.authorize(ctx, origin, id, operation, []ledger.Resource{target}, nil, 0, s.p.through)
+		chain, err := s.authorize(ctx, reads, origin, id, operation, []ledger.Resource{target}, nil, 0, s.p.through)
 		if errors.Is(err, ErrDenied) {
 			continue
 		}

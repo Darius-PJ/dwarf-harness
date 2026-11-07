@@ -25,7 +25,7 @@ func (s *Service) OpenSession(ctx context.Context, binding Binding) (session.Ses
 	if s == nil {
 		return nil, ErrNotBound
 	}
-	ids, err := s.initialIDs(ctx, binding, false)
+	ids, err := s.initialIDs(ctx, &historyReadSet{}, binding, false)
 	if err != nil {
 		return nil, err
 	}
@@ -56,11 +56,11 @@ func (v *loopSession) usable() error {
 	}
 	return nil
 }
-func (v *loopSession) bound(ctx context.Context, contextID uuid.UUID) (submissionIDs, error) {
+func (v *loopSession) bound(ctx context.Context, reads *historyReadSet, contextID uuid.UUID) (submissionIDs, error) {
 	if err := v.usable(); err != nil {
 		return submissionIDs{}, err
 	}
-	ids, err := v.service.initialIDs(ctx, Binding{AgentID: v.ids.agent, ContextID: contextID}, false)
+	ids, err := v.service.initialIDs(ctx, reads, Binding{AgentID: v.ids.agent, ContextID: contextID}, false)
 	if err == nil && ids.session != v.ids.session {
 		err = ErrNotBound
 	}
@@ -71,7 +71,8 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 	if command.Schema != 1 || !validID(command.CommandID) || !validID(command.ContextID) {
 		return result, ErrInvalid
 	}
-	ids, err := v.bound(ctx, command.ContextID)
+	reads := &historyReadSet{}
+	ids, err := v.bound(ctx, reads, command.ContextID)
 	if err != nil {
 		return result, err
 	}
@@ -81,7 +82,7 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 		if command.Operation != "message.send" || !validID(args.TurnID) || !utf8.ValidString(args.Text) || len(args.Text) > maxObjectBytes || len(args.Artifacts) > s.limits.MaxSelectedObjects {
 			return result, ErrInvalid
 		}
-		g, err := r.start(ctx, ids, command.CommandID, args)
+		g, err := r.start(ctx, reads, ids, command.CommandID, args)
 		if err != nil {
 			return result, err
 		}
@@ -90,12 +91,12 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 		if command.Operation != "turn.cancel" || !validID(args.TurnID) {
 			return result, ErrInvalid
 		}
-		return v.cancelTurn(ctx, ids, command.CommandID, args.TurnID)
+		return v.cancelTurn(ctx, reads, ids, command.CommandID, args.TurnID)
 	case session.TurnStatus:
 		if command.Operation != "turn.status" || !validID(args.TurnID) {
 			return result, ErrInvalid
 		}
-		view, err := v.status(ctx, ids, args.TurnID)
+		view, err := v.status(ctx, reads, ids, args.TurnID)
 		if err != nil {
 			return result, err
 		}
@@ -105,7 +106,7 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 			return result, ErrInvalid
 		}
 		s.mu.Lock()
-		if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+		if err := s.refreshLocked(ctx, reads, s.store.Durable()); err != nil {
 			s.mu.Unlock()
 			return result, err
 		}
@@ -138,7 +139,7 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 		return result, ErrInvalid
 	}
 }
-func (v *loopSession) status(ctx context.Context, ids submissionIDs, id uuid.UUID) (session.TurnView, error) {
+func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids submissionIDs, id uuid.UUID) (session.TurnView, error) {
 	r, s := v.service.loop, v.service
 	r.mu.Lock()
 	if t := r.turns[id]; t != nil {
@@ -153,43 +154,49 @@ func (v *loopSession) status(ctx context.Context, ids submissionIDs, id uuid.UUI
 	r.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return session.TurnView{}, err
-	}
-	view := session.TurnView{TurnID: id, State: "recovery_pending"}
-	err := s.scanDirectory(ctx, directoryKey{kind: directoryTurnStatus, id: id}, 0, s.p.through, func(c ledger.Commit) error {
-		for _, record := range c.Records {
-			if record.AgentID != ids.agent || record.ExecutionSessionID != ids.session || record.ContextID != ids.context || record.TurnID != id {
-				continue
-			}
-			switch record.Type {
-			case ledger.TypeRuntimeTurnBound:
-				view.BoundSequence = record.Seq
-			case ledger.TypeRuntimeTurnResult:
-				result, err := ledger.DecodeRuntimeTurnResult(record.Payload)
-				if err != nil {
-					return err
+	var view session.TurnView
+	err := s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		var err error
+		view, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryTurnStatus, id: id}, 0, s.p.through, directoryReadSelection{Purpose: "loop_status", Origin: originOf(ids)}, func(view *session.TurnView, c ledger.Commit) error {
+			for _, record := range c.Records {
+				if record.AgentID != ids.agent || record.ExecutionSessionID != ids.session || record.ContextID != ids.context || record.TurnID != id {
+					continue
 				}
-				view.State, view.Reason, view.ModelCalls, view.ToolDispatches, view.Result = result.Outcome, result.Reason, result.ModelCalls, result.ToolDispatches, &result
+				switch record.Type {
+				case ledger.TypeRuntimeTurnBound:
+					view.BoundSequence = record.Seq
+				case ledger.TypeRuntimeTurnResult:
+					result, err := ledger.DecodeRuntimeTurnResult(record.Payload)
+					if err != nil {
+						return err
+					}
+					view.State, view.Reason, view.ModelCalls, view.ToolDispatches, view.Result = result.Outcome, result.Reason, result.ModelCalls, result.ToolDispatches, &result
+				}
 			}
-		}
-		return nil
+			return nil
+		})
+		return err
 	})
+	view.TurnID = id
+	if view.State == "" {
+		view.State = "recovery_pending"
+	}
 	if err == nil && view.BoundSequence == 0 {
 		err = ErrUnavailable
 	}
 	return view, err
 }
-func (v *loopSession) cancelTurn(ctx context.Context, ids submissionIDs, command, id uuid.UUID) (session.CommandResult, error) {
+func (v *loopSession) cancelTurn(ctx context.Context, reads *historyReadSet, ids submissionIDs, command, id uuid.UUID) (session.CommandResult, error) {
 	result := session.CommandResult{CommandID: command, Outcome: "refused", TurnID: id}
 	r, s := v.service.loop, v.service
 	// Historical retries resolve globally before selecting a live cancellation.
 	s.mu.Lock()
-	err := s.refreshLocked(ctx, s.store.Durable())
 	var match commandMatch
-	if err == nil {
-		match, err = s.findCommand(ctx, command, 0, s.p.through)
-	}
+	err := s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		var err error
+		match, err = s.findCommand(ctx, reads, command, 0, s.p.through)
+		return err
+	})
 	s.mu.Unlock()
 	if err != nil {
 		return result, err
@@ -254,7 +261,7 @@ func (v *loopSession) Since(ctx context.Context, cursor uint64, limit int) (sess
 	}
 	defer s.active.Done()
 	s.mu.Lock()
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+	if err := s.refreshLocked(ctx, &historyReadSet{}, s.store.Durable()); err != nil {
 		s.mu.Unlock()
 		return session.EventPage{}, err
 	}
@@ -393,21 +400,23 @@ func (v *loopSession) lateText(ctx context.Context, id uuid.UUID) (session.TextS
 	s := v.service
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return session.TextSnapshot{}, nil, err
-	}
+	ids := v.ids
 	var result *ledger.RuntimeTurnResult
-	err := s.scanDirectory(ctx, directoryKey{kind: directoryTurnResult, id: id}, 0, s.p.through, func(c ledger.Commit) error {
-		for _, record := range c.Records {
-			if record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == id && record.AgentID == v.ids.agent && record.ExecutionSessionID == v.ids.session {
-				value, err := ledger.DecodeRuntimeTurnResult(record.Payload)
-				if err != nil {
-					return err
+	err := s.prepareHistoryLocked(ctx, &historyReadSet{}, &ids, true, func(reads *historyReadSet) error {
+		var err error
+		result, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryTurnResult, id: id}, 0, s.p.through, directoryReadSelection{Purpose: "loop_late_text", Origin: originOf(ids)}, func(result **ledger.RuntimeTurnResult, c ledger.Commit) error {
+			for _, record := range c.Records {
+				if record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == id && record.AgentID == ids.agent && record.ExecutionSessionID == ids.session {
+					value, err := ledger.DecodeRuntimeTurnResult(record.Payload)
+					if err != nil {
+						return err
+					}
+					*result = &value
 				}
-				result = &value
 			}
-		}
-		return nil
+			return nil
+		})
+		return err
 	})
 	if err != nil {
 		return session.TextSnapshot{}, nil, err
@@ -436,7 +445,7 @@ func (v *loopSession) FinalText(ctx context.Context, id uuid.UUID) (string, erro
 	}
 	defer s.active.Done()
 	s.mu.Lock()
-	err := s.refreshLocked(ctx, s.store.Durable())
+	err := s.refreshLocked(ctx, &historyReadSet{}, s.store.Durable())
 	through := s.p.through
 	s.mu.Unlock()
 	if err != nil {

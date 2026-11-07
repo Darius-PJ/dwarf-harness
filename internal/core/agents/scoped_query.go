@@ -11,7 +11,7 @@ import (
 
 // A projection is disclosed only after refresh, with authority and its ledger
 // high-water held stable until all returned metadata has been copied.
-func (s *Service) scopedQuery(ctx context.Context, bound *submissionIDs) (func(), error) {
+func (s *Service) scopedQuery(ctx context.Context, reads *historyReadSet, bound *submissionIDs) (func(), error) {
 	if s == nil {
 		return nil, ErrNotBound
 	}
@@ -22,7 +22,7 @@ func (s *Service) scopedQuery(ctx context.Context, bound *submissionIDs) (func()
 	done := func() { s.mu.Unlock(); s.active.Done() }
 	err := s.usableLocked(ctx)
 	if err == nil {
-		err = s.refreshLocked(ctx, s.store.Durable())
+		err = s.refreshLocked(ctx, reads, s.store.Durable())
 	}
 	if err == nil && bound != nil && !s.p.registeredOrigin(originOf(*bound)) {
 		err = ErrNotBound
@@ -32,6 +32,25 @@ func (s *Service) scopedQuery(ctx context.Context, bound *submissionIDs) (func()
 		return nil, err
 	}
 	return done, nil
+}
+
+func queryHistory[T any](ctx context.Context, s *Service, bound *submissionIDs, phase func(*historyReadSet) (T, error)) (T, error) {
+	var value T
+	reads := &historyReadSet{}
+	done, err := s.scopedQuery(ctx, reads, bound)
+	if err != nil {
+		return value, err
+	}
+	defer done()
+	err = s.prepareHistoryLocked(ctx, reads, bound, true, func(reads *historyReadSet) error {
+		if bound != nil && !s.p.registeredOrigin(originOf(*bound)) {
+			return ErrNotBound
+		}
+		var err error
+		value, err = phase(reads)
+		return err
+	})
+	return value, err
 }
 
 func (s *Service) workView(work scopedWorkState) (WorkView, error) {

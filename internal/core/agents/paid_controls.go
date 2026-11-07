@@ -107,7 +107,7 @@ func controlInput(request any) (paidControlInput, error) {
 	return in, nil
 }
 
-func (s *Service) controlAuthority(ctx context.Context, in paidControlInput) ([]grantRules, error) {
+func (s *Service) controlAuthority(ctx context.Context, reads *historyReadSet, in paidControlInput) ([]grantRules, error) {
 	if s.paid == nil {
 		return nil, ErrUnavailable
 	}
@@ -118,14 +118,14 @@ func (s *Service) controlAuthority(ctx context.Context, in paidControlInput) ([]
 		return nil, nil
 	}
 	p := in.spend
-	grant, found, err := s.loadGrant(ctx, p.Scope.ID, s.p.through)
+	grant, found, err := s.loadGrant(ctx, reads, p.Scope.ID, s.p.through)
 	if err != nil {
 		return nil, err
 	}
 	if !found || grant.issuer != "agent" || grant.origin != in.sub.Origin || grant.definition.ParentGrantID != in.grant {
 		return nil, ErrDenied
 	}
-	chain, err := s.authorize(ctx, in.sub.Origin, in.grant, "grant.issue", grant.definition.Resources, grant.rules().recipients, 0, s.p.through)
+	chain, err := s.authorize(ctx, reads, in.sub.Origin, in.grant, "grant.issue", grant.definition.Resources, grant.rules().recipients, 0, s.p.through)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +152,8 @@ func (s *Service) paidControl(ctx context.Context, caller scopedCaller, request 
 		return PaidReceipt{}, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, caller.binding, false)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, caller.binding, false)
 	if err != nil {
 		return PaidReceipt{}, err
 	}
@@ -167,14 +168,14 @@ func (s *Service) paidControl(ctx context.Context, caller scopedCaller, request 
 	if err != nil {
 		return PaidReceipt{}, err
 	}
-	authority := func() error { _, err := s.controlAuthority(ctx, in); return err }
-	match, err := s.lookupPaid(ctx, in.id, authority)
+	authority := func(reads *historyReadSet) error { _, err := s.controlAuthority(ctx, reads, in); return err }
+	match, err := s.lookupPaid(ctx, reads, &ids, in.id, authority)
 	if err == nil && match.found {
 		r, err := s.matchPaid(match, in.sub, digest)
 		s.mu.Unlock()
 		return r, err
 	}
-	if err == nil {
+	if err == nil && in.credential != nil {
 		err = s.controlGuardsLocked(ctx, in, request)
 	}
 	if err != nil {
@@ -201,14 +202,11 @@ func (s *Service) paidControl(ctx context.Context, caller scopedCaller, request 
 				secret.Release()
 			}
 		}()
-		match, err = s.lookupPaid(ctx, in.id, authority)
+		match, err = s.lookupPaid(ctx, reads, &ids, in.id, authority)
 		if err == nil && match.found {
 			r, err := s.matchPaid(match, in.sub, digest)
 			s.mu.Unlock()
 			return r, err
-		}
-		if err == nil {
-			err = s.controlGuardsLocked(ctx, in, request)
 		}
 	}
 	var retiredSecret *credentials.Secret
@@ -229,77 +227,88 @@ func (s *Service) paidControl(ctx context.Context, caller scopedCaller, request 
 	// the refresh and samples again. Nothing was written.
 	conditional := in.route != nil && in.route.Enabled
 	for attempt := 1; ; attempt++ {
-		if attempt > 1 {
-			match, err := s.relookupPaidLocked(ctx, in.id, authority)
-			if err == nil && match.found {
-				return s.matchPaid(match, in.sub, digest)
+		var drafts []ledger.Draft
+		var group *paidGroup
+		err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+			drafts, group = nil, nil
+			if err := authority(reads); err != nil {
+				return err
 			}
+			var err error
+			match, err = s.findCommand(ctx, reads, in.id, 0, s.p.through)
+			if err != nil || match.found {
+				return err
+			}
+			if err := s.controlGuardsLocked(ctx, in, request); err != nil {
+				return err
+			}
+			var effect paidEncoding
+			var typ, outcome string
+			var version int64
+			var usage *ledger.PaidLocalUsage
+			switch {
+			case in.route != nil:
+				p := *in.route
+				if p.Enabled {
+					sample, err := s.samplePaidLocked()
+					if err != nil {
+						return err
+					}
+					if err := providerProfile(p.Profile).Current(sample); err != nil {
+						return err
+					}
+					p.ObservedUTCNS = sample
+				}
+				effect, typ, outcome, version = p, ledger.TypeRuntimePaidRouteConfigured, "configured", p.Version
+			case in.credential != nil:
+				p := *in.credential
+				outcome = "revoked"
+				if p.Action == "bind" {
+					outcome = "bound"
+				}
+				effect, typ, version = p, ledger.TypeRuntimeCredentialChanged, p.Version
+			case in.spend != nil:
+				p := *in.spend
+				p.AuthorityVersion = s.p.authority
+				if p.Terms.Enabled {
+					if _, err := s.samplePaidLocked(); err != nil {
+						return err
+					}
+				}
+				outcome = "configured"
+				if caller.actor == "agent" {
+					chain, err := s.controlAuthority(ctx, reads, in)
+					if err != nil {
+						return err
+					}
+					scopes, err := chainScopes(in.sub.Origin, chain)
+					if err != nil {
+						return err
+					}
+					if len(scopes) > s.limits.MaxBudgetScopes {
+						return ErrTooLarge
+					}
+					usage = &ledger.PaidLocalUsage{AuthorityVersion: s.p.authority, GrantID: in.grant, Scopes: scopes, Units: 1}
+					if err := s.p.book.checkPreparation(scopes, budgetPreparation{hold: [4]int64{0, 1, 0, 1}}, true); err != nil {
+						return err
+					}
+					outcome = "delegated"
+				}
+				effect, typ, version = p, ledger.TypeRuntimeSpendConfigured, p.Version
+			}
+			drafts, err = paidDrafts(in.id, in.sub, effect, typ, outcome, version, uuid.UUID{}, uuid.UUID{}, usage)
 			if err == nil {
-				err = s.controlGuardsLocked(ctx, in, request)
+				drafts, group, err = s.preflightPaidLocked(ctx, reads, drafts)
 			}
-			if err != nil {
-				return PaidReceipt{}, err
-			}
-		}
-		var effect paidEncoding
-		var typ, outcome string
-		var version int64
-		var usage *ledger.PaidLocalUsage
-		switch {
-		case in.route != nil:
-			p := in.route
-			if p.Enabled {
-				sample, e := s.samplePaidLocked()
-				if e != nil {
-					return PaidReceipt{}, e
-				}
-				if e = providerProfile(p.Profile).Current(sample); e != nil {
-					return PaidReceipt{}, e
-				}
-				p.ObservedUTCNS = sample
-			}
-			effect, typ, outcome, version = *p, ledger.TypeRuntimePaidRouteConfigured, "configured", p.Version
-		case in.credential != nil:
-			p := in.credential
-			outcome = "revoked"
-			if p.Action == "bind" {
-				outcome = "bound"
-			}
-			effect, typ, version = *p, ledger.TypeRuntimeCredentialChanged, p.Version
-		case in.spend != nil:
-			p := in.spend
-			p.AuthorityVersion = s.p.authority
-			if p.Terms.Enabled {
-				if _, err := s.samplePaidLocked(); err != nil {
-					return PaidReceipt{}, err
-				}
-			}
-			outcome = "configured"
-			if caller.actor == "agent" {
-				chain, e := s.controlAuthority(ctx, in)
-				if e != nil {
-					return PaidReceipt{}, e
-				}
-				scopes, e := chainScopes(in.sub.Origin, chain)
-				if e != nil {
-					return PaidReceipt{}, e
-				}
-				if len(scopes) > s.limits.MaxBudgetScopes {
-					return PaidReceipt{}, ErrTooLarge
-				}
-				usage = &ledger.PaidLocalUsage{AuthorityVersion: s.p.authority, GrantID: in.grant, Scopes: scopes, Units: 1}
-				if e = s.p.book.checkPreparation(scopes, budgetPreparation{hold: [4]int64{0, 1, 0, 1}}, true); e != nil {
-					return PaidReceipt{}, e
-				}
-				outcome = "delegated"
-			}
-			effect, typ, version = *p, ledger.TypeRuntimeSpendConfigured, p.Version
-		}
-		drafts, err := paidDrafts(in.id, in.sub, effect, typ, outcome, version, uuid.UUID{}, uuid.UUID{}, usage)
+			return err
+		})
 		if err != nil {
 			return PaidReceipt{}, err
 		}
-		receipt, err := s.submitPaidGroupLocked(ctx, drafts, conditional)
+		if match.found {
+			return s.matchPaid(match, in.sub, digest)
+		}
+		receipt, err := s.submitPaidGroupLocked(ctx, drafts, group, conditional)
 		if errors.Is(err, ledgerstore.ErrTailMoved) {
 			if attempt == tailAttempts {
 				return PaidReceipt{}, &BusyError{Reason: "ledger_tail"}

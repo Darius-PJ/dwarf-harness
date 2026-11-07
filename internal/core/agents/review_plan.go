@@ -35,13 +35,13 @@ type reviewHead struct {
 // and its slot, then the task's version, assignment and stored submission, then
 // both participants' current authority. planReview runs it first; a producer
 // also runs it alone, before any witness, clock or capacity decision.
-func (s *Service) reviewHeadAt(ctx context.Context, request *ledger.RuntimeReviewRequested, result *ledger.RuntimeReviewResult, first uint64) (reviewHead, error) {
+func (s *Service) reviewHeadAt(ctx context.Context, reads *historyReadSet, request *ledger.RuntimeReviewRequested, result *ledger.RuntimeReviewResult, first uint64) (reviewHead, error) {
 	h := reviewHead{}
 	through := first - 1
 	if request != nil {
 		q := *request
 		if reviewRequestNeedsScan(q.RequestID, s.p.maxRequest) {
-			_, found, err := s.loadReview(ctx, q.RequestID, through)
+			_, found, err := s.loadReview(ctx, reads, q.RequestID, through)
 			if err != nil {
 				return h, err
 			}
@@ -67,7 +67,7 @@ func (s *Service) reviewHeadAt(ctx context.Context, request *ledger.RuntimeRevie
 		v := *result
 		h.slot = s.p.reviews[v.Binding.TaskID]
 		if h.slot.id != v.RequestID {
-			_, found, err := s.loadReview(ctx, v.RequestID, through)
+			_, found, err := s.loadReview(ctx, reads, v.RequestID, through)
 			if err != nil {
 				return h, err
 			}
@@ -84,7 +84,7 @@ func (s *Service) reviewHeadAt(ctx context.Context, request *ledger.RuntimeRevie
 		}
 		h.sample = v.ObservedUTCNS
 	}
-	task, found, err := s.loadTask(ctx, h.slot.binding.TaskID, through)
+	task, found, err := s.loadTask(ctx, reads, h.slot.binding.TaskID, through)
 	if err != nil {
 		return h, err
 	}
@@ -103,20 +103,20 @@ func (s *Service) reviewHeadAt(ctx context.Context, request *ledger.RuntimeRevie
 	}
 	h.task = task
 	h.requester = ledger.ReviewPrincipal{Actor: h.slot.request.RequesterActor, Origin: h.slot.request.Requester, GrantID: h.slot.request.RequesterGrantID}
-	if h.requestChain, err = s.reviewParticipant(ctx, h.requester, b, h.slot.kind, true, p, through); err != nil {
+	if h.requestChain, err = s.reviewParticipant(ctx, reads, h.requester, b, h.slot.kind, true, p, through); err != nil {
 		return h, err
 	}
-	h.reviewerChain, err = s.reviewParticipant(ctx, b.Reviewer, b, h.slot.kind, false, p, through)
+	h.reviewerChain, err = s.reviewParticipant(ctx, reads, b.Reviewer, b, h.slot.kind, false, p, through)
 	return h, err
 }
 
 // planReview is the one F3-12 rule set, in brief §3.1 step 4's order: the head,
 // then both participants' subject and evidence rights and the source
 // witnesses, then trusted time, then the transition and its charge.
-func (s *Service) planReview(ctx context.Context, g *reviewGroup, first uint64) (reviewPlan, error) {
+func (s *Service) planReview(ctx context.Context, reads *historyReadSet, g *reviewGroup, first uint64) (reviewPlan, error) {
 	plan := reviewPlan{}
 	through := first - 1
-	h, err := s.reviewHeadAt(ctx, g.request, g.result, first)
+	h, err := s.reviewHeadAt(ctx, reads, g.request, g.result, first)
 	if err != nil {
 		return plan, err
 	}
@@ -126,13 +126,13 @@ func (s *Service) planReview(ctx context.Context, g *reviewGroup, first uint64) 
 	slot, task, requester, b, p := h.slot, h.task, h.requester, h.slot.binding, h.task.record
 	sources := g.sources
 	if sources == nil {
-		sources, err = s.reviewWitnesses(ctx, b, through)
+		sources, err = s.reviewWitnesses(ctx, reads, b, through)
 		if err != nil {
 			return plan, err
 		}
 	}
 	for _, principal := range []ledger.ReviewPrincipal{requester, b.Reviewer} {
-		if err := s.reviewReadRights(ctx, principal, b, through, sources); err != nil {
+		if err := s.reviewReadRights(ctx, reads, principal, b, through, sources); err != nil {
 			return plan, err
 		}
 	}

@@ -93,7 +93,7 @@ func TestPaidParentEndingAndDisclosure(t *testing.T) {
 		f.reserve(t)
 		sub := ledger.ScopedSubmission{Schema: 2, Actor: "core", Origin: f.origin, Operation: "turn.end", Target: f.service.p.work[f.turn].admission.Target, GrantID: f.inspect, Expected: ledger.ScopedExpected{Version: 1}, Arguments: ledger.WorkEndArguments{WorkID: f.turn, Outcome: "interrupted"}}
 		input := scopedInput{id: f.id(), sub: sub, digest: ledger.Digest(sha256.Sum256(paidEncode(t, sub))), turn: f.turn}
-		d, err := f.service.scopedDrafts(context.Background(), input)
+		d, err := f.service.scopedDrafts(context.Background(), nil, input)
 		if err != nil {
 			t.Fatal(err)
 		}

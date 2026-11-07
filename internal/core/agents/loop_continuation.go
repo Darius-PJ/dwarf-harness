@@ -42,7 +42,7 @@ type loopToolExecution struct {
 	correction *modelToolCorrection
 }
 
-func (s *Service) loopGrantLocked(ctx context.Context, origin ledger.Origin, operation string, targets []ledger.Resource, size int64) (uuid.UUID, error) {
+func (s *Service) loopGrantLocked(ctx context.Context, reads *historyReadSet, origin ledger.Origin, operation string, targets []ledger.Resource, size int64) (uuid.UUID, error) {
 	ids := make([]uuid.UUID, 0, len(s.p.grants))
 	for id, grant := range s.p.grants {
 		if grant.definition.Grantee == ledger.Binding(bindingOf(origin)) {
@@ -51,7 +51,7 @@ func (s *Service) loopGrantLocked(ctx context.Context, origin ledger.Origin, ope
 	}
 	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
 	for _, id := range ids {
-		if _, err := s.authorize(ctx, origin, id, operation, targets, nil, size, s.p.through); err == nil {
+		if _, err := s.authorize(ctx, reads, origin, id, operation, targets, nil, size, s.p.through); err == nil {
 			return id, nil
 		} else if !errors.Is(err, ErrDenied) {
 			return uuid.UUID{}, err
@@ -62,13 +62,14 @@ func (s *Service) loopGrantLocked(ctx context.Context, origin ledger.Origin, ope
 func (s *Service) loopGrant(ctx context.Context, origin ledger.Origin, operation string, targets []ledger.Resource, size int64) (uuid.UUID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.usableLocked(ctx); err != nil {
-		return uuid.UUID{}, err
-	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
-		return uuid.UUID{}, err
-	}
-	return s.loopGrantLocked(ctx, origin, operation, targets, size)
+	ids := submissionIDs{origin.AgentID, origin.SessionID, origin.ContextID}
+	var grant uuid.UUID
+	err := s.prepareHistoryLocked(ctx, &historyReadSet{}, &ids, true, func(reads *historyReadSet) error {
+		var err error
+		grant, err = s.loopGrantLocked(ctx, reads, origin, operation, targets, size)
+		return err
+	})
+	return grant, err
 }
 func loopPrivateTarget(origin ledger.Origin) ledger.Resource {
 	return ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{"continuation", "handoff", "memory", "transcript"}}
@@ -150,7 +151,14 @@ func (r *loopRuntime) model(t *loopTurn) error {
 		return err
 	}
 	s.mu.Lock()
-	a, found, err := s.loadPaid(context.Background(), call.id, s.p.through, ledger.Digest{})
+	var a paidAttempt
+	var found bool
+	ids := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	err = s.prepareHistoryLocked(context.Background(), &historyReadSet{}, &ids, true, func(reads *historyReadSet) error {
+		var err error
+		a, found, err = s.loadPaid(context.Background(), reads, call.id, s.p.through, ledger.Digest{})
+		return err
+	})
 	s.mu.Unlock()
 	if err != nil {
 		return err

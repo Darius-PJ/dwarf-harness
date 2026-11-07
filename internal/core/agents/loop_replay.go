@@ -122,8 +122,8 @@ type loopPlan struct {
 
 // A source link is accepted only from a complete, already-accepted native group.
 // The sequence names the effect/receipt, never a caller's guessed cursor.
-func (s *Service) loopNative(ctx context.Context, id uuid.UUID, origin ledger.Origin, through uint64) (*scopedGroup, error) {
-	m, err := s.findCommand(ctx, id, 0, through)
+func (s *Service) loopNative(ctx context.Context, reads *historyReadSet, id uuid.UUID, origin ledger.Origin, through uint64) (*scopedGroup, error) {
+	m, err := s.findCommand(ctx, reads, id, 0, through)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (s *Service) loopNative(ctx context.Context, id uuid.UUID, origin ledger.Or
 	return m.scoped, nil
 }
 
-func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loopPlan, error) {
+func (s *Service) planLoop(ctx context.Context, reads *historyReadSet, g *loopGroup, first uint64) (loopPlan, error) {
 	plan := loopPlan{}
 	sub, through := g.receipt.Submission, first-1
 	if !s.p.registeredOrigin(sub.Origin) {
@@ -145,11 +145,11 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 		if bound || g.bound == nil {
 			return plan, ErrInvalid
 		}
-		native, err := s.loopNative(ctx, a.AdmissionCommandID, sub.Origin, through)
+		native, err := s.loopNative(ctx, reads, a.AdmissionCommandID, sub.Origin, through)
 		if err != nil {
 			return plan, err
 		}
-		work, found, err := s.loadWork(ctx, sub.TurnID, through)
+		work, found, err := s.loadWork(ctx, reads, sub.TurnID, through)
 		if err != nil {
 			return plan, err
 		}
@@ -163,10 +163,11 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 		// An ended binding cannot be rebound, even if the native slot still exists.
 		_, duplicate, hit := s.history.membership(directoryKey{kind: directoryTurnBound, id: sub.TurnID}, through)
 		if !hit {
-			err = s.scan(ctx, native.first-1, through, func(c ledger.Commit) error {
+			turnID := sub.TurnID
+			duplicate, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryTurnBound, id: turnID}, native.first-1, through, directoryReadSelection{Purpose: "loop_bound"}, func(found *bool, c ledger.Commit) error {
 				for _, r := range c.Records {
-					if r.Type == ledger.TypeRuntimeTurnBound && r.TurnID == sub.TurnID {
-						duplicate = true
+					if r.Type == ledger.TypeRuntimeTurnBound && r.TurnID == turnID {
+						*found = true
 					}
 				}
 				return nil
@@ -183,7 +184,7 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 		if !bound || turn.origin != sub.Origin || g.start == nil || !sameScopedValue(ledger.RuntimeToolStarted(a), *g.start) {
 			return plan, ErrInvalid
 		}
-		work, found, err := s.loadWork(ctx, sub.TurnID, through)
+		work, found, err := s.loadWork(ctx, reads, sub.TurnID, through)
 		if err != nil {
 			return plan, err
 		}
@@ -197,7 +198,8 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 			_, duplicate, hit := s.history.membership(directoryKey{kind: directoryToolStart, id: a.ToolID}, through)
 			var err error
 			if !hit {
-				err = s.scan(ctx, 0, through, func(c ledger.Commit) error {
+				toolID := a.ToolID
+				duplicate, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryToolStart, id: toolID}, 0, through, directoryReadSelection{Purpose: "loop_tool_start"}, func(found *bool, c ledger.Commit) error {
 					for _, r := range c.Records {
 						if r.Type != ledger.TypeRuntimeToolStarted {
 							continue
@@ -206,8 +208,8 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 						if err != nil {
 							return err
 						}
-						if v.ToolID == a.ToolID {
-							duplicate = true
+						if v.ToolID == toolID {
+							*found = true
 						}
 					}
 					return nil
@@ -226,7 +228,7 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 		if _, exists := turn.calls[loopCall{a.AttemptID, a.ProviderCallID}]; exists {
 			return plan, ErrInvalid
 		}
-		attempt, found, err := s.loadPaid(ctx, a.AttemptID, through, ledger.Digest{})
+		attempt, found, err := s.loadPaid(ctx, reads, a.AttemptID, through, ledger.Digest{})
 		if err != nil {
 			return plan, err
 		}
@@ -234,7 +236,7 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 			return plan, ErrInvalid
 		}
 		if a.GrantID != (uuid.UUID{}) {
-			if err := s.loopPassiveAuthority(ctx, sub.Origin, ledger.RuntimeToolStarted(a), through); err != nil {
+			if err := s.loopPassiveAuthority(ctx, reads, sub.Origin, ledger.RuntimeToolStarted(a), through); err != nil {
 				return plan, err
 			}
 		}
@@ -244,7 +246,7 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 		if !bound || turn.origin != sub.Origin || !found || tool.origin != sub.Origin || tool.start.ParentTurnID != sub.TurnID || int64(tool.sequence) != a.StartedSequence || g.result == nil || !sameScopedValue(ledger.RuntimeToolResult(a), *g.result) {
 			return plan, ErrInvalid
 		}
-		if err := s.loopEffectReceipt(ctx, tool, ledger.RuntimeToolResult(a), through); err != nil {
+		if err := s.loopEffectReceipt(ctx, reads, tool, ledger.RuntimeToolResult(a), through); err != nil {
 			return plan, err
 		}
 		plan.endTool = a.ToolID
@@ -255,7 +257,7 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 		if !bound || turn.origin != sub.Origin || int64(turn.sequence) != a.BoundSequence || s.p.toolChildren[sub.TurnID] != 0 || s.p.paidChildren[sub.TurnID] != 0 || g.ending == nil || g.revision == nil {
 			return plan, ErrInvalid
 		}
-		native, err := s.loopNative(ctx, a.EndingCommandID, sub.Origin, through)
+		native, err := s.loopNative(ctx, reads, a.EndingCommandID, sub.Origin, through)
 		if err != nil {
 			return plan, err
 		}

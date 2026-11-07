@@ -406,7 +406,7 @@ func TestLedgerTailBusy(t *testing.T) {
 		}
 		f.service.mu.Lock()
 		poisoned := f.service.poisoned
-		match, err := f.service.findCommand(ctx, r.CommandID, 0, f.service.p.through)
+		match, err := f.service.findCommand(ctx, nil, r.CommandID, 0, f.service.p.through)
 		f.service.mu.Unlock()
 		if poisoned || err != nil || match.found {
 			t.Fatalf("busy left poisoned=%v, command found=%v, %v", poisoned, match.found, err)
@@ -595,7 +595,7 @@ func testAgentTailAcknowledgementOverlap(t *testing.T) {
 	refreshed := make(chan error, 1)
 	go func() {
 		s.mu.Lock()
-		err := s.refreshLocked(ctx, foreignEnd)
+		err := s.refreshLocked(ctx, &historyReadSet{}, foreignEnd)
 		s.mu.Unlock()
 		refreshed <- err
 	}()
@@ -604,7 +604,7 @@ func testAgentTailAcknowledgementOverlap(t *testing.T) {
 	// submit layer directly to exercise this defensive overlap: a readback
 	// must neither wait on the suspended refresher nor unlock before completion.
 	s.mu.Lock()
-	err = s.admissionGuardsLocked(ctx, p)
+	err = s.admissionGuardsLocked(ctx, nil, p)
 	sub := ledger.PaidSubmission{Schema: 4, Actor: "agent", Origin: p.origin, Operation: "paid.admit", GrantID: request.GrantID, Arguments: paidAdmitArguments(p.admission)}
 	var drafts []ledger.Draft
 	if err == nil {
@@ -615,7 +615,7 @@ func testAgentTailAcknowledgementOverlap(t *testing.T) {
 		close(observing)
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		match, err := s.findCommand(ctx, request.CommandID, 0, s.p.through)
+		match, err := s.findCommand(ctx, nil, request.CommandID, 0, s.p.through)
 		if err == nil {
 			view, viewErr := s.paidView(s.p.paidAttempts[request.AttemptID])
 			err = viewErr
@@ -627,8 +627,12 @@ func testAgentTailAcknowledgementOverlap(t *testing.T) {
 	}()
 	<-observing
 	var receipt PaidReceipt
+	var group *paidGroup
 	if err == nil {
-		receipt, err = s.submitPaidGroupLocked(ctx, drafts, false)
+		drafts, group, err = s.preflightPaidLocked(ctx, nil, drafts)
+	}
+	if err == nil {
+		receipt, err = s.submitPaidGroupLocked(ctx, drafts, group, false)
 	}
 	if err == nil {
 		s.completePaidAdmissionLocked(p, request.AttemptID)

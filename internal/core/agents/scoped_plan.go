@@ -8,7 +8,7 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-func (s *Service) planScoped(ctx context.Context, g *scopedGroup, first uint64) (scopedPlan, error) {
+func (s *Service) planScoped(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64) (scopedPlan, error) {
 	plan := scopedPlan{authority: s.p.authority}
 	sub := g.receipt.Submission
 	if !s.p.registeredOrigin(sub.Origin) {
@@ -19,18 +19,18 @@ func (s *Service) planScoped(ctx context.Context, g *scopedGroup, first uint64) 
 	var err error
 	switch {
 	case g.issue != nil || g.revoke != nil:
-		plan, chain, err = s.planGrant(ctx, g, first)
+		plan, chain, err = s.planGrant(ctx, reads, g, first)
 	case g.config != nil:
 		plan, err = s.planConfiguration(g)
 	case g.task != nil:
-		plan, chain, err = s.planTask(ctx, g, first)
+		plan, chain, err = s.planTask(ctx, reads, g, first)
 		if args, ok := sub.Arguments.(ledger.TaskCreateArguments); ok {
 			size = args.Description.Bytes
 		}
 	case g.admission != nil || g.dispatch != nil || g.ending != nil:
-		plan, err = s.planWork(ctx, g, first)
+		plan, err = s.planWork(ctx, reads, g, first)
 	default:
-		plan, chain, size, err = s.planScopedPrivate(ctx, g, first)
+		plan, chain, size, err = s.planScopedPrivate(ctx, reads, g, first)
 	}
 	if err != nil {
 		return scopedPlan{}, err

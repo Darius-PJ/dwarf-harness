@@ -109,11 +109,11 @@ func makeRegistrationInput(ids submissionIDs, operation string, request any) (re
 	return input, err
 }
 
-func (s *Service) refreshRegistrationLocked(ctx context.Context, sub ledger.RegistrationSubmission) error {
+func (s *Service) refreshRegistrationLocked(ctx context.Context, reads *historyReadSet, sub ledger.RegistrationSubmission) error {
 	if err := s.usableLocked(ctx); err != nil {
 		return err
 	}
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+	if err := s.refreshLocked(ctx, reads, s.store.Durable()); err != nil {
 		return err
 	}
 	if sub.Actor != "owner" {
@@ -127,9 +127,9 @@ func (s *Service) refreshRegistrationLocked(ctx context.Context, sub ledger.Regi
 
 // Returns with mu held. Scan the captured old prefix without mu, then refresh
 // and scan the tail under mu to close a concurrent same-command publication.
-func (s *Service) lookupRegistration(ctx context.Context, input registrationInput) (commandMatch, error) {
+func (s *Service) lookupRegistration(ctx context.Context, reads *historyReadSet, input registrationInput) (commandMatch, error) {
 	s.mu.Lock()
-	if err := s.refreshRegistrationLocked(ctx, input.sub); err != nil {
+	if err := s.refreshRegistrationLocked(ctx, reads, input.sub); err != nil {
 		return commandMatch{}, err
 	}
 	through := s.p.through
@@ -141,18 +141,29 @@ func (s *Service) lookupRegistration(ctx context.Context, input registrationInpu
 	var match commandMatch
 	var err error
 	if old {
-		match, err = s.findCommand(ctx, input.id, 0, through)
+		match, err = s.findCommand(ctx, nil, input.id, 0, through)
 	}
 	s.mu.Lock()
 	if err != nil {
 		return match, err
 	}
-	if err := s.refreshRegistrationLocked(ctx, input.sub); err != nil {
-		return match, err
-	}
-	if !match.found && through < s.p.through {
-		match, err = s.findCommand(ctx, input.id, through, s.p.through)
-	}
+	base := match
+	ids := submissionIDs{input.sub.Origin.AgentID, input.sub.Origin.SessionID, input.sub.Origin.ContextID}
+	err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		match = base
+		if input.sub.Actor != "owner" {
+			return ErrDenied
+		}
+		if !s.p.registeredOrigin(input.sub.Origin) {
+			return ErrNotBound
+		}
+		if !match.found && through < s.p.through {
+			var err error
+			match, err = s.findCommand(ctx, reads, input.id, through, s.p.through)
+			return err
+		}
+		return nil
+	})
 	return match, err
 }
 
@@ -207,7 +218,8 @@ func (s *Service) executeRegistration(ctx context.Context, caller scopedCaller, 
 		return RegistrationReceipt{}, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, caller.binding, false)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, caller.binding, false)
 	if err != nil {
 		return RegistrationReceipt{}, err
 	}
@@ -215,7 +227,7 @@ func (s *Service) executeRegistration(ctx context.Context, caller scopedCaller, 
 	if err != nil {
 		return RegistrationReceipt{}, err
 	}
-	match, err := s.lookupRegistration(ctx, input)
+	match, err := s.lookupRegistration(ctx, reads, input)
 	if err != nil {
 		s.mu.Unlock()
 		return RegistrationReceipt{}, err
@@ -225,22 +237,42 @@ func (s *Service) executeRegistration(ctx context.Context, caller scopedCaller, 
 		s.mu.Unlock()
 		return receipt, err
 	}
-	plan, err := s.deriveRegistration(ctx, input.sub, s.p.through+1)
-	if err == nil {
-		err = s.registrationProducerGuard(input.sub)
-	}
 	var drafts []ledger.Draft
-	if err == nil {
+	err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		drafts, match = nil, commandMatch{}
+		if !s.p.registeredOrigin(input.sub.Origin) {
+			return ErrNotBound
+		}
+		var err error
+		if bytes.Compare(input.id[:], s.p.maxCommand[:]) <= 0 {
+			match, err = s.findCommand(ctx, reads, input.id, 0, s.p.through)
+		}
+		if err != nil || match.found {
+			return err
+		}
+		plan, err := s.deriveRegistration(ctx, reads, input.sub, s.p.through+1)
+		if err != nil {
+			return err
+		}
+		if err := s.registrationProducerGuard(input.sub); err != nil {
+			return err
+		}
 		drafts, err = registrationDrafts(input, plan)
-	}
-	if err == nil && s.deps.beforeSubmit != nil {
-		drafts = s.deps.beforeSubmit(drafts)
-	}
-	if err == nil {
-		err = s.preflightRegistration(ctx, input, drafts)
-	}
-	if err == nil {
-		err = s.usableLocked(ctx)
+		if err != nil {
+			return err
+		}
+		if s.deps.beforeSubmit != nil {
+			drafts = s.deps.beforeSubmit(drafts)
+		}
+		if err := s.preflightRegistration(ctx, reads, input, drafts); err != nil {
+			return err
+		}
+		return s.usableLocked(ctx)
+	})
+	if err == nil && match.found {
+		receipt, err := matchRegistrationReceipt(match, input)
+		s.mu.Unlock()
+		return receipt, err
 	}
 	if err != nil {
 		s.mu.Unlock()
@@ -264,7 +296,7 @@ func (s *Service) executeRegistration(ctx context.Context, caller scopedCaller, 
 	err = s.acknowledgeLocked(max(s.p.through, committed.Last))
 	var actual commandMatch
 	if err == nil {
-		actual, err = s.findCommand(context.Background(), input.id, committed.First-1, committed.Last)
+		actual, err = s.findCommand(context.Background(), nil, input.id, committed.First-1, committed.Last)
 	}
 	var receipt RegistrationReceipt
 	if err == nil && !actual.found {

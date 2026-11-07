@@ -57,11 +57,11 @@ func requestStorageBound(r providers.Request) (int64, error) {
 	return n, nil
 }
 
-func (s *Service) livePaidAuthority(ctx context.Context, p *preparedPaid) ([]grantRules, error) {
+func (s *Service) livePaidAuthority(ctx context.Context, reads *historyReadSet, p *preparedPaid) ([]grantRules, error) {
 	if s.paid == nil {
 		return nil, ErrUnavailable
 	}
-	chain, _, err := s.paidAuthority(ctx, paidAttempt{origin: p.origin, admission: p.admission}, s.p.through)
+	chain, _, err := s.paidAuthority(ctx, reads, paidAttempt{origin: p.origin, admission: p.admission}, s.p.through)
 	if err == nil && s.paid.secrets[p.admission.Request.Credential.Version] == nil {
 		err = ErrUnavailable
 	}
@@ -87,55 +87,64 @@ func (s *Service) preparePaid(ctx context.Context, origin Binding, input Anthrop
 		return nil, err
 	}
 	defer s.active.Done()
-	ids, err := s.initialIDs(ctx, origin, false)
+	reads := &historyReadSet{}
+	ids, err := s.initialIDs(ctx, reads, origin, false)
 	if err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
-	if err = s.paidUsableLocked(ctx); err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	route := s.p.paidRoutes[input.RouteID]
-	digest, _ := route.Profile.SHA256()
+	var route ledger.RuntimePaidRouteConfigured
 	p := &preparedPaid{origin: originOf(ids)}
-	p.admission = ledger.RuntimePaidReserved{AttemptID: input.AttemptID, Version: 1, GrantID: input.GrantID, ParentTurnID: input.ParentTurnID, RouteID: input.RouteID, RouteVersion: input.ExpectedRouteVersion, ProfileSHA256: digest}
-	if input.TaskBinding != nil {
-		p.admission.TaskBinding = new(*input.TaskBinding)
-	}
-	p.admission.Request = ledger.SealedDescriptor{Provider: route.Profile.Provider, Credential: ledger.CredentialRef{ScopeID: route.CredentialScopeID, Version: input.CredentialVersion}}
-	chain, err := s.authorize(ctx, p.origin, input.GrantID, "model.call", []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + input.RouteID.String()}}, nil, 0, s.p.through)
-	if err == nil {
-		p.admission.Scopes = paidScopes(p.origin, route.CredentialScopeID, p.admission.TaskBinding, chain)
-		_, err = s.livePaidAuthority(ctx, p)
-	}
-	var sample int64
-	if err == nil {
-		sample, err = s.samplePaidLocked()
-	}
-	if err == nil {
-		err = providerProfile(route.Profile).Current(sample)
-	}
-	if err == nil && route.Profile.Provider != provider {
-		err = providers.ErrUnsupported
-	}
-	if err == nil {
-		err = s.paidDestination(providerProfile(route.Profile))
-	}
-	if err == nil && (len(s.paid.prepared) >= s.paid.limits.MaxPreparedPaid || len(p.admission.Scopes) > s.paid.limits.MaxPaidScopes) {
-		err = &BusyError{Reason: "paid_preparing"}
-	}
 	var bound int64
-	if err == nil {
-		bound, err = requestStorageBound(input.Request)
-	}
 	var scopes []ledger.ScopeKey
-	if err == nil {
+	err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		if s.paid == nil {
+			return ErrUnavailable
+		}
+		route = s.p.paidRoutes[input.RouteID]
+		digest, _ := route.Profile.SHA256()
+		p.admission = ledger.RuntimePaidReserved{AttemptID: input.AttemptID, Version: 1, GrantID: input.GrantID, ParentTurnID: input.ParentTurnID, RouteID: input.RouteID, RouteVersion: input.ExpectedRouteVersion, ProfileSHA256: digest}
+		if input.TaskBinding != nil {
+			p.admission.TaskBinding = new(*input.TaskBinding)
+		}
+		p.admission.Request = ledger.SealedDescriptor{Provider: route.Profile.Provider, Credential: ledger.CredentialRef{ScopeID: route.CredentialScopeID, Version: input.CredentialVersion}}
+		chain, err := s.authorize(ctx, reads, p.origin, input.GrantID, "model.call", []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + input.RouteID.String()}}, nil, 0, s.p.through)
+		if err != nil {
+			return err
+		}
+		p.admission.Scopes = paidScopes(p.origin, route.CredentialScopeID, p.admission.TaskBinding, chain)
+		if _, err := s.livePaidAuthority(ctx, reads, p); err != nil {
+			return err
+		}
+		sample, err := s.samplePaidLocked()
+		if err != nil {
+			return err
+		}
+		if err := providerProfile(route.Profile).Current(sample); err != nil {
+			return err
+		}
+		if route.Profile.Provider != provider {
+			return providers.ErrUnsupported
+		}
+		if err := s.paidDestination(providerProfile(route.Profile)); err != nil {
+			return err
+		}
+		if len(s.paid.prepared) >= s.paid.limits.MaxPreparedPaid || len(p.admission.Scopes) > s.paid.limits.MaxPaidScopes {
+			return &BusyError{Reason: "paid_preparing"}
+		}
+		bound, err = requestStorageBound(input.Request)
+		if err != nil {
+			return err
+		}
 		scopes, err = chainScopes(p.origin, chain)
-	}
-	if err == nil && len(scopes) > s.limits.MaxBudgetScopes {
-		err = ErrTooLarge
-	}
+		if err != nil {
+			return err
+		}
+		if len(scopes) > s.limits.MaxBudgetScopes {
+			return ErrTooLarge
+		}
+		return nil
+	})
 	p.reservation.origin = p.origin
 	if err == nil {
 		err = s.reserveScopedProcessLocked(&p.reservation)
@@ -213,20 +222,25 @@ func (s *Service) preparePaid(ctx context.Context, origin Binding, input Anthrop
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err == nil {
-		err = s.paidUsableLocked(ctx)
-	}
-	if err == nil {
-		_, err = s.livePaidAuthority(ctx, p)
-	}
-	if err == nil {
-		size := int64(len(body))
-		p.reservation.budget.operationBytes = &size
-		err = s.p.book.checkPreparation(scopes, p.reservation.budget, false)
+		err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+			if s.paid == nil {
+				return ErrUnavailable
+			}
+			if _, err := s.livePaidAuthority(ctx, reads, p); err != nil {
+				return err
+			}
+			size := int64(len(body))
+			preparation := p.reservation.budget
+			preparation.operationBytes = &size
+			return s.p.book.checkPreparation(scopes, preparation, false)
+		})
 	}
 	if err != nil {
 		s.releasePaidPreparation(p)
 		return nil, err
 	}
+	size := int64(len(body))
+	p.reservation.budget.operationBytes = &size
 	p.envelope, p.body, p.compiled = envelope, body, compiled
 	d := envelope.Descriptor()
 	p.admission.Request = ledger.SealedDescriptor{Provider: d.Provider, Authority: d.Authority, Model: d.Model, Region: d.Region, Method: d.Method, Path: d.Path, RequestedTier: d.RequestedTier, Credential: p.admission.Request.Credential, BodySHA256: ledger.Digest(sha256.Sum256(body)), BodyBytes: int64(len(body))}

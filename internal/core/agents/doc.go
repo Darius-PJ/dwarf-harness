@@ -417,10 +417,47 @@
 // or evicted tokens still require prefix decoding. Directory positions narrow
 // command, turn and paid reads to their containing commits; paid reconstruction
 // includes corrections, acknowledgements and the exact admission route version.
-// Directory loss retains the original scans for this incarnation; rebuilding
-// after loss is not yet implemented. Gaps, duplicates and prior installation
-// retain acknowledgement catch-up plus interval lookup. A payload receipt alone
-// is never a global command-search proof.
+// Directory loss uses the original scans while an independent rebuild streams
+// 0..T outside Service.mu. A numeric EOF and successful Close are required;
+// the replacement is installed only if the frontier and generation still match.
+// Its flight is separate from refresh. A successful swap re-enables token
+// publication; tokens missed during invalid coverage remain absent. Gaps,
+// duplicates and prior installation retain locked acknowledgement catch-up
+// plus interval lookup. A payload receipt is never a global command-search proof.
+//
+// Live cold metadata uses one prepare/resolve/revalidate/rerun protocol. The
+// locked pure phase refreshes before capturing its prefix, binding and directory
+// generation. A typed need carries only copied selectors and a resolver over
+// immutable inputs; its encoded, CRC-protected answer belongs to that operation.
+// Resolving releases Service.mu, then checks usability, cancellation, binding,
+// session, frontier and generation and reruns the whole phase. A moved prefix
+// discards the read set, negative proofs and partial plans. Resolver errors keep
+// their original identity in an operation-local slot and are raised again only
+// if the unchanged-prefix rerun reaches the same need. A phase suspended for a
+// history read publishes no clock sample, and its rerun samples afresh.
+// At most two resolutions unlock per operation; the third and later reads stay
+// locked, with the existing outcomes and SubmitAt attempt bound. Effects and new
+// reservations begin only after a completed phase; previously owned scope gates,
+// buffers, paid preparations and exchange tokens survive its suspension.
+// Acceptance likewise stages a complete plan before installing it. Its staging
+// never waits on its own refresh flight and skips a commit another caller has
+// already installed while the stage was suspended.
+//
+// Known locked cold paths are the third-round fallback in readHistory; Open's
+// unpublished replay; acknowledgeLocked and its acceptCommitLocked reducer;
+// executeScopedResult and executeReview's exact committed-range fast readbacks;
+// and the post-Submit duplicate-receipt searches in perform,
+// executeScopedResult, executeReview, executeRegistration,
+// submitPaidGroupLocked and commitLoop. Acknowledgement and caller completion
+// remain one locked interval. In particular, acceptance of an operation's own
+// commit can repeat contextTask, credentialVersionExists and
+// validatePrivateSelection/scopeHistory reads under that lock. The operation's
+// pre-commit read set is never reused across this acknowledgement boundary.
+// Lock nesting is Service.mu, then the loop runtime's mu (as in quantum and
+// claimPaid), then historyIndex.mu; historyIndex.mu never spans I/O.
+// loopBoundary snapshots runtime fields briefly in that order on every rerun.
+// Token LRU churn from acknowledgement frontiers may evict dormant Since
+// cursors among the 256 tokens; that is a cold-read cost, not a changed bound.
 //
 // Every preparation, final decision and replayed F3-12 group retains current
 // authority, participant read-rights and source-identity checks. A historical
@@ -582,7 +619,7 @@
 // the floor at the group's actual position, which such a commit can raise.
 // They are written with ledgerstore.SubmitAt, only at the tail their guards
 // and the reducer's preflight saw. When another commit lands first, the
-// producer re-enters at its refresh without leaving the lock: it searches
+// producer re-enters at its refresh and pure preparation phase: it searches
 // the new commits for the command, repeats authority and every guard with a
 // fresh sample, and builds and preflights the group again. The third refusal
 // answers BusyError{ledger_tail}: nothing was written or sent, and the

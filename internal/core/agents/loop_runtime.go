@@ -101,7 +101,7 @@ func (s *Service) EnableTurnLoop(ctx context.Context, ws *workspace.Service, opt
 	defer s.active.Done()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.refreshLocked(ctx, s.store.Durable()); err != nil {
+	if err := s.refreshLocked(ctx, &historyReadSet{}, s.store.Durable()); err != nil {
 		return err
 	}
 	if s.paid == nil || len(options.Contexts) == 0 || len(options.Contexts) > s.limits.MaxRegistrations {
@@ -483,48 +483,77 @@ func (s *Service) loopBoundary(t *loopTurn) string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.usableLocked(context.Background()) != nil || s.refreshLocked(context.Background(), s.store.Durable()) != nil {
-		return "integrity"
-	}
-	target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(t.origin)), Scope: "context", Slots: []string{}}
-	if _, err := s.authorize(context.Background(), t.origin, t.grant, "turn.start", []ledger.Resource{target}, nil, 0, s.p.through); err != nil {
-		return "authority_lost"
-	}
-	if st := s.p.scopes[scopeKey{t.origin.AgentID, t.origin.ContextID}]; st == nil || len(st.issues) != 0 {
-		return "integrity"
-	}
-	route := s.p.paidRoutes[t.settings.RouteID]
-	if !route.Enabled || route.Version != t.settings.ExpectedRouteVersion || s.paid.secrets[t.credential] == nil {
-		return "authority_lost"
-	}
-	if _, err := s.loopGrantLocked(context.Background(), t.origin, "model.call", []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + t.settings.RouteID.String()}}, 0); err != nil {
-		return "authority_lost"
-	}
-	for _, source := range t.sources {
-		target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(t.origin)), Scope: source.Scope, Slots: []string{source.Slot}}
-		if _, err := s.loopGrantLocked(context.Background(), t.origin, "private.read", []ledger.Resource{target}, source.Head.Bytes); err != nil {
-			return "authority_lost"
+	bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	var stop string
+	err := s.prepareHistoryLocked(context.Background(), &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
+		stop = ""
+		// Established order: Service.mu before runtime.mu. Only copy runtime
+		// fields here; no service call or wait occurs while runtime.mu is held.
+		r.mu.Lock()
+		reason, calls, tools = t.reason, t.modelCalls, t.toolCalls
+		pending, answer = len(t.tools), t.answer != nil
+		counted = t.paid != nil && t.paid.counted
+		unadmitted = 0
+		for i := range t.tools {
+			if !t.tools[i].counted {
+				unadmitted++
+			}
 		}
-	}
-	for _, ref := range t.artifacts {
-		if _, err := s.artifactAuthority(context.Background(), t.origin, ref, uuid.UUID{}, s.p.through, nil); err != nil {
-			return "authority_lost"
+		r.mu.Unlock()
+		if reason == "cancelled" || reason == "shutdown" {
+			stop = reason
+			return nil
 		}
-	}
-	now, err := s.samplePaidLocked()
+		lost := func(err error) error {
+			if isHistoryNeed(err) {
+				return err
+			}
+			stop = "authority_lost"
+			return nil
+		}
+		target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(t.origin)), Scope: "context", Slots: []string{}}
+		if _, err := s.authorize(context.Background(), reads, t.origin, t.grant, "turn.start", []ledger.Resource{target}, nil, 0, s.p.through); err != nil {
+			return lost(err)
+		}
+		if st := s.p.scopes[scopeKey{t.origin.AgentID, t.origin.ContextID}]; st == nil || len(st.issues) != 0 {
+			stop = "integrity"
+			return nil
+		}
+		route := s.p.paidRoutes[t.settings.RouteID]
+		if !route.Enabled || route.Version != t.settings.ExpectedRouteVersion || s.paid.secrets[t.credential] == nil {
+			stop = "authority_lost"
+			return nil
+		}
+		if _, err := s.loopGrantLocked(context.Background(), reads, t.origin, "model.call", []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + t.settings.RouteID.String()}}, 0); err != nil {
+			return lost(err)
+		}
+		for _, source := range t.sources {
+			target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(t.origin)), Scope: source.Scope, Slots: []string{source.Slot}}
+			if _, err := s.loopGrantLocked(context.Background(), reads, t.origin, "private.read", []ledger.Resource{target}, source.Head.Bytes); err != nil {
+				return lost(err)
+			}
+		}
+		for _, ref := range t.artifacts {
+			if _, err := s.artifactAuthority(context.Background(), reads, t.origin, ref, uuid.UUID{}, s.p.through, nil); err != nil {
+				return lost(err)
+			}
+		}
+		now, err := s.samplePaidLocked()
+		if err != nil {
+			stop = "integrity"
+		} else if now >= t.policy.DeadlineUTCNS {
+			stop = "deadline"
+		} else if reason != "" {
+			stop = reason
+		} else if pending > 0 && (unadmitted > t.policy.MaxToolCalls-tools || calls >= t.policy.MaxModelCalls) || pending == 0 && !answer && calls >= t.policy.MaxModelCalls && !counted {
+			stop = "loop_limit"
+		}
+		return nil
+	})
 	if err != nil {
 		return "integrity"
 	}
-	if now >= t.policy.DeadlineUTCNS {
-		return "deadline"
-	}
-	if reason != "" {
-		return reason
-	}
-	if pending > 0 && (unadmitted > t.policy.MaxToolCalls-tools || calls >= t.policy.MaxModelCalls) || pending == 0 && !answer && calls >= t.policy.MaxModelCalls && !counted {
-		return "loop_limit"
-	}
-	return ""
+	return stop
 }
 
 func (r *loopRuntime) turnView(t *loopTurn) session.TurnView {

@@ -114,7 +114,7 @@ func TestTurnLoopScopedFiles(t *testing.T) {
 				continue
 			}
 			f.service.mu.Lock()
-			record, found, err := f.service.sourceRecord(context.Background(), value.EffectReceiptSequence, f.service.p.through)
+			record, found, err := f.service.sourceRecord(context.Background(), nil, value.EffectReceiptSequence, f.service.p.through)
 			f.service.mu.Unlock()
 			if err != nil || !found || record.Type != ledger.TypeRuntimeScopedReceipt || record.TurnID != start.TurnID {
 				t.Fatal("file result did not name a real local ending")

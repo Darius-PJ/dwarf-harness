@@ -441,7 +441,7 @@ func TestScopedAcknowledgementPrefixChanged(t *testing.T) {
 			if durable <= before || f.store.Durable() != durable || !bytes.Equal(readTestFile(t, path), damaged) {
 				t.Fatal("failed acknowledgement rolled back or rewrote durable Submit")
 			}
-			if _, _, err := f.service.sourceRecord(ctx, source, durable); !errors.Is(err, ledger.ErrCorrupt) {
+			if _, _, err := f.service.sourceRecord(ctx, nil, source, durable); !errors.Is(err, ledger.ErrCorrupt) {
 				t.Fatalf("rejected acknowledgement published a successful source proof: %v", err)
 			}
 		})
@@ -464,7 +464,7 @@ func testTailCheckpointPrefixChanged(t *testing.T, provenance string) {
 	}
 	s := f.service
 	s.mu.Lock()
-	err := s.refreshLocked(ctx, f.store.Durable())
+	err := s.refreshLocked(ctx, &historyReadSet{}, f.store.Durable())
 	s.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -486,7 +486,7 @@ func testTailCheckpointPrefixChanged(t *testing.T, provenance string) {
 	through := f.store.Durable()
 	if provenance == "since" {
 		s.mu.Lock()
-		err = s.refreshLocked(ctx, through)
+		err = s.refreshLocked(ctx, &historyReadSet{}, through)
 		s.mu.Unlock()
 		if err != nil {
 			t.Fatal(err)
@@ -506,7 +506,7 @@ func testTailCheckpointPrefixChanged(t *testing.T, provenance string) {
 	}
 	if provenance == "refresh" {
 		s.mu.Lock()
-		err = s.refreshLocked(ctx, through)
+		err = s.refreshLocked(ctx, &historyReadSet{}, through)
 		s.mu.Unlock()
 	} else {
 		var page session.EventPage
@@ -612,7 +612,7 @@ func TestScopedAcknowledgementRejectsRewrittenCommit(t *testing.T) {
 			data := readTestFile(t, path)
 			data[len(prefix)] = 'x'
 			writeTestFile(t, path, data)
-			if _, _, err := f.service.sourceRecord(ctx, source, f.store.Durable()); !errors.Is(err, ledger.ErrCorrupt) {
+			if _, _, err := f.service.sourceRecord(ctx, nil, source, f.store.Durable()); !errors.Is(err, ledger.ErrCorrupt) {
 				t.Fatalf("rejected group published source metadata: %v", err)
 			}
 		})

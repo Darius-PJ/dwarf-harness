@@ -67,7 +67,7 @@ func (p *projection) registeredOrigin(origin ledger.Origin) bool {
 
 // Live maps and valid above-maximum proofs serve the current accepted prefix.
 // Other misses consult history, including pruned terminal identities.
-func (s *Service) loadGrant(ctx context.Context, id uuid.UUID, through uint64) (grantState, bool, error) {
+func (s *Service) loadGrant(ctx context.Context, reads *historyReadSet, id uuid.UUID, through uint64) (grantState, bool, error) {
 	if grant, ok := s.p.grants[id]; ok && through == s.p.through {
 		return grant, true, nil
 	}
@@ -77,39 +77,55 @@ func (s *Service) loadGrant(ctx context.Context, id uuid.UUID, through uint64) (
 	if grant, found, hit := s.history.grant(id, through); hit {
 		return grant, found, nil
 	}
-	var grant grantState
-	found := false
-	err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-		for _, record := range commit.Records {
-			switch record.Type {
-			case ledger.TypeRuntimeGrantIssued:
-				p, err := ledger.DecodeRuntimeGrantIssued(record.Payload)
-				if err != nil {
-					return err
-				}
-				if p.GrantID == id {
-					grant = grantState{definition: p, issuer: string(record.Actor), origin: ledger.Origin{AgentID: record.AgentID, SessionID: record.ExecutionSessionID, ContextID: record.ContextID}, sequence: record.Seq}
-					found = true
-				}
-			case ledger.TypeRuntimeGrantRevoked:
-				p, err := ledger.DecodeRuntimeGrantRevoked(record.Payload)
-				if err != nil {
-					return err
-				}
-				if p.GrantID == id {
-					grant.revoked = true
+	value, err := readHistory(ctx, reads, 0, through, grantHistoryKey{id}, func(ctx context.Context) (historyGrantValue, error) {
+		var grant grantState
+		found := false
+		err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
+			for _, record := range commit.Records {
+				switch record.Type {
+				case ledger.TypeRuntimeGrantIssued:
+					p, err := ledger.DecodeRuntimeGrantIssued(record.Payload)
+					if err != nil {
+						return err
+					}
+					if p.GrantID == id {
+						grant = grantState{definition: p, issuer: string(record.Actor), origin: ledger.Origin{AgentID: record.AgentID, SessionID: record.ExecutionSessionID, ContextID: record.ContextID}, sequence: record.Seq}
+						found = true
+					}
+				case ledger.TypeRuntimeGrantRevoked:
+					p, err := ledger.DecodeRuntimeGrantRevoked(record.Payload)
+					if err != nil {
+						return err
+					}
+					if p.GrantID == id {
+						grant.revoked = true
+					}
 				}
 			}
+			return nil
+		})
+		if err != nil || !found {
+			return historyGrantValue{}, err
 		}
-		return nil
+		payload, err := grant.definition.Encode()
+		return historyGrantValue{payload, grant.issuer, grant.origin, grant.revoked, grant.sequence}, err
 	})
-	if err == nil {
-		s.history.putGrant(id, through, grant, found)
+	if err != nil || value.Sequence == 0 {
+		if err == nil {
+			s.history.putGrant(id, through, grantState{}, false)
+		}
+		return grantState{}, false, err
 	}
-	return grant, found, err
+	definition, err := ledger.DecodeRuntimeGrantIssued(value.Definition)
+	if err != nil {
+		return grantState{}, false, err
+	}
+	grant := grantState{definition: definition, issuer: value.Issuer, origin: value.Origin, revoked: value.Revoked, sequence: value.Sequence}
+	s.history.putGrant(id, through, grant, true)
+	return grant, true, nil
 }
 
-func (s *Service) loadTask(ctx context.Context, id uuid.UUID, through uint64) (scopedTaskState, bool, error) {
+func (s *Service) loadTask(ctx context.Context, reads *historyReadSet, id uuid.UUID, through uint64) (scopedTaskState, bool, error) {
 	if task, ok := s.p.tasks[id]; ok && through == s.p.through {
 		return task, true, nil
 	}
@@ -119,41 +135,57 @@ func (s *Service) loadTask(ctx context.Context, id uuid.UUID, through uint64) (s
 	if task, found, hit := s.history.task(id, through); hit {
 		return task, found, nil
 	}
-	var task scopedTaskState
-	found := false
-	err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-		for _, record := range commit.Records {
-			switch record.Type {
-			case ledger.TypeRuntimeTaskChanged:
-				p, err := ledger.DecodeRuntimeTaskChanged(record.Payload)
-				if err != nil {
-					return err
-				}
-				if p.TaskID == id {
-					if p.Action == "create" {
-						task.descriptionSequence = record.Seq
+	value, err := readHistory(ctx, reads, 0, through, taskHistoryKey{id}, func(ctx context.Context) (historyTaskValue, error) {
+		var task scopedTaskState
+		found := false
+		err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
+			for _, record := range commit.Records {
+				switch record.Type {
+				case ledger.TypeRuntimeTaskChanged:
+					p, err := ledger.DecodeRuntimeTaskChanged(record.Payload)
+					if err != nil {
+						return err
 					}
-					task.record, task.sequence, found = p, record.Seq, true
-				}
-			case ledger.TypeRuntimeReviewResult:
-				p, err := ledger.DecodeRuntimeReviewResult(record.Payload)
-				if err != nil {
-					return err
-				}
-				if p.Binding.TaskID == id && p.Verdict != "reject" {
-					task = taskAfterReview(task, p, record.Seq)
+					if p.TaskID == id {
+						if p.Action == "create" {
+							task.descriptionSequence = record.Seq
+						}
+						task.record, task.sequence, found = p, record.Seq, true
+					}
+				case ledger.TypeRuntimeReviewResult:
+					p, err := ledger.DecodeRuntimeReviewResult(record.Payload)
+					if err != nil {
+						return err
+					}
+					if p.Binding.TaskID == id && p.Verdict != "reject" {
+						task = taskAfterReview(task, p, record.Seq)
+					}
 				}
 			}
+			return nil
+		})
+		if err != nil || !found {
+			return historyTaskValue{}, err
 		}
-		return nil
+		payload, err := task.record.Encode()
+		return historyTaskValue{payload, task.sequence, task.descriptionSequence}, err
 	})
-	if err == nil {
-		s.history.putTask(id, through, task, found)
+	if err != nil || value.Sequence == 0 {
+		if err == nil {
+			s.history.putTask(id, through, scopedTaskState{}, false)
+		}
+		return scopedTaskState{}, false, err
 	}
-	return task, found, err
+	record, err := ledger.DecodeRuntimeTaskChanged(value.Record)
+	if err != nil {
+		return scopedTaskState{}, false, err
+	}
+	task := scopedTaskState{record: record, sequence: value.Sequence, descriptionSequence: value.DescriptionSequence}
+	s.history.putTask(id, through, task, true)
+	return task, true, nil
 }
 
-func (s *Service) loadWork(ctx context.Context, id uuid.UUID, through uint64) (scopedWorkState, bool, error) {
+func (s *Service) loadWork(ctx context.Context, reads *historyReadSet, id uuid.UUID, through uint64) (scopedWorkState, bool, error) {
 	if work, ok := s.p.work[id]; ok && through == s.p.through {
 		return work, true, nil
 	}
@@ -163,53 +195,69 @@ func (s *Service) loadWork(ctx context.Context, id uuid.UUID, through uint64) (s
 	if work, found, hit := s.history.work(id, through); hit {
 		return work, found, nil
 	}
-	var work scopedWorkState
-	found := false
-	err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-		for _, record := range commit.Records {
-			switch record.Type {
-			case ledger.TypeRuntimeWorkAdmitted:
-				p, err := ledger.DecodeRuntimeWorkAdmitted(record.Payload)
-				if err != nil {
-					return err
-				}
-				if p.WorkID == id {
-					work = scopedWorkState{admission: p, origin: ledger.Origin{AgentID: record.AgentID, SessionID: record.ExecutionSessionID, ContextID: record.ContextID}, turn: record.TurnID, version: p.Version, sequence: record.Seq}
-					found = true
-				}
-			case ledger.TypeRuntimeWorkDispatched:
-				p, err := ledger.DecodeRuntimeWorkDispatched(record.Payload)
-				if err != nil {
-					return err
-				}
-				if p.WorkID == id {
-					work.dispatched, work.version = true, p.Version
-				}
-			case ledger.TypeRuntimeWorkEnded:
-				p, err := ledger.DecodeRuntimeWorkEnded(record.Payload)
-				if err != nil {
-					return err
-				}
-				if p.WorkID == id {
-					work.ended, work.version, work.outcome = true, p.Version, p.Outcome
-					work.released = releasesWork(work.admission.Kind, p.Outcome)
-				}
-			case ledger.TypeRuntimeScopedReceipt:
-				p, err := ledger.DecodeRuntimeScopedReceipt(record.Payload)
-				if err != nil {
-					return err
-				}
-				if p.WorkID == id {
-					work.receipt = scopedReceiptAt(p, record.Seq)
+	value, err := readHistory(ctx, reads, 0, through, workHistoryKey{id}, func(ctx context.Context) (*historyWorkValue, error) {
+		var work scopedWorkState
+		found := false
+		err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
+			for _, record := range commit.Records {
+				switch record.Type {
+				case ledger.TypeRuntimeWorkAdmitted:
+					p, err := ledger.DecodeRuntimeWorkAdmitted(record.Payload)
+					if err != nil {
+						return err
+					}
+					if p.WorkID == id {
+						work = scopedWorkState{admission: p, origin: ledger.Origin{AgentID: record.AgentID, SessionID: record.ExecutionSessionID, ContextID: record.ContextID}, turn: record.TurnID, version: p.Version, sequence: record.Seq}
+						found = true
+					}
+				case ledger.TypeRuntimeWorkDispatched:
+					p, err := ledger.DecodeRuntimeWorkDispatched(record.Payload)
+					if err != nil {
+						return err
+					}
+					if p.WorkID == id {
+						work.dispatched, work.version = true, p.Version
+					}
+				case ledger.TypeRuntimeWorkEnded:
+					p, err := ledger.DecodeRuntimeWorkEnded(record.Payload)
+					if err != nil {
+						return err
+					}
+					if p.WorkID == id {
+						work.ended, work.version, work.outcome = true, p.Version, p.Outcome
+						work.released = releasesWork(work.admission.Kind, p.Outcome)
+					}
+				case ledger.TypeRuntimeScopedReceipt:
+					p, err := ledger.DecodeRuntimeScopedReceipt(record.Payload)
+					if err != nil {
+						return err
+					}
+					if p.WorkID == id {
+						work.receipt = scopedReceiptAt(p, record.Seq)
+					}
 				}
 			}
+			return nil
+		})
+		if err != nil || !found {
+			return nil, err
 		}
-		return nil
+		payload, err := work.admission.Encode()
+		return &historyWorkValue{payload, work.origin, work.turn, work.version, work.dispatched, work.ended, work.released, work.outcome, work.sequence, historyScopedReceipt{work.receipt, historyResource(work.receipt.Target)}}, err
 	})
-	if err == nil {
-		s.history.putWork(id, through, work, found)
+	if err != nil || value == nil {
+		if err == nil {
+			s.history.putWork(id, through, scopedWorkState{}, false)
+		}
+		return scopedWorkState{}, false, err
 	}
-	return work, found, err
+	admission, err := ledger.DecodeRuntimeWorkAdmitted(value.Admission)
+	if err != nil {
+		return scopedWorkState{}, false, err
+	}
+	work := scopedWorkState{admission: admission, origin: value.Origin, turn: value.Turn, version: value.Version, dispatched: value.Dispatched, ended: value.Ended, released: value.Released, outcome: value.Outcome, sequence: value.Sequence, receipt: value.Receipt.receipt()}
+	s.history.putWork(id, through, work, true)
+	return work, true, nil
 }
 
 func releasesWork(kind, outcome string) bool {
@@ -219,7 +267,7 @@ func releasesWork(kind, outcome string) bool {
 	return outcome == "released_unsent" || outcome == "succeeded" || outcome == "failed" || outcome == "interrupted"
 }
 
-func (s *Service) assignmentUnused(ctx context.Context, assignment ledger.AssignmentInput, through uint64) (idUnused, contextUnused bool, err error) {
+func (s *Service) assignmentUnused(ctx context.Context, reads *historyReadSet, assignment ledger.AssignmentInput, through uint64) (idUnused, contextUnused bool, err error) {
 	if s.p.identityAbsent(assignment.AssignmentID, s.p.identities.assignment, through) {
 		key := scopeKey{assignment.Assignee.AgentID, assignment.Assignee.ContextID}
 		if task, known := s.p.contextAssociation(key, through); known {
@@ -233,23 +281,27 @@ func (s *Service) assignmentUnused(ctx context.Context, assignment ledger.Assign
 		}
 		s.history.discard(key)
 	}
-	idUnused, contextUnused = true, true
-	err = s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-		for _, record := range commit.Records {
-			if record.Type != ledger.TypeRuntimeTaskChanged {
-				continue
+	answer, err := readHistory(ctx, reads, 0, through, assignmentHistoryKey{assignment}, func(ctx context.Context) ([2]bool, error) {
+		idUnused, contextUnused := true, true
+		err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
+			for _, record := range commit.Records {
+				if record.Type != ledger.TypeRuntimeTaskChanged {
+					continue
+				}
+				p, err := ledger.DecodeRuntimeTaskChanged(record.Payload)
+				if err != nil {
+					return err
+				}
+				if p.Assignment != nil {
+					idUnused = idUnused && p.Assignment.AssignmentID != assignment.AssignmentID
+					contextUnused = contextUnused && p.Assignment.Assignee.ContextID != assignment.Assignee.ContextID
+				}
 			}
-			p, err := ledger.DecodeRuntimeTaskChanged(record.Payload)
-			if err != nil {
-				return err
-			}
-			if p.Assignment != nil {
-				idUnused = idUnused && p.Assignment.AssignmentID != assignment.AssignmentID
-				contextUnused = contextUnused && p.Assignment.Assignee.ContextID != assignment.Assignee.ContextID
-			}
-		}
-		return nil
+			return nil
+		})
+		return [2]bool{idUnused, contextUnused}, err
 	})
+	idUnused, contextUnused = answer[0], answer[1]
 	if err == nil {
 		data := []byte{0, 0}
 		if idUnused {
@@ -263,17 +315,17 @@ func (s *Service) assignmentUnused(ctx context.Context, assignment ledger.Assign
 	return idUnused, contextUnused, err
 }
 
-func (s *Service) sourceRecord(ctx context.Context, sequence int64, through uint64) (ledger.Record, bool, error) {
+func (s *Service) sourceRecord(ctx context.Context, reads *historyReadSet, sequence int64, through uint64) (ledger.Record, bool, error) {
 	if sequence <= 0 || uint64(sequence) > through {
 		return ledger.Record{}, false, nil
 	}
-	sources, err := s.sourceRecords(ctx, []int64{sequence}, through)
+	sources, err := s.sourceRecords(ctx, reads, []int64{sequence}, through)
 	source, found := sources[sequence]
 	return source, found, err
 }
 
-func (s *Service) verifyArtifactSource(ctx context.Context, artifact ledger.ArtifactRef, through uint64) error {
-	source, found, err := s.sourceRecord(ctx, artifact.SourceSequence, through)
+func (s *Service) verifyArtifactSource(ctx context.Context, reads *historyReadSet, artifact ledger.ArtifactRef, through uint64) error {
+	source, found, err := s.sourceRecord(ctx, reads, artifact.SourceSequence, through)
 	if err != nil {
 		return err
 	}
@@ -283,7 +335,7 @@ func (s *Service) verifyArtifactSource(ctx context.Context, artifact ledger.Arti
 	return nil
 }
 
-func (s *Service) registeredResource(ctx context.Context, resource ledger.Resource, through uint64) (bool, error) {
+func (s *Service) registeredResource(ctx context.Context, reads *historyReadSet, resource ledger.Resource, through uint64) (bool, error) {
 	switch resource.Kind {
 	case "context":
 		return s.p.contexts[resource.Binding.ContextID] == resource.Binding.AgentID, nil
@@ -291,10 +343,10 @@ func (s *Service) registeredResource(ctx context.Context, resource ledger.Resour
 		if resource.TaskID == (uuid.UUID{}) {
 			return true, nil
 		}
-		_, found, err := s.loadTask(ctx, resource.TaskID, through)
+		_, found, err := s.loadTask(ctx, reads, resource.TaskID, through)
 		return found, err
 	case "artifact":
-		err := s.verifyArtifactSource(ctx, resource.Artifact, through)
+		err := s.verifyArtifactSource(ctx, reads, resource.Artifact, through)
 		return err == nil, err
 	case "workspace":
 		if s.p.contexts[resource.Binding.ContextID] != resource.Binding.AgentID {
@@ -310,24 +362,28 @@ func (s *Service) registeredResource(ctx context.Context, resource ledger.Resour
 			}
 			s.history.discard(key)
 		}
-		found := false
-		err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-			for _, record := range commit.Records {
-				if record.Type != ledger.TypeWorkspaceRegistered {
-					continue
+		workspace := resource.WorkspaceID
+		answer, err := readHistory(ctx, reads, 0, through, workspaceHistoryKey{workspace}, func(ctx context.Context) (bool, error) {
+			found := false
+			err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
+				for _, record := range commit.Records {
+					if record.Type != ledger.TypeWorkspaceRegistered {
+						continue
+					}
+					p, err := ledger.DecodeWorkspaceRegistered(record.Payload)
+					if err != nil {
+						return err
+					}
+					found = found || p.WorkspaceID == workspace
 				}
-				p, err := ledger.DecodeWorkspaceRegistered(record.Payload)
-				if err != nil {
-					return err
-				}
-				found = found || p.WorkspaceID == resource.WorkspaceID
-			}
-			return nil
+				return nil
+			})
+			return found, err
 		})
 		if err == nil {
-			s.history.put(historyEntry{key: key, from: through, found: found})
+			s.history.put(historyEntry{key: key, from: through, found: answer})
 		}
-		return found, err
+		return answer, err
 	case "external":
 		return true, nil
 	default:
@@ -335,7 +391,7 @@ func (s *Service) registeredResource(ctx context.Context, resource ledger.Resour
 	}
 }
 
-func (s *Service) contextTask(ctx context.Context, origin ledger.Origin, through uint64) (scopedTaskState, bool, error) {
+func (s *Service) contextTask(ctx context.Context, reads *historyReadSet, origin ledger.Origin, through uint64) (scopedTaskState, bool, error) {
 	if s.p.agents[origin.AgentID].general == origin.ContextID {
 		return scopedTaskState{}, false, nil
 	}
@@ -343,7 +399,7 @@ func (s *Service) contextTask(ctx context.Context, origin ledger.Origin, through
 		if id == (uuid.UUID{}) {
 			return scopedTaskState{}, false, nil
 		}
-		return s.loadTask(ctx, id, through)
+		return s.loadTask(ctx, reads, id, through)
 	}
 	if through == s.p.through {
 		for _, task := range s.p.tasks {
@@ -352,24 +408,28 @@ func (s *Service) contextTask(ctx context.Context, origin ledger.Origin, through
 			}
 		}
 	}
-	var id uuid.UUID
-	err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
-		for _, record := range commit.Records {
-			if record.Type != ledger.TypeRuntimeTaskChanged {
-				continue
+	contextID := origin.ContextID
+	id, err := readHistory(ctx, reads, 0, through, contextTaskHistoryKey{contextID}, func(ctx context.Context) (uuid.UUID, error) {
+		var id uuid.UUID
+		err := s.scan(ctx, 0, through, func(commit ledger.Commit) error {
+			for _, record := range commit.Records {
+				if record.Type != ledger.TypeRuntimeTaskChanged {
+					continue
+				}
+				task, err := ledger.DecodeRuntimeTaskChanged(record.Payload)
+				if err != nil {
+					return err
+				}
+				if task.Assignment != nil && task.Assignment.Assignee.ContextID == contextID {
+					id = task.TaskID
+				}
 			}
-			task, err := ledger.DecodeRuntimeTaskChanged(record.Payload)
-			if err != nil {
-				return err
-			}
-			if task.Assignment != nil && task.Assignment.Assignee.ContextID == origin.ContextID {
-				id = task.TaskID
-			}
-		}
-		return nil
+			return nil
+		})
+		return id, err
 	})
 	if err != nil || id == (uuid.UUID{}) {
 		return scopedTaskState{}, false, err
 	}
-	return s.loadTask(ctx, id, through)
+	return s.loadTask(ctx, reads, id, through)
 }

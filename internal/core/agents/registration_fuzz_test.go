@@ -83,10 +83,10 @@ func FuzzRegistrationGroupReplay(f *testing.F) {
 		fixture.service.service.mu.Lock()
 		_, _, _, _, group, _, err := decodeFamily(d, fixture.before+1)
 		if err == nil && group != nil {
-			_, err = fixture.service.service.planRegistration(context.Background(), group, fixture.before+1)
+			_, err = fixture.service.service.planRegistration(context.Background(), nil, group, fixture.before+1)
 		}
 		if err == nil {
-			err = fixture.service.service.preflightRegistration(context.Background(), fixture.input, d)
+			err = fixture.service.service.preflightRegistration(context.Background(), nil, fixture.input, d)
 		}
 		unchanged := sameProjectionState(fixture.service.service.p, fixture.baseline.p)
 		fixture.service.service.mu.Unlock()

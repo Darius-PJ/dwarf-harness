@@ -7,12 +7,12 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (scopedPlan, error) {
+func (s *Service) planWork(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64) (scopedPlan, error) {
 	plan := scopedPlan{authority: s.p.authority}
 	sub, through := g.receipt.Submission, first-1
 	if g.admission != nil {
 		p := *g.admission
-		if _, found, err := s.loadWork(ctx, p.WorkID, through); err != nil {
+		if _, found, err := s.loadWork(ctx, reads, p.WorkID, through); err != nil {
 			return plan, err
 		} else if found {
 			return plan, ErrInvalid
@@ -24,7 +24,7 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 		if p.MaxBytes != nil {
 			size = *p.MaxBytes
 		}
-		chain, err := s.authorize(ctx, sub.Origin, sub.GrantID, p.Operation, []ledger.Resource{p.Target}, nil, size, through)
+		chain, err := s.authorize(ctx, reads, sub.Origin, sub.GrantID, p.Operation, []ledger.Resource{p.Target}, nil, size, through)
 		if err != nil {
 			return plan, err
 		}
@@ -35,7 +35,7 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 		if chain[0].task != (ledger.TaskBinding{}) && (p.TaskBinding == nil || *p.TaskBinding != chain[0].task) {
 			return plan, ErrDenied
 		}
-		task, err := s.activeWorkTask(ctx, sub.Origin, p.TaskBinding, through)
+		task, err := s.activeWorkTask(ctx, reads, sub.Origin, p.TaskBinding, through)
 		if err != nil {
 			return plan, err
 		}
@@ -54,7 +54,7 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 			}
 			delta.hold[turnExposure] = 1
 		} else {
-			parent, found, err := s.loadWork(ctx, p.ParentTurnID, through)
+			parent, found, err := s.loadWork(ctx, reads, p.ParentTurnID, through)
 			if err != nil {
 				return plan, err
 			}
@@ -64,7 +64,7 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 			if sub.Operation != "local.admit" || !sameScopedValue(sub.Arguments, ledger.LocalAdmissionArguments{WorkID: p.WorkID, ParentTurnID: p.ParentTurnID, LocalOperation: p.Operation, ArgumentsSHA256: p.ArgumentsSHA256, ToolSchema: *p.ToolSchema, MaxBytes: *p.MaxBytes, TaskBinding: p.TaskBinding}) {
 				return plan, ErrInvalid
 			}
-			if err := s.workspaceReady(ctx, p.Target, through); err != nil {
+			if err := s.workspaceReady(ctx, reads, p.Target, through); err != nil {
 				return plan, err
 			}
 			delta.hold = [4]int64{0, 1, *p.MaxBytes, 1}
@@ -77,7 +77,7 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 		return plan, nil
 	}
 	id := g.receipt.WorkID
-	work, found, err := s.loadWork(ctx, id, through)
+	work, found, err := s.loadWork(ctx, reads, id, through)
 	if err != nil {
 		return plan, err
 	}
@@ -100,20 +100,20 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 		if work.admission.Kind != "local" || work.version != 1 || work.dispatched || work.ended || p.WorkID != id || p.ExpectedVersion != work.version || p.AuthorityVersion != s.p.authority || p.GrantID != work.admission.GrantID || p.ArgumentsSHA256 != work.admission.ArgumentsSHA256 || !sameScopedValue(sub.Arguments, ledger.WorkDispatchArguments{WorkID: id, ArgumentsSHA256: p.ArgumentsSHA256}) {
 			return plan, ErrInvalid
 		}
-		if _, err := s.authorize(ctx, work.origin, work.admission.GrantID, work.admission.Operation, []ledger.Resource{work.admission.Target}, nil, *work.admission.MaxBytes, through); err != nil {
+		if _, err := s.authorize(ctx, reads, work.origin, work.admission.GrantID, work.admission.Operation, []ledger.Resource{work.admission.Target}, nil, *work.admission.MaxBytes, through); err != nil {
 			return plan, err
 		}
-		task, err := s.activeWorkTask(ctx, work.origin, work.admission.TaskBinding, through)
+		task, err := s.activeWorkTask(ctx, reads, work.origin, work.admission.TaskBinding, through)
 		if err != nil {
 			return plan, err
 		}
 		if task != nil {
 			plan.dependencies = append(plan.dependencies, *task)
 		}
-		if err := s.workspaceReady(ctx, work.admission.Target, through); err != nil {
+		if err := s.workspaceReady(ctx, reads, work.admission.Target, through); err != nil {
 			return plan, err
 		}
-		parent, found, err := s.loadWork(ctx, work.admission.ParentTurnID, through)
+		parent, found, err := s.loadWork(ctx, reads, work.admission.ParentTurnID, through)
 		if err != nil {
 			return plan, err
 		}
@@ -142,7 +142,7 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 					if work.version != 1 {
 						return plan, ErrDenied
 					}
-					if _, err := s.authorize(ctx, work.origin, sub.GrantID, "turn.cancel", []ledger.Resource{sub.Target}, nil, 0, through); err != nil {
+					if _, err := s.authorize(ctx, reads, work.origin, sub.GrantID, "turn.cancel", []ledger.Resource{sub.Target}, nil, 0, through); err != nil {
 						return plan, err
 					}
 				}
@@ -188,8 +188,8 @@ func (s *Service) planWork(ctx context.Context, g *scopedGroup, first uint64) (s
 
 // A broad context grant cannot erase the assignment carried by a task context.
 // The durable admission and every dispatch must retain that exact active pair.
-func (s *Service) activeWorkTask(ctx context.Context, origin ledger.Origin, binding *ledger.TaskBinding, through uint64) (*scopedTaskState, error) {
-	task, bound, err := s.contextTask(ctx, origin, through)
+func (s *Service) activeWorkTask(ctx context.Context, reads *historyReadSet, origin ledger.Origin, binding *ledger.TaskBinding, through uint64) (*scopedTaskState, error) {
+	task, bound, err := s.contextTask(ctx, reads, origin, through)
 	if err != nil {
 		return nil, err
 	}
@@ -206,11 +206,11 @@ func (s *Service) activeWorkTask(ctx context.Context, origin ledger.Origin, bind
 	return &task, nil
 }
 
-func (s *Service) workspaceReady(ctx context.Context, target ledger.Resource, through uint64) error {
+func (s *Service) workspaceReady(ctx context.Context, reads *historyReadSet, target ledger.Resource, through uint64) error {
 	if target.Kind != "workspace" {
 		return ErrUnavailable
 	}
-	registered, err := s.registeredResource(ctx, target, through)
+	registered, err := s.registeredResource(ctx, reads, target, through)
 	if err != nil {
 		return err
 	}

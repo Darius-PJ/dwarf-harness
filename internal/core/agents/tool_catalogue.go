@@ -22,22 +22,28 @@ func (r *loopRuntime) catalogue(t *loopTurn, inv *loopInvocation, args loopCoreA
 	s := r.service
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.refreshLocked(t.ctx, s.store.Durable()); err != nil {
-		return nil, 0, err
-	}
-	chain, err := s.currentChain(t.ctx, t.origin, inv.grant, s.p.through)
+	bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	var allowed []modelTool
+	err := s.prepareHistoryLocked(t.ctx, &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
+		allowed = make([]modelTool, 0, len(modelCatalogue))
+		chain, err := s.currentChain(t.ctx, reads, t.origin, inv.grant, s.p.through)
+		if err != nil {
+			return err
+		}
+		for _, tool := range modelCatalogue {
+			ok, err := s.loopCatalogueAllowed(t.ctx, reads, t.origin, inv.grant, tool, chain, s.p.through)
+			if err != nil {
+				return err
+			}
+			if !ok || !strings.Contains(tool.name, args.Query) && !strings.Contains(tool.description, args.Query) {
+				continue
+			}
+			allowed = append(allowed, tool)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, 0, err
-	}
-	allowed := make([]modelTool, 0, len(modelCatalogue))
-	for _, tool := range modelCatalogue {
-		if !s.loopCatalogueAllowed(t.ctx, t.origin, inv.grant, tool, chain, s.p.through) {
-			continue
-		}
-		if !strings.Contains(tool.name, args.Query) && !strings.Contains(tool.description, args.Query) {
-			continue
-		}
-		allowed = append(allowed, tool)
 	}
 	slices.SortFunc(allowed, func(a, b modelTool) int { return strings.Compare(a.name, b.name) })
 	page := loopCataloguePage{Entries: []loopCatalogueEntry{}}
