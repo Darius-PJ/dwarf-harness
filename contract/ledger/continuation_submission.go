@@ -6,8 +6,8 @@ import (
 	"uuid"
 )
 
-// ContinuationSubmission is the canonical schema-7 preimage, proposed for freeze
-// (D125). All five closed operations use the same concrete snapshot arguments.
+// ContinuationSubmission is the canonical schema-7 preimage, frozen (D169).
+// All five closed operations use the same concrete snapshot arguments.
 type ContinuationSubmission struct {
 	Schema          int64                 `json:"schema"`
 	Actor           string                `json:"actor"`

@@ -182,8 +182,8 @@
 // the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
 // F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
-// F3-13 types, the four F3-139 types and the six F3-15 types below,
-// fifty-nine in all, each at version 1. F3-15 is frozen (D165).
+// F3-13 types, the four F3-139 types, the six F3-15 types and the two
+// F3-16 types below, sixty-one in all, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -206,6 +206,11 @@
 // F3-139 is ticket 139's part of F3, frozen (D154),
 // also by addition to format version 1; record availability does not imply
 // an operational producer or graph consumer.
+// F3-15 is ticket 15's part of F3, frozen (D165),
+// also by addition to format version 1.
+// F3-16 is ticket 16's part of F3, frozen (D169),
+// also by addition to format version 1; record availability does not imply
+// an operational continuation owner, recovery or child shutdown.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -3072,10 +3077,10 @@
 // # F3-16: durable continuation owner
 //
 // Ticket 16's runtime.continuation_changed and runtime.continuation_receipt,
-// both version 1, and canonical schema 7 are proposed for freeze (D125).
+// both version 1, and canonical schema 7 are frozen (D169).
 // Defined grows from 59 to 61. This is an additive family: every earlier
-// codec, schema, group and golden remains unchanged. No Core producer consumes
-// the proposed family before its freeze. C3 owns the payloads; the designated
+// codec, schema, group and golden remains unchanged. No Core producer consumed
+// the family before its freeze. C3 owns the payloads; the designated
 // producer is internal/core/agents through the existing Core Submit boundary.
 // Consumers are preflight/Open, the single continuation owner, exact-origin
 // views, cancellation and recovery. All known members and envelope bindings

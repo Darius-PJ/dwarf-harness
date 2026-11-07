@@ -11,7 +11,7 @@ import (
 	"uuid"
 )
 
-// F3-16's two version-1 types are proposed for freeze (D125).
+// F3-16's two version-1 types are frozen (D169).
 const (
 	TypeRuntimeContinuationChanged = "runtime.continuation_changed"
 	TypeRuntimeContinuationReceipt = "runtime.continuation_receipt"

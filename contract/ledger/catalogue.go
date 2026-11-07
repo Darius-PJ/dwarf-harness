@@ -66,7 +66,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeRuntimeRegistrationReceipt; and F3-15, frozen (D165):
 // TypePrivateTurnRevision, TypeRuntimeTurnBound, TypeRuntimeToolStarted,
 // TypeRuntimeToolResult, TypeRuntimeTurnResult and TypeRuntimeLoopReceipt;
-// and F3-16, proposed for freeze (D125): TypeRuntimeContinuationChanged
+// and F3-16, frozen (D169): TypeRuntimeContinuationChanged
 // and TypeRuntimeContinuationReceipt. All sixty-one are at version 1.
 // It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {
