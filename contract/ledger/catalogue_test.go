@@ -98,6 +98,8 @@ func TestNewCatalogue(t *testing.T) {
 		{"runtime.tool_result", 1}:                      true,
 		{"runtime.turn_result", 1}:                      true,
 		{"runtime.loop_receipt", 1}:                     true,
+		{"runtime.continuation_changed", 1}:             true,
+		{"runtime.continuation_receipt", 1}:             true,
 	}
 	for tv := range want {
 		if !def.Contains(tv) || def.Contains(TypeVersion{tv.Type, 2}) {

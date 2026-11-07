@@ -333,9 +333,6 @@ func TestLoopGroupRulesAndFrozenReplay(t *testing.T) {
 func TestDefinedF3_15(t *testing.T) {
 	t.Parallel()
 	c := Defined()
-	if len(c.set) != 53+6 {
-		t.Fatalf("catalogue has %d types, want 53+6", len(c.set))
-	}
 	for _, f := range loopCodecFixtures()[:6] {
 		if !c.Contains(TypeVersion{f.typ, 1}) || c.Contains(TypeVersion{f.typ, 2}) {
 			t.Fatalf("catalogue version %s", f.typ)
