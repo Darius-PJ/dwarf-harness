@@ -48,9 +48,13 @@ func testStartSupervisor(t *testing.T, root, mode, phase string) *supervisorProc
 	if err != nil {
 		t.Fatal(err)
 	}
+	payload, err := testPayload(t)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	child := &supervisorProcess{cancel: cancel}
-	child.command = exec.CommandContext(ctx, executable, "-test.run=^TestWinexecSupervisor$", "-test.timeout=35s", "--", "--winexec-supervisor", root, mode, phase)
+	child.command = exec.CommandContext(ctx, executable, "-test.run=^TestWinexecSupervisor$", "-test.timeout=35s", "--", "--winexec-supervisor", root, mode, phase, payload.path)
 	child.command.Stderr = &child.stderr
 	child.input, err = child.command.StdinPipe()
 	if err != nil {
@@ -242,10 +246,21 @@ func TestWinexecSupervisor(t *testing.T) {
 		return
 	}
 	args := os.Args[marker+1:]
-	if len(args) != 3 {
-		t.Fatal("missing supervisor root/mode/phase")
+	if len(args) != 4 {
+		t.Fatal("missing supervisor root/mode/phase/payload")
 	}
 	root, mode, target := args[0], args[1], args[2]
+	if !filepath.IsAbs(args[3]) {
+		t.Fatal("supervisor payload path must be absolute")
+	}
+	info, err := os.Stat(args[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatal("supervisor payload path must be a regular file")
+	}
+	testPayloadSource = args[3]
 	e, err := Open(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
