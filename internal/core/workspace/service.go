@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger/appender"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 )
 
 type workspaceStore interface {
@@ -62,6 +64,8 @@ type Service struct {
 	ops                             sync.WaitGroup
 	closed, poisoned                bool
 	closeDone                       chan struct{}
+	closeErr                        error
+	processes                       *gitprocess.Owner
 	store                           workspaceStore
 	colony                          string
 	deps                            serviceDeps
@@ -180,7 +184,23 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	s.activationFloor = math.MinInt64
 	s.activationWake = make(chan struct{}, 1)
 	s.activationContext, s.stopActivation = context.WithCancel(context.Background())
-	s.git = newGitRunner(deps.environ)
+	processes, _, err := gitprocess.Open(ctx, filepath.Join(colony, "workspaces", "processes"), gitprocess.Options{RequireTree: runtime.GOOS == "windows"})
+	if err != nil {
+		s.stopActivation()
+		return nil, report, err
+	}
+	opened := false
+	defer func() {
+		if !opened {
+			s.stopActivation()
+			_ = processes.Close()
+		}
+	}()
+	if _, err := processes.Reconcile(ctx); err != nil {
+		return nil, report, err
+	}
+	s.processes = processes
+	s.git = newGitRunner(processes, deps.environ)
 	s.engine = newCaptureEngine(s.git, colony)
 	reader, err := ledger.OpenReader(store.LogDir(), ledger.ReadOptions{Colony: store.Colony(), Through: store.Durable(), Consume: workspaceConsumption(), AllTypes: true})
 	if err != nil {
@@ -233,6 +253,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 		return nil, report, err
 	}
 	report = s.reconcile(ctx)
+	opened = true
 	return s, report, nil
 }
 
@@ -264,17 +285,19 @@ func (s *Service) Close() error {
 		done := s.closeDone
 		s.mu.Unlock()
 		<-done
-		return nil
+		return s.closeErr
 	}
 	s.closed = true
 	s.stopActivation()
+	s.processes.Cancel()
 	s.mu.Unlock()
 	if s.deps.afterCloseStart != nil {
 		s.deps.afterCloseStart()
 	}
 	s.ops.Wait()
+	s.closeErr = s.processes.Close()
 	close(s.closeDone)
-	return nil
+	return s.closeErr
 }
 
 // SetReleaseNotifier registers the one callback the reservation pool calls

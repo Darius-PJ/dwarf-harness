@@ -58,10 +58,15 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 	}
 	// Drain order: Core stops its turns before the workspace, then the store.
 	drain := []func() error{store.Close}
-	stop := func() {
+	stop := func() error {
+		var stopped error
 		for _, step := range drain {
-			_ = step()
+			stopped = errors.Join(stopped, step())
 		}
+		if stopped != nil {
+			fmt.Fprintln(stdout, "[terminal] shutdown failed: closure unconfirmed")
+		}
+		return stopped
 	}
 	service, report, err := agents.OpenPaid(ctx, store, *colonyDir, agents.DefaultLimits(), agents.PaidOptions{Limits: agents.DefaultPaidLimits()})
 	if err != nil {
@@ -119,7 +124,7 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 	}
 	info, err := stdin.Stat()
 	interactive := err == nil && info.Mode()&os.ModeCharDevice != 0
-	err = terminal.Run(ctx, terminal.Config{Agents: views, Input: stdin, Output: stdout, Interactive: interactive, Interrupts: interrupts, Describe: describe, Drain: drain})
+	err = terminal.Run(ctx, terminal.Config{Agents: views, Input: stdin, Output: stdout, Interactive: interactive, Interrupts: interrupts, Describe: describe, Drain: []func() error{stop}})
 	if err != nil {
 		return 1
 	}

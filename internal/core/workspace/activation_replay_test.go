@@ -481,6 +481,9 @@ func activationIntentScopeRules(t *testing.T, golden []ledger.Commit) {
 		if _, err := store.Append(context.Background(), intent); err != nil {
 			t.Fatal(err)
 		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
 		reopened, _, err := Open(context.Background(), store, colony, serviceConfig())
 		if reopened != nil {
 			reopened.Close()
