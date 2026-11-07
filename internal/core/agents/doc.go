@@ -862,13 +862,21 @@
 // or C3-exit claim. Existing scoped/private replay and authorization costs remain
 // inherited limits. Paid cold work is explicit: attempt and credential-version
 // IDs at or below their watermarks (including fresh out-of-order IDs), historical
-// attempts and receipts, original-period/missing-account totals, task enrollment
-// and rare scope reactivation. Agent.PaidBudgetStatus reconstructs origin-filtered
-// totals on every call. Validated context/task associations avoid the inherited
-// contextTask scan at the exact current prefix; missing, damaged or older-prefix
-// proofs retain historical fallback. Old-object selection scans from admission;
-// duplicate evidence reads its three-record receipt. Later results on a hot
-// attempt use its retained evidence map, not a new whole-history scan per result.
+// attempts and receipts, original-period, missing-account and unconfigured-scope
+// totals, task enrollment and rare scope reactivation. Unconfigured (version-0)
+// accounts cache held and fence exposure only and retain no settled total.
+// Owner and Agent budget status for version-0 scopes always use the explicit
+// needPaidTotal fold, including while a hold or fence keeps the account present:
+// one selected-scope whole-history pass per call with operation-local attempt
+// and route memory, outside Service.mu for the first two rounds. Configured
+// active-period totals stay hot; correcting an attempt naming an unconfigured
+// scope adds no scope-total scan. Agent.PaidBudgetStatus reconstructs
+// origin-filtered totals on every call. Validated context/task associations avoid
+// the inherited contextTask scan at the exact current prefix; missing, damaged
+// or older-prefix proofs retain historical fallback. Old-object selection scans
+// from admission; duplicate evidence reads its three-record receipt. Later
+// results on a hot attempt use its retained evidence map, not a new whole-history
+// scan per result.
 // Open's paid reduction does not read artifacts, present or absent.
 //
 // Physical admission is separate from financial exposure. Each preparation

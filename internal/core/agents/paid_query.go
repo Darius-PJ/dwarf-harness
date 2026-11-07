@@ -275,7 +275,7 @@ func (s *Service) paidBudgetStatus(ctx context.Context, bound *submissionIDs, re
 				related = ownTerms
 			}
 		}
-		if bound != nil || !exists || period != s.p.book.paidPeriod {
+		if bound != nil || !exists || account.version == 0 || period != s.p.book.paidPeriod {
 			var historical bool
 			var err error
 			settled, held, historical, err = s.paidHistoryTotal(ctx, reads, request.Scope, period, origin, s.p.through)

@@ -119,6 +119,8 @@ func (b *budgetBook) checkPaid(scopes []ledger.PaidScope, period string, extra i
 }
 
 // planPaidMoney changes every affected scope together, never a second wallet.
+// Configured accounts hold exact active-period settled aggregates; version-0
+// accounts hold live exposure only, with totals available by explicit cold query.
 func (b *budgetBook) planPaidMoney(before, after paidAttempt, current string) (map[ledger.PaidScope]paidAccount, error) {
 	next := make(map[ledger.PaidScope]paidAccount, len(after.admission.Scopes))
 	for _, scope := range after.admission.Scopes {
@@ -131,7 +133,9 @@ func (b *budgetBook) planPaidMoney(before, after paidAttempt, current string) (m
 		if after.held {
 			a.held.Add(a.held, big.NewInt(after.admission.Quote.MaximumMicros))
 		}
-		if after.admission.AdmissionPeriod == current {
+		if a.version == 0 {
+			a.settled.SetInt64(0)
+		} else if after.admission.AdmissionPeriod == current {
 			a.settled.Sub(a.settled, big.NewInt(before.cost))
 			a.settled.Add(a.settled, big.NewInt(after.cost))
 		}
