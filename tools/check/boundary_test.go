@@ -191,6 +191,11 @@ func TestImportBoundary(t *testing.T) {
 		{name: "credentials imports x sys", files: map[string]string{
 			"internal/core/credentials/plant.go": src("credentials", xSysModule, xSysModule+"/windows"),
 		}},
+		{name: "gitprocess and its own tests import x sys", files: map[string]string{
+			"internal/core/gitprocess/plant.go":         src("gitprocess", xSysModule+"/windows"),
+			"internal/core/gitprocess/plant_test.go":    src("gitprocess", "testing", xSysModule+"/windows"),
+			"internal/core/gitprocess/external_test.go": src("gitprocess_test", "testing", m("internal/core/gitprocess"), xSysModule+"/windows"),
+		}},
 		{name: "agents test variants import x sys", files: map[string]string{
 			"internal/core/agents/agents.go":               src("agents"),
 			"internal/core/agents/agents_internal_test.go": src("agents", "testing", xSysModule, xSysModule+"/windows"),
@@ -198,6 +203,11 @@ func TestImportBoundary(t *testing.T) {
 		}},
 
 		// Must fail.
+		{
+			name:  "gitprocess subpackage cannot import x sys",
+			files: map[string]string{"internal/core/gitprocess/child/plant.go": src("child", xSysModule+"/windows")},
+			want:  []violation{forbidden("internal/core/gitprocess/child", xSysModule+"/windows")},
+		},
 		{
 			name:  "undercurrent imports router",
 			files: map[string]string{"internal/undercurrent/engine/plant.go": src("engine", m("internal/router/route"))},

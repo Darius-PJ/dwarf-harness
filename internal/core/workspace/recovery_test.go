@@ -17,6 +17,7 @@ import (
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger/appender"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
@@ -421,13 +422,19 @@ func TestHelperFinalizationCrash(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if step == "ambiguous_git_exit" || step == "owned_git" {
-		svc.git.afterStart = func(cmd *exec.Cmd) {
-			if slices.Contains(cmd.Args, "update-ref") && slices.Contains(cmd.Args, "refs/heads/main") {
+		updating := false
+		svc.git.afterStart = func(args []string, pid int) {
+			if slices.Contains(args, "update-ref") && slices.Contains(args, "refs/heads/main") {
 				if step == "owned_git" {
-					point.GitPID = cmd.Process.Pid
+					point.GitPID = pid
 					stop()
 				}
-				cmd.Cancel = func() error { return nil }
+				updating = true
+			}
+		}
+		svc.git.afterRun = func(_ gitprocess.Result) {
+			if updating {
+				updating = false
 				cancel()
 			}
 		}

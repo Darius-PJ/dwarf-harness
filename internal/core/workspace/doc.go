@@ -18,8 +18,16 @@
 // Persisted capture-inputs/1 documents keep their original Git 2.42 validation
 // floor so old bytes still replay; this does not lower the executable's floor.
 //
-// Commands use exec.CommandContext, a five-second WaitDelay and at most 64 KiB
-// of stderr. Each call declares its expected exit codes; an unexpected exit is
+// Commands use the gitprocess Owner and at most 64 KiB of stderr. Windows
+// children are atomically assigned to a named non-breakaway Job before resume.
+// Open reconciles durable process fences before version inspection or any
+// workspace sweep. An unconfirmed fence refuses startup. Close cancels process
+// calls, joins operations and proves closure before releasing root ownership;
+// every Close caller receives the same error. Observations started after Close
+// begins are refused; their scratch edits stay on disk for recovery. Held writers
+// must still Close to release logical ownership. Inspect uses a fresh one-shot
+// Owner. Portable execution proves root/I/O joins only, never descendant exit.
+// Each call declares its expected exit codes; an unexpected exit is
 // a GitError matching ErrGit. Git message text never determines an outcome.
 // GitError also preserves cancellation and process-start or wait errors for
 // errors.Is; cancellation never becomes an expected exit.
