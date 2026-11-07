@@ -21,9 +21,11 @@ import (
 
 type supervisorFrame struct {
 	Phase            string
+	ObservedPhase    string
 	Fence            runFence
 	RootPID          uint32
 	PIDs             []uint32
+	PIDListKnown     bool
 	Job              uint64
 	Active           uint32
 	AccountingKnown  bool
@@ -160,24 +162,93 @@ func testSupervisorBarrier(reader *bufio.Reader, frame supervisorFrame) error {
 	return nil
 }
 
-func testRunFrame(phase string, r *nativeRun) (supervisorFrame, error) {
-	frame := supervisorFrame{Phase: phase, Fence: r.fence, RootPID: r.pi.ProcessId, Job: uint64(r.job), Receipt: r.receipt}
+func testObservationPolicy(phase string, heldTree bool) (accounting, pids bool) {
+	switch phase {
+	case "suspended_created", "suspended_verified", "count-ready":
+		return true, true
+	case "resumed":
+		return heldTree, heldTree
+	case "tree_exited", "closed_fence":
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+func testRunFrame(phase string, r *nativeRun, heldTree bool) (supervisorFrame, error) {
+	frame := supervisorFrame{Phase: phase, ObservedPhase: phase, Fence: r.fence, RootPID: r.pi.ProcessId, Job: uint64(r.job), Receipt: r.receipt}
 	if r.pipes != nil {
 		frame.Receipt.Stdout, frame.Receipt.Stderr = r.pipes.output()
 	}
-	if r.job != 0 {
+	accountingRequired, pidsRequired := testObservationPolicy(phase, heldTree)
+	if r.job != 0 && accountingRequired {
 		accounting, err := jobAccounting(r.job)
 		if err != nil {
-			return frame, err
+			return frame, fmt.Errorf("observe %s: %w", phase, err)
 		}
 		frame.Active = accounting.Active
 		frame.AccountingKnown = true
+	}
+	if r.job != 0 && pidsRequired {
+		var err error
 		frame.PIDs, err = testJobPIDs(r.job)
 		if err != nil {
-			return frame, err
+			return frame, fmt.Errorf("observe %s: %w", phase, err)
 		}
+		frame.PIDListKnown = true
 	}
 	return frame, nil
+}
+
+func TestSupervisorObservationProofBoundaries(t *testing.T) {
+	t.Parallel()
+	for _, target := range []string{"root_exited", "suspended_created"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			e := testExecutor(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var frame supervisorFrame
+			var observationErr error
+			observed := false
+			e.observe = func(phase string, r *nativeRun) {
+				if phase != target {
+					return
+				}
+				observed = true
+				snapshot := *r
+				snapshot.job = windows.InvalidHandle
+				frame, observationErr = testRunFrame(phase, &snapshot, false)
+				if observationErr != nil {
+					cancel()
+				}
+			}
+			receipt, runErr := e.Run(ctx, testRequest(t, "output", "1"))
+			if !observed {
+				t.Fatalf("observation boundary not reached: %+v %v", receipt, runErr)
+			}
+			if target == "root_exited" {
+				if observationErr != nil {
+					t.Fatalf("diagnostic phase required native proof: %v", observationErr)
+				}
+				assertReusable(t, receipt, runErr)
+				if string(receipt.Stdout) != "o" || string(receipt.Stderr) != "e" {
+					t.Fatalf("diagnostic observation lost real output: stdout=%q stderr=%q", receipt.Stdout, receipt.Stderr)
+				}
+				if frame.AccountingKnown || frame.PIDListKnown {
+					t.Fatalf("diagnostic phase claimed native proof: %+v", frame)
+				}
+				return
+			}
+			var native *NativeError
+			if !errors.As(observationErr, &native) || native.Code != uint32(windows.ERROR_INVALID_HANDLE) {
+				t.Fatalf("mandatory live proof did not report native invalid handle: %v", observationErr)
+			}
+			if !errors.Is(runErr, context.Canceled) || !receipt.ResumedUTC.IsZero() || len(receipt.Stdout)+len(receipt.Stderr) != 0 || receipt.OutputState != Unpublishable || receipt.State != Closed || !receipt.RootExited || !receipt.TreeExited || !receipt.ResourcesReusable {
+				t.Fatalf("missing live proof did not cancel admission and close the real tree: %+v %v", receipt, runErr)
+			}
+		})
+	}
 }
 
 func testWaitLiveJob(r *nativeRun, count int) ([]uint32, error) {
@@ -275,7 +346,8 @@ func TestWinexecSupervisor(t *testing.T) {
 		request = testRequest(t, "process-count")
 		request.Limits.Processes = 2
 	}
-	if mode == "ambiguous" || (mode == "crash" && (target == "resumed" || target == "run_removed")) {
+	heldTree := mode == "ambiguous" || (mode == "crash" && (target == "resumed" || target == "run_removed"))
+	if heldTree {
 		request = testRequest(t, "held-tree")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -286,7 +358,7 @@ func TestWinexecSupervisor(t *testing.T) {
 		if observationErr != nil {
 			return
 		}
-		if phase == "resumed" && (mode == "ambiguous" || (mode == "crash" && (target == "resumed" || target == "run_removed"))) {
+		if phase == "resumed" && heldTree {
 			if err := testWaitHeldTree(r); err != nil {
 				observationErr = err
 				cancel()
@@ -301,7 +373,7 @@ func TestWinexecSupervisor(t *testing.T) {
 			}
 			phase = "count-ready"
 		}
-		last, observationErr = testRunFrame(phase, r)
+		last, observationErr = testRunFrame(phase, r, heldTree)
 		if observationErr != nil {
 			cancel()
 			return
@@ -442,26 +514,57 @@ func testOuterJob(t *testing.T, count uint32, breakaway bool) windows.Handle {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		pids, err := testJobPIDs(job)
-		if err != nil {
-			t.Error(err)
+		// A retiring Job's list only collects handles; accounting proves closure.
+		var list struct {
+			Assigned, Count uint32
+			IDs             [16]uintptr
 		}
 		var handles []windows.Handle
-		for _, pid := range pids {
-			h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, pid)
-			if err == nil {
-				handles = append(handles, h)
-			} else if !errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
-				t.Error(err)
+		if err := queryJob(job, windows.JobObjectBasicProcessIdList, unsafe.Pointer(&list), unsafe.Sizeof(list)); err != nil {
+			t.Error(err)
+		} else if list.Count > uint32(len(list.IDs)) {
+			t.Errorf("outer Job handle snapshot exceeds buffer: %+v", list)
+		} else {
+			if list.Assigned != list.Count {
+				t.Logf("outer Job rundown handle snapshot: %+v", list)
+			}
+			for _, pid := range list.IDs[:list.Count] {
+				if pid == 0 || uint64(pid) > uint64(^uint32(0)) {
+					t.Errorf("invalid outer Job snapshot PID: %d", pid)
+					continue
+				}
+				h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+				if err == nil {
+					handles = append(handles, h)
+				} else if !errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+					t.Error(err)
+				}
 			}
 		}
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
 		if err := windows.TerminateJobObject(job, 1); err != nil {
 			t.Error(err)
 		}
 		testWaitAndCloseProcesses(t, &handles)
-		accounting, err := jobAccounting(job)
-		if err != nil || accounting.Active != 0 {
-			t.Errorf("outer Job teardown did not prove zero active processes: %+v %v", accounting, err)
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+	waitZero:
+		for {
+			accounting, err := jobAccounting(job)
+			if err != nil {
+				t.Errorf("outer Job teardown accounting: %+v %v", accounting, err)
+				break
+			}
+			if accounting.Active == 0 {
+				break
+			}
+			select {
+			case <-tick.C:
+			case <-deadline.C:
+				t.Errorf("outer Job teardown did not prove zero active processes: %+v", accounting)
+				break waitZero
+			}
 		}
 		if err := windows.CloseHandle(job); err != nil {
 			t.Error(err)

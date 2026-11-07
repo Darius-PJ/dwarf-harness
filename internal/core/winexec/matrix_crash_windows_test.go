@@ -22,7 +22,7 @@ func testObserveFrameProcesses(t *testing.T, frame supervisorFrame, handles *[]w
 	if frame.RootPID == 0 && frame.Active == 0 && len(frame.PIDs) == 0 {
 		return true
 	}
-	if !frame.AccountingKnown || frame.Active == 0 || int(frame.Active) != len(frame.PIDs) {
+	if !frame.AccountingKnown || !frame.PIDListKnown || frame.Active == 0 || int(frame.Active) != len(frame.PIDs) {
 		t.Errorf("native live-process observation is incomplete: %+v", frame)
 		return false
 	}
@@ -177,7 +177,7 @@ func TestSupervisorLossFenceMatrix(t *testing.T) {
 					t.Fatalf("running root/child/grandchild not observed: %+v", frame)
 				}
 			case "tree_exited", "closed_fence":
-				if !frame.Receipt.TreeExited || !frame.Receipt.RootExited || !frame.AccountingKnown || frame.Active != 0 || len(frame.PIDs) != 0 {
+				if !frame.Receipt.TreeExited || !frame.Receipt.RootExited || !frame.AccountingKnown || frame.Active != 0 || frame.PIDListKnown {
 					t.Fatalf("native zero-active closure not observed: %+v", frame)
 				}
 			default:

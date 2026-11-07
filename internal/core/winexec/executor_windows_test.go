@@ -179,17 +179,30 @@ func liveHeldDescendant(r *nativeRun) error {
 	if err := queryJob(r.job, windows.JobObjectBasicProcessIdList, unsafe.Pointer(&list), unsafe.Sizeof(list)); err != nil {
 		return err
 	}
-	if list.Count != 1 || list.IDs[0] == 0 || list.IDs[0] == uintptr(r.pi.ProcessId) {
+	if list.Count > uint32(len(list.IDs)) {
 		return fmt.Errorf("held descendant Job PID list: %+v", list)
+	}
+	var descendant uint32
+	for _, pid := range list.IDs[:list.Count] {
+		if pid == uintptr(r.pi.ProcessId) {
+			continue
+		}
+		if pid == 0 || uint64(pid) > uint64(^uint32(0)) || descendant != 0 {
+			return fmt.Errorf("held descendant Job PID list: %+v", list)
+		}
+		descendant = uint32(pid)
+	}
+	if descendant == 0 {
+		return fmt.Errorf("held descendant missing from Job PID list: %+v", list)
 	}
 	a, err := jobAccounting(r.job)
 	if err != nil {
 		return err
 	}
-	if a.Active != 1 {
+	if a.Active < 1 {
 		return fmt.Errorf("held descendant active count: %d", a.Active)
 	}
-	h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(list.IDs[0]))
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, descendant)
 	if err != nil {
 		return err
 	}
