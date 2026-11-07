@@ -111,6 +111,10 @@ func payloadPeer(t *testing.T, args []string) {
 	if err := json.NewEncoder(os.Stdout).Encode(probe); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(os.Getenv("DWARF_WORK"), "peer-probed"), own, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payloadReleaseFile(t, "peer-release")
 	windows.ExitProcess(0)
 }
 

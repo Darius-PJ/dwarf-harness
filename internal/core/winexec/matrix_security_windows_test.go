@@ -20,51 +20,105 @@ import (
 
 func TestSeparateRunsCannotReadPeerInput(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	var contexts [2]context.Context
+	var cancels [2]context.CancelFunc
+	for i := range contexts {
+		contexts[i], cancels[i] = context.WithCancel(context.Background())
+	}
 	type admitted struct {
-		index int
-		dir   string
-		sid   string
+		index   int
+		dir     string
+		sid     string
+		process windows.Handle
+		err     error
 	}
 	ready := make(chan admitted, 2)
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	defer unblock()
+	releases := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	var releaseOnce [2]sync.Once
+	unblock := func(i int) { releaseOnce[i].Do(func() { close(releases[i]) }) }
+	var handlesMu sync.Mutex
+	var handles [2]windows.Handle
+	closeHandles := func() bool {
+		handlesMu.Lock()
+		defer handlesMu.Unlock()
+		ok := true
+		for i, handle := range handles {
+			if handle != 0 {
+				if err := windows.CloseHandle(handle); err != nil {
+					t.Errorf("close peer %d observer handle: %v", i, err)
+					ok = false
+				}
+				handles[i] = 0
+			}
+		}
+		return ok
+	}
 	var results [2]chan runResult
+	var done [2]chan struct{}
+	// Defers run before testExecutor's cleanups, including on an early failure.
+	defer func() {
+		for _, cancel := range cancels {
+			cancel()
+		}
+		for i := range releases {
+			unblock(i)
+		}
+		closeHandles()
+		for _, joined := range done {
+			if joined != nil {
+				<-joined
+			}
+		}
+	}()
+	checkTargets := func(dir, nonce string) error {
+		for path, want := range map[string]string{
+			filepath.Join(dir, "input", "nonce"):     nonce,
+			filepath.Join(dir, "work", "peer-nonce"): "private-work-" + nonce,
+		} {
+			data, err := os.ReadFile(path)
+			if err != nil || string(data) != want {
+				return fmt.Errorf("peer target changed: path=%q contents=%q error=%v", path, data, err)
+			}
+		}
+		return nil
+	}
 	var unchanged [2]error
 	var sharedLimits Limits
 	for i := range results {
 		e := testExecutor(t)
 		nonce := fmt.Sprintf("authorized-peer-%d", i)
+		ctx := contexts[i]
 		request := testRequest(t, "peer", nonce)
 		sharedLimits = request.Limits
 		request.Files = append(request.Files, InputFile{Path: "nonce", Data: []byte(nonce)})
 		e.observe = func(phase string, r *nativeRun) {
 			switch phase {
 			case "suspended_verified":
-				ready <- admitted{index: i, dir: r.dir, sid: r.sid.String()}
+				peer := admitted{index: i, dir: r.dir, sid: r.sid.String()}
+				handlesMu.Lock()
+				// Cancellation precedes handle cleanup, so a late callback
+				// cannot create a duplicate after cleanup has closed them.
+				if ctx.Err() == nil {
+					self := windows.CurrentProcess()
+					peer.err = windows.DuplicateHandle(self, r.pi.Process, self, &peer.process, windows.SYNCHRONIZE, false, 0)
+					handles[i] = peer.process
+				}
+				handlesMu.Unlock()
+				ready <- peer
 				select {
-				case <-release:
+				case <-releases[i]:
 				case <-ctx.Done():
 				}
 			case "tree_exited":
-				for path, want := range map[string]string{
-					filepath.Join(r.dir, "input", "nonce"):     nonce,
-					filepath.Join(r.dir, "work", "peer-nonce"): "private-work-" + nonce,
-				} {
-					data, err := os.ReadFile(path)
-					if err != nil || string(data) != want {
-						unchanged[i] = fmt.Errorf("peer target changed: path=%q contents=%q error=%v", path, data, err)
-					}
-				}
+				unchanged[i] = checkTargets(r.dir, nonce)
 			}
 		}
 		results[i] = make(chan runResult, 1)
+		done[i] = make(chan struct{})
 		go func() {
 			r, err := e.Run(ctx, request)
 			results[i] <- runResult{r, err}
+			close(done[i])
 		}()
 	}
 	var peers [2]admitted
@@ -72,6 +126,13 @@ func TestSeparateRunsCannotReadPeerInput(t *testing.T) {
 		select {
 		case peer := <-ready:
 			peers[peer.index] = peer
+			if peer.err != nil {
+				t.Fatalf("peer %d admission: %v", peer.index, peer.err)
+			}
+		case <-done[0]:
+			t.Fatalf("peer A completed before both admissions: %+v", <-results[0])
+		case <-done[1]:
+			t.Fatalf("peer B completed before both admissions: %+v", <-results[1])
 		case <-testAdmissionWait(t, sharedLimits, sharedLimits.Wall+sharedLimits.StopGrace):
 			t.Fatal("both real runs did not reach the suspended boundary")
 		}
@@ -92,7 +153,48 @@ func TestSeparateRunsCannotReadPeerInput(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	unblock()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for i, peer := range peers {
+		t.Logf("releasing peer %d from suspended boundary", i)
+		unblock(i)
+		want := fmt.Sprintf("authorized-peer-%d", i)
+		for {
+			data, err := os.ReadFile(filepath.Join(peer.dir, "work", "peer-probed"))
+			if err == nil && string(data) == want {
+				t.Logf("observed peer %d probe marker: %q", i, data)
+				break
+			}
+			if err != nil && !os.IsNotExist(err) {
+				t.Fatalf("peer %d probe marker: %v", i, err)
+			}
+			select {
+			case <-done[0]:
+				t.Fatalf("peer A completed before peer %d probe marker: %+v", i, <-results[0])
+			case <-done[1]:
+				t.Fatalf("peer B completed before peer %d probe marker: %+v", i, <-results[1])
+			case <-tick.C:
+			}
+		}
+	}
+	for i, peer := range peers {
+		state, err := windows.WaitForSingleObject(peer.process, 0)
+		if err != nil || state != uint32(windows.WAIT_TIMEOUT) {
+			t.Fatalf("peer %d root did not remain live after both probes: state=%d error=%v", i, state, err)
+		}
+		if err := checkTargets(peer.dir, fmt.Sprintf("authorized-peer-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !closeHandles() {
+		t.Fatal("peer observer handles did not close before payload release")
+	}
+	for i, peer := range peers {
+		t.Logf("releasing peer %d after both live-target proofs", i)
+		if err := os.WriteFile(filepath.Join(peer.dir, "work", "peer-release"), []byte("release-nonce"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i, result := range results {
 		got := awaitResult(t, result)
 		assertReusable(t, got.receipt, got.err)
