@@ -209,14 +209,14 @@ func TestReservationReleasedOnEveryPath(t *testing.T) {
 
 func TestObserveReturnsPoolButKeepsExclusion(t *testing.T) {
 	t.Parallel()
-	f := newCaptureFixture(t)
-	other, err := f.f.git.createWorktree(context.Background(), f.f.colony, f.p, f.s.InputsDir, filepath.Join(f.f.colony, "scratch", "87654321"), "second-observer", f.s.Worktree.BaseCommit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second := f.s
-	second.Worktree = other
 	synctest.Test(t, func(t *testing.T) {
+		f := newCaptureFixture(t)
+		other, err := f.f.git.createWorktree(context.Background(), f.f.colony, f.p, f.s.InputsDir, filepath.Join(f.f.colony, "scratch", "87654321"), "second-observer", f.s.Worktree.BaseCommit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second := f.s
+		second.Worktree = other
 		profile := CapacityProfile{MaxFiles: 100, MaxBytes: 1 << 20, BytesInFlight: 1 << 20, CheckpointsPerPair: 4, GenerationWindow: 4}
 		pool := testReservationPool(t, &profile)
 		r, err := pool.reserve(f.s.Worktree.Dir, closureReservation)

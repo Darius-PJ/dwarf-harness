@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 )
 
 type finalizationHistory struct {
@@ -71,8 +72,8 @@ func canonicalFiles(t *testing.T, common string) map[string]string {
 
 func countCanonicalUpdates(g *gitRunner) *int {
 	count := new(int)
-	g.afterStart = func(cmd *exec.Cmd) {
-		if slices.Contains(cmd.Args, "update-ref") {
+	g.afterStart = func(args []string, _ int) {
+		if slices.Contains(args, "update-ref") {
 			*count++
 		}
 	}
@@ -100,14 +101,21 @@ func TestGuardedMainUpdate(t *testing.T) {
 					f, w := finalizationFixture(t, h, packed)
 					before := canonicalFiles(t, w.CommonDir)
 					var argv []string
-					var command *exec.Cmd
-					f.svc.git.afterStart = func(cmd *exec.Cmd) {
-						if slices.Contains(cmd.Args, "update-ref") {
+					var command gitprocess.Result
+					updating := false
+					f.svc.git.afterRun = func(result gitprocess.Result) {
+						if updating {
+							command = result
+							updating = false
+						}
+					}
+					f.svc.git.afterStart = func(args []string, _ int) {
+						if slices.Contains(args, "update-ref") {
 							if argv != nil {
 								t.Error("second canonical update")
 							}
-							argv = slices.Clone(cmd.Args)
-							command = cmd
+							argv = slices.Clone(args)
+							updating = true
 						}
 					}
 					state, err := f.svc.guardedMainUpdate(context.Background(), w, h.old, h.target, h.tree)
@@ -119,7 +127,7 @@ func TestGuardedMainUpdate(t *testing.T) {
 					if after["packed-refs"] != before["packed-refs"] || after["refs/heads/main.lock"] != before["refs/heads/main.lock"] {
 						t.Fatal("CAS changed packed refs or foreign lock")
 					}
-					t.Logf("Git %s; successful argv=%q; exit=%d; packed-refs unchanged=%t", f.svc.git.version, argv, command.ProcessState.ExitCode(), after["packed-refs"] == before["packed-refs"])
+					t.Logf("Git %s; successful argv=%q; exit=%d; packed-refs unchanged=%t", f.svc.git.version, argv, command.ExitCode, after["packed-refs"] == before["packed-refs"])
 					start := time.Now()
 					if err := f.svc.hardenCanonicalStorage(context.Background(), w, h.target, h.tree); err != nil {
 						t.Fatal(err)
@@ -131,7 +139,7 @@ func TestGuardedMainUpdate(t *testing.T) {
 					if err != nil || state != mainUpdateThird || !reflect.DeepEqual(after, canonicalFiles(t, w.CommonDir)) {
 						t.Fatalf("stale old overwrote canonical: %v %v", state, err)
 					}
-					t.Logf("refused argv=%q; exit=%d; canonical bytes unchanged=true; observed=third", argv, command.ProcessState.ExitCode())
+					t.Logf("refused argv=%q; exit=%d; canonical bytes unchanged=true; observed=third", argv, command.ExitCode)
 				})
 			}
 			if format != "sha1" {
@@ -256,17 +264,23 @@ func TestGuardedMainUpdateAmbiguousExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	updates := 0
-	var observed *exec.Cmd
-	f.svc.git.afterStart = func(cmd *exec.Cmd) {
-		if slices.Contains(cmd.Args, "update-ref") {
+	var observed gitprocess.Result
+	updating := false
+	f.svc.git.afterStart = func(args []string, _ int) {
+		if slices.Contains(args, "update-ref") {
 			updates++
-			observed = cmd
-			cmd.Cancel = func() error { return nil }
+			updating = true
+		}
+	}
+	f.svc.git.afterRun = func(result gitprocess.Result) {
+		if updating {
+			updating = false
+			observed = result
 			cancel()
 		}
 	}
 	state, err := f.svc.guardedMainUpdate(ctx, w, h.old, h.target, h.tree)
-	if err != nil || state != mainUpdateMoved || updates != 1 || observed == nil || observed.ProcessState == nil {
+	if err != nil || state != mainUpdateMoved || updates != 1 || !observed.RootExited || !observed.IOJoined {
 		t.Fatalf("ambiguous exit retried or hid real effect: state=%v updates=%d err=%v", state, updates, err)
 	}
 	assertCanonicalTip(t, f, h.target)
