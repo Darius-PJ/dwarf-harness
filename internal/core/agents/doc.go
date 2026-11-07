@@ -397,8 +397,10 @@
 // segment through the latest source's complete commit. With 64 MiB segments,
 // that start may still be the log's. A contiguous nonduplicate scoped Submit
 // reuses one authoritative interval read for reduction and acknowledgement.
-// A warm Reader checkpoint hashes the entire previously verified containing
-// prefix instead of decoding it again, then decodes the actual new commit.
+// Every warm page or exact read rehashes its whole containing segment prefix;
+// the warm-byte allowance includes twice that prefix (W contains 2P). Refresh,
+// Since and exact reads cost O(prefix bytes hashed + suffix decoded), never
+// constant. Per-commit acknowledgement readback pays the same prefix rehash.
 // Tokens are keyed by their exact complete-commit After and survive accepted
 // advances. Only successful Open's own replay, successful acknowledgement
 // readbacks (including review), a completed numeric refresh, and a Since page
@@ -417,9 +419,10 @@
 // or evicted tokens still require prefix decoding. Directory positions narrow
 // command, turn and paid reads to their containing commits; paid reconstruction
 // includes corrections, acknowledgements and the exact admission route version.
-// Directory loss uses the original scans while an independent rebuild streams
-// 0..T outside Service.mu. A numeric EOF and successful Close are required;
-// the replacement is installed only if the frontier and generation still match.
+// Directory loss uses the original scans while an independent rebuild makes
+// one full-prefix pass, re-reading and re-hashing 0..T outside Service.mu.
+// A numeric EOF and successful Close are required; the replacement is installed
+// only if the frontier and generation still match.
 // Its flight is separate from refresh. A successful swap re-enables token
 // publication; tokens missed during invalid coverage remain absent. Gaps,
 // duplicates and prior installation retain locked acknowledgement catch-up
@@ -431,8 +434,9 @@
 // immutable inputs; its encoded, CRC-protected answer belongs to that operation.
 // Resolving releases Service.mu, then checks usability, cancellation, binding,
 // session, frontier and generation and reruns the whole phase. A moved prefix
-// discards the read set, negative proofs and partial plans. Resolver errors keep
-// their original identity in an operation-local slot and are raised again only
+// discards even immutable answers in the read set, negative proofs and partial
+// plans: those answers must be re-read. Resolver errors keep their original
+// identity in an operation-local slot and are raised again only
 // if the unchanged-prefix rerun reaches the same need. A phase suspended for a
 // history read publishes no clock sample, and its rerun samples afresh.
 // At most two resolutions unlock per operation; the third and later reads stay
