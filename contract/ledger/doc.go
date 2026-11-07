@@ -3068,4 +3068,203 @@
 // remain byte-identical. Before review its earlier-family setup must pass real
 // Core Open with no error, no issue and unchanged durable sequence. A codec
 // golden alone does not establish an operational loop or provider acceptance.
+//
+// # F3-16: durable continuation owner
+//
+// Ticket 16's runtime.continuation_changed and runtime.continuation_receipt,
+// both version 1, and canonical schema 7 are proposed for freeze (D125).
+// Defined grows from 59 to 61. This is an additive family: every earlier
+// codec, schema, group and golden remains unchanged. No Core producer consumes
+// the proposed family before its freeze. C3 owns the payloads; the designated
+// producer is internal/core/agents through the existing Core Submit boundary.
+// Consumers are preflight/Open, the single continuation owner, exact-origin
+// views, cancellation and recovery. All known members and envelope bindings
+// are replay-essential. Records contain metadata and private object references,
+// never private text, provider continuation artifacts, credential sources,
+// secret-derived identities, locators, native handles or body_refs.
+//
+// MaxContinuationPayloadBytes is 65,536 bytes for each COMPLETE input and each
+// compact output independently, including ignored extensions and the entire
+// receipt with its embedded submission. Schema 7 itself has the same bound.
+// F3-15's complete UTF-8 JSON, recursive duplicate-key refusal (including
+// ignored extensions), canonical UUIDv7/nonzero digest and integer rules apply.
+// Integers are plain unsigned decimals through MaxInt64; version and generation
+// increments are checked, never wrapped. Optional members are omitted, never
+// null, empty or zero. Required pending and notice_cursors arrays may be empty
+// but are never null. Unknown optional members are ignored and do not enter the
+// canonical preimage. Errors wrap ErrInvalid. Origin and ObjectRef are unchanged.
+//
+// Exact key order (? denotes omission when absent):
+//
+//	runtime.continuation_changed:
+//	  turn_id, bound_sequence, expected_version, version, expected_state,
+//	  state, resume_state?, operation_id, generation, wait_reason, model_calls,
+//	  tool_dispatches, deadline_utc_ns, pending, stop_reason?, cancel_command_id?,
+//	  final_message_object?, native_ending_sequence?, notice_cursors
+//	pending element:
+//	  kind, id, command_id?, expected_version, source_sequence?
+//	notice_cursors element:
+//	  workspace_id, scratch_id, after_sequence
+//	runtime.continuation_receipt:
+//	  command_id, submission_sha256, submission, outcome, effect_sequence
+//
+// Pending is strictly ordered by (kind,id,command_id), cursors by
+// (workspace_id,scratch_id), on raw token/UUID bytes. Absent command_id sorts
+// before a present ID. Duplicate keys and out-of-order arrays refuse on both
+// encode and decode; callers supply canonical order. Runtime's 128-entry pending
+// ceiling is a producer guard, not a historical decoder limit.
+//
+// Current pending kinds are paid_attempt, tool, local_work, scratch_observation
+// and merge_back. command_id is present EXACTLY when the child has a native
+// command: paid_attempt names paid.admit; tool names effect_command_id (absent
+// for passive/correction tools); local_work names local.admit; scratch_observation
+// and merge_back name the F2 command. id is the corresponding attempt, tool,
+// local work, observation or merge-back identity; expected_version binds that
+// child's expected state. Positive source_sequence selects its exact committed
+// source. An entry with no source is pre-minted, never dispatched at recovery,
+// and is dropped by owner.reconcile. Source, child, command and originating
+// context identity are checked against actual history, not a predicted cursor.
+//
+// States, expected states, resume states, wait/stop reasons, pending kinds and
+// receipt outcomes are open ^[a-z][a-z0-9_]*$ tokens of at most 64 bytes.
+// Unknown well-formed values survive decoding as unsupported; they never imply
+// dispatch, success, completion, permission, release or an executable transition.
+// Current states: ready, model_pending, tool_pending, waiting_resource, finishing,
+// stopping, reconciling, terminal. absent is reserved for expectation version 0,
+// not a snapshot state. resume_state is required for waiting_resource and omitted
+// for other known states; current values are model_pending, tool_pending,
+// finishing and reconciling. A wait requires a non-none wait_reason.
+// Current wait reasons: none, paid_exchange, paid_prepare, local_slot,
+// local_buffer, workspace_capture, workspace_merge_back, child_quiescence and
+// effect_reconciliation. ledger_tail is NOT a writer wait reason: a moved-tail
+// refusal reruns the quantum and never parks or writes a transition. Ordinary
+// nonwaiting phases use none; stopping/reconciling may identify child/effect
+// reconciliation. Writers persist a park before waiting, and resume only after
+// the resource claim succeeds, before the resumed phase's first effect.
+// A spurious wake or a still-busy rerun writes no transition.
+//
+// # Schema-7 canonical submission and group
+//
+// SHA-256 covers compact ContinuationSubmission.Encode JSON, in this order:
+//
+//	schema (7), actor, origin, turn_id, operation, expected_version,
+//	  expected_state, arguments
+//	arguments:
+//	  bound_sequence, state, resume_state?, operation_id, generation, wait_reason,
+//	  model_calls, tool_dispatches, deadline_utc_ns, pending, stop_reason?,
+//	  cancel_command_id?, final_message_object?, native_ending_sequence?,
+//	  notice_cursors
+//
+// The arguments are one concrete snapshot, never arbitrary JSON. turn_id,
+// expected_version, version and expected_state are forbidden argument members,
+// even when null. Schema, actor and operation are closed. The five operations
+// are owner.initialize, owner.advance, owner.stop, owner.reconcile, owner.close.
+// Actor is core except a Session-originated owner.stop uses owner and that
+// Session command ID. No agent entrance is added. Every operation has exactly
+// one group, [ledger.command, runtime.continuation_changed,
+// runtime.continuation_receipt], in one SubmitAt at the preflighted tail.
+// Three moved-tail attempts then return BusyError{ledger_tail}.
+//
+// All envelopes bind the same original agent/session/context/turn and have
+// operation_id equal to THIS transition's command_id. The change actor is core;
+// command and receipt actors match the submission. In contrast, the PAYLOAD's
+// operation_id is the command ID of the transition that opened the logical
+// operation: initialize, advance from ready, stop or a new recovery operation.
+// Later park/resume/progress/close transitions retain it with their own envelope
+// command IDs. Generation starts at 1, stays fixed within an operation and
+// increments when a new operation replaces it. No counter is an incarnation's
+// ephemeral wake generation.
+//
+// Receipt writers emit recorded. effect_sequence is positive and names the
+// actual change record after authoritative readback. Receipt decoding re-encodes
+// schema 7 and verifies submission_sha256. All effects reconstruct from the
+// original normalized submission and pre-transition state. No unrelated, mixed,
+// extra, reordered or missing records, measurement_path or body_refs.
+// Reader/EncodeCommit/ledgerstore do not enforce these producer history rules.
+// Global command lookup extends schemas 1-6 to 1-7: same ID/principal/digest
+// returns the original receipt after current disclosure authorization; changed
+// meaning is ErrCommandMismatch before state CAS.
+//
+// # Owner transitions, stopping and recovery
+//
+// Initialize expects 0/absent and an exact unmatched F3-15 binding, writes
+// version 1/generation 1 in ready (live) or reconciling (recovery), before enqueue.
+// Later snapshots compare exact expected version/state, operation and generation;
+// version=expected_version+1. Original origin/turn/bound_sequence/deadline never
+// change; counters and notice cursors never regress. Allowed known-state edges:
+//
+//	ready -> model_pending/tool_pending/finishing: advance, new operation;
+//	model_pending/tool_pending -> ready/finishing: advance, matching child result;
+//	model_pending/tool_pending/finishing/reconciling -> waiting_resource:
+//	  same operation, resume_state is the preceding phase;
+//	waiting_resource -> its resume_state: same operation, successful fresh claim;
+//	nonterminal without native ending -> stopping: stop, new operation;
+//	stopping -> finishing/reconciling: same stop operation, bookkeeping only;
+//	inert nonterminal -> reconciling: reconcile, new operation unless already so;
+//	finishing/reconciling -> terminal: close, same operation, matching endings;
+//	state -> same state: advance/reconcile for actual child/counter/cursor progress.
+//
+// Other known edges refuse; no change means no new record. Terminal never
+// reopens. Callback tokens bind origin, turn, operation, generation, expected
+// phase/version and result identity. A stale callback returns
+// ErrContinuationStale without a record, counter, wake or effect; exact retries
+// return their original receipt. Post-stop results are reconciliation evidence,
+// never a ready edge. Counters fold actual committed paid dispatch intents and
+// completed tool invocations exactly once; a crashed started tool counts once
+// when recovery journals its unavailable/unknown result. Waiting counts nothing.
+//
+// Every non-natural ending uses ONE owner.stop edge, generation+1, retaining
+// pending identities. stop_reason is an F3-15 reason other than natural_stop:
+// cancelled, shutdown, deadline, loop_limit, authority_lost, integrity,
+// provider_error, content_invalid, request_too_large, unresolved_result or
+// scratch_pending. The first durable stop wins; later stops return current state
+// without another record, and shutdown never relabels a persisted cancellation
+// or committed ending. cancel_command_id is present exactly with cancelled and
+// names the pre-minted F3-11 turn.cancel command, DISTINCT from the owner.stop
+// envelope/Session command ID. Historical schema-2 cancellation retries retain
+// their original receipt through global lookup.
+//
+// Stop publication and native ending serialize under the context scope gate.
+// A stop finding any committed native ending is too_late and writes no record;
+// a finish finding a stop uses that stop's reason and fixed native cancellation
+// ID. Persist before signaling; persistence failure is not reported as success.
+// final_message_object is selected in the original context only for validated
+// natural finish, before native EndTurn; a pre-ending stop removes it.
+// native_ending_sequence appears only after the exact F3-11 ending exists and
+// is required at terminal. owner.close additionally requires the matching
+// F3-15 terminal and no executable pending work. Unknown financial holds may
+// remain; waits/terminal bookkeeping never release them or reuse unconfirmed
+// child resources. A native ending already committed fixes the original outcome.
+//
+// Open reconstructs inert owners/waits and interrupted outcomes, without clock,
+// credentials, dispatch, scheduler, tool execution or automatically resumed work.
+// Explicit reconciliation records child endings first (F3-13/F3-11/F3-15),
+// then F3-11 native ending, F3-15 loop.end and F3-16 owner.close. Existing native
+// journals remain the sole authorities for effects and holds. Recovery never
+// re-executes a started tool, model exchange, observation or merge-back. Unpaired
+// legacy bindings initialize reconciling, not ready. Repeated bookkeeping cannot
+// duplicate an ending, charge or observation.
+//
+// Additive guarded-turn reading, ONLY where an F3-16 owner exists: local.begin,
+// paid.dispatch intent, tool.begin and atomic effect commands require current
+// phase/operation/generation, exact pending identity and no persisted stop in
+// BOTH producer preflight and replay. The promised-native-ID directory supplies
+// the turn for atomic groups omitting turn_id. local.end, paid observe/release/
+// result/correction, tool.result, turn.end and turn.cancel retain their original
+// IDs and remain allowed after stop. Old ownerless logs are unaffected.
+//
+// Notice cursors advance in the first owner.advance after the turn's first
+// committed F3-13 dispatch intent. Busy/failed pre-intent starts consume nothing;
+// a crash before cursor publication may repeat the same notice on the next
+// natural turn. Cursors survive terminal eviction through ledger/directory
+// reconstruction. They are presentation progress, never deletion, authority or
+// a completion-triggered model call. Status needs no cursor.
+//
+// testdata/f3/16 is generated only by TestGoldenF3_16 -update, using synthetic
+// fixed IDs/times, encoded hashes and real earlier-family setup. It covers all
+// five operations, wait, cancellation, unchanged-prefix stale refusal and
+// recovery/terminal snapshots. Earlier fixtures remain byte-identical. Codec
+// fixtures alone do not prove runtime recovery, concurrency or child shutdown.
+// No runtime policy, pending ceiling, scheduler setting, private object schema,
+// Session API or native process mechanism is frozen by this family.
 package ledger
