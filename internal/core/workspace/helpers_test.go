@@ -19,8 +19,23 @@ import (
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
+
+func testGitRunner(t testing.TB, environ func() []string) *gitRunner {
+	t.Helper()
+	owner, _, err := gitprocess.Open(context.Background(), t.TempDir(), gitprocess.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := owner.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return newGitRunner(owner, environ)
+}
 
 type gitFixture struct {
 	root, colony string
@@ -146,7 +161,7 @@ func fixtureSeed(t testing.TB, format string) *gitFixtureSeed {
 		gitCommand(t, env, root, nil, "add", "--", "base.txt")
 		gitCommand(t, env, root, nil, "commit", "-m", "base")
 		gitCommand(t, env, root, nil, "checkout", "--detach")
-		git := newGitRunner(func() []string { return env })
+		git := testGitRunner(t, func() []string { return env })
 		proposal, err := git.inspect(context.Background(), root)
 		if err != nil {
 			t.Fatal(err)
@@ -157,7 +172,7 @@ func fixtureSeed(t testing.TB, format string) *gitFixtureSeed {
 		if err := os.CopyFS(copyRoot, os.DirFS(root)); err != nil {
 			t.Fatal(err)
 		}
-		copyGit := newGitRunner(func() []string { return copyEnv })
+		copyGit := testGitRunner(t, func() []string { return copyEnv })
 		got, err := copyGit.inspect(context.Background(), copyRoot)
 		if err != nil {
 			t.Fatal(err)
@@ -185,7 +200,7 @@ func newGitFixture(t testing.TB, format string) gitFixture {
 	if err := prepareGitLayout(f.colony); err != nil {
 		t.Fatal(err)
 	}
-	f.git = newGitRunner(func() []string { return f.env })
+	f.git = testGitRunner(t, func() []string { return f.env })
 	if f.git.unavailable != nil {
 		t.Fatal(f.git.unavailable)
 	}
@@ -470,7 +485,7 @@ func serviceFromHistory(t *testing.T, history gitFixture) *serviceFixture {
 	t.Helper()
 	fixture := gitFixture{root: filepath.Join(canonicalTempDir(t), "repo"), colony: canonicalTempDir(t), env: history.env}
 	fixture.seed = copyGitHistory(t, history, fixture.env, fixture.root)
-	fixture.git = newGitRunner(func() []string { return fixture.env })
+	fixture.git = testGitRunner(t, func() []string { return fixture.env })
 	f := openFixtureService(t, fixture)
 	var err error
 	f.w, err = f.svc.Register(context.Background(), f.p)

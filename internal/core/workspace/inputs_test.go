@@ -61,7 +61,7 @@ func TestInspectRefuses(t *testing.T) {
 	t.Parallel()
 	t.Run("not repository", func(t *testing.T) {
 		t.Parallel()
-		g := newGitRunner(func() []string { return testEnv(t) })
+		g := testGitRunner(t, func() []string { return testEnv(t) })
 		_, err := g.inspect(context.Background(), t.TempDir())
 		if !errors.Is(err, ErrNotGitRepository) {
 			t.Fatal(err)

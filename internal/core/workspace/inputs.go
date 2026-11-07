@@ -6,12 +6,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 )
 
 const maxInputBytes = 1 << 20
@@ -36,7 +40,20 @@ type Proposal struct {
 // Inspect reads the owner's live Git setup without creating a repository or
 // changing it. A canonical main checked out anywhere is refused (D48).
 func Inspect(ctx context.Context, root string) (Proposal, error) {
-	return newGitRunner(nil).inspect(ctx, root)
+	dir, err := os.MkdirTemp("", "dwarf-git-inspect-")
+	if err != nil {
+		return Proposal{}, err
+	}
+	owner, _, err := gitprocess.Open(ctx, dir, gitprocess.Options{RequireTree: runtime.GOOS == "windows"})
+	if err != nil {
+		return Proposal{}, errors.Join(err, os.RemoveAll(dir))
+	}
+	proposal, err := newGitRunner(owner, nil).inspect(ctx, root)
+	closeErr := owner.Close()
+	if closeErr == nil {
+		closeErr = os.RemoveAll(dir)
+	}
+	return proposal, errors.Join(err, closeErr)
 }
 
 func (g *gitRunner) inspect(ctx context.Context, root string) (Proposal, error) {

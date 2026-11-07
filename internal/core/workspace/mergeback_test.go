@@ -54,7 +54,7 @@ func (h materializeHistory) fixture(t *testing.T, crlf bool) *captureFixture {
 	if err := prepareGitLayout(f.colony); err != nil {
 		t.Fatal(err)
 	}
-	f.git = newGitRunner(func() []string { return f.env })
+	f.git = testGitRunner(t, func() []string { return f.env })
 	p, err := f.git.inspect(context.Background(), f.root)
 	if err != nil {
 		t.Fatal(err)
