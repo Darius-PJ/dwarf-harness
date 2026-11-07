@@ -41,6 +41,12 @@ func TestMain(m *testing.M) {
 			code = 1
 		}
 	}
+	if testPayloadDir != "" {
+		if err := os.RemoveAll(testPayloadDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			code = 1
+		}
+	}
 	os.Exit(code)
 }
 

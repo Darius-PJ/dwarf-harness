@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -21,17 +20,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-var testExecutable = sync.OnceValues(func() ([]byte, error) {
-	path, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	return os.ReadFile(path)
-})
-
 func testRequest(t *testing.T, operation ...string) Request {
 	t.Helper()
-	image, err := testExecutable()
+	payload, err := testPayload(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +47,8 @@ func testRequest(t *testing.T, operation ...string) Request {
 	// - mapped input held through cleanup: grace=2s, ruled after the check's
 	//   1.28s stop exhausted 1s before a native denial could be retained;
 	// - closed-fence seed: grace=100ms, intentional expiry without a child;
-	// - native CPU=2s, commit=256MiB, and process-count/resource processes=2;
+	// - native CPU=2s; native memory commit=256MiB;
+	// - process-count/resource processes=2;
 	// - output boundary=256 bytes; expired admission Deadline=now-1s.
 	// Validation-only finiteRequest uses 1s wall/deadline/grace and 100ns CPU;
 	// its invalid/zero/overflow overrides do not launch a native workload.
@@ -72,7 +64,7 @@ func testRequest(t *testing.T, operation ...string) Request {
 	// supervisor parent/child=40s/35s, handshake=15s; native exit=3s/10s;
 	// other resume-anchored work-file barriers=10s; Git=20s/10s;
 	// junction creation=5s. Polls of 10ms and zero-time queries are not budgets.
-	return Request{Program: "payload.exe", Args: args, Files: []InputFile{{Path: "payload.exe", Data: image}}, Deadline: time.Now().Add(25 * time.Second), Limits: Limits{Wall: 20 * time.Second, UserCPU: 10 * time.Second, CPUPercent: 100, JobCommitBytes: 2 << 30, Processes: 4, InputBytes: uint64(len(image)) + 1<<20, OutputBytes: 16384, StopGrace: 10 * time.Second}}
+	return Request{Program: "payload.exe", Args: args, Files: []InputFile{{Path: "payload.exe", Data: payload.image}}, Deadline: time.Now().Add(25 * time.Second), Limits: Limits{Wall: 20 * time.Second, UserCPU: 10 * time.Second, CPUPercent: 100, JobCommitBytes: 2 << 30, Processes: 4, InputBytes: uint64(len(payload.image)) + 1<<20, OutputBytes: 16384, StopGrace: 10 * time.Second}}
 }
 
 func testAdmissionWait(t *testing.T, limits Limits, budget time.Duration) <-chan time.Time {
