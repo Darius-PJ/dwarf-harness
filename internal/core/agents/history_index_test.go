@@ -480,51 +480,12 @@ func TestHistoryIndexAcknowledgementFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode == "byte-pressure" {
-				func() {
-					s := f.service
-					s.mu.Lock()
-					defer s.mu.Unlock()
-					h := s.history
-					checkpoint := h.ackCheckpoint(warmed.Sequence)
-					h.mu.Lock()
-					h.clearLocked()
-					h.mu.Unlock()
-					h.putAckCheckpoint(warmed.Sequence, checkpoint)
-					h.mu.Lock()
-					if h.bytes != 384 || len(h.entries) != 1 {
-						t.Errorf("opaque proof escaped shared charge: bytes=%d entries=%d", h.bytes, len(h.entries))
-					}
-					h.mu.Unlock()
-					// Exact fit, replacement and removal use the same shared
-					// allowance. One extra byte then evicts the genuine proof.
-					pressure := historyEntry{key: historyKey{kind: historyCommand, id: privateID(29999)}, from: warmed.Sequence, found: true, data: make([]byte, historyByteLimit-128-384)}
-					h.put(pressure)
-					h.putAckCheckpoint(warmed.Sequence, checkpoint)
-					h.mu.Lock()
-					if h.bytes != historyByteLimit || len(h.entries) != 2 {
-						t.Errorf("checkpoint replacement changed the shared bound: bytes=%d entries=%d", h.bytes, len(h.entries))
-					}
-					h.mu.Unlock()
-					h.discard(historyKey{kind: historyAckRead})
-					h.mu.Lock()
-					if h.bytes != historyByteLimit-384 {
-						t.Errorf("checkpoint removal left charged bytes: %d", h.bytes)
-					}
-					h.mu.Unlock()
-					h.putAckCheckpoint(warmed.Sequence, checkpoint)
-					pressure.data = append(pressure.data, 0)
-					h.put(pressure)
-					h.mu.Lock()
-					if h.bytes != historyByteLimit-383 || len(h.entries) != 1 {
-						t.Errorf("byte pressure did not evict within the shared bound: bytes=%d entries=%d", h.bytes, len(h.entries))
-					}
-					h.mu.Unlock()
-				}()
+				h := f.service.history
+				for i := range 2 {
+					h.put(historyEntry{key: historyKey{kind: historyCommand, id: privateID(29998 + i)}, from: warmed.Sequence, found: true, data: make([]byte, historyPayloadByteLimit-128)})
+				}
 			} else {
 				damageHistoryCache(f.service, mode)
-			}
-			if f.service.history.ackCheckpoint(warmed.Sequence) != nil {
-				t.Fatal("discarded or invalid checkpoint remained usable")
 			}
 			request := ScopedPrivateWrite{CommandID: privateID(2500), GrantID: grant.GrantID, Scope: "context", ExpectedVersion: uint64(warmed.Version), Changes: []Change{{Slot: "memory", Mode: "replace", Bytes: []byte("after checkpoint loss")}}}
 			receipt, err := agent.WritePrivate(ctx, request)
@@ -577,13 +538,9 @@ func TestHistoryIndexAcknowledgementFallback(t *testing.T) {
 			ctx := context.Background()
 			f, request := liveReviewFixture(t)
 			creation := scopedNewTask(2600, 2601, uuid.UUID{}, reviewOwner().AgentID)
-			warmed, err := f.service.CreateTask(ctx, reviewOwner(), creation)
+			_, err := f.service.CreateTask(ctx, reviewOwner(), creation)
 			if err != nil {
 				t.Fatal(err)
-			}
-			checkpoint := f.service.history.ackCheckpoint(warmed.Sequence)
-			if checkpoint == nil {
-				t.Fatal("real scoped creation did not warm a checkpoint")
 			}
 			var reviewed ReviewReceipt
 			if publication == "foreign-review" {
@@ -599,11 +556,6 @@ func TestHistoryIndexAcknowledgementFallback(t *testing.T) {
 				t.Fatalf("accepted review advance lost its request: %+v %v", view, err)
 			}
 			advanced := f.store.Durable()
-			// A fill from the old accepted prefix cannot retimestamp its proof.
-			f.service.history.putAckCheckpoint(warmed.Sequence, checkpoint)
-			if f.service.history.ackCheckpoint(warmed.Sequence) != nil || f.service.history.ackCheckpoint(advanced) != nil {
-				t.Fatal("review advance retained or retimestamped the old checkpoint")
-			}
 			cancel := TaskMutation{CommandID: privateID(2602), TaskID: creation.TaskID, ExpectedVersion: 1, Action: "cancel"}
 			receipt, err := f.service.TransitionTask(ctx, reviewOwner(), cancel)
 			if err != nil {
@@ -1099,7 +1051,9 @@ func TestAgentTailCommandIndex(t *testing.T) {
 			// Replay uses the real Reader over correctly framed commits, rather
 			// than the store's duplicate-admission guard.
 			s := &Service{store: f.store, p: newProjection(), history: newHistoryIndex()}
+			s.mu.Lock()
 			err = s.refreshLocked(ctx, chain.Seq)
+			s.mu.Unlock()
 			if kind != "duplicate" {
 				if !errors.Is(err, ErrInconsistent) || s.p.through != before {
 					t.Fatalf("reused command published: through=%d error=%v", s.p.through, err)

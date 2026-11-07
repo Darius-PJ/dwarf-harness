@@ -238,12 +238,28 @@ func draftsOf(c ledger.Commit) []ledger.Draft {
 	}
 	return d
 }
-func (s *Service) scan(ctx context.Context, after, through uint64, visit func(ledger.Commit) error) (err error) {
-	r, err := ledger.OpenReader(s.store.LogDir(), ledger.ReadOptions{Colony: s.store.Colony(), After: after, Through: through, Consume: privateConsumption(), AllTypes: true})
-	if err != nil {
-		return err
+func (s *Service) scan(ctx context.Context, after, through uint64, visit func(ledger.Commit) error) error {
+	_, err := s.readRange(ctx, after, through, s.history.checkpoint(after), visit)
+	return err
+}
+
+// readRange is the shared numeric, checked-close reader. Its returned token is
+// not published here: the consumer must also finish its own acceptance.
+func (s *Service) readRange(ctx context.Context, after, through uint64, checkpoint *ledger.ReadCheckpoint, visit func(ledger.Commit) error) (*ledger.ReadCheckpoint, error) {
+	if s.deps.beforeRangeRead != nil {
+		s.deps.beforeRangeRead(after, through)
 	}
-	return scanReader(ctx, r, visit)
+	r, err := ledger.OpenReaderWithCheckpoint(s.store.LogDir(), ledger.ReadOptions{Colony: s.store.Colony(), After: after, Through: through, Consume: privateConsumption(), AllTypes: true}, checkpoint)
+	if err != nil {
+		return nil, err
+	}
+	if err := scanReader(ctx, r, visit); err != nil {
+		if errors.Is(err, ledger.ErrCorrupt) {
+			s.history.discard(historyKey{kind: historyCheckpoint, sequence: after})
+		}
+		return nil, err
+	}
+	return r.Checkpoint(), nil
 }
 
 func scanReader(ctx context.Context, r *ledger.Reader, visit func(ledger.Commit) error) (err error) {
@@ -253,7 +269,7 @@ func scanReader(ctx context.Context, r *ledger.Reader, visit func(ledger.Commit)
 			return err
 		}
 		c, err := r.Next()
-		if errors.Is(err, io.EOF) {
+		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
@@ -264,41 +280,113 @@ func scanReader(ctx context.Context, r *ledger.Reader, visit func(ledger.Commit)
 		}
 	}
 }
+
+// refreshLocked returns with mu held on every path. Only the performing
+// caller owns a Reader; waiters resume at the installed frontier.
 func (s *Service) refreshLocked(ctx context.Context, through uint64) error {
-	if through == s.p.through {
-		return nil
+	for {
+		if err := s.usableLocked(ctx); err != nil {
+			return err
+		}
+		if s.refreshDone == nil {
+			if through <= s.p.through {
+				return nil
+			}
+			break
+		}
+		done, closed := s.refreshDone, s.closeSignal
+		s.mu.Unlock()
+		if s.deps.beforeRefreshWait != nil {
+			s.deps.beforeRefreshWait()
+		}
+		select {
+		case <-done:
+		case <-closed:
+		case <-ctx.Done():
+		}
+		s.mu.Lock()
+		if err := s.usableLocked(ctx); err != nil {
+			return err
+		}
+		if through <= s.p.through {
+			return nil
+		}
 	}
-	err := s.scan(ctx, s.p.through, through, func(c ledger.Commit) error {
+	after := s.p.through
+	checkpoint := s.history.checkpoint(after)
+	s.refreshDone = make(chan struct{})
+	s.refreshTarget = through
+	// Some internal callers are not public entrants. Close must still drain
+	// the performing read before releasing the history and runtime.
+	s.active.Add(1)
+	s.mu.Unlock()
+	checkpoint, err := s.readRange(ctx, after, through, checkpoint, func(c ledger.Commit) error {
+		if s.deps.beforeRefreshInstall != nil {
+			s.deps.beforeRefreshInstall(c)
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.usableLocked(ctx); err != nil {
+			return err
+		}
+		if c.First <= s.p.through {
+			return nil
+		}
+		if c.First != s.p.through+1 {
+			return inconsistent(c.First, "noncontiguous refresh")
+		}
 		_, err := s.acceptCommitLocked(ctx, c, nil)
 		return err
 	})
-	if err != nil && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
+	s.mu.Lock()
+	if err == nil {
+		err = s.usableLocked(ctx)
+	}
+	if err == nil {
+		s.history.putCheckpoint(through, checkpoint)
+	} else if !errors.Is(err, ErrClosed) && !errors.Is(err, ErrPoisoned) && (ctx.Err() == nil || !errors.Is(err, ctx.Err())) {
 		s.poisoned = true
 	}
+	close(s.refreshDone)
+	s.refreshDone = nil
+	s.refreshTarget = 0
+	s.active.Done()
 	return err
+}
+
+// acknowledgeLocked preserves the successful submitter's lock through its
+// caller-owned completion. It must not wait for an unlocked refresh, which
+// may itself be waiting to install under mu.
+func (s *Service) acknowledgeLocked(through uint64) error {
+	if through == s.p.through {
+		return nil
+	}
+	ctx := context.Background()
+	checkpoint, err := s.readRange(ctx, s.p.through, through, s.history.checkpoint(s.p.through), func(c ledger.Commit) error {
+		if c.First != s.p.through+1 {
+			return inconsistent(c.First, "noncontiguous acknowledgement")
+		}
+		_, err := s.acceptCommitLocked(ctx, c, nil)
+		return err
+	})
+	if err != nil {
+		s.poisoned = true
+		return err
+	}
+	s.history.putCheckpoint(through, checkpoint)
+	return nil
 }
 
 // readCommittedRange requires one complete authoritative commit, including a
 // successful reader close. A Submit receipt is a range, not decoded effects.
 func (s *Service) readCommittedRange(ctx context.Context, first, last uint64, checkpoint *ledger.ReadCheckpoint) (ledger.Commit, *ledger.ReadCheckpoint, error) {
 	if first == 0 || last < first {
-		return ledger.Commit{}, nil, inconsistent(first, "acknowledgement range")
-	}
-	opts := ledger.ReadOptions{Colony: s.store.Colony(), After: first - 1, Through: last, Consume: privateConsumption(), AllTypes: true}
-	var r *ledger.Reader
-	var err error
-	if checkpoint == nil {
-		r, err = ledger.OpenReader(s.store.LogDir(), opts)
-	} else {
-		r, err = ledger.OpenReaderWithCheckpoint(s.store.LogDir(), opts, checkpoint)
-	}
-	if err != nil {
-		return ledger.Commit{}, nil, err
+		return ledger.Commit{}, nil, inconsistent(first, "committed range")
 	}
 	var accepted ledger.Commit
-	err = scanReader(ctx, r, func(c ledger.Commit) error {
+	checkpoint, err := s.readRange(ctx, first-1, last, checkpoint, func(c ledger.Commit) error {
 		if accepted.First != 0 || c.First != first || c.Last != last {
-			return inconsistent(first, "acknowledgement commit range")
+			return inconsistent(first, "complete commit range")
 		}
 		accepted = c
 		return nil
@@ -307,9 +395,9 @@ func (s *Service) readCommittedRange(ctx context.Context, first, last uint64, ch
 		return ledger.Commit{}, nil, err
 	}
 	if accepted.First == 0 {
-		return ledger.Commit{}, nil, inconsistent(first, "missing acknowledgement commit")
+		return ledger.Commit{}, nil, inconsistent(first, "missing committed range")
 	}
-	return accepted, r.Checkpoint(), nil
+	return accepted, checkpoint, nil
 }
 
 // acceptCommitLocked is shared by refresh and a contiguous scoped acknowledgement.
@@ -517,7 +605,7 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 		if len(rows) > 1 {
 			return commandMatch{}, inconsistent(rows[1].first, "duplicate command")
 		}
-		if match, cached := s.history.command(id, after, through); cached {
+		if match, cached := s.history.command(id, after, through); cached && match.found {
 			return match, nil
 		}
 		commit, err := s.directoryCommit(ctx, rows[0], through)
@@ -596,6 +684,9 @@ func (s *Service) commandUsed(ctx context.Context, id uuid.UUID, through uint64)
 	if _, found, hit := s.history.membership(directoryKey{kind: directoryCommand, id: id}, through); hit {
 		return found, nil
 	}
+	if bytes.Compare(id[:], s.p.maxCommand[:]) > 0 {
+		return false, nil
+	}
 	old, err := s.findCommandLegacy(ctx, id, 0, through)
 	return old.found, err
 }
@@ -618,7 +709,7 @@ func (s *Service) directoryCommit(ctx context.Context, row directoryRow, through
 	for seq := row.first; seq <= row.last; seq++ {
 		record, hit := s.history.acceptedRecord(int64(seq), through, s.store.Colony())
 		if !hit {
-			accepted, _, err := s.readCommittedRange(ctx, row.first, row.last, nil)
+			accepted, _, err := s.readCommittedRange(ctx, row.first, row.last, s.history.checkpoint(row.first-1))
 			if err == nil {
 				s.history.warmSources(accepted)
 			}

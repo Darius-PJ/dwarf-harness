@@ -368,12 +368,12 @@
 //
 // Costs, as built. Live state retains one review slot per live task, identity
 // watermarks and context/task associations. A fresh identity above its validated
-// namespace watermark needs no history lookup. Historical payloads and one copied
-// Reader checkpoint share one per-Service LRU capped at 256 entries and 8 MiB of
-// charged retained metadata, with bounded container overhead; this is not a
-// total-RSS bound. The checkpoint costs 256 bytes in addition to its entry's
-// 128-byte charge. Invalid, missing, disabled or evicted entries fall back to
-// authoritative history. Genuine task, grant, registration and budget history
+// namespace watermark needs no history lookup. Historical payloads and copied
+// Reader checkpoints have independent per-Service LRUs, each capped at 256
+// entries. They share an 8 MiB charged-metadata bound, reserving 256*384 bytes
+// for tokens so neither class evicts the other. Container overhead is separate;
+// this is not a total-RSS bound. Invalid, missing, disabled or evicted entries
+// fall back to authoritative history. Genuine task, grant and budget history
 // still requires historical folds. Registration caches neither authority nor
 // scratch readiness: current binding, grants and an open matching scratch apply.
 //
@@ -399,15 +399,28 @@
 // reuses one authoritative interval read for reduction and acknowledgement.
 // A warm Reader checkpoint hashes the entire previously verified containing
 // prefix instead of decoding it again, then decodes the actual new commit.
-// Successful Open can seed this same charged checkpoint from its existing replay,
-// without an extra scan. Eviction or segment rotation can still make the first
-// scoped acknowledgement cold. Prefix I/O and hashing remain; cold, rotated,
-// invalid or evicted checkpoints still require prefix decoding. Directory
-// positions narrow cold command, turn and paid reads to their containing commits;
-// paid reconstruction includes corrections, acknowledgements and the exact
-// admission route version. Directory loss retains the original range scans.
-// Gaps, duplicates and prior installation retain refresh plus interval lookup.
-// A payload receipt alone is never a global command-search proof.
+// Tokens are keyed by their exact complete-commit After and survive accepted
+// advances. Only successful Open's own replay, successful acknowledgement
+// readbacks (including review), a completed numeric refresh, and a Since page
+// or its page-end proof pass publish tokens. Every publication requires terminal
+// EOF, successful actual Close and a token returned by that Reader. Errors,
+// equal bounds, ToEnd and early stops publish nothing. Open needs no extra scan.
+// Refresh streams one commit at a time outside Service.mu, installing each under
+// the lock; concurrent callers wait for that one Reader rather than decoding its
+// suffix again. Close drains a performing refresh. Since reads at its cursor,
+// opens no Reader at an equal frontier, and uses one additional numeric proof
+// pass only when a whole-commit page cut precedes the captured frontier.
+// Post-Submit acknowledgement readbacks retain Service.mu throughout, so the
+// installed effects and caller-owned completion remain atomic. A missing token
+// there is still a locked cold path. Eviction or segment rotation can make a
+// subsequent read cold. Prefix I/O and hashing remain; cold, rotated, invalid
+// or evicted tokens still require prefix decoding. Directory positions narrow
+// command, turn and paid reads to their containing commits; paid reconstruction
+// includes corrections, acknowledgements and the exact admission route version.
+// Directory loss retains the original scans for this incarnation; rebuilding
+// after loss is not yet implemented. Gaps, duplicates and prior installation
+// retain acknowledgement catch-up plus interval lookup. A payload receipt alone
+// is never a global command-search proof.
 //
 // Every preparation, final decision and replayed F3-12 group retains current
 // authority, participant read-rights and source-identity checks. A historical

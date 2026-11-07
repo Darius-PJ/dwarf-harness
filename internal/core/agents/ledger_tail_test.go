@@ -564,3 +564,95 @@ func TestTurnLoopCommittedEndingStands(t *testing.T) {
 		t.Fatalf("loop.end records %+v for the ending %+v, %d cancelled work endings", ends, committed, cancels)
 	}
 }
+
+func testAgentTailAcknowledgementOverlap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newLivePaidFixture(t)
+	ws, registered := privateWorkspace(t, f.serviceFixture)
+	dormant := registerPrivate(t, f.service, 840000)
+	request := f.prepare(t)
+	p, s := request.Prepared.state, f.service
+	scope, err := s.scopePath(submissionIDs{f.origin.AgentID, f.origin.SessionID, f.origin.ContextID}, "context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scope.publishObject(p.body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.Scratch(ctx, dormant.ContextID, registered.ID); err != nil {
+		t.Fatal(err)
+	}
+	foreignEnd := f.store.Durable()
+	stopped, resume := make(chan struct{}), make(chan struct{})
+	var once atomic.Bool
+	s.deps.beforeRefreshInstall = func(ledger.Commit) {
+		if once.CompareAndSwap(false, true) {
+			close(stopped)
+			<-resume
+		}
+	}
+	refreshed := make(chan error, 1)
+	go func() {
+		s.mu.Lock()
+		err := s.refreshLocked(ctx, foreignEnd)
+		s.mu.Unlock()
+		refreshed <- err
+	}()
+	<-stopped
+	// Public producers wait at their pre-Submit refresh. Enter the real locked
+	// submit layer directly to exercise this defensive overlap: a readback
+	// must neither wait on the suspended refresher nor unlock before completion.
+	s.mu.Lock()
+	err = s.admissionGuardsLocked(ctx, p)
+	sub := ledger.PaidSubmission{Schema: 4, Actor: "agent", Origin: p.origin, Operation: "paid.admit", GrantID: request.GrantID, Arguments: paidAdmitArguments(p.admission)}
+	var drafts []ledger.Draft
+	if err == nil {
+		drafts, err = paidDrafts(request.CommandID, sub, p.admission, ledger.TypeRuntimePaidReserved, "reserved", 1, request.AttemptID, request.ParentTurnID, nil)
+	}
+	observing, observed := make(chan struct{}), make(chan error, 1)
+	go func() {
+		close(observing)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		match, err := s.findCommand(ctx, request.CommandID, 0, s.p.through)
+		if err == nil {
+			view, viewErr := s.paidView(s.p.paidAttempts[request.AttemptID])
+			err = viewErr
+			if err == nil && (!match.found || !p.consumed || view.State != "reserved" || view.HeldMicros != "120") {
+				err = errors.New("receipt, hold and consumed preparation were not visible together")
+			}
+		}
+		observed <- err
+	}()
+	<-observing
+	var receipt PaidReceipt
+	if err == nil {
+		receipt, err = s.submitPaidGroupLocked(ctx, drafts, false)
+	}
+	if err == nil {
+		s.completePaidAdmissionLocked(p, request.AttemptID)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		close(resume)
+		<-refreshed
+		t.Fatal(err)
+	}
+	if err := <-observed; err != nil {
+		t.Error(err)
+	}
+	through := f.store.Durable()
+	close(resume)
+	if err := <-refreshed; err != nil {
+		t.Fatal(err)
+	}
+	view := f.view(t, request.AttemptID)
+	if s.p.through != through || receipt.Sequence != through || view.State != "reserved" || view.HeldMicros != "120" || f.budget(t, "").HeldMicros != "120" {
+		t.Fatalf("overlap duplicated or lost the admission: %+v %+v", receipt, view)
+	}
+	retry, bound, err := scopedBound(t, s, bindingOf(f.origin)).AdmitPaid(ctx, request)
+	if err != nil || bound == nil || retry.Sequence != receipt.Sequence || f.store.Durable() != through {
+		t.Fatalf("completed admission was not retryable: %+v %v", retry, err)
+	}
+}

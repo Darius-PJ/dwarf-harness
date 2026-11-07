@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
@@ -147,11 +148,15 @@ func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidRecei
 		if err != nil {
 			return PaidReceipt{}, nil, err
 		}
-		p.consumed = true
-		delete(s.paid.prepared, p)
-		s.paid.calls[request.AttemptID] = p
+		s.completePaidAdmissionLocked(p, request.AttemptID)
 		return receipt, &BoundCall{service: s, admission: p.admission}, nil
 	}
+}
+
+func (s *Service) completePaidAdmissionLocked(p *preparedPaid, attempt uuid.UUID) {
+	p.consumed = true
+	delete(s.paid.prepared, p)
+	s.paid.calls[attempt] = p
 }
 
 func (s *Service) admissionGuardsLocked(ctx context.Context, p *preparedPaid) error {

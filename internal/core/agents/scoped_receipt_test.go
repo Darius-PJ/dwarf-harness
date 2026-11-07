@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 )
 
 func TestScopedReceiptsAndLostAck(t *testing.T) {
@@ -281,7 +283,7 @@ func TestScopedAcknowledgementInterleaving(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.service.history.ackCheckpoint(warmed.Sequence) == nil {
+			if f.service.history.checkpoint(warmed.Sequence) == nil {
 				t.Fatal("completed scoped acknowledgement did not warm a checkpoint")
 			}
 			beforeBook, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}})
@@ -368,7 +370,7 @@ func warmScopedPrivateAcknowledgement(t *testing.T, f *serviceFixture, agent *Ag
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.service.history.ackCheckpoint(receipt.Sequence) == nil {
+	if f.service.history.checkpoint(receipt.Sequence) == nil {
 		t.Fatal("completed private acknowledgement did not warm a checkpoint")
 	}
 	return receipt
@@ -376,6 +378,12 @@ func warmScopedPrivateAcknowledgement(t *testing.T, f *serviceFixture, agent *Ag
 
 func TestScopedAcknowledgementPrefixChanged(t *testing.T) {
 	t.Parallel()
+	for _, provenance := range []string{"refresh", "since"} {
+		t.Run(provenance, func(t *testing.T) {
+			t.Parallel()
+			testTailCheckpointPrefixChanged(t, provenance)
+		})
+	}
 	for _, provenance := range []string{"scoped-ack", "open"} {
 		t.Run(provenance, func(t *testing.T) {
 			t.Parallel()
@@ -384,7 +392,7 @@ func TestScopedAcknowledgementPrefixChanged(t *testing.T) {
 			warmed := warmScopedPrivateAcknowledgement(t, f, agent, grant)
 			if provenance == "open" {
 				reopenScoped(t, f, DefaultLimits())
-				if f.service.history.ackCheckpoint(f.store.Durable()) == nil {
+				if f.service.history.checkpoint(f.store.Durable()) == nil {
 					t.Fatal("completed Open did not seed a checkpoint")
 				}
 				agent = scopedBound(t, f.service, binding)
@@ -437,6 +445,78 @@ func TestScopedAcknowledgementPrefixChanged(t *testing.T) {
 				t.Fatalf("rejected acknowledgement published a successful source proof: %v", err)
 			}
 		})
+	}
+}
+
+func testTailCheckpointPrefixChanged(t *testing.T, provenance string) {
+	t.Helper()
+	ctx := context.Background()
+	f := newTurnFixture(t, "anthropic", func(http.ResponseWriter, *http.Request) {
+		t.Error("history reads must not send a provider request")
+	}, nil)
+	scratch, _ := f.files(t, "")
+	first := registerPrivate(t, f.service, 850000)
+	next := registerPrivate(t, f.service, 850010)
+	f.enable(t)
+	cursor := f.store.Durable()
+	if _, err := f.workspace.Scratch(ctx, first.ContextID, scratch.WorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+	s := f.service
+	s.mu.Lock()
+	err := s.refreshLocked(ctx, f.store.Durable())
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := f.store.Durable()
+	if provenance == "since" {
+		s.history.discard(historyKey{kind: historyCheckpoint, sequence: after})
+		page, err := f.view.Since(ctx, cursor, 128)
+		if err != nil || page.ThroughSequence != after || len(page.Events) != 0 {
+			t.Fatalf("Since provenance page: %+v %v", page, err)
+		}
+	}
+	if s.history.checkpoint(after) == nil {
+		t.Fatal("provenance read did not produce its real Reader token")
+	}
+	if _, err := f.workspace.Scratch(ctx, next.ContextID, scratch.WorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+	through := f.store.Durable()
+	if provenance == "since" {
+		s.mu.Lock()
+		err = s.refreshLocked(ctx, through)
+		s.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseline := s.p
+	s.history.discard(historyKey{kind: historyCheckpoint, sequence: through})
+	path := filepath.Join(f.store.LogDir(), ledger.SegmentName(1))
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	damaged := readTestFile(t, path)
+	damaged[0] = 'x'
+	writeTestFile(t, path, damaged)
+	if s.history.checkpoint(after) == nil {
+		t.Fatal("cursor token was lost before the corrupt-prefix read")
+	}
+	if provenance == "refresh" {
+		s.mu.Lock()
+		err = s.refreshLocked(ctx, through)
+		s.mu.Unlock()
+	} else {
+		var page session.EventPage
+		page, err = f.view.Since(ctx, after, 128)
+		if len(page.Events) != 0 || page.ThroughSequence != after {
+			t.Fatalf("corrupt Since exposed suffix events or cursor: %+v", page)
+		}
+	}
+	if !errors.Is(err, ledger.ErrCorrupt) || !sameProjectionState(s.p, baseline) || f.store.Durable() != through || s.history.checkpoint(through) != nil || !bytes.Equal(readTestFile(t, path), damaged) {
+		t.Fatalf("%s accepted or rewrote a corrupt prefix: %v", provenance, err)
 	}
 }
 

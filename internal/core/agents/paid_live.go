@@ -260,7 +260,7 @@ func (s *Service) submitPaidLocked(ctx context.Context, drafts []ledger.Draft) (
 }
 
 // submitPaidGroupLocked preflights the exact bytes with Open's reducer, then
-// installs only through refreshLocked after the whole group has become
+// installs through the locked acknowledgement reader after the whole group is
 // durable. A conditional group, one that carries a clock sample judged
 // against the review floor, is written only at the tail it was planned at: at
 // a moved tail it returns the store's ledgerstore.ErrTailMoved and writes
@@ -304,7 +304,7 @@ func (s *Service) submitPaidGroupLocked(ctx context.Context, drafts []ledger.Dra
 	if s.deps.afterScopedSubmit != nil {
 		s.deps.afterScopedSubmit()
 	}
-	err = s.refreshLocked(context.Background(), max(s.p.through, committed.Last))
+	err = s.acknowledgeLocked(max(s.p.through, committed.Last))
 	if err == nil && committed.Duplicate {
 		var m commandMatch
 		m, err = s.findCommand(context.Background(), original.command.CommandID, committed.First-1, committed.Last)

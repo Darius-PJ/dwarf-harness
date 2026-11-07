@@ -354,7 +354,7 @@ func (s *Service) perform(ctx context.Context, op privateOperation) (Receipt, er
 	}
 	// Submit's actual range is authoritative. Refresh all intervening commits,
 	// including workspace records, rather than jumping a guessed cursor.
-	if err := s.refreshLocked(context.Background(), max(s.p.through, committed.Last)); err != nil {
+	if err := s.acknowledgeLocked(max(s.p.through, committed.Last)); err != nil {
 		s.mu.Unlock()
 		return Receipt{}, err
 	}

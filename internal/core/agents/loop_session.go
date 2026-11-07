@@ -268,8 +268,12 @@ func (v *loopSession) Since(ctx context.Context, cursor uint64, limit int) (sess
 		return session.EventPage{}, ErrInvalid
 	}
 	page := session.EventPage{Events: []session.Event{}, ThroughSequence: cursor, Wake: wake}
+	if cursor == through {
+		return page, nil
+	}
+	hint := s.history.checkpoint(cursor)
 	size := 0
-	err = s.scan(ctx, cursor, through, func(c ledger.Commit) error {
+	checkpoint, err := s.readRange(ctx, cursor, through, hint, func(c ledger.Commit) error {
 		var next []session.Event
 		for _, record := range c.Records {
 			if record.AgentID != v.ids.agent || record.ExecutionSessionID != v.ids.session {
@@ -296,8 +300,22 @@ func (v *loopSession) Since(ctx context.Context, cursor uint64, limit int) (sess
 		page.ThroughSequence = c.Last
 		return nil
 	})
-	if errors.Is(err, errLoopPageFull) {
-		err = nil
+	if joined, ok := err.(interface{ Unwrap() []error }); ok && errors.Is(err, errLoopPageFull) {
+		// Remove only our early-stop sentinel, retaining any actual Close
+		// failure. A cut needs its own completed numeric proof pass.
+		var remaining []error
+		for _, cause := range joined.Unwrap() {
+			if cause != errLoopPageFull {
+				remaining = append(remaining, cause)
+			}
+		}
+		err = errors.Join(remaining...)
+		if err == nil {
+			checkpoint, err = s.readRange(ctx, cursor, page.ThroughSequence, hint, func(ledger.Commit) error { return nil })
+		}
+	}
+	if err == nil {
+		s.history.putCheckpoint(page.ThroughSequence, checkpoint)
 	}
 	return page, err
 }

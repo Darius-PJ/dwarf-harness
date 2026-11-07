@@ -139,7 +139,8 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 		// authoritative read without rereading immutable source witnesses.
 		floor := plan.floor
 		var accepted ledger.Commit
-		accepted, _, err = s.readCommittedRange(context.Background(), committed.First, committed.Last, s.history.ackCheckpoint(s.p.through))
+		var checkpoint *ledger.ReadCheckpoint
+		accepted, checkpoint, err = s.readCommittedRange(context.Background(), committed.First, committed.Last, s.history.checkpoint(s.p.through))
 		if err == nil {
 			for _, r := range accepted.Records {
 				floor = max(floor, r.EventTimeNS)
@@ -152,9 +153,10 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 			if bytes.Compare(input.id[:], s.p.maxCommand[:]) > 0 {
 				s.p.maxCommand = input.id
 			}
+			s.history.putCheckpoint(committed.Last, checkpoint)
 		}
 	} else {
-		err = s.refreshLocked(context.Background(), max(s.p.through, committed.Last))
+		err = s.acknowledgeLocked(max(s.p.through, committed.Last))
 		if err == nil {
 			var match commandMatch
 			match, err = s.findCommand(context.Background(), input.id, committed.First-1, committed.Last)

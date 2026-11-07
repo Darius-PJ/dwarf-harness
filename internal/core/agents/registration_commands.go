@@ -261,7 +261,7 @@ func (s *Service) executeRegistration(ctx context.Context, caller scopedCaller, 
 		s.deps.afterScopedSubmit()
 	}
 	// Caller cancellation cannot undo a committed transition or skip its readback.
-	err = s.refreshLocked(context.Background(), max(s.p.through, committed.Last))
+	err = s.acknowledgeLocked(max(s.p.through, committed.Last))
 	var actual commandMatch
 	if err == nil {
 		actual, err = s.findCommand(context.Background(), input.id, committed.First-1, committed.Last)

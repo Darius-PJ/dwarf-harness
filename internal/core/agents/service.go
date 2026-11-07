@@ -44,6 +44,9 @@ type serviceDeps struct {
 	beforeProjection        func(Binding, string)
 	beforeLookup            func()
 	beforeHistoryFill       func(historyKey)
+	beforeRangeRead         func(after, through uint64)
+	beforeRefreshWait       func()
+	beforeRefreshInstall    func(ledger.Commit)
 	beforeReplayWait        func()
 	afterCloseFence         func()
 	beforeFinishCommit      func(turn uuid.UUID) error // Test seam: its error stands in for CommitObserved's.
@@ -135,6 +138,9 @@ type Service struct {
 	active        sync.WaitGroup
 	closed        bool
 	poisoned      bool
+	closeSignal   chan struct{}
+	refreshDone   chan struct{}
+	refreshTarget uint64
 	store         privateStore
 	colony        string
 	limits        Limits
@@ -177,25 +183,17 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 	if deps.reviewClock == nil {
 		deps.reviewClock = func() (int64, error) { return time.Now().UTC().UnixNano(), nil }
 	}
-	s := &Service{store: store, colony: colony, limits: limits, deps: deps, p: newProjection(), history: newHistoryIndex(), gates: map[scopeKey]*scopeGate{}}
+	s := &Service{store: store, colony: colony, limits: limits, deps: deps, p: newProjection(), history: newHistoryIndex(), gates: map[scopeKey]*scopeGate{}, closeSignal: make(chan struct{})}
 	through := store.Durable()
 	var checkpoint *ledger.ReadCheckpoint
 	if through != s.p.through {
-		r, err := ledger.OpenReaderWithCheckpoint(s.store.LogDir(), ledger.ReadOptions{
-			Colony: s.store.Colony(), After: s.p.through, Through: through,
-			Consume: privateConsumption(), AllTypes: true,
-		}, nil)
-		if err != nil {
-			return nil, report, err
-		}
-		err = scanReader(ctx, r, func(c ledger.Commit) error {
+		checkpoint, err = s.readRange(ctx, s.p.through, through, nil, func(c ledger.Commit) error {
 			_, err := s.acceptCommitLocked(ctx, c, nil)
 			return err
 		})
 		if err != nil {
 			return nil, report, err
 		}
-		checkpoint = r.Checkpoint()
 	}
 	s.openedThrough = s.p.through
 	report, err = s.inspectOpen(ctx)
@@ -212,7 +210,7 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 	}
 	report.UnboundCredentials = s.unboundCredentialViews()
 	report.PendingLoops = s.p.pendingLoopViews()
-	s.history.putAckCheckpoint(s.openedThrough, checkpoint)
+	s.history.putCheckpoint(s.openedThrough, checkpoint)
 	return s, report, nil
 }
 func (s *Service) Close() error {
@@ -226,6 +224,9 @@ func (s *Service) Close() error {
 	s.mu.Lock()
 	first := !s.closed
 	s.closed = true
+	if first && s.closeSignal != nil {
+		close(s.closeSignal)
+	}
 	if s.paid != nil {
 		for _, cancel := range s.paid.exchanges {
 			cancel()

@@ -141,10 +141,13 @@ const (
 	historyAssignment
 	historySource
 	historyWorkspace
-	historyAckRead
+	historyCheckpoint
 
 	historyEntryLimit = 256
 	historyByteLimit  = 8 << 20
+	// Reserve the token class's maximum charge so neither class ever has to
+	// evict the other to stay inside the shared byte bound.
+	historyPayloadByteLimit = historyByteLimit - historyEntryLimit*384
 )
 
 type historyKey struct {
@@ -153,8 +156,8 @@ type historyKey struct {
 	sequence    uint64
 }
 
-// Encoded metadata and one copied opaque Reader checkpoint are retained. A
-// selected record never keeps its reader's entire commit backing buffer alive.
+// Encoded metadata and copied opaque Reader checkpoints are retained.
+// A selected record never keeps its reader's entire commit backing buffer alive.
 type historyEntry struct {
 	key                      historyKey
 	from, after, first, last uint64
@@ -174,10 +177,10 @@ func (e historyEntry) retainedCharge() int {
 }
 
 func (e historyEntry) validCheckpointWrapper() bool {
-	if e.key.kind != historyAckRead {
+	if e.key.kind != historyCheckpoint {
 		return e.checkpoint == nil
 	}
-	return e.key == (historyKey{kind: historyAckRead}) && e.checkpoint != nil &&
+	return e.from > 0 && e.key == (historyKey{kind: historyCheckpoint, sequence: e.from}) && e.checkpoint != nil &&
 		len(e.data) == 0 && e.found && e.after == 0 && e.first == 0 &&
 		e.last == 0 && e.task == (uuid.UUID{})
 }
@@ -208,15 +211,16 @@ func historyCoverageSum(through uint64) uint32 {
 	return crc32.ChecksumIEEE(data[:])
 }
 
-// This is the one instance-private historical LRU. Its mutex never spans I/O
-// or acquisition of Service.mu. Projection callers take Service.mu first;
-// unlocked command/source readers touch only this mutex.
+// The instance-private payload and token LRUs share this mutex and byte charge.
+// The mutex never spans I/O or acquisition of Service.mu. Projection callers
+// take Service.mu first; unlocked readers touch only this mutex.
 type historyIndex struct {
 	mu         sync.Mutex
 	through    uint64
 	checksum   uint32
 	entries    map[historyKey]*list.Element
 	lru        list.List
+	tokens     list.List
 	bytes      int
 	disabled   bool
 	generation uint64
@@ -232,6 +236,7 @@ func newHistoryIndex() *historyIndex {
 func (h *historyIndex) clearLocked() {
 	clear(h.entries)
 	h.lru.Init()
+	h.tokens.Init()
 	h.bytes = 0
 }
 
@@ -239,8 +244,15 @@ func (h *historyIndex) removeLocked(key historyKey) {
 	if node := h.entries[key]; node != nil {
 		h.bytes -= node.Value.(*historyEntry).retainedCharge()
 		delete(h.entries, key)
-		h.lru.Remove(node)
+		h.entryLRU(key.kind).Remove(node)
 	}
+}
+
+func (h *historyIndex) entryLRU(kind byte) *list.List {
+	if kind == historyCheckpoint {
+		return &h.tokens
+	}
+	return &h.lru
 }
 
 func (h *historyIndex) discard(key historyKey) {
@@ -282,8 +294,8 @@ func (h *historyIndex) get(key historyKey, after, through uint64) (historyEntry,
 		h.removeLocked(key)
 		return historyEntry{}, false
 	}
-	if key.kind == historyAckRead {
-		if e.from != through || through != h.through {
+	if key.kind == historyCheckpoint {
+		if e.from != through {
 			return historyEntry{}, false
 		}
 	} else if key.kind == historySource {
@@ -312,12 +324,12 @@ func (h *historyIndex) get(key historyKey, after, through uint64) (historyEntry,
 		checkpoint := *e.checkpoint
 		out.checkpoint = &checkpoint
 	}
-	h.lru.MoveToFront(node)
+	h.entryLRU(key.kind).MoveToFront(node)
 	return out, true
 }
 
 func (h *historyIndex) put(e historyEntry) {
-	if h == nil || !e.validCheckpointWrapper() || e.retainedCharge() > historyByteLimit {
+	if h == nil || !e.validCheckpointWrapper() || e.retainedCharge() > historyPayloadByteLimit {
 		return
 	}
 	h.mu.Lock()
@@ -325,7 +337,14 @@ func (h *historyIndex) put(e historyEntry) {
 	if h.disabled || h.checksum != historyCoverageSum(h.through) {
 		return
 	}
-	if e.key.kind == historySource {
+	if e.key.kind == historyCheckpoint {
+		if !h.directory.valid(h.generation) || e.from > h.directory.through {
+			return
+		}
+		if boundary, known := h.directory.boundary(e.from); !known || !boundary {
+			return
+		}
+	} else if e.key.kind == historySource {
 		if !e.found || e.first == 0 || e.last < e.first || e.last > e.from || e.from > h.through {
 			return
 		}
@@ -338,8 +357,9 @@ func (h *historyIndex) put(e historyEntry) {
 		h.entries = make(map[historyKey]*list.Element)
 	}
 	h.removeLocked(e.key)
-	for len(h.entries) >= historyEntryLimit || h.bytes+e.retainedCharge() > historyByteLimit {
-		h.removeLocked(h.lru.Back().Value.(*historyEntry).key)
+	lru := h.entryLRU(e.key.kind)
+	for lru.Len() >= historyEntryLimit || e.key.kind != historyCheckpoint && h.bytes-h.tokens.Len()*384+e.retainedCharge() > historyPayloadByteLimit {
+		h.removeLocked(lru.Back().Value.(*historyEntry).key)
 	}
 	data := make([]byte, len(e.data))
 	copy(data, e.data)
@@ -349,23 +369,23 @@ func (h *historyIndex) put(e historyEntry) {
 		e.checkpoint = &checkpoint
 	}
 	e.checksum = e.sum()
-	h.entries[e.key] = h.lru.PushFront(&e)
+	h.entries[e.key] = lru.PushFront(&e)
 	h.bytes += e.retainedCharge()
 }
 
-func (h *historyIndex) ackCheckpoint(after uint64) *ledger.ReadCheckpoint {
-	e, ok := h.get(historyKey{kind: historyAckRead}, 0, after)
+func (h *historyIndex) checkpoint(after uint64) *ledger.ReadCheckpoint {
+	e, ok := h.get(historyKey{kind: historyCheckpoint, sequence: after}, 0, after)
 	if !ok {
 		return nil
 	}
 	return e.checkpoint
 }
 
-func (h *historyIndex) putAckCheckpoint(after uint64, checkpoint *ledger.ReadCheckpoint) {
+func (h *historyIndex) putCheckpoint(after uint64, checkpoint *ledger.ReadCheckpoint) {
 	if checkpoint == nil {
 		return
 	}
-	h.put(historyEntry{key: historyKey{kind: historyAckRead}, from: after, found: true, checkpoint: checkpoint})
+	h.put(historyEntry{key: historyKey{kind: historyCheckpoint, sequence: after}, from: after, found: true, checkpoint: checkpoint})
 }
 
 // Accepted effects invalidate answers; they do not reduce historical state a
@@ -718,7 +738,7 @@ type historySourceValue struct {
 func (h *historyIndex) source(sequence int64, through uint64, colony uuid.UUID) (ledger.Record, bool) {
 	record, hit := h.acceptedRecord(sequence, through, colony)
 	// Complete-commit payload reuse must not widen source eligibility.
-	if !hit || record.Type != ledger.TypePrivateRevision && record.Type != ledger.TypePrivateScopedRevision && len(record.BodyRefs) == 0 {
+	if !hit || record.Type != ledger.TypePrivateRevision && record.Type != ledger.TypePrivateScopedRevision && record.Type != ledger.TypePrivateTurnRevision && len(record.BodyRefs) == 0 {
 		return ledger.Record{}, false
 	}
 	return record, true

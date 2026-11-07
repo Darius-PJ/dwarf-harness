@@ -58,7 +58,10 @@ func testReviewResultRechecksPrefixChains(t *testing.T) {
 			if _, err := f.store.Submit(ctx, d[0], d[1:]); err != nil {
 				t.Fatal(err)
 			}
-			if err := f.service.refreshLocked(ctx, f.store.Durable()); err != nil {
+			f.service.mu.Lock()
+			err = f.service.refreshLocked(ctx, f.store.Durable())
+			f.service.mu.Unlock()
+			if err != nil {
 				t.Fatal(err)
 			}
 			if row.grant == 0 {
@@ -78,7 +81,10 @@ func testReviewResultRechecksPrefixChains(t *testing.T) {
 				if _, err := f.store.Submit(ctx, next[0], next[1:]); err != nil {
 					t.Fatal(err)
 				}
-				if err := f.service.refreshLocked(ctx, f.store.Durable()); err != nil {
+				f.service.mu.Lock()
+				err = f.service.refreshLocked(ctx, f.store.Durable())
+				f.service.mu.Unlock()
+				if err != nil {
 					t.Fatal(err)
 				}
 			} else if _, err := f.service.RevokeGrant(ctx, reviewOwner(), GrantRevocation{CommandID: privateID(980), RevokeGrantID: reviewGoldenID(row.grant), ExpectedVersion: 1, ExpectedAuthorityVersion: 4}); err != nil {

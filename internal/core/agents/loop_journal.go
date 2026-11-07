@@ -111,7 +111,7 @@ func (s *Service) commitLoop(ctx context.Context, id uuid.UUID, sub ledger.LoopS
 	if s.deps.afterScopedSubmit != nil {
 		s.deps.afterScopedSubmit()
 	}
-	if err := s.refreshLocked(context.Background(), max(s.p.through, committed.Last)); err != nil {
+	if err := s.acknowledgeLocked(max(s.p.through, committed.Last)); err != nil {
 		s.poisoned = true
 		return nil, err
 	}
