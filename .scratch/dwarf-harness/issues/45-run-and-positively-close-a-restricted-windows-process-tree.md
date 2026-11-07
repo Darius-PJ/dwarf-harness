@@ -71,3 +71,5 @@ Ticket 45 is built, reviewed and on `main`. C10's Windows executor, `internal/co
 - **Limits and evidence.** Finite limits fail closed, and start, stop and resource behavior is recorded under Defender: `TestNativeUserCPULimit`, `TestRequiredEnforcementUnavailable`, `TestLimitsNeverDefaultToUnlimited` and `TestDefenderResourceEvidence`. A kill request, root exit or pipe EOF never counts as closure; only the Job's count of active processes does (the ruling, P11).
 
 The Linux and macOS builds compile, vet and refuse with `ErrUnsupported`; their executors are tickets 47 and 49. Nothing is frozen, so `CONTRACTS.md` is unchanged.
+
+2026-11-07 — Consolidation cross-link: Ticket [144](144-make-the-windows-executors-race-step-tests-reliable-on-hosted-runners.md) finds and removes the causes of three hosted race-step failures in this ticket's tests, `TestNativeUserCPULimit`, `TestSeparateRunsCannotReadPeerInput` and `TestNativeProcessLimitAndHostJobNesting`, in place of further small follow-ups here. These extensions add no blocker or criterion to this ticket.

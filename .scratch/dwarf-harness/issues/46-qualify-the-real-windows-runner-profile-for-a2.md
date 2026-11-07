@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: C10 Windows qualification; exports Windows A2 profile (ticket [46](46-qualify-the-real-windows-runner-profile-for-a2.md))
-Blocked by: 18, 19, 45
+Blocked by: 18, 19, 45, 144
 
 ## What to build
 
@@ -59,3 +59,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-18 — Ticket 45, one of this ticket's blockers, is resolved: C10's Windows executor, `internal/core/winexec`, is on `main` ([B30](../../../docs/DECISIONS.md#b30-c10-the-windows-containment-executor-ticket-45)). Tickets 18 and 19 remain open. The executor's request, receipt and quarantine fence are Core-internal code, not contracts. If this ticket is the first to need a durable executor fact, it specifies that fact in C4's attempt and evidence family under `CONTRACTS.md`'s rules (the [gate ruling](../c10-evidence/ticket-45-design-ruling.md), P2). Ticket 45 claims no capacity, no V6 result and no A2 label. The Limits of B30 state the boundary this qualification inherits.
+
+2026-11-07 — D167 rework: by the owner's decision this ticket now also waits for ticket [144](144-make-the-windows-executors-race-step-tests-reliable-on-hosted-runners.md), so that the Windows A2 qualification rests on explained tests: two of the three hosted race-step failures 144 investigates are confinement proofs this qualification relies on. Its blockers were 18, 19 and 45; they are now 18, 19, 45 and 144. The number and criteria are unchanged; this grants no separate implementation, contract-freeze or release approval.
