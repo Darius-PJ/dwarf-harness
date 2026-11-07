@@ -148,7 +148,7 @@ func (r *loopRuntime) manifest(t *loopTurn, outcome, reason string, final *ledge
 	s.mu.Lock()
 	through := s.p.through
 	s.mu.Unlock()
-	err := s.scan(context.Background(), t.binding.first-1, through, func(c ledger.Commit) error {
+	err := s.scanDirectory(context.Background(), directoryKey{kind: directoryTurn, id: t.id}, t.binding.first-1, through, func(c ledger.Commit) error {
 		for _, record := range c.Records {
 			if record.TurnID != t.id {
 				continue
@@ -474,7 +474,7 @@ func (r *loopRuntime) renderTranscript(ctx context.Context, t *loopTurn, raw []b
 			through := s.p.through
 			s.mu.Unlock()
 			selected := false
-			err = s.scan(ctx, 0, through, func(commit ledger.Commit) error {
+			err = s.scanDirectory(ctx, directoryKey{kind: directoryTurnBound, id: turn}, 0, through, func(commit ledger.Commit) error {
 				for _, record := range commit.Records {
 					if record.Type != ledger.TypeRuntimeTurnBound || record.TurnID != turn || record.AgentID != t.origin.AgentID || record.ExecutionSessionID != t.origin.SessionID || record.ContextID != t.origin.ContextID {
 						continue
@@ -544,7 +544,7 @@ func (r *loopRuntime) finalText(ctx context.Context, origin ledger.Origin, turn 
 	through := s.p.through
 	s.mu.Unlock()
 	selected := false
-	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
+	err := s.scanDirectory(ctx, directoryKey{kind: directoryTurnResult, id: turn}, 0, through, func(c ledger.Commit) error {
 		for _, record := range c.Records {
 			if record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == turn && record.AgentID == origin.AgentID && record.ExecutionSessionID == origin.SessionID && record.ContextID == origin.ContextID {
 				result, err := ledger.DecodeRuntimeTurnResult(record.Payload)

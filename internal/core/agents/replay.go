@@ -314,7 +314,6 @@ func (s *Service) readCommittedRange(ctx context.Context, first, last uint64, ch
 
 // acceptCommitLocked is shared by refresh and a contiguous scoped acknowledgement.
 // expected binds the latter to its actual command before any effect is installed.
-// It never turns that single occurrence into a global command-search proof.
 func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expected *scopedInput) (commandMatch, error) {
 	d := draftsOf(c)
 	g, scoped, review, paid, registration, loop, err := decodeFamily(d, c.First)
@@ -344,12 +343,12 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 			return commandMatch{}, err
 		}
 	}
-	if match.found && bytes.Compare(match.command.CommandID[:], s.p.maxCommand[:]) <= 0 {
-		old, err := s.findCommand(ctx, match.command.CommandID, 0, c.First-1)
+	if match.found {
+		used, err := s.commandUsed(ctx, match.command.CommandID, c.First-1)
 		if err != nil {
 			return commandMatch{}, err
 		}
-		if old.found {
+		if used {
 			return commandMatch{}, inconsistent(c.First, "reused command ID")
 		}
 	}
@@ -483,9 +482,7 @@ func (s *Service) acceptCommitLocked(ctx context.Context, c ledger.Commit, expec
 	for _, record := range c.Records {
 		s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
 	}
-	s.p.publishHistory(g, scoped, c.Last)
-	s.history.advance(s.p.through, c.Last, d)
-	s.history.warmSources(c)
+	s.publishCommitLocked(c, g, scoped)
 	s.p.through = c.Last
 	s.loop.notify()
 	return match, nil
@@ -506,9 +503,33 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 	if err := ctx.Err(); err != nil {
 		return commandMatch{}, err
 	}
-	if match, hit := s.history.command(id, after, through); hit {
-		return match, nil
+	rows, hit, err := s.history.occurrences(directoryKey{kind: directoryCommand, id: id}, after, through)
+	if err != nil {
+		return commandMatch{}, err
 	}
+	if hit {
+		if len(rows) == 0 {
+			if s.deps.beforeHistoryFill != nil {
+				s.deps.beforeHistoryFill(historyKey{kind: historyCommand, id: id})
+			}
+			return commandMatch{}, nil
+		}
+		if len(rows) > 1 {
+			return commandMatch{}, inconsistent(rows[1].first, "duplicate command")
+		}
+		if match, cached := s.history.command(id, after, through); cached {
+			return match, nil
+		}
+		commit, err := s.directoryCommit(ctx, rows[0], through)
+		if err != nil {
+			return commandMatch{}, err
+		}
+		return s.commandFromCommit(ctx, id, after, through, commit)
+	}
+	return s.findCommandLegacy(ctx, id, after, through)
+}
+
+func (s *Service) findCommandLegacy(ctx context.Context, id uuid.UUID, after, through uint64) (commandMatch, error) {
 	var matched ledger.Commit
 	var found commandMatch
 	err := s.scan(ctx, after, through, func(c ledger.Commit) error {
@@ -542,6 +563,100 @@ func (s *Service) findCommand(ctx context.Context, id uuid.UUID, after, through 
 		s.history.putCommand(id, after, through, found, matched)
 	}
 	return found, err
+}
+
+func (s *Service) commandFromCommit(ctx context.Context, id uuid.UUID, after, through uint64, c ledger.Commit) (commandMatch, error) {
+	for _, r := range c.Records {
+		if r.Type != ledger.TypeCommand {
+			continue
+		}
+		cmd, err := ledger.DecodeCommand(r.Payload)
+		if err != nil {
+			return commandMatch{}, err
+		}
+		if cmd.CommandID != id {
+			continue
+		}
+		g, scoped, review, paid, registration, loop, err := decodeFamily(draftsOf(c), c.First)
+		if err != nil {
+			return commandMatch{}, err
+		}
+		match := commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}
+		if s.deps.beforeHistoryFill != nil {
+			s.deps.beforeHistoryFill(historyKey{kind: historyCommand, id: id})
+		}
+		s.history.putCommand(id, after, through, match, c)
+		return match, nil
+	}
+	// A damaged position cannot manufacture absence.
+	return s.findCommandLegacy(ctx, id, after, through)
+}
+
+func (s *Service) commandUsed(ctx context.Context, id uuid.UUID, through uint64) (bool, error) {
+	if _, found, hit := s.history.membership(directoryKey{kind: directoryCommand, id: id}, through); hit {
+		return found, nil
+	}
+	old, err := s.findCommandLegacy(ctx, id, 0, through)
+	return old.found, err
+}
+
+// Both accepted publication paths call this before exposing p.through. The
+// commit contains authoritative envelopes, not the preflight's draft positions.
+func (s *Service) publishCommitLocked(c ledger.Commit, g *privateGroup, scoped *scopedGroup) {
+	s.p.publishHistory(g, scoped, c.Last)
+	s.history.advance(s.p.through, c)
+	s.history.warmSources(c)
+}
+
+// directoryCommit shares the existing charged source LRU. A partial payload
+// hit needs only one containing-commit read; no index mutex spans that read.
+func (s *Service) directoryCommit(ctx context.Context, row directoryRow, through uint64) (ledger.Commit, error) {
+	if err := ctx.Err(); err != nil {
+		return ledger.Commit{}, err
+	}
+	c := ledger.Commit{First: row.first, Last: row.last}
+	for seq := row.first; seq <= row.last; seq++ {
+		record, hit := s.history.acceptedRecord(int64(seq), through, s.store.Colony())
+		if !hit {
+			accepted, _, err := s.readCommittedRange(ctx, row.first, row.last, nil)
+			if err == nil {
+				s.history.warmSources(accepted)
+			}
+			return accepted, err
+		}
+		c.Records = append(c.Records, record)
+	}
+	return c, nil
+}
+
+// Selected consumers keep their existing visitor, validation and lock scope.
+// Missing, stale or damaged metadata always uses the original range scan.
+func (s *Service) scanDirectory(ctx context.Context, key directoryKey, after, through uint64, visit func(ledger.Commit) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	rows, hit, err := s.history.occurrences(key, after, through)
+	if err != nil {
+		return err
+	}
+	if !hit {
+		return s.scan(ctx, after, through, visit)
+	}
+	var last uint64
+	for _, row := range rows {
+		if row.last == last {
+			continue
+		}
+		c, err := s.directoryCommit(ctx, row, through)
+		if err != nil {
+			return err
+		}
+		if err := visit(c); err != nil {
+			return err
+		}
+		last = row.last
+	}
+	return nil
 }
 func matchReceipt(m commandMatch, ids submissionIDs, digest ledger.Digest) (Receipt, error) {
 	if m.group != nil && m.group.ids != ids {

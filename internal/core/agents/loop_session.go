@@ -157,7 +157,7 @@ func (v *loopSession) status(ctx context.Context, ids submissionIDs, id uuid.UUI
 		return session.TurnView{}, err
 	}
 	view := session.TurnView{TurnID: id, State: "recovery_pending"}
-	err := s.scan(ctx, 0, s.p.through, func(c ledger.Commit) error {
+	err := s.scanDirectory(ctx, directoryKey{kind: directoryTurnStatus, id: id}, 0, s.p.through, func(c ledger.Commit) error {
 		for _, record := range c.Records {
 			if record.AgentID != ids.agent || record.ExecutionSessionID != ids.session || record.ContextID != ids.context || record.TurnID != id {
 				continue
@@ -379,7 +379,7 @@ func (v *loopSession) lateText(ctx context.Context, id uuid.UUID) (session.TextS
 		return session.TextSnapshot{}, nil, err
 	}
 	var result *ledger.RuntimeTurnResult
-	err := s.scan(ctx, 0, s.p.through, func(c ledger.Commit) error {
+	err := s.scanDirectory(ctx, directoryKey{kind: directoryTurnResult, id: id}, 0, s.p.through, func(c ledger.Commit) error {
 		for _, record := range c.Records {
 			if record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == id && record.AgentID == v.ids.agent && record.ExecutionSessionID == v.ids.session {
 				value, err := ledger.DecodeRuntimeTurnResult(record.Payload)
@@ -426,7 +426,7 @@ func (v *loopSession) FinalText(ctx context.Context, id uuid.UUID) (string, erro
 	}
 	var origin ledger.Origin
 	var final *ledger.ObjectRef
-	err = s.scan(ctx, 0, through, func(c ledger.Commit) error {
+	err = s.scanDirectory(ctx, directoryKey{kind: directoryTurnResult, id: id}, 0, through, func(c ledger.Commit) error {
 		for _, record := range c.Records {
 			if record.Type != ledger.TypeRuntimeTurnResult || record.TurnID != id || record.AgentID != v.ids.agent || record.ExecutionSessionID != v.ids.session {
 				continue

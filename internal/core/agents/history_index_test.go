@@ -319,6 +319,10 @@ func TestHistoryIndexHistoricalPrefix(t *testing.T) {
 }
 
 func damageHistoryCache(s *Service, mode string) {
+	if directoryMode := map[string]string{"directory-missing": "missing", "directory-stale": "stale", "directory-generation": "generation", "directory-row": "row", "directory-boundary": "boundary"}[mode]; directoryMode != "" {
+		damageCommandDirectory(s, directoryMode)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h := s.history
@@ -366,7 +370,7 @@ func damageHistoryCache(s *Service, mode string) {
 
 func TestHistoryIndexPrefixAndDiscard(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"empty", "warm", "evicted", "discarded", "disabled", "damaged", "key", "range", "decoder", "provenance", "coverage"} {
+	for _, mode := range []string{"empty", "warm", "evicted", "discarded", "disabled", "damaged", "key", "range", "decoder", "provenance", "coverage", "directory-missing", "directory-stale", "directory-generation", "directory-row", "directory-boundary"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
@@ -1018,9 +1022,223 @@ func TestHistoryIndexCommandOccurrences(t *testing.T) {
 	if _, err := f.service.findCommand(ctx, privateID(20), 0, chain.Seq); !errors.Is(err, ErrInconsistent) {
 		t.Fatalf("cached receipt concealed duplicate command: %v", err)
 	}
+	if match, err := f.service.findCommand(ctx, privateID(20), through, chain.Seq); err != nil || !match.found || match.group != nil || match.command.SubmissionSHA256 != receipt.SubmissionSHA256 {
+		t.Fatalf("unique foreign tail occurrence changed: %+v %v", match, err)
+	}
+	if match, err := f.service.findCommand(ctx, privateID(20), 0, through); err != nil || match.group == nil || !reflect.DeepEqual(match.group.result, receipt) {
+		t.Fatalf("future duplicate changed prior receipt: %+v %v", match, err)
+	}
 	if _, err := f.service.findCommand(ctx, foreign.CommandID, 0, chain.Seq-1); !errors.Is(err, ledger.ErrCursor) {
 		t.Fatalf("warm command accepted incomplete commit: %v", err)
 	}
+}
+
+func TestAgentTailCommandIndex(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"reuse", "foreign_reuse", "duplicate"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			var captured []ledger.Draft
+			f := newServiceFixture(t, serviceDeps{beforeSubmit: func(d []ledger.Draft) []ledger.Draft {
+				captured = d
+				return d
+			}})
+			b := registerPrivate(t, f.service, 100)
+			first := writePrivate(t, f.service, b, 20, 1, Change{Slot: "memory", Mode: "replace", Bytes: []byte("first")})
+			before := f.store.Durable()
+			var last ledger.Record
+			if err := f.service.scan(ctx, 0, before, func(c ledger.Commit) error {
+				last = c.Records[len(c.Records)-1]
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(f.store.LogDir(), ledger.SegmentName(1))
+			prefix := readTestFile(t, path)
+			writePrivate(t, f.service, b, 30, 2, Change{Slot: "memory", Mode: "replace", Bytes: []byte("second")})
+			drafts := captured
+			previous := ledger.Chain{Seq: last.Seq, Hash: last.Hash, EventTimeNS: last.EventTimeNS}
+			reused := privateID(20)
+			if kind == "foreign_reuse" {
+				reused = privateID(40)
+				foreign := []ledger.Draft{{Type: ledger.TypeCommand, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: testPayload(t, ledger.Command{CommandID: reused, SubmissionSHA256: ledger.Digest{1}})}}
+				raw, chain, err := ledger.EncodeCommit(previous, ledger.CommitHeader{ColonyID: f.store.Colony(), CommitID: privateID(89), EventTimeNS: previous.EventTimeNS + 1}, foreign)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prefix, previous, before = append(prefix, raw...), chain, chain.Seq
+			}
+			if kind != "duplicate" {
+				cmd := scopedDecode(t, ledger.DecodeCommand, drafts[0].Payload)
+				cmd.CommandID = reused
+				drafts[0].Payload = testPayload(t, cmd)
+				receipt := scopedDecode(t, ledger.DecodeRuntimeCommandReceipt, drafts[len(drafts)-1].Payload)
+				receipt.CommandID = cmd.CommandID
+				drafts[len(drafts)-1].Payload = testPayload(t, receipt)
+				for i := range drafts {
+					drafts[i].OperationID = cmd.CommandID
+				}
+			} else {
+				drafts = []ledger.Draft{
+					{Type: ledger.TypeCommand, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: testPayload(t, ledger.Command{CommandID: privateID(20), SubmissionSHA256: first.SubmissionSHA256})},
+					{Type: ledger.TypeCommand, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: testPayload(t, ledger.Command{CommandID: privateID(40), SubmissionSHA256: ledger.Digest{1}})},
+				}
+			}
+			if err := f.service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			extra, chain, err := ledger.EncodeCommit(previous, ledger.CommitHeader{ColonyID: f.store.Colony(), CommitID: privateID(90), EventTimeNS: previous.EventTimeNS + 1}, drafts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeTestFile(t, path, append(prefix, extra...))
+			// Replay uses the real Reader over correctly framed commits, rather
+			// than the store's duplicate-admission guard.
+			s := &Service{store: f.store, p: newProjection(), history: newHistoryIndex()}
+			err = s.refreshLocked(ctx, chain.Seq)
+			if kind != "duplicate" {
+				if !errors.Is(err, ErrInconsistent) || s.p.through != before {
+					t.Fatalf("reused command published: through=%d error=%v", s.p.through, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.findCommand(ctx, privateID(20), 0, chain.Seq); !errors.Is(err, ErrInconsistent) {
+				t.Fatalf("duplicate command returned a receipt: %v", err)
+			}
+			if m, err := s.findCommand(ctx, privateID(20), 0, before); err != nil || m.group == nil || !reflect.DeepEqual(m.group.result, first) {
+				t.Fatalf("later duplicate changed historical receipt: %+v %v", m, err)
+			}
+			if _, err := s.findCommand(ctx, privateID(40), before+1, chain.Seq); !errors.Is(err, ledger.ErrCursor) {
+				t.Fatalf("partial lower endpoint accepted: %v", err)
+			}
+		})
+	}
+}
+
+func damageCommandDirectory(s *Service, mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := s.history
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.clearLocked()
+	d := &h.directory
+	switch mode {
+	case "missing":
+		*d = commandDirectory{}
+	case "stale":
+		d.boundaries = d.boundaries[:len(d.boundaries)-1]
+		d.boundaryCount = len(d.boundaries)
+		d.through = d.boundaries[len(d.boundaries)-1].last
+		for key, bucket := range d.rows {
+			for len(bucket.rows) != 0 && bucket.rows[len(bucket.rows)-1].last > d.through {
+				bucket.rows = bucket.rows[:len(bucket.rows)-1]
+				d.rowCount--
+			}
+			if len(bucket.rows) == 0 {
+				delete(d.rows, key)
+				d.keyCount--
+			} else {
+				bucket.count = len(bucket.rows)
+				d.rows[key] = bucket
+			}
+		}
+		d.chargedBytes = 96*d.rowCount + 24*d.boundaryCount
+		d.checksum = d.sum()
+		h.through, h.checksum = d.through, historyCoverageSum(d.through)
+	case "generation":
+		h.generation++
+	case "row":
+		for key, bucket := range d.rows {
+			bucket.rows[0].checksum ^= 1
+			d.rows[key] = bucket
+		}
+	case "boundary":
+		d.boundaries[0].checksum ^= 1
+	case "count":
+		d.rowCount++
+	case "disabled":
+		h.disabled = true
+	}
+}
+
+func TestAgentTailDiscardRecovery(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"cold", "missing", "stale", "generation", "row", "boundary", "count", "disabled"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f := newServiceFixture(t, serviceDeps{})
+			b := registerPrivate(t, f.service, 100)
+			request := memoryWrite(b, 20, 1, "retained")
+			receipt, err := f.service.WritePrivate(ctx, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := f.store.Durable()
+			for phase := range 2 {
+				if phase == 1 {
+					reopenScoped(t, f, DefaultLimits())
+				}
+				damageCommandDirectory(f.service, mode)
+				got, err := f.service.WritePrivate(ctx, request)
+				if err != nil || !reflect.DeepEqual(got, receipt) {
+					t.Fatalf("retry lost receipt: %+v %v", got, err)
+				}
+				mismatch := memoryWrite(b, 20, 2, "changed")
+				if _, err := f.service.WritePrivate(ctx, mismatch); !errors.Is(err, ErrCommandMismatch) {
+					t.Fatalf("reused ID accepted after directory loss: %v", err)
+				}
+				if _, err := f.service.CommandStatus(ctx, CommandLookup{Binding: b, CommandID: privateID(19), SubmissionSHA256: receipt.SubmissionSHA256}); !errors.Is(err, ErrUnavailable) {
+					t.Fatalf("absent ID gained a receipt: %v", err)
+				}
+				if f.store.Durable() != before {
+					t.Fatal("directory recovery appended")
+				}
+			}
+		})
+	}
+	t.Run("cold_load", func(t *testing.T) {
+		t.Parallel()
+		f := newPaidFixture(t)
+		p := f.reserve(t)
+		f.dispatch(t, p)
+		result := f.result(t, p, 10, 2)
+		f.append(t, result)
+		correction := paidCorrection(f, t, p, result, 19, 2)
+		f.append(t, correction)
+		pending := f.reserve(t)
+		before := f.store.Durable()
+		for _, mode := range []string{"cold", "missing", "reopen"} {
+			if mode == "reopen" {
+				reopenScoped(t, f.serviceFixture, DefaultLimits())
+			}
+			f.service.mu.Lock()
+			f.service.p.paidHotLimit = 0
+			f.service.p.prunePaid()
+			f.service.mu.Unlock()
+			damageCommandDirectory(f.service, mode)
+			if v := f.view(t, p.AttemptID); v.SettledMicros != "21" || v.HeldMicros != "0" || v.Version != 4 || v.Fenced {
+				t.Fatalf("cold corrected amount changed: %+v", v)
+			}
+			if v := f.view(t, pending.AttemptID); v.HeldMicros != "120" || v.SettledMicros != "0" || v.State != "reserved" {
+				t.Fatalf("pending hold changed: %+v", v)
+			}
+			if v := f.budget(t, p.AdmissionPeriod); v.SettledMicros != "21" || v.HeldMicros != "120" {
+				t.Fatalf("directory recovery changed exposure: %+v", v)
+			}
+			if f.store.Durable() != before {
+				t.Fatal("cold paid recovery appended")
+			}
+		}
+	})
 }
 
 func TestHistoryIndexAuthoritativeCorruption(t *testing.T) {

@@ -42,7 +42,7 @@ func (s *Service) paidObjectSelected(ctx context.Context, a paidAttempt, ref led
 	// Prior evidence remains selectable after a correction. This is an explicit
 	// historical query, not a scan in dispatch or an ordinary settlement.
 	found := false
-	err := s.scan(ctx, a.sequence-2, s.p.through, func(c ledger.Commit) error {
+	err := s.scanDirectory(ctx, directoryKey{kind: directoryPaid, id: a.admission.AttemptID}, a.sequence-2, s.p.through, func(c ledger.Commit) error {
 		_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err == nil && g != nil && g.receipt.AttemptID == a.admission.AttemptID && selected(g.result) {
 			found = true
@@ -109,7 +109,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 				}
 			}
 			if replayEvidence == (ledger.ObjectRef{}) {
-				err = s.scan(ctx, a.sequence-2, selectedThrough, func(c ledger.Commit) error {
+				err = s.scanDirectory(ctx, directoryKey{kind: directoryPaid, id: a.admission.AttemptID}, a.sequence-2, selectedThrough, func(c ledger.Commit) error {
 					_, _, _, group, _, _, err := decodeFamily(draftsOf(c), c.First)
 					if err == nil && group != nil && group.result != nil && group.receipt.AttemptID == a.admission.AttemptID && group.result.EvidenceObject != nil {
 						evidenceBytes = max(evidenceBytes, group.result.EvidenceObject.Bytes)
@@ -166,7 +166,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 		if replayRequired {
 			// A correction does not erase earlier selected observation objects.
 			// Scan metadata first; read only bounded evidence, one at a time.
-			err = s.scan(ctx, a.sequence-2, selectedThrough, func(c ledger.Commit) error {
+			err = s.scanDirectory(ctx, directoryKey{kind: directoryPaid, id: a.admission.AttemptID}, a.sequence-2, selectedThrough, func(c ledger.Commit) error {
 				if replayEvidence != (ledger.ObjectRef{}) {
 					return nil
 				}

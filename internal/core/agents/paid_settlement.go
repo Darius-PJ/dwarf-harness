@@ -383,7 +383,7 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 	if errors.Is(err, ErrNoEffect) {
 		sequence := prior.evidence[ref.SHA256]
 		var receipt PaidReceipt
-		err = s.scan(ctx, sequence-3, sequence, func(c ledger.Commit) error {
+		err = s.scanDirectory(ctx, directoryKey{kind: directoryPaid, id: request.AttemptID}, sequence-3, sequence, func(c ledger.Commit) error {
 			_, _, _, g, _, _, e := decodeFamily(draftsOf(c), c.First)
 			if e == nil && g != nil && c.Last == sequence {
 				receipt, e = copyPaidReceipt(g, s.p.through)

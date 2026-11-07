@@ -162,9 +162,9 @@ func (s *Service) credentialVersionExists(ctx context.Context, id uuid.UUID, thr
 	return found, err
 }
 
-// loadPaid is one explicit cold scan for a historical ID, retaining only that
-// attempt and its admission tariff. It does not read an object or re-authorize
-// a fact which was validated at its original ledger position.
+// loadPaid folds one attempt's ordered occurrences and its exact admission
+// route version. Missing directory metadata retains the original history scan;
+// neither path reads objects or re-authorizes an accepted fact.
 func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, evidence ledger.Digest) (paidAttempt, bool, error) {
 	if bytes.Compare(id[:], s.p.maxAttempt[:]) > 0 {
 		return paidAttempt{}, false, nil
@@ -176,17 +176,22 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 		return a, true, nil
 	}
 	var a paidAttempt
-	routes := map[uuid.UUID]ledger.Profile{}
-	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
+	routes := map[uuid.UUID]ledger.RuntimePaidRouteConfigured{}
+	visit := func(c ledger.Commit) error {
 		_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil || g == nil {
 			return err
 		}
 		if g.route != nil {
-			routes[g.route.RouteID] = g.route.Profile
+			routes[g.route.RouteID] = *g.route
 		}
 		if v := g.reserved; v != nil && v.AttemptID == id {
-			a = paidAttempt{admission: *v, profile: routes[v.RouteID], origin: originOf(g.ids), version: 1, sequence: c.First + 1, held: true, state: "reserved"}
+			route, found := routes[v.RouteID]
+			digest, digestErr := route.Profile.SHA256()
+			if !found || route.Version != v.RouteVersion || digestErr != nil || digest != v.ProfileSHA256 {
+				return ErrIntegrity
+			}
+			a = paidAttempt{admission: *v, profile: route.Profile, origin: originOf(g.ids), version: 1, sequence: c.First + 1, held: true, state: "reserved"}
 		}
 		if a.version == 0 || g.receipt.AttemptID != id {
 			return nil
@@ -205,7 +210,40 @@ func (s *Service) loadPaid(ctx context.Context, id uuid.UUID, through uint64, ev
 		}
 		a.receipt, a.receiptSequence = g.receipt, c.Last
 		return nil
-	})
+	}
+	var err error
+	rows, hit, err := s.history.occurrences(directoryKey{kind: directoryPaid, id: id}, 0, through)
+	if err != nil {
+		return a, false, err
+	}
+	if hit && len(rows) != 0 {
+		admission := rows[0]
+		routeRows, routeHit, routeErr := s.history.occurrences(directoryKey{kind: directoryRoute, id: admission.link, version: int64(admission.linkSequence)}, 0, admission.first-1)
+		if routeErr != nil {
+			return a, false, routeErr
+		}
+		if !routeHit || len(routeRows) != 1 {
+			hit = false
+		} else {
+			var c ledger.Commit
+			c, err = s.directoryCommit(ctx, routeRows[0], through)
+			if err == nil {
+				err = visit(c)
+			}
+			for _, row := range rows {
+				if err != nil {
+					break
+				}
+				c, err = s.directoryCommit(ctx, row, through)
+				if err == nil {
+					err = visit(c)
+				}
+			}
+		}
+	}
+	if !hit {
+		err = s.scan(ctx, 0, through, visit)
+	}
 	if err == nil && evidence != (ledger.Digest{}) && a.evidence[evidence] != 0 {
 		err = ErrNoEffect
 	}

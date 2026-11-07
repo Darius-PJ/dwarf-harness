@@ -139,7 +139,7 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 		// authoritative read without rereading immutable source witnesses.
 		floor := plan.floor
 		var accepted ledger.Commit
-		accepted, _, err = s.readCommittedRange(context.Background(), committed.First, committed.Last, nil)
+		accepted, _, err = s.readCommittedRange(context.Background(), committed.First, committed.Last, s.history.ackCheckpoint(s.p.through))
 		if err == nil {
 			for _, r := range accepted.Records {
 				floor = max(floor, r.EventTimeNS)
@@ -147,9 +147,7 @@ func (s *Service) executeReview(ctx context.Context, caller scopedCaller, operat
 		}
 		if err == nil {
 			s.p.installReview(plan)
-			s.p.publishHistory(nil, nil, committed.Last)
-			s.history.advance(s.p.through, committed.Last, draftsOf(accepted))
-			s.history.warmSources(accepted)
+			s.publishCommitLocked(accepted, nil, nil)
 			s.p.reviewFloor, s.p.through = floor, committed.Last
 			if bytes.Compare(input.id[:], s.p.maxCommand[:]) > 0 {
 				s.p.maxCommand = input.id

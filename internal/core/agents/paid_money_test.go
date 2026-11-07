@@ -59,6 +59,11 @@ func TestPaidSettlementAndCorrection(t *testing.T) {
 			t.Fatalf("old correction charged current period: %+v", v)
 		}
 		reopenScoped(t, f.serviceFixture, DefaultLimits())
+		f.service.mu.Lock()
+		f.service.p.paidHotLimit = 0
+		f.service.p.prunePaid()
+		f.service.mu.Unlock()
+		damageHistoryCache(f.service, "discarded")
 		if v := f.view(t, p.AttemptID); v.SettledMicros != "22" || v.Version != 5 || v.Fenced {
 			t.Fatalf("correction recovery: %+v", v)
 		}

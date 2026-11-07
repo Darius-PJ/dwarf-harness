@@ -212,17 +212,21 @@ func historyCoverageSum(through uint64) uint32 {
 // or acquisition of Service.mu. Projection callers take Service.mu first;
 // unlocked command/source readers touch only this mutex.
 type historyIndex struct {
-	mu       sync.Mutex
-	through  uint64
-	checksum uint32
-	entries  map[historyKey]*list.Element
-	lru      list.List
-	bytes    int
-	disabled bool
+	mu         sync.Mutex
+	through    uint64
+	checksum   uint32
+	entries    map[historyKey]*list.Element
+	lru        list.List
+	bytes      int
+	disabled   bool
+	generation uint64
+	directory  commandDirectory
 }
 
 func newHistoryIndex() *historyIndex {
-	return &historyIndex{checksum: historyCoverageSum(0), entries: make(map[historyKey]*list.Element)}
+	h := &historyIndex{checksum: historyCoverageSum(0), entries: make(map[historyKey]*list.Element)}
+	h.directory = newCommandDirectory(0)
+	return h
 }
 
 func (h *historyIndex) clearLocked() {
@@ -254,6 +258,8 @@ func (h *historyIndex) close() {
 	}
 	h.mu.Lock()
 	h.clearLocked()
+	h.directory = commandDirectory{}
+	h.generation++
 	h.disabled = true
 	h.mu.Unlock()
 }
@@ -282,6 +288,10 @@ func (h *historyIndex) get(key historyKey, after, through uint64) (historyEntry,
 		}
 	} else if key.kind == historySource {
 		if !e.found || e.first == 0 || e.first > key.sequence || key.sequence > e.last || e.last > through || through > h.through {
+			return historyEntry{}, false
+		}
+	} else if key.kind == historyCommand && e.found {
+		if e.first == 0 || e.first <= after || e.first > e.last || e.last > through || through > h.through {
 			return historyEntry{}, false
 		}
 	} else {
@@ -361,7 +371,7 @@ func (h *historyIndex) putAckCheckpoint(after uint64, checkpoint *ledger.ReadChe
 // Accepted effects invalidate answers; they do not reduce historical state a
 // second time. A bounded review/assignment scan replaces any reverse index.
 // Call before publishing the projection cursor on BOTH publication paths.
-func (h *historyIndex) advance(after, through uint64, drafts []ledger.Draft) {
+func (h *historyIndex) advance(after uint64, commit ledger.Commit) {
 	if h == nil {
 		return
 	}
@@ -369,8 +379,10 @@ func (h *historyIndex) advance(after, through uint64, drafts []ledger.Draft) {
 	defer h.mu.Unlock()
 	if h.checksum != historyCoverageSum(h.through) || h.through != after {
 		h.clearLocked()
+		h.directory = commandDirectory{}
 	}
-	h.removeLocked(historyKey{kind: historyAckRead})
+	h.generation++
+	h.directory.advance(commit, h.generation)
 	invalidateTask := func(id uuid.UUID) {
 		h.removeLocked(historyKey{kind: historyTask, id: id})
 		for key, node := range h.entries {
@@ -379,7 +391,8 @@ func (h *historyIndex) advance(after, through uint64, drafts []ledger.Draft) {
 			}
 		}
 	}
-	for _, draft := range drafts {
+	for _, record := range commit.Records {
+		draft := record.Draft
 		var err error
 		switch draft.Type {
 		case ledger.TypeCommand:
@@ -440,7 +453,7 @@ func (h *historyIndex) advance(after, through uint64, drafts []ledger.Draft) {
 			h.clearLocked()
 		}
 	}
-	h.through, h.checksum = through, historyCoverageSum(through)
+	h.through, h.checksum = commit.Last, historyCoverageSum(commit.Last)
 }
 
 // These wrappers add only state/sequence scalars to existing payload codecs.
@@ -652,7 +665,7 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 				return commandMatch{found: true, command: command}, true
 			}
 			if uint64(len(v.Drafts)) == e.last-e.first+1 {
-				g, scoped, review, paid, _, loop, err := decodeFamily(v.Drafts, e.first)
+				g, scoped, review, paid, registration, loop, err := decodeFamily(v.Drafts, e.first)
 				occurrences := 0
 				for _, draft := range v.Drafts {
 					if draft.Type == ledger.TypeCommand {
@@ -664,8 +677,8 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 						}
 					}
 				}
-				if err == nil && occurrences == 1 && (g != nil || scoped != nil || review != nil || paid != nil || loop != nil) {
-					return commandMatch{found: true, command: command, group: g, scoped: scoped, review: review, paid: paid, loop: loop}, true
+				if err == nil && occurrences == 1 && (g != nil || scoped != nil || review != nil || paid != nil || registration != nil || loop != nil) {
+					return commandMatch{found: true, command: command, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}, true
 				}
 			}
 		}
@@ -675,9 +688,6 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 }
 
 func (h *historyIndex) putCommand(id uuid.UUID, after, through uint64, match commandMatch, commit ledger.Commit) {
-	if match.registration != nil {
-		return
-	}
 	e := historyEntry{key: historyKey{kind: historyCommand, id: id}, from: through, after: after, found: match.found}
 	if match.found {
 		command, err := match.command.Encode()
@@ -687,7 +697,7 @@ func (h *historyIndex) putCommand(id uuid.UUID, after, through uint64, match com
 		v := historyCommandValue{Command: command}
 		// Unconsumed families need only the F0 identity, not arbitrary
 		// payloads that this service neither interprets nor retains.
-		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil || match.loop != nil {
+		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil || match.registration != nil || match.loop != nil {
 			v.Drafts = draftsOf(commit)
 		}
 		e.first, e.last = commit.First, commit.Last
@@ -706,6 +716,15 @@ type historySourceValue struct {
 }
 
 func (h *historyIndex) source(sequence int64, through uint64, colony uuid.UUID) (ledger.Record, bool) {
+	record, hit := h.acceptedRecord(sequence, through, colony)
+	// Complete-commit payload reuse must not widen source eligibility.
+	if !hit || record.Type != ledger.TypePrivateRevision && record.Type != ledger.TypePrivateScopedRevision && len(record.BodyRefs) == 0 {
+		return ledger.Record{}, false
+	}
+	return record, true
+}
+
+func (h *historyIndex) acceptedRecord(sequence int64, through uint64, colony uuid.UUID) (ledger.Record, bool) {
 	key := historyKey{kind: historySource, sequence: uint64(sequence)}
 	e, hit := h.get(key, 0, through)
 	if !hit {
@@ -778,8 +797,325 @@ func (h *historyIndex) warmSources(commit ledger.Commit) {
 		return
 	}
 	for _, record := range commit.Records {
-		if record.Type == ledger.TypePrivateRevision || record.Type == ledger.TypePrivateScopedRevision || record.Type == ledger.TypePrivateTurnRevision || len(record.BodyRefs) != 0 {
-			h.putSource(record, commit.First, commit.Last, commit.Last)
+		h.putSource(record, commit.First, commit.Last, commit.Last)
+	}
+}
+
+const (
+	directoryCommand byte = iota + 1
+	directoryTurnBound
+	directoryTurnResult
+	directoryToolStart
+	directoryToolResult
+	directoryRefusedEffect
+	directoryPaid
+	directoryRoute
+	directoryTurn
+	directoryTurnStatus
+)
+
+type directoryKey struct {
+	kind    byte
+	id      uuid.UUID
+	version int64
+}
+
+// Rows retain only identity and position metadata. Their charge is 96 bytes;
+// map buckets, slice headers and spare capacity are additional container space.
+type directoryRow struct {
+	sequence, first, last  uint64
+	digest                 ledger.Digest
+	link                   uuid.UUID
+	linkSequence, boundary uint64
+	checksum               uint32
+}
+
+func (r directoryRow) sum(key directoryKey) uint32 {
+	var data [113]byte
+	data[0] = key.kind
+	copy(data[1:17], key.id[:])
+	binary.LittleEndian.PutUint64(data[17:25], uint64(key.version))
+	binary.LittleEndian.PutUint64(data[25:33], r.sequence)
+	binary.LittleEndian.PutUint64(data[33:41], r.first)
+	binary.LittleEndian.PutUint64(data[41:49], r.last)
+	copy(data[49:81], r.digest[:])
+	copy(data[81:97], r.link[:])
+	binary.LittleEndian.PutUint64(data[97:105], r.linkSequence)
+	binary.LittleEndian.PutUint64(data[105:], r.boundary)
+	return crc32.ChecksumIEEE(data[:])
+}
+
+type directoryRows struct {
+	rows  []directoryRow
+	count int
+}
+
+// The genesis boundary is implicit. Each complete commit charges 24 bytes.
+type directoryBoundary struct {
+	first, last uint64
+	checksum    uint32
+}
+
+func (b directoryBoundary) sum() uint32 {
+	var data [16]byte
+	binary.LittleEndian.PutUint64(data[:8], b.first)
+	binary.LittleEndian.PutUint64(data[8:], b.last)
+	return crc32.ChecksumIEEE(data[:])
+}
+
+type commandDirectory struct {
+	known               bool
+	through, generation uint64
+	rows                map[directoryKey]directoryRows
+	boundaries          []directoryBoundary
+	rowCount, keyCount  int
+	boundaryCount       int
+	chargedBytes        int // Excludes map/slice/container overhead and the LRU.
+	checksum            uint32
+}
+
+func newCommandDirectory(generation uint64) commandDirectory {
+	d := commandDirectory{known: true, generation: generation, rows: make(map[directoryKey]directoryRows)}
+	d.checksum = d.sum()
+	return d
+}
+
+func (d *commandDirectory) sum() uint32 {
+	var data [48]byte
+	binary.LittleEndian.PutUint64(data[:8], d.through)
+	binary.LittleEndian.PutUint64(data[8:16], d.generation)
+	binary.LittleEndian.PutUint64(data[16:24], uint64(d.rowCount))
+	binary.LittleEndian.PutUint64(data[24:32], uint64(d.keyCount))
+	binary.LittleEndian.PutUint64(data[32:40], uint64(d.boundaryCount))
+	binary.LittleEndian.PutUint64(data[40:], uint64(d.chargedBytes))
+	return crc32.ChecksumIEEE(data[:])
+}
+
+func (d *commandDirectory) valid(generation uint64) bool {
+	if !d.known || d.generation != generation || d.checksum != d.sum() ||
+		d.keyCount != len(d.rows) || d.boundaryCount != len(d.boundaries) ||
+		d.rowCount < d.keyCount || d.boundaryCount == 0 && d.through != 0 ||
+		d.chargedBytes != 96*d.rowCount+24*d.boundaryCount {
+		return false
+	}
+	if len(d.boundaries) != 0 {
+		b := d.boundaries[len(d.boundaries)-1]
+		return b.first > 0 && b.first <= b.last && b.last == d.through && b.checksum == b.sum()
+	}
+	return true
+}
+
+// boundary checks only the search path, not the entire immutable prefix.
+// A damaged boundary is unknown, distinct from a valid partial cursor.
+func (d *commandDirectory) boundary(sequence uint64) (bool, bool) {
+	if sequence == 0 {
+		return true, true
+	}
+	lo, hi := 0, len(d.boundaries)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		b := d.boundaries[mid]
+		if b.first == 0 || b.last < b.first || b.checksum != b.sum() ||
+			mid == 0 && b.first != 1 || mid > 0 && d.boundaries[mid-1].last+1 != b.first {
+			return false, false
+		}
+		if b.last < sequence {
+			lo = mid + 1
+		} else {
+			hi = mid
 		}
 	}
+	return lo < len(d.boundaries) && d.boundaries[lo].last == sequence, true
+}
+
+func (d *commandDirectory) add(key directoryKey, row directoryRow) {
+	bucket, exists := d.rows[key]
+	if !exists {
+		d.keyCount++
+	}
+	row.boundary = uint64(len(d.boundaries))
+	row.checksum = row.sum(key)
+	bucket.rows = append(bucket.rows, row)
+	bucket.count++
+	d.rows[key] = bucket
+	d.rowCount++
+	d.chargedBytes += 96
+}
+
+// Called only for an accepted, contiguous commit. Decode failure loses the
+// accelerator, never accepted state. Group/authority validation stays upstream.
+func (d *commandDirectory) advance(c ledger.Commit, generation uint64) {
+	if !d.valid(generation-1) || c.First != d.through+1 || c.Last < c.First || uint64(len(c.Records)) != c.Last-c.First+1 {
+		*d = commandDirectory{}
+		return
+	}
+	for _, r := range c.Records {
+		row := directoryRow{sequence: r.Seq, first: c.First, last: c.Last}
+		var key directoryKey
+		var err error
+		switch r.Type {
+		case ledger.TypeCommand:
+			var v ledger.Command
+			v, err = ledger.DecodeCommand(r.Payload)
+			key = directoryKey{kind: directoryCommand, id: v.CommandID}
+			row.digest = v.SubmissionSHA256
+		case ledger.TypeRuntimeTurnBound:
+			key = directoryKey{kind: directoryTurnBound, id: r.TurnID}
+			d.add(directoryKey{kind: directoryTurnStatus, id: r.TurnID}, row)
+		case ledger.TypeRuntimeTurnResult:
+			key = directoryKey{kind: directoryTurnResult, id: r.TurnID}
+			d.add(directoryKey{kind: directoryTurnStatus, id: r.TurnID}, row)
+		case ledger.TypeRuntimeToolStarted:
+			var v ledger.RuntimeToolStarted
+			v, err = ledger.DecodeRuntimeToolStarted(r.Payload)
+			key = directoryKey{kind: directoryToolStart, id: v.ToolID}
+			row.link, row.linkSequence = v.EffectCommandID, r.Seq
+		case ledger.TypeRuntimeToolResult:
+			var v ledger.RuntimeToolResult
+			v, err = ledger.DecodeRuntimeToolResult(r.Payload)
+			key = directoryKey{kind: directoryToolResult, id: v.ToolID}
+			if err == nil && v.EffectReceiptSequence == 0 {
+				startKey := directoryKey{kind: directoryToolStart, id: v.ToolID}
+				starts := d.rows[startKey]
+				if len(starts.rows) != 1 || starts.count != 1 {
+					d.known = false
+					return
+				}
+				start := starts.rows[0]
+				if start.sequence != uint64(v.StartedSequence) || start.checksum != start.sum(startKey) {
+					d.known = false
+					return
+				}
+				if start.link != (uuid.UUID{}) {
+					d.add(directoryKey{kind: directoryRefusedEffect, id: start.link}, row)
+				}
+			}
+		case ledger.TypeRuntimePaidReserved:
+			var v ledger.RuntimePaidReserved
+			v, err = ledger.DecodeRuntimePaidReserved(r.Payload)
+			key = directoryKey{kind: directoryPaid, id: v.AttemptID}
+			row.link, row.linkSequence = v.RouteID, uint64(v.RouteVersion)
+		case ledger.TypeRuntimePaidDispatchIntent:
+			var v ledger.RuntimePaidDispatchIntent
+			v, err = ledger.DecodeRuntimePaidDispatchIntent(r.Payload)
+			key = directoryKey{kind: directoryPaid, id: v.AttemptID}
+		case ledger.TypeRuntimePaidResult:
+			var v ledger.RuntimePaidResult
+			v, err = ledger.DecodeRuntimePaidResult(r.Payload)
+			key = directoryKey{kind: directoryPaid, id: v.AttemptID}
+		case ledger.TypeRuntimePaidOverrunAcknowledged:
+			var v ledger.RuntimePaidOverrunAcknowledged
+			v, err = ledger.DecodeRuntimePaidOverrunAcknowledged(r.Payload)
+			key = directoryKey{kind: directoryPaid, id: v.AttemptID}
+		case ledger.TypeRuntimePaidRouteConfigured:
+			var v ledger.RuntimePaidRouteConfigured
+			v, err = ledger.DecodeRuntimePaidRouteConfigured(r.Payload)
+			key = directoryKey{kind: directoryRoute, id: v.RouteID, version: v.Version}
+		}
+		if err != nil {
+			d.known = false
+			return
+		}
+		if key.kind != 0 {
+			d.add(key, row)
+		}
+		// The manifest also checks envelope origin on otherwise unselected
+		// records. Preserve that check, including unconsumed families.
+		if r.TurnID != (uuid.UUID{}) {
+			d.add(directoryKey{kind: directoryTurn, id: r.TurnID}, row)
+		}
+	}
+	b := directoryBoundary{first: c.First, last: c.Last}
+	b.checksum = b.sum()
+	d.boundaries = append(d.boundaries, b)
+	d.boundaryCount++
+	d.chargedBytes += 24
+	d.through, d.generation = c.Last, generation
+	d.checksum = d.sum()
+}
+
+// occurrences returns copied immutable positions. Zero rows prove absence only
+// at exact coverage and generation; all other misses take the legacy scan.
+func (h *historyIndex) occurrences(key directoryKey, after, through uint64) ([]directoryRow, bool, error) {
+	if h == nil {
+		return nil, false, nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	d := &h.directory
+	if h.disabled || h.checksum != historyCoverageSum(h.through) || !d.valid(h.generation) || d.through != h.through {
+		return nil, false, nil
+	}
+	if through > d.through {
+		return nil, false, nil
+	}
+	a, aOK := d.boundary(after)
+	b, bOK := d.boundary(through)
+	if !aOK || !bOK {
+		d.known = false
+		return nil, false, nil
+	}
+	if after > through || !a || !b {
+		return nil, true, ledger.ErrCursor
+	}
+	bucket := d.rows[key]
+	if bucket.count != len(bucket.rows) {
+		d.known = false
+		return nil, false, nil
+	}
+	var rows []directoryRow
+	var previous uint64
+	for _, row := range bucket.rows {
+		if row.sequence <= previous || !d.validRow(key, row) {
+			d.known = false
+			return nil, false, nil
+		}
+		previous = row.sequence
+		if row.first > after && row.last <= through {
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) == 0 && through != d.through {
+		return nil, false, nil
+	}
+	return rows, true, nil
+}
+
+// Membership at the accepted frontier does not search boundaries or decode a
+// prefix. The first occurrence suffices even when foreign history repeats IDs.
+func (h *historyIndex) membership(key directoryKey, through uint64) (directoryRow, bool, bool) {
+	if h == nil {
+		return directoryRow{}, false, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	d := &h.directory
+	if h.disabled || h.checksum != historyCoverageSum(h.through) || through != h.through ||
+		d.through != through || !d.valid(h.generation) {
+		return directoryRow{}, false, false
+	}
+	bucket := d.rows[key]
+	if bucket.count != len(bucket.rows) {
+		d.known = false
+		return directoryRow{}, false, false
+	}
+	if len(bucket.rows) == 0 {
+		return directoryRow{}, false, true
+	}
+	row := bucket.rows[0]
+	if !d.validRow(key, row) {
+		d.known = false
+		return directoryRow{}, false, false
+	}
+	return row, true, true
+}
+
+func (d *commandDirectory) validRow(key directoryKey, row directoryRow) bool {
+	if row.boundary >= uint64(len(d.boundaries)) || row.first == 0 ||
+		row.first > row.sequence || row.sequence > row.last ||
+		row.last > d.through || row.checksum != row.sum(key) {
+		return false
+	}
+	b := d.boundaries[row.boundary]
+	return b.first == row.first && b.last == row.last && b.checksum == b.sum()
 }

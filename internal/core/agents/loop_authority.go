@@ -131,8 +131,14 @@ func (s *Service) loopEffectReceipt(ctx context.Context, tool loopToolState, res
 }
 
 // Refused native command IDs cannot gain an effect later, including after Open.
-// A maximum proves the usual fresh-command case without retaining tombstones.
+// Complete directory membership includes ended/pruned tools across this Open.
 func (s *Service) loopEffectAvailable(ctx context.Context, id uuid.UUID, through uint64) error {
+	if row, found, hit := s.history.membership(directoryKey{kind: directoryRefusedEffect, id: id}, through); hit {
+		if found {
+			return inconsistent(row.sequence, "ended tool native command")
+		}
+		return nil
+	}
 	if bytes.Compare(id[:], s.p.maxLoopEffect[:]) > 0 {
 		return nil
 	}

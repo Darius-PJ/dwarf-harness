@@ -161,15 +161,17 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 			return plan, ErrInvalid
 		}
 		// An ended binding cannot be rebound, even if the native slot still exists.
-		duplicate := false
-		err = s.scan(ctx, native.first-1, through, func(c ledger.Commit) error {
-			for _, r := range c.Records {
-				if r.Type == ledger.TypeRuntimeTurnBound && r.TurnID == sub.TurnID {
-					duplicate = true
+		_, duplicate, hit := s.history.membership(directoryKey{kind: directoryTurnBound, id: sub.TurnID}, through)
+		if !hit {
+			err = s.scan(ctx, native.first-1, through, func(c ledger.Commit) error {
+				for _, r := range c.Records {
+					if r.Type == ledger.TypeRuntimeTurnBound && r.TurnID == sub.TurnID {
+						duplicate = true
+					}
 				}
-			}
-			return nil
-		})
+				return nil
+			})
+		}
 		if err != nil {
 			return plan, err
 		}
@@ -192,22 +194,25 @@ func (s *Service) planLoop(ctx context.Context, g *loopGroup, first uint64) (loo
 			return plan, ErrInvalid
 		}
 		if bytes.Compare(a.ToolID[:], s.p.maxLoopTool[:]) <= 0 {
-			duplicate := false
-			err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-				for _, r := range c.Records {
-					if r.Type != ledger.TypeRuntimeToolStarted {
-						continue
+			_, duplicate, hit := s.history.membership(directoryKey{kind: directoryToolStart, id: a.ToolID}, through)
+			var err error
+			if !hit {
+				err = s.scan(ctx, 0, through, func(c ledger.Commit) error {
+					for _, r := range c.Records {
+						if r.Type != ledger.TypeRuntimeToolStarted {
+							continue
+						}
+						v, err := ledger.DecodeRuntimeToolStarted(r.Payload)
+						if err != nil {
+							return err
+						}
+						if v.ToolID == a.ToolID {
+							duplicate = true
+						}
 					}
-					v, err := ledger.DecodeRuntimeToolStarted(r.Payload)
-					if err != nil {
-						return err
-					}
-					if v.ToolID == a.ToolID {
-						duplicate = true
-					}
-				}
-				return nil
-			})
+					return nil
+				})
+			}
 			if err != nil {
 				return plan, err
 			}
