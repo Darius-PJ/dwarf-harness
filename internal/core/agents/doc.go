@@ -397,10 +397,10 @@
 // segment through the latest source's complete commit. With 64 MiB segments,
 // that start may still be the log's. A contiguous nonduplicate scoped Submit
 // reuses one authoritative interval read for reduction and acknowledgement.
-// Every warm page or exact read rehashes its whole containing segment prefix;
-// the warm-byte allowance includes twice that prefix (W contains 2P). Refresh,
-// Since and exact reads cost O(prefix bytes hashed + suffix decoded), never
-// constant. Per-commit acknowledgement readback pays the same prefix rehash.
+// Every warm page or exact read rehashes its whole containing segment prefix.
+// Refresh, Since and exact reads cost O(prefix bytes hashed + suffix decoded),
+// never constant. Per-commit acknowledgement readback pays the same prefix
+// rehash.
 // Tokens are keyed by their exact complete-commit After and survive accepted
 // advances. Only successful Open's own replay, successful acknowledgement
 // readbacks (including review), a completed numeric refresh, and a Since page
