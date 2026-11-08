@@ -14,7 +14,7 @@ import (
 
 func TestGitProcessFencePublicationCrash(t *testing.T) {
 	t.Parallel()
-	for _, shape := range []string{"empty", "pending", "identity", "invalid-identity", "rewrite", "running-only", "wrong-id", "extra-file"} {
+	for _, shape := range []string{"pending", "identity", "invalid-identity", "rewrite", "running-only", "wrong-id", "extra-file", "extra-directory"} {
 		t.Run(shape, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
@@ -29,14 +29,11 @@ func TestGitProcessFencePublicationCrash(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			dir := filepath.Dir(o.fencePath(f.RunID))
-			if err := os.Mkdir(dir, 0o700); err != nil {
-				t.Fatal(err)
-			}
+			path := o.fencePath(f.RunID)
+			extra := filepath.Join(filepath.Dir(path), "unknown")
 			var job windows.Handle
 			var pi windows.ProcessInformation
 			switch shape {
-			case "empty":
 			case "identity", "invalid-identity":
 				identity := filepath.Join(root, "identity.json")
 				if err := os.Rename(identity, identity+".pending"); err != nil {
@@ -70,6 +67,9 @@ func TestGitProcessFencePublicationCrash(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if err := o.writeFence(f); err != nil {
+					t.Fatal(err)
+				}
 				fallthrough
 			default:
 				if shape == "running-only" {
@@ -83,11 +83,17 @@ func TestGitProcessFencePublicationCrash(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(dir, "fence.json.pending"), raw, 0o600); err != nil {
+				if err := os.WriteFile(path+".pending", raw, 0o600); err != nil {
 					t.Fatal(err)
 				}
 				if shape == "extra-file" {
-					if err := os.WriteFile(filepath.Join(dir, "unknown"), []byte("keep"), 0o600); err != nil {
+					if err := os.WriteFile(extra, []byte("keep"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if shape == "extra-directory" {
+					extra = filepath.Join(filepath.Dir(path), uuid.NewV7().String()+".json")
+					if err := os.Mkdir(extra, 0o700); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -103,10 +109,10 @@ func TestGitProcessFencePublicationCrash(t *testing.T) {
 					_ = windows.CloseHandle(pi.Thread)
 				}
 			}()
-			negative := shape == "running-only" || shape == "wrong-id" || shape == "extra-file"
+			negative := shape == "running-only" || shape == "wrong-id" || shape == "extra-file" || shape == "extra-directory"
 			var before []byte
 			if negative {
-				before, err = os.ReadFile(filepath.Join(dir, "fence.json.pending"))
+				before, err = os.ReadFile(path + ".pending")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -116,9 +122,21 @@ func TestGitProcessFencePublicationCrash(t *testing.T) {
 				if err == nil || opened != nil {
 					t.Fatal("unsafe publication debris admitted", err)
 				}
-				after, err := os.ReadFile(filepath.Join(dir, "fence.json.pending"))
+				after, err := os.ReadFile(path + ".pending")
 				if err != nil || !bytes.Equal(before, after) {
 					t.Fatal("refused Open swept unknown state", err)
+				}
+				if shape == "extra-file" {
+					data, err := os.ReadFile(extra)
+					if err != nil || string(data) != "keep" {
+						t.Fatal("refused Open changed an unknown file", err)
+					}
+				}
+				if shape == "extra-directory" {
+					info, err := os.Lstat(extra)
+					if err != nil || !info.IsDir() {
+						t.Fatal("refused Open swept a directory", err)
+					}
 				}
 				return
 			}
@@ -128,12 +146,10 @@ func TestGitProcessFencePublicationCrash(t *testing.T) {
 			defer opened.Close()
 			want := Debris{}
 			switch shape {
-			case "empty":
-				want.EmptyRuns = 1
 			case "pending":
 				want.PendingRuns = 1
 			case "identity", "invalid-identity":
-				want.EmptyRuns, want.PendingIdentities = 1, 1
+				want.PendingIdentities = 1
 			case "rewrite":
 				if len(report.Pending) != 1 {
 					t.Fatal("rewrite lost authoritative fence")
@@ -150,8 +166,11 @@ func TestGitProcessFencePublicationCrash(t *testing.T) {
 			if report.Debris != want {
 				t.Fatalf("debris shape count: %+v want %+v", report.Debris, want)
 			}
-			if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
-				t.Fatal("confirmed debris retained", err)
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("confirmed authoritative fence retained", err)
+			}
+			if _, err := os.Stat(path + ".pending"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("confirmed publication debris retained", err)
 			}
 			result, err := opened.Run(context.Background(), Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()})
 			if err != nil || !result.TreeClosed || result.ExitCode != 0 {

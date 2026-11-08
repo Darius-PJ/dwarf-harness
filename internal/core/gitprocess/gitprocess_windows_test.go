@@ -25,9 +25,10 @@ import (
 )
 
 type processNotice struct {
-	Kind string
-	PID  int
-	Job  string
+	Kind  string
+	PID   int
+	Job   string
+	RunID uuid.UUID
 }
 
 func nativeOwner(t *testing.T, root string) *Owner {
@@ -64,7 +65,7 @@ func heldGit(t *testing.T) Spec {
 	alias := `!"` + filepath.ToSlash(exe) + `" -test.run=^TestGitProcessHelper$`
 	return Spec{Program: gitProgram(t), Args: []string{"-c", "alias.hold=" + alias, "hold"}, Env: append(os.Environ(), "DWARF_GITPROCESS_HELPER=worker")}
 }
-func observer(t *testing.T, pid int) windows.Handle {
+func observer(t *testing.T, pid int, readyAt time.Time) windows.Handle {
 	t.Helper()
 	h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
@@ -73,7 +74,9 @@ func observer(t *testing.T, pid int) windows.Handle {
 	t.Cleanup(func() { _ = windows.CloseHandle(h) })
 	state, err := windows.WaitForSingleObject(h, 0)
 	if err != nil || state != uint32(windows.WAIT_TIMEOUT) {
-		t.Fatalf("observer was not live: %d %v", state, err)
+		var code uint32
+		exitErr := windows.GetExitCodeProcess(h, &code)
+		t.Fatalf("observer was not live: %d %v; exit=%d (%v); since-readiness=%s", state, err, code, exitErr, time.Since(readyAt))
 	}
 	return h
 }
@@ -234,15 +237,17 @@ func TestGitProcessTree(t *testing.T) {
 			}
 			go func() { result, err := o.Run(ctx, spec); done <- ending{result, err} }()
 			var n processNotice
+			var readyAt time.Time
 			select {
 			case n = <-output.notices:
+				readyAt = time.Now()
 			case early := <-done:
 				t.Fatalf("Git failed before readiness: %+v %v", early.result, early.err)
 			}
 			if n.Kind != "child" {
 				t.Fatalf("missing held-descendant readiness: %+v", n)
 			}
-			h := observer(t, n.PID)
+			h := observer(t, n.PID, readyAt)
 			switch mode {
 			case "natural":
 				_, _ = send.Write([]byte("x"))
@@ -266,7 +271,7 @@ func TestGitProcessTree(t *testing.T) {
 			if !got.result.RootExited || !got.result.TreeClosed || !got.result.IOJoined || got.result.TotalProcesses < 3 || got.result.Proof != "live" {
 				t.Fatalf("root exit accepted without tree/I/O closure: %+v %v", got.result, got.err)
 			}
-			state, err := windows.WaitForSingleObject(h, 0)
+			state, err := windows.WaitForSingleObject(h, uint32(o.options.StopGrace/time.Millisecond))
 			if err != nil || state != windows.WAIT_OBJECT_0 {
 				t.Fatalf("claimed tree closure left a live descendant: %d %v", state, err)
 			}
@@ -356,12 +361,83 @@ func TestGitProcessHelper(t *testing.T) {
 		}
 		close(hold.release)
 		os.Exit(0)
+	case "proven-closure", "cleanup-failure":
+		mode := os.Getenv("DWARF_GITPROCESS_HELPER")
+		o, _, err := Open(context.Background(), os.Getenv("DWARF_GITPROCESS_ROOT"), Options{RequireTree: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rootObserver, heldFence windows.Handle
+		defer func() {
+			if rootObserver != 0 {
+				_ = windows.CloseHandle(rootObserver)
+			}
+			if heldFence != 0 {
+				_ = windows.CloseHandle(heldFence)
+			}
+		}()
+		o.observe = func(phase string, f fence) {
+			if phase == "suspended" && mode == "proven-closure" {
+				// Keep the exited PID openable, without retaining the Job.
+				rootObserver, err = windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, f.RootPID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if phase != "closed" {
+				return
+			}
+			if mode == "cleanup-failure" {
+				path, err := windows.UTF16PtrFromString(o.fencePath(f.RunID))
+				if err != nil {
+					t.Fatal(err)
+				}
+				heldFence, err = windows.CreateFile(path, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := json.NewEncoder(os.Stdout).Encode(processNotice{Kind: "closed", PID: int(f.RootPID), RunID: f.RunID}); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "proven-closure" {
+				var b [1]byte
+				_, _ = os.Stdin.Read(b[:])
+				t.Fatal("proven-closure crash barrier was released")
+			}
+		}
+		r, err := o.Run(context.Background(), Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()})
+		var unconfirmed *UnconfirmedError
+		if !errors.As(err, &unconfirmed) || unconfirmed.Reason != "cleanup_failed" || !r.TreeClosed || !r.RootExited || !r.IOJoined {
+			t.Fatalf("removal failure lost proven closure or retained ownership: %+v %v", r, err)
+		}
+		if _, err := o.Run(context.Background(), Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()}); !errors.Is(err, ErrUnconfirmed) {
+			t.Fatal("cleanup failure admitted another Run", err)
+		}
+		for range 2 {
+			if err := o.Close(); !errors.Is(err, ErrUnconfirmed) {
+				t.Fatal("Close hid cleanup failure", err)
+			}
+		}
+		raw, err := readRegular(o.fencePath(r.RunID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := decodeFence(raw)
+		if err != nil || f.State != "running" || f.RunID != r.RunID {
+			t.Fatalf("cleanup failure erased or published over running fence: %+v %v", f, err)
+		}
+		if err := windows.CloseHandle(heldFence); err != nil {
+			t.Fatal(err)
+		}
+		heldFence = 0
+		os.Exit(0)
 	case "worker":
 		system, err := windows.GetSystemDirectory()
 		if err != nil {
 			t.Fatal(err)
 		}
-		child := exec.Command(filepath.Join(system, "cmd.exe"), "/d", "/q", "/c", "waitfor /t 86400 dwarf-git-"+uuid.NewV7().String())
+		child := exec.Command(filepath.Join(system, "cmd.exe"), "/d", "/q", "/c", "waitfor /t 86400 dwarfgit"+strings.ReplaceAll(uuid.NewV7().String(), "-", ""))
 		if err := child.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -423,21 +499,23 @@ func coreDeath(t *testing.T, retained bool) {
 	}()
 	scan := bufio.NewScanner(stdout)
 	var rootNotice, childNotice processNotice
+	var rootReadyAt, childReadyAt time.Time
 	for rootNotice.PID == 0 || childNotice.PID == 0 {
 		if !scan.Scan() {
 			t.Fatalf("helper failed readiness: %s", stderr.String())
 		}
+		receivedAt := time.Now()
 		var n processNotice
 		if err := json.Unmarshal(scan.Bytes(), &n); err != nil {
 			t.Fatal(err)
 		}
 		if n.Kind == "root" {
-			rootNotice = n
+			rootNotice, rootReadyAt = n, receivedAt
 		} else if n.Kind == "child" {
-			childNotice = n
+			childNotice, childReadyAt = n, receivedAt
 		}
 	}
-	rootHandle, childHandle := observer(t, rootNotice.PID), observer(t, childNotice.PID)
+	rootHandle, childHandle := observer(t, rootNotice.PID, rootReadyAt), observer(t, childNotice.PID, childReadyAt)
 	var job windows.Handle
 	if retained {
 		job, err = openJob(rootNotice.Job)
@@ -495,11 +573,105 @@ func coreDeath(t *testing.T, retained bool) {
 func TestGitProcessCoreDeath(t *testing.T)           { coreDeath(t, false) }
 func TestGitProcessRetainedJobRecovery(t *testing.T) { coreDeath(t, true) }
 
-func installFence(t *testing.T, o *Owner, f fence) {
+func TestGitProcessProvenClosureCrash(t *testing.T)      { closureRecovery(t, true) }
+func TestGitProcessCleanupFailureRetention(t *testing.T) { closureRecovery(t, false) }
+
+func closureRecovery(t *testing.T, crash bool) {
 	t.Helper()
-	if err := os.Mkdir(filepath.Dir(o.fencePath(f.RunID)), 0o700); err != nil {
+	root := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
+	mode := "cleanup-failure"
+	if crash {
+		mode = "proven-closure"
+	}
+	cmd := exec.Command(exe, "-test.run=^TestGitProcessHelper$")
+	cmd.Env = append(os.Environ(), "DWARF_GITPROCESS_HELPER="+mode, "DWARF_GITPROCESS_ROOT="+root)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	}()
+	var notice processNotice
+	decoder := json.NewDecoder(stdout)
+	if err := decoder.Decode(&notice); err != nil {
+		t.Fatalf("closure helper failed readiness: %v %s", err, stderr.String())
+	}
+	if notice.Kind != "closed" || !validID(notice.RunID) || notice.PID == 0 {
+		t.Fatalf("invalid closure notice: %+v", notice)
+	}
+	if crash {
+		h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(notice.PID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer windows.CloseHandle(h)
+		state, err := windows.WaitForSingleObject(h, 0)
+		if err != nil || state != windows.WAIT_OBJECT_0 {
+			t.Fatalf("closed root is not signaled: %d %v", state, err)
+		}
+		var code uint32
+		if err := windows.GetExitCodeProcess(h, &code); err != nil || code != 0 {
+			t.Fatalf("closed git version exit: %d %v", code, err)
+		}
+		if err := cmd.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	diagnostic, readErr := io.ReadAll(io.MultiReader(decoder.Buffered(), stdout))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	err = cmd.Wait()
+	waited = true
+	if crash && err == nil || !crash && err != nil {
+		t.Fatalf("closure helper exit: crash=%v error=%v stdout=%s stderr=%s", crash, err, diagnostic, stderr.String())
+	}
+	o := nativeOwner(t, root)
+	report := o.report()
+	if len(report.Pending) != 1 || report.Pending[0].RunID != notice.RunID {
+		t.Fatalf("proof-to-removal window lost its running fence: %+v", report)
+	}
+	if _, err := o.Run(context.Background(), Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()}); !errors.Is(err, ErrUnconfirmed) {
+		t.Fatal("pending closure admitted Git", err)
+	}
+	report, err = o.Reconcile(context.Background())
+	if err != nil || len(report.Pending) != 0 || len(report.Closed) != 1 {
+		t.Fatalf("running fence did not reconcile: %+v %v", report, err)
+	}
+	closed := report.Closed[0]
+	if closed.RunID != notice.RunID || closed.Proof != "name_absent" || closed.ExitCode != -1 || closed.TotalProcesses != 0 {
+		t.Fatalf("recovery inferred live success or retained the Job: %+v", closed)
+	}
+	if _, err := os.Stat(o.fencePath(notice.RunID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("reconciled fence survived", err)
+	}
+	r, err := o.Run(context.Background(), Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()})
+	if err != nil || r.RunID == notice.RunID || !r.TreeClosed {
+		t.Fatalf("fresh Run after proven closure: %+v %v", r, err)
+	}
+}
+
+func installFence(t *testing.T, o *Owner, f fence) {
+	t.Helper()
 	if err := o.writeFence(f); err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +740,7 @@ func TestGitProcessFenceErrors(t *testing.T) {
 				if pathErr != nil {
 					t.Fatal(pathErr)
 				}
-				pi, err = createSuspended(Spec{Program: filepath.Join(system, "cmd.exe"), Args: []string{"/d", "/q", "/c", "waitfor /t 86400 dwarf-git-" + uuid.NewV7().String()}, Env: os.Environ()}, job, pipes)
+				pi, err = createSuspended(Spec{Program: filepath.Join(system, "cmd.exe"), Args: []string{"/d", "/q", "/c", "waitfor /t 86400 dwarfgit" + strings.ReplaceAll(uuid.NewV7().String(), "-", "")}, Env: os.Environ()}, job, pipes)
 				_ = pipes.closeChildren()
 				pipes.closeParents()
 				if err != nil {

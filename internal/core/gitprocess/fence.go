@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/internal/core/durable"
@@ -147,7 +148,7 @@ func writeMarker(path string, value any) error {
 	return durable.Rename(tmp, path)
 }
 func (o *Owner) fencePath(id uuid.UUID) string {
-	return filepath.Join(o.root, "runs", id.String(), "fence.json")
+	return filepath.Join(o.root, "runs", id.String()+".json")
 }
 func (o *Owner) loadFences() error {
 	path := filepath.Join(o.root, "identity.json")
@@ -191,10 +192,7 @@ func (o *Owner) loadFences() error {
 		}
 	}
 	runs := filepath.Join(o.root, "runs")
-	var debris []struct {
-		dir     string
-		pending bool
-	}
+	var debris []string
 	if hasRuns {
 		if _, err := realDirectory(runs); err != nil {
 			return err
@@ -203,60 +201,44 @@ func (o *Owner) loadFences() error {
 		if err != nil {
 			return err
 		}
+		groups := make(map[uuid.UUID]bool)
 		for _, entry := range entries {
-			id, err := uuid.Parse(entry.Name())
-			if err != nil || !validID(id) || id.String() != entry.Name() {
-				return ErrInvalid
-			}
-			dir := filepath.Join(runs, entry.Name())
-			if _, err := realDirectory(dir); err != nil {
-				return err
-			}
-			files, err := os.ReadDir(dir)
-			if err != nil {
-				return err
-			}
-			if len(files) == 0 {
-				debris = append(debris, struct {
-					dir     string
-					pending bool
-				}{dir, false})
-				continue
-			}
-			hasFence, hasPending := false, false
-			for _, file := range files {
-				switch file.Name() {
-				case "fence.json":
-					hasFence = true
-				case "fence.json.pending":
-					hasPending = true
-				default:
+			name, pending := strings.CutSuffix(entry.Name(), ".json.pending")
+			if !pending {
+				var ok bool
+				name, ok = strings.CutSuffix(entry.Name(), ".json")
+				if !ok {
 					return ErrInvalid
 				}
-				info, err := os.Lstat(filepath.Join(dir, file.Name()))
-				if err != nil || !info.Mode().IsRegular() {
-					return errors.Join(ErrInvalid, err)
-				}
 			}
-			if !hasFence && hasPending {
-				raw, err := readRegular(filepath.Join(dir, "fence.json.pending"))
+			id, err := uuid.Parse(name)
+			if err != nil || !validID(id) || id.String() != name {
+				return ErrInvalid
+			}
+			info, err := os.Lstat(filepath.Join(runs, entry.Name()))
+			if err != nil || !info.Mode().IsRegular() {
+				return errors.Join(ErrInvalid, err)
+			}
+			groups[id] = groups[id] || !pending
+		}
+		for id, authoritative := range groups {
+			path := o.fencePath(id)
+			if !authoritative {
+				raw, err := readRegular(path + ".pending")
 				if err != nil {
 					return err
 				}
 				f, err := decodeFence(raw)
-				if err != nil || f.RunID != id || f.State != "launch_pending" || (!missingIdentity && f.RootID != o.rootID) {
+				if err != nil || f.RunID != id || f.RootID != o.rootID || f.State != "launch_pending" {
 					return errors.Join(ErrInvalid, err)
 				}
-				debris = append(debris, struct {
-					dir     string
-					pending bool
-				}{dir, true})
+				debris = append(debris, path+".pending")
 				continue
 			}
 			if missingIdentity {
 				return ErrInvalid
 			}
-			raw, err := readRegular(o.fencePath(id))
+			raw, err := readRegular(path)
 			if err != nil {
 				return err
 			}
@@ -269,23 +251,14 @@ func (o *Owner) loadFences() error {
 	}
 	// Validate the complete layout before removing any debris. A neighboring
 	// malformed state must not turn a refused Open into a partial sweep.
-	for _, item := range debris {
-		if item.pending {
-			if err := os.Remove(filepath.Join(item.dir, "fence.json.pending")); err != nil {
-				return err
-			}
-		}
-		if err := os.Remove(item.dir); err != nil {
+	for _, path := range debris {
+		if err := os.Remove(path); err != nil {
 			return err
 		}
 		if err := durable.SyncDir(runs); err != nil {
 			return err
 		}
-		if item.pending {
-			o.debris.PendingRuns++
-		} else {
-			o.debris.EmptyRuns++
-		}
+		o.debris.PendingRuns++
 	}
 	if missingIdentity {
 		if !validID(o.rootID) {

@@ -17,6 +17,11 @@
 // does not imply success or absence of an effect. An uninterruptible caller
 // reader/writer retains the Owner lock and returns ErrUnconfirmed, not a false
 // joined result. Callers must make their streams finite or interruptible.
+// Run waits on the root's process handle and polls Job accounting and the PID
+// list only during StopGrace after stopping.
+// The Job-zero proof can precede completion of terminated members' kernel
+// rundown, so an observer holding a descendant handle waits for its signal
+// rather than assuming it is signaled at the instant of closure.
 // An unconfirmed Run or Close retains its Owner and native resources in a
 // package-private, append-only process-lifetime registry. Dropping the caller's
 // reference cannot release the root lock through a finalizer. The same process
@@ -35,12 +40,20 @@
 // member's termination before releasing the name; the root is waited, but
 // descendants are not individually waitable. Already-issued kernel I/O may
 // complete after termination; no Git logic runs after that point.
-// Open removes only empty UUID run directories and strictly valid, matching
-// launch_pending-only fence.json.pending directories, neither of which could
-// have launched a child. Before the first launch it can finish or replace an
-// interrupted identity.json.pending; Report.Debris counts these shapes. A stale
-// pending rewrite beside an authoritative fence is removed only after positive
-// reconciliation. Unknown entries or unsafe pending-only states fail closed.
+// The flat runs/<uuid>.json layout publishes launch_pending and running only.
+// Live closure is proved natively; after the port, process and Job handles close,
+// the fence is removed without a directory flush. A crash between proof and
+// removal leaves running, which recovery closes by name_absent or retained_job,
+// with ExitCode -1 and no success inferred. A fence that cannot be removed keeps
+// its Owner retained. Reconcile alone publishes closed before removal; existing
+// closed fences, including closed/live, remain decodable and recoverable.
+// Open removes only a lone <uuid>.json.pending that strictly decodes as
+// launch_pending for this root and run. Before the first launch it can finish or
+// replace an interrupted identity.json.pending; Report.Debris counts these
+// shapes. A stale .json.pending beside an authoritative .json is removed only
+// after positive reconciliation. Every runs entry must be a regular file with
+// a canonical UUIDv7 name and one of those two suffixes. Unknown entries,
+// directories and unsafe pending-only states fail closed without a sweep.
 //
 // Elsewhere the Owner keeps the root lock, cancellable admission and root/I/O
 // joins, but writes no fences and never claims tree closure. RequireTree refuses
