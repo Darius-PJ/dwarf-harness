@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"uuid"
@@ -23,6 +25,20 @@ type loopFuzzPrefix struct {
 	through  uint64
 }
 
+// Prefix snapshots omit durable lock files, including an idle workspace Owner's
+// still-held lock. Records and bodies are copied unchanged.
+type loopPrefixFS struct{ fs.FS }
+
+func (root loopPrefixFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	entries, err := fs.ReadDir(root.FS, name)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(entries, func(entry fs.DirEntry) bool {
+		return entry.Name() == "lock" && entry.Type().IsRegular()
+	}), nil
+}
+
 func retainLoopFuzzPrefix(f *testing.F, fixture *serviceFixture) loopFuzzPrefix {
 	f.Helper()
 	if fixture.service != nil {
@@ -36,7 +52,7 @@ func retainLoopFuzzPrefix(f *testing.F, fixture *serviceFixture) loopFuzzPrefix 
 	}
 	fixture.store = nil
 	prepared := testRoot(f)
-	if err := os.CopyFS(prepared, os.DirFS(fixture.root)); err != nil {
+	if err := os.CopyFS(prepared, loopPrefixFS{os.DirFS(fixture.root)}); err != nil {
 		f.Fatal(err)
 	}
 	var err error

@@ -173,7 +173,7 @@ func (o *Owner) loadFences() error {
 	hasRuns, pendingIdentity := false, false
 	for _, entry := range entries {
 		switch entry.Name() {
-		case "owner.lock", "identity.json":
+		case "lock", "identity.json":
 		case "identity.json.pending":
 			pendingIdentity = true
 			candidate, err := readRegular(filepath.Join(o.root, entry.Name()))

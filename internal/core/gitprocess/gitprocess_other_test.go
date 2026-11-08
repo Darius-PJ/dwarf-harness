@@ -56,7 +56,7 @@ func TestGitProcessPortable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "owner.lock" {
+	if len(entries) != 1 || entries[0].Name() != "lock" {
 		t.Fatal("portable execution wrote a fence", entries)
 	}
 	if err := o.Close(); err != nil {
