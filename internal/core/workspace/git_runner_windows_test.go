@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
@@ -93,7 +94,8 @@ func TestGitRunnerTree(t *testing.T) {
 	if !proof.RootExited || !proof.TreeClosed || !proof.IOJoined || proof.ExitCode != 0 {
 		t.Fatalf("runner returned before tree closure: %+v", proof)
 	}
-	state, _, nativeErr = runnerWaitProcess.Call(h, 0)
+	// Use the package's existing owned-Git exit bound for kernel rundown.
+	state, _, nativeErr = runnerWaitProcess.Call(h, uintptr(time.Minute/time.Millisecond))
 	if state != 0 {
 		t.Fatalf("runner descendant survived: %d %v", state, nativeErr)
 	}
@@ -106,7 +108,7 @@ func TestGitRunnerHelper(t *testing.T) {
 		return
 	}
 	program := filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
-	child := exec.Command(program, "/d", "/q", "/c", "waitfor /t 86400 dwarf-runner-"+uuid.NewV7().String())
+	child := exec.Command(program, "/d", "/q", "/c", "waitfor /t 86400 dwarfrunner"+strings.ReplaceAll(uuid.NewV7().String(), "-", ""))
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}

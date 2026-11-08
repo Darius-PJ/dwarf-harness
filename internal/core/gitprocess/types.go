@@ -83,7 +83,7 @@ type Pending struct {
 }
 
 // Debris counts only shapes that cannot have launched a native child.
-type Debris struct{ EmptyRuns, PendingRuns, PendingIdentities int }
+type Debris struct{ PendingRuns, PendingIdentities int }
 type Report struct {
 	Pending            []Pending
 	Closed             []Result
