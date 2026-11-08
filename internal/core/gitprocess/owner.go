@@ -68,7 +68,7 @@ func Open(ctx context.Context, root string, options Options) (*Owner, Report, er
 	if err != nil {
 		return nil, Report{}, err
 	}
-	lockPath := filepath.Join(root, "owner.lock")
+	lockPath := filepath.Join(root, "lock")
 	if info, err := os.Lstat(lockPath); err == nil && !info.Mode().IsRegular() {
 		return nil, Report{}, ErrInvalid
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {

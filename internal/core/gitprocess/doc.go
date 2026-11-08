@@ -22,8 +22,9 @@
 // reference cannot release the root lock through a finalizer. The same process
 // cannot reopen that root; the next process reconciles its durable fences.
 //
-// Open holds an exclusive durable root lock. Windows fences use canonical
-// compact JSON plus LF, bounded to 4096 bytes, UUIDv7 root/run identities and
+// Open holds an exclusive durable root lock named "lock", following the colony's
+// durable-lock convention. Windows fences use canonical compact JSON plus LF,
+// bounded to 4096 bytes, UUIDv7 root/run identities and
 // never-reused Local Job names. Recovery never launches Git. A retained Job
 // must have the exact limits before termination and positive zero proof. Only
 // ERROR_FILE_NOT_FOUND in the recorded Windows session permits name_absent;
