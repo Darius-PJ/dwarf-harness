@@ -27,6 +27,9 @@
 // HTTP/1-only selection inside the same constructor. It is not an alternate
 // response or RoundTripper. Keep-alive is retained; GetBody remains nil and
 // positive ContentLength prevents Go's zero-write replay path.
+// net/http can return an early response before the request write completes.
+// Status alone proves neither a replay nor no charge; Core retains the hold
+// without final billing evidence.
 //
 // The Anthropic SSE parser distinguishes complete message state from available
 // cumulative billing evidence. Null invalidates a counter, omission retains it,
