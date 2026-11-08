@@ -98,3 +98,5 @@ This ticket's CI start gate (D133, a green Windows job) is met, and its design s
 F3-10's `TestF3_10Payloads`, `TestF3_10PayloadsValues`, `TestF3_10PayloadsNestedMembers`, `TestGoldenF3_10`, `TestF3_10Compatibility` and `FuzzDecodeF3_10` hold its records. A foreign materialization or a missing or corrupt object stays blocked: this ticket has no repair path, and ticket 16 or a later entry supplies the authorized repair.
 
 2026-11-07 — Consolidation cross-link: Ticket [144](144-make-the-windows-executors-race-step-tests-reliable-on-hosted-runners.md) is the repair ticket for three hosted race-step failures in the Windows executor's tests, linked here as this ticket's 2026-10-19 comment asks for a red product row. These extensions add no blocker or criterion to this ticket.
+
+2026-11-08 — Consolidation cross-link: Ticket [145](145-explain-and-fix-the-one-shot-paid-transport-test-that-sees-a-faulted-request-succeed.md) is the repair ticket for three hosted failures of the paid transport test `TestPaidHTTP1OneShot`, linked here as this ticket's 2026-10-19 comment asks for a red product row. These extensions add no blocker or criterion to this ticket.
