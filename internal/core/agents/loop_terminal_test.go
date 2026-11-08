@@ -260,7 +260,9 @@ func TestTerminalCancel(t *testing.T) {
 		h.send(t, "/context "+a.String()+" "+general.String())
 		i = h.wait(t, i, "selected General work")
 		h.send(t, "/cancel "+moved.String())
-		movedLines := []int{h.wait(t, i, "command turn.cancel accepted"), h.wait(t, i, "event turn.cancelled")}
+		// The final line follows owner.close: the status read below needs the
+		// closed owner, which turn.cancelled (loop.end) alone does not imply.
+		movedLines := []int{h.wait(t, i, "command turn.cancel accepted"), h.wait(t, i, "event turn.cancelled"), h.wait(t, i, "final (durable) none: the turn ended cancelled")}
 		i = slices.Max(movedLines)
 		h.send(t, "/status "+held.String())
 		heldLines = append(heldLines, h.wait(t, i, "status state=cancelled"))
