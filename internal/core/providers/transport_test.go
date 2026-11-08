@@ -221,20 +221,33 @@ func exerciseOneShotFault(t *testing.T, provider, mode, closeMode, extraActivity
 	defer tr.CloseIdleConnections()
 	envelope := transportEnvelope(t, provider, server)
 	syntheticValue := []byte("synthetic-transport-value")
-	response, e := tr.Do(context.Background(), envelope, syntheticValue)
+	// net/http pools only after the request write's result (transport.go wroteRequest waits at most 50 ms).
+	// Under load it closes the warm connection instead, so the next attempt would dial.
+	var pooled atomic.Bool
+	warmCtx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{PutIdleConn: func(err error) {
+		pooled.Store(err == nil)
+	}})
+	response, e := tr.Do(warmCtx, envelope, syntheticValue)
 	if e != nil {
 		t.Fatal(e)
 	}
 	drain(t, response)
+	if !pooled.Load() {
+		t.Fatalf("warm connection not pooled: net/http declined reuse before the faulted attempt; dials=%d requests=%d complete=%d", dials.Load(), requests.Load(), complete.Load())
+	}
 	if dials.Load() != 1 || requests.Load() != 1 || complete.Load() != 1 || connection == nil {
 		t.Fatal("warm exchange did not use one real connection")
 	}
 	if extraActivity == "extra_complete" {
-		response, e = tr.Do(context.Background(), envelope, syntheticValue)
+		pooled.Store(false)
+		response, e = tr.Do(warmCtx, envelope, syntheticValue)
 		if e != nil {
 			t.Fatal(e)
 		}
 		drain(t, response)
+		if !pooled.Load() {
+			t.Fatalf("warm connection not pooled: net/http declined reuse before the faulted attempt; dials=%d requests=%d complete=%d", dials.Load(), requests.Load(), complete.Load())
+		}
 		if dials.Load() != 1 || requests.Load() != 2 || complete.Load() != 2 {
 			t.Fatal("extra exchange did not complete on the warm connection")
 		}
