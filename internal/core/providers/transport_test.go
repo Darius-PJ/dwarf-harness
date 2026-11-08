@@ -181,15 +181,27 @@ func TestPaidHTTP1OneShot(t *testing.T) {
 						}
 					}})
 					response, e = tr.Do(ctx, envelope, secret)
+					diagStatus, diagProto := "none", "none"
 					if response != nil {
-						drain(t, response)
+						diagStatus, diagProto = response.Status, response.Proto
+						_, copyErr := io.Copy(io.Discard, response.Body)
+						closeErr := response.Body.Close()
+						if copyErr != nil || closeErr != nil {
+							t145Drain.Add(1)
+							t145Leaf(provider, mode)
+							t.Fatal("response drain failed")
+						}
 					}
 					tr.CloseIdleConnections()
 					if !reused.Load() || connection.faultWrites.Load() != 1 {
-						t.Fatal("fault did not hit warm connection")
+						t.Fatalf("fault did not hit warm connection DIAG reused=%v dials=%d writes=%d faultWrites=%d err=%v", reused.Load(), dials.Load(), connection.writes.Load(), connection.faultWrites.Load(), e)
 					}
 					if e == nil {
-						t.Fatal("faulted attempt unexpectedly succeeded (possible replay)")
+						t145Nil400.Add(1)
+						t145Leaf(provider, mode)
+						t145Max(&t145DialsMax, dials.Load())
+						t145Max(&t145RequestsMax, requests.Load())
+						t.Fatalf("faulted attempt unexpectedly succeeded (possible replay) DIAG dials=%d requests=%d complete=%d writes=%d faultWrites=%d status=%q proto=%q wrongProtocol=%v", dials.Load(), requests.Load(), complete.Load(), connection.writes.Load(), connection.faultWrites.Load(), diagStatus, diagProto, wrongProtocol.Load())
 					}
 					if dials.Load() != 1 {
 						t.Fatalf("redial after fault: %d", dials.Load())
@@ -378,5 +390,22 @@ func TestTransportRejectsUntrustedCertificate(t *testing.T) {
 	server.Close()
 	if e == nil || count.Load() != 0 {
 		t.Fatal("TLS verification bypassed")
+	}
+}
+
+// t145Leaf and t145Max feed ticket 145's temporary hosted stress diagnostic
+// (zz_t145_hosted_stress_test.go). This instrumentation never lands.
+func t145Leaf(provider, mode string) {
+	t145Leaves.Lock()
+	defer t145Leaves.Unlock()
+	t145Leaves.m[provider+"."+mode]++
+}
+
+func t145Max(max *atomic.Int64, v int64) {
+	for {
+		cur := max.Load()
+		if v <= cur || max.CompareAndSwap(cur, v) {
+			return
+		}
 	}
 }
