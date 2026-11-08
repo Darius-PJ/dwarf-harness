@@ -958,7 +958,7 @@ These are unrun acceptance obligations. The exact attenuation and readiness/cuto
 
 **Exit criterion.** With real hostile-process drills on supported Windows, Linux and Apple-silicon macOS paths, demonstrate positive controls and denials against canonical refs, common metadata, ledger, private peer files, credentials, owner IPC and unauthorized network. On cancellation, timeout, crash or Core/helper loss prove every descendant/VM is stopped or keep its resources quarantined; no ambiguous run may publish, reuse a slot or restart automatically. Record actual costs and platform limits before any A2 claim. For the first release the declared platform is Windows: tickets 45 and 46 meet this criterion there, and the Linux and macOS paths (tickets 47–51) follow the release (D138).
 
-**Status.** In progress (ticket 45, Windows executor, 2026-10-18; C3 integration and A2 qualification wait for C3 and ticket 46; the Linux and macOS executors and qualifications, tickets 47–51, follow the first release, D138; ticket 144, the executor's race-step tests on hosted runners, remains open).
+**Status.** In progress (ticket 45, Windows executor, 2026-10-18; C3 integration and A2 qualification wait for C3 and ticket 46; the Linux and macOS executors and qualifications, tickets 47–51, follow the first release, D138; ticket 144 is resolved: the executor's race-step tests passed twenty consecutive hosted full-matrix runs of their final commit).
 
 ## 3. Remaining prerequisites and evidence
 
