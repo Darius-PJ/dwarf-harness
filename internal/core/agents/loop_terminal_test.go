@@ -246,7 +246,7 @@ func TestTerminalCancel(t *testing.T) {
 			t.Fatal("unexpected continuation")
 		}
 		h.interrupts <- os.Interrupt
-		heldLines := []int{h.wait(t, i, "interrupt cancellation requested"), h.wait(t, i, "command turn.cancel applied"), h.wait(t, i, "event turn.cancelled"), h.wait(t, i, "final (durable) none: the turn ended cancelled")}
+		heldLines := []int{h.wait(t, i, "command turn.cancel accepted"), h.wait(t, i, "event turn.cancelled"), h.wait(t, i, "final (durable) none: the turn ended cancelled")}
 		i = slices.Max(heldLines)
 		h.send(t, "/context "+a.String()+" "+w.String())
 		i = h.wait(t, i, "selected Moved task")
@@ -260,12 +260,12 @@ func TestTerminalCancel(t *testing.T) {
 		h.send(t, "/context "+a.String()+" "+general.String())
 		i = h.wait(t, i, "selected General work")
 		h.send(t, "/cancel "+moved.String())
-		movedLines := []int{h.wait(t, i, "command turn.cancel applied"), h.wait(t, i, "event turn.cancelled")}
+		movedLines := []int{h.wait(t, i, "command turn.cancel accepted"), h.wait(t, i, "event turn.cancelled")}
 		i = slices.Max(movedLines)
 		h.send(t, "/status "+held.String())
 		heldLines = append(heldLines, h.wait(t, i, "status state=cancelled"))
 		h.send(t, "/cancel "+held.String())
-		heldLines = append(heldLines, h.wait(t, i, "refused: turn.cancel agents: unavailable"))
+		heldLines = append(heldLines, h.wait(t, i, "command turn.cancel too_late"))
 		h.interrupts <- os.Interrupt
 		h.wait(t, i, "interrupt idle prompt; detaching")
 		if err := <-h.done; err != nil {

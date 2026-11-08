@@ -35,7 +35,6 @@ func testLoopDeadlinePrecedence(t *testing.T) {
 				if kind == "authority_lost" {
 					f.revoke(t, f.privateGrant)
 				}
-				clock.Add(int64(11 * time.Minute))
 				switch kind {
 				case "cancelled":
 					host.loop.mu.Lock()
@@ -44,18 +43,23 @@ func testLoopDeadlinePrecedence(t *testing.T) {
 						turn = id
 					}
 					host.loop.mu.Unlock()
-					go func() {
-						command := session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: turn}}
-						result, err := f.view.Do(context.Background(), command)
-						cancelled <- loopCancelReply{command, result, err}
-					}()
+					command := session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: turn}}
+					result, err := f.view.Do(context.Background(), command)
+					// The first durable stop wins; expire the clock only after
+					// cancellation has actually been accepted.
+					clock.Add(int64(11 * time.Minute))
+					cancelled <- loopCancelReply{command, result, err}
 				case "shutdown":
 					// The owning host's Close must drain this running exchange
 					// to a durable ending before it returns.
 					go func() { closed <- host.Close() }()
+					<-r.Context().Done()
+					clock.Add(int64(11 * time.Minute))
+					return
 				default:
 					// A real owner commit wakes the host after the guarded clock
 					// advances; no polling, sleep, or test-only scheduler call.
+					clock.Add(int64(11 * time.Minute))
 					scope := ledger.ScopeKey{Kind: "colony"}
 					host.mu.Lock()
 					version := host.p.book.accounts[scope].version
@@ -93,24 +97,24 @@ func testLoopDeadlinePrecedence(t *testing.T) {
 				return
 			}
 			reply := <-cancelled
-			if reply.err != nil || reply.result.Outcome != "applied" {
-				t.Fatal("cancellation did not acknowledge its recorded native ending")
+			if reply.err != nil || reply.result.Outcome != "accepted" {
+				t.Fatal("cancellation did not acknowledge its durable stop")
 			}
-			// The live acknowledgement and a historical retry of the same
-			// command must both name the native cancellation's actual records.
+			// Live acknowledgement and historical retry name the same stop,
+			// not the distinct native ending which follows it.
 			host.mu.Lock()
 			effect, effectFound, effectErr := host.sourceRecord(context.Background(), nil, int64(reply.result.EffectSequence), host.p.through)
 			receipt, receiptFound, receiptErr := host.sourceRecord(context.Background(), nil, int64(reply.result.ReceiptSequence), host.p.through)
 			host.mu.Unlock()
-			if effectErr != nil || receiptErr != nil || !effectFound || !receiptFound || effect.Type != ledger.TypeRuntimeWorkEnded || receipt.Type != ledger.TypeRuntimeScopedReceipt {
-				t.Fatal("live cancellation acknowledgement did not name its native effect and receipt")
+			if effectErr != nil || receiptErr != nil || !effectFound || !receiptFound || effect.Type != ledger.TypeRuntimeContinuationChanged || receipt.Type != ledger.TypeRuntimeContinuationReceipt {
+				t.Fatal("cancellation acknowledgement did not name its stop effect and receipt")
 			}
-			ended, err := ledger.DecodeRuntimeWorkEnded(effect.Payload)
-			if err != nil || ended.WorkID != start.TurnID || ended.Outcome != "cancelled" || effect.OperationID != reply.command.CommandID {
-				t.Fatal("cancellation effect sequence selected another record")
+			stopped, err := ledger.DecodeRuntimeContinuationChanged(effect.Payload)
+			if err != nil || stopped.TurnID != start.TurnID || stopped.StopReason != "cancelled" || effect.OperationID != reply.command.CommandID || stopped.CancelCommandID == reply.command.CommandID {
+				t.Fatal("stop acknowledgement selected another record or reused its native ID")
 			}
 			retry, err := f.view.Do(context.Background(), reply.command)
-			if err != nil || retry.Outcome != "applied" || retry.EffectSequence != reply.result.EffectSequence || retry.ReceiptSequence != reply.result.ReceiptSequence {
+			if err != nil || retry.Outcome != "accepted" || retry.EffectSequence != reply.result.EffectSequence || retry.ReceiptSequence != reply.result.ReceiptSequence {
 				t.Fatal("historical cancellation retry disagreed with its live acknowledgement")
 			}
 		})

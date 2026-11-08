@@ -72,7 +72,7 @@ func (s *Service) selectRegistration(ctx context.Context, reads *historyReadSet,
 	value, err := readHistory(ctx, reads, 0, through, key, func(ctx context.Context) (registrationValue, error) {
 		var selected registrationValue
 		err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-			_, _, _, _, g, _, err := decodeFamily(draftsOf(c), c.First)
+			_, _, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
 			if err != nil || g == nil {
 				return err
 			}

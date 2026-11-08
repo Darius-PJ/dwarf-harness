@@ -175,7 +175,10 @@ func (e *RevisionError) Error() string {
 }
 func (e *RevisionError) Unwrap() error { return ErrRevision }
 
-type BusyError struct{ Reason string }
+type BusyError struct {
+	Reason   string
+	waitKind string
+}
 
 func (e *BusyError) Error() string {
 	if e.Reason == "" {

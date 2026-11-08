@@ -77,6 +77,20 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 	}
 	drain = []func() error{service.Close, ws.Close, store.Close}
 	fmt.Fprintf(stdout, "[terminal] colony opened: %d integrity issues, %d pending paid attempts, %d unresumable turns\n", len(report.Issues), len(report.PendingPaid), len(report.PendingLoops))
+	for _, pending := range report.PendingLoops {
+		if pending.ToolID != (uuid.UUID{}) {
+			continue
+		}
+		_, err := service.ReconcileLoop(ctx, agents.LoopReconciliation{CommandID: uuid.NewV7(), TurnID: pending.TurnID, ExpectedOwnerVersion: pending.OwnerVersion})
+		if errors.Is(err, agents.ErrRecoveryPending) {
+			fmt.Fprintf(stdout, "[terminal] turn %s recovery pending: %s\n", pending.TurnID, describe(err))
+			continue
+		}
+		if err != nil {
+			stop()
+			return refuse("turn recovery", err)
+		}
+	}
 	bound, err := bindCredentials(ctx, service, settings)
 	if err != nil {
 		stop()

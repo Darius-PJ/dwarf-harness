@@ -61,7 +61,7 @@ func (b *budgetBook) plan(scopes []ledger.ScopeKey, delta budgetDelta, operation
 		for i := range account.usage {
 			value, err := changeBudget(account.usage[i], delta.hold[i], delta.release[i], delta.charge[i], limits[i])
 			if err != nil {
-				return nil, budgetScopeError(scope, err)
+				return nil, budgetScopeError(scope, i, err)
 			}
 			account.usage[i] = value
 		}
@@ -171,11 +171,11 @@ func (b *budgetBook) checkPreparation(scopes []ledger.ScopeKey, preparation budg
 			}
 			current, err := changeBudget(account.usage[i], b.preparing[scope][i], 0, 0, limits[i])
 			if err != nil {
-				return budgetScopeError(scope, err)
+				return budgetScopeError(scope, i, err)
 			}
 			if additional {
 				if _, err := changeBudget(current, needed, 0, 0, limits[i]); err != nil {
-					return budgetScopeError(scope, err)
+					return budgetScopeError(scope, i, err)
 				}
 			}
 		}
@@ -183,9 +183,16 @@ func (b *budgetBook) checkPreparation(scopes []ledger.ScopeKey, preparation budg
 	return nil
 }
 
-func budgetScopeError(scope ledger.ScopeKey, err error) error {
+func budgetScopeError(scope ledger.ScopeKey, resource int, err error) error {
 	if _, busy := err.(*BusyError); busy {
-		return &BusyError{Reason: scope.Kind + "_capacity"}
+		kind := ""
+		if resource == localExposure {
+			kind = "local_slot"
+		}
+		if resource == bufferExposure {
+			kind = "local_buffer"
+		}
+		return &BusyError{Reason: scope.Kind + "_capacity", waitKind: kind}
 	}
 	return err
 }

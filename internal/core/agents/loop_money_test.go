@@ -42,7 +42,6 @@ func loopPaidAdmissions(t *testing.T, s *Service) []ledger.RuntimePaidReserved {
 
 func TestTurnLoopMoneyPerCall(t *testing.T) {
 	t.Parallel()
-	t.Run("released_unsent", func(t *testing.T) { testLoopPhysicalRelease(t, true) })
 	for _, provider := range []string{"anthropic", "openai"} {
 		t.Run(provider, func(t *testing.T) {
 			t.Parallel()

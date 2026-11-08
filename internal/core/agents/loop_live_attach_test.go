@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
@@ -150,6 +152,58 @@ func TestTurnLoopLiveAttachAndAttribution(t *testing.T) {
 		if !errors.Is(subscription.Err(), session.ErrFinished) {
 			t.Fatal("late attachment remained provisional")
 		}
+	}
+}
+
+// A view can read turn.started as soon as loop.bind is installed, before
+// owner.initialize commits. Attaching then must reach the turn's live buffer
+// and its later provisional text, not be refused as an unknown turn.
+func TestTurnLoopLiveAttachDuringBind(t *testing.T) {
+	t.Parallel()
+	bound, release := make(chan uuid.UUID, 1), make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+		model, _ := turnRequest(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, turnAnthropic(model, nil, "Bound answer."))
+	}, func(deps *serviceDeps) {
+		// afterLoopCommit runs after commitLoop releases Service.mu: the bind
+		// is durable and installed, and owner.initialize has not started.
+		deps.afterLoopCommit = func(receipt ledger.RuntimeLoopReceipt) {
+			if receipt.Submission.Operation == "loop.bind" {
+				bound <- receipt.Submission.TurnID
+				<-release
+			}
+		}
+	})
+	t.Cleanup(free)
+	f.enable(t)
+	command := turnMessage(f.origin.ContextID, "bound request")
+	done := make(chan error, 1)
+	go func() { _, err := f.view.Do(context.Background(), command); done <- err }()
+	turn := <-bound
+	snapshot, sub, err := f.view.LiveText(context.Background(), turn)
+	if err != nil {
+		t.Fatalf("view attaching between loop.bind and owner.initialize was refused: %v", err)
+	}
+	defer sub.Close()
+	if snapshot.State != "provisional" || snapshot.Text != "" {
+		t.Fatalf("bound turn's live buffer was not empty and provisional: %+v", snapshot)
+	}
+	free()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	for delta := range sub.Deltas {
+		text.WriteString(delta.Text)
+	}
+	if text.String() != "Bound answer." || !errors.Is(sub.Err(), session.ErrFinished) {
+		t.Fatalf("attachment made during bind lost its provisional text: %q %v", text.String(), sub.Err())
+	}
+	if result, _ := f.finished(t, turn); result.Outcome != "finished" {
+		t.Fatalf("bound turn did not finish: %+v", result)
 	}
 }
 

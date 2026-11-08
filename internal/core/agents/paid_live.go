@@ -237,15 +237,15 @@ const tailAttempts = 3
 // preflightPaidLocked validates only. The enclosing pure phase reruns its
 // authority, current guards and drafts whenever a historical read suspends it.
 func (s *Service) preflightPaidLocked(ctx context.Context, reads *historyReadSet, drafts []ledger.Draft) ([]ledger.Draft, *paidGroup, error) {
-	_, _, _, original, _, _, err := decodeFamily(drafts, s.p.through+1)
+	_, _, _, original, _, _, _, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil || original == nil {
 		return nil, nil, ErrInvalid
 	}
 	if s.deps.beforeSubmit != nil {
 		drafts = s.deps.beforeSubmit(drafts)
 	}
-	p, scoped, review, g, registration, loop, err := decodeFamily(drafts, s.p.through+1)
-	if err == nil && (p != nil || scoped != nil || review != nil || registration != nil || loop != nil || g == nil || g.command != original.command || !sameScopedValue(g.receipt.Submission, original.receipt.Submission)) {
+	p, scoped, review, g, registration, loop, continuation, err := decodeFamily(drafts, s.p.through+1)
+	if err == nil && (p != nil || scoped != nil || review != nil || registration != nil || loop != nil || continuation != nil || g == nil || g.command != original.command || !sameScopedValue(g.receipt.Submission, original.receipt.Submission)) {
 		err = ErrInvalid
 	}
 	if err == nil {

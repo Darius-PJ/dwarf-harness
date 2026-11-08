@@ -33,6 +33,7 @@ type serviceDeps struct {
 	afterCommit             func(Receipt)
 	afterScopedSubmit       func()
 	afterScopedCommit       func(ScopedReceipt) error
+	afterScopedClaim        func(ledger.ScopedSubmission)
 	afterLoopCommit         func(ledger.RuntimeLoopReceipt)
 	afterReviewCommit       func(ReviewReceipt) error
 	afterRegistrationCommit func(RegistrationReceipt) error
@@ -100,6 +101,7 @@ type projection struct {
 	toolChildren         map[uuid.UUID]int
 	loopTurns            map[uuid.UUID]loopTurnState
 	loopTools            map[uuid.UUID]loopToolState
+	owners               map[uuid.UUID]continuationState
 	maxLoopEffect        uuid.UUID
 	maxLoopTool          uuid.UUID
 	paidCapabilities     map[string]ledger.Digest
@@ -127,6 +129,7 @@ func newProjection() projection {
 		paidCredentials: map[uuid.UUID]ledger.RuntimeCredentialChanged{},
 		paidAttempts:    map[uuid.UUID]paidAttempt{}, paidChildren: map[uuid.UUID]int{},
 		toolChildren: map[uuid.UUID]int{}, loopTurns: map[uuid.UUID]loopTurnState{}, loopTools: map[uuid.UUID]loopToolState{},
+		owners:           map[uuid.UUID]continuationState{},
 		paidHotLimit:     128,
 		paidCapabilities: map[string]ledger.Digest{}, paidTariffs: map[string]ledger.Digest{}, retiredProfiles: map[ledger.Digest]bool{},
 	}
@@ -220,7 +223,9 @@ func (s *Service) Close() error {
 	runtime := s.loop
 	s.mu.Unlock()
 	if runtime != nil {
-		runtime.shutdown()
+		if err := runtime.shutdown(); err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	first := !s.closed
@@ -356,6 +361,7 @@ func privateConsumption() ledger.Consumption {
 		ledger.TypePrivateTurnRevision: {1}, ledger.TypeRuntimeTurnBound: {1},
 		ledger.TypeRuntimeToolStarted: {1}, ledger.TypeRuntimeToolResult: {1},
 		ledger.TypeRuntimeTurnResult: {1}, ledger.TypeRuntimeLoopReceipt: {1},
+		ledger.TypeRuntimeContinuationChanged: {1}, ledger.TypeRuntimeContinuationReceipt: {1},
 	}
 }
 func isPrivateType(t string) bool {

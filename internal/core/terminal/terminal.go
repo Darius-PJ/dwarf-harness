@@ -459,16 +459,27 @@ func (r *runner) result(j job, result session.CommandResult, err error) {
 		if result.ReceiptSequence != 0 {
 			text += fmt.Sprintf(" receipt=%d effect=%d", result.ReceiptSequence, result.EffectSequence)
 		}
+		if operation == "turn.cancel" {
+			switch result.Outcome {
+			case "accepted":
+				text += "; stop recorded, ending pending"
+			case "too_late":
+				text += "; native ending already committed"
+			}
+		}
 		r.say(j.ids, "command", text)
 	}
 }
 
 func (r *runner) turnView(ids lineIDs, v session.TurnView) {
 	if v.State == "recovery_pending" {
-		r.say(ids, "unresumable", "recovery pending from an earlier run; no resume is offered")
+		r.say(ids, "unresumable", fmt.Sprintf("recovery pending; saved_phase=%s wait_reason=%s owner_version=%d generation=%d; no resume is offered", v.SavedPhase, v.WaitReason, v.OwnerVersion, v.Generation))
 		return
 	}
 	r.say(ids, "status", fmt.Sprintf("state=%s reason=%s model_calls=%d tool_dispatches=%d", v.State, v.Reason, v.ModelCalls, v.ToolDispatches))
+	if v.OwnerVersion != 0 {
+		r.say(ids, "owner", fmt.Sprintf("phase=%s wait_reason=%s version=%d generation=%d", v.SavedPhase, v.WaitReason, v.OwnerVersion, v.Generation))
+	}
 }
 
 func (r *runner) activeSelected() *turnState {

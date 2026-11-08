@@ -69,9 +69,11 @@ type scopeHistoryKey struct {
 	Usage                   ledger.RuntimeLocalUsed
 }
 type directoryReadSelection struct {
-	Purpose string
-	Origin  ledger.Origin
-	Object  ledger.ObjectRef
+	Purpose     string
+	Origin      ledger.Origin
+	Object      ledger.ObjectRef
+	PendingKind string
+	PendingID   uuid.UUID
 }
 type directoryHistoryKey struct {
 	Kind      byte

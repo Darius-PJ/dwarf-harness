@@ -21,6 +21,11 @@ var (
 
 type loopInvocation struct {
 	attempt          uuid.UUID
+	id               uuid.UUID
+	token            continuationToken
+	completed        bool
+	delivery         []byte
+	resultOutcome    string
 	callID, name     string
 	normalized       modelToolInvocation
 	correction       *modelToolCorrection
@@ -74,20 +79,30 @@ func (s *Service) loopGrant(ctx context.Context, origin ledger.Origin, operation
 func loopPrivateTarget(origin ledger.Origin) ledger.Resource {
 	return ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{"continuation", "handoff", "memory", "transcript"}}
 }
-func (r *loopRuntime) readPaid(ctx context.Context, origin ledger.Origin, attempt uuid.UUID, ref ledger.ObjectRef) ([]byte, error) {
+
+// A committed result's object read waits on local capacity, not on admission
+// or exchange preparation. Preserve its original error through classification.
+type loopPaidReadError struct{ error }
+
+func (e *loopPaidReadError) Unwrap() error { return e.error }
+
+func (r *loopRuntime) readPaid(ctx context.Context, origin ledger.Origin, attempt uuid.UUID, ref ledger.ObjectRef, claimed func() error) ([]byte, error) {
 	grant, err := r.service.loopGrant(ctx, origin, "private.read", []ledger.Resource{loopPrivateTarget(origin)}, ref.Bytes)
 	if err != nil {
 		return nil, err
 	}
-	agent := &Agent{service: r.service, ids: submissionIDs{origin.AgentID, origin.SessionID, origin.ContextID}}
-	return agent.ReadPaidObject(ctx, PaidObjectLookup{AttemptID: attempt, GrantID: grant, Object: ref, MaxBytes: maxObjectBytes})
+	ids := submissionIDs{origin.AgentID, origin.SessionID, origin.ContextID}
+	body, err := r.service.readPaidObject(ctx, &ids, PaidObjectLookup{AttemptID: attempt, GrantID: grant, Object: ref, MaxBytes: maxObjectBytes}, claimed)
+	if err != nil && claimed != nil {
+		err = &loopPaidReadError{err}
+	}
+	return body, err
 }
 
 func (r *loopRuntime) model(t *loopTurn) error {
 	s := r.service
 	if reason := s.loopBoundary(t); reason != "" {
-		r.noteStop(t, reason)
-		return nil
+		return r.noteStop(t, reason)
 	}
 	r.mu.Lock()
 	call := t.paid
@@ -115,20 +130,29 @@ func (r *loopRuntime) model(t *loopTurn) error {
 		}
 	}
 	if !call.admitted {
+		if _, err := r.resumeOwner(t, "paid_prepare"); err != nil {
+			return err
+		}
 		if reason := s.loopBoundary(t); reason != "" {
-			r.noteStop(t, reason)
-			return nil
+			return r.noteStop(t, reason)
 		}
 		agent := &Agent{service: s, ids: submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}}
-		_, _, err := agent.AdmitPaid(t.ctx, PaidAdmission{CommandID: call.admitID, AttemptID: call.id, GrantID: call.grant, ParentTurnID: t.id, TaskBinding: t.settings.TaskBinding, Prepared: call.prepared})
+		receipt, _, err := agent.AdmitPaid(t.ctx, PaidAdmission{CommandID: call.admitID, AttemptID: call.id, GrantID: call.grant, ParentTurnID: t.id, TaskBinding: t.settings.TaskBinding, Prepared: call.prepared})
 		if err != nil {
 			return err
 		}
-		call.admitted = true
+		call.admitted, call.sourceSequence = true, receipt.EffectSequence
 	}
+	owner, err := r.recordPending(t, ledger.ContinuationPending{Kind: "paid_attempt", ID: call.id, CommandID: call.admitID, ExpectedVersion: 1, SourceSequence: int64(call.sourceSequence)})
+	if err != nil {
+		return err
+	}
+	if owner.Snapshot.StopReason != "" {
+		return ErrContinuationStale
+	}
+	call.token = owner.token(call.id)
 	if reason := s.loopBoundary(t); reason != "" {
-		r.noteStop(t, reason)
-		return nil
+		return r.noteStop(t, reason)
 	}
 	out, err := s.DispatchPaidStreaming(t.ctx, PaidDispatch{CommandID: call.dispatchID, AttemptID: call.id, ExpectedVersion: 1}, t.live.append)
 	if out.IntentReceipt.CommandID != (uuid.UUID{}) && !call.counted {
@@ -178,7 +202,19 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	if a.result.Kind != "usage" || a.result.EvidenceObject == nil {
 		return errLoopContent
 	}
-	raw, err := r.readPaid(t.ctx, t.origin, call.id, *a.result.EvidenceObject)
+	claimed := func() error {
+		r.mu.Lock()
+		token := call.token
+		r.mu.Unlock()
+		owner, err := s.resumePaidRead(t.ctx, token)
+		if err == nil {
+			r.mu.Lock()
+			call.token = owner.token(call.id)
+			r.mu.Unlock()
+		}
+		return err
+	}
+	raw, err := r.readPaid(t.ctx, t.origin, call.id, *a.result.EvidenceObject, claimed)
 	if err != nil {
 		return err
 	}
@@ -186,7 +222,7 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	if json.Unmarshal(raw, &observation) != nil || observation.AttemptID != call.id || observation.Origin != t.origin || observation.ParentTurnID != t.id || observation.RequestSHA256 != a.admission.Quote.RequestSHA256 || observation.Model != t.profile.ModelID || !observation.Complete || observation.ContentError || observation.ReplayObject == nil {
 		return errLoopContent
 	}
-	replay, err := r.readPaid(t.ctx, t.origin, call.id, *observation.ReplayObject)
+	replay, err := r.readPaid(t.ctx, t.origin, call.id, *observation.ReplayObject, claimed)
 	if err != nil {
 		return err
 	}
@@ -194,7 +230,7 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	texts := []ledger.ObjectRef{}
 	lastBlock, lastChunk := -1, -1
 	for _, ref := range a.result.MessageObjects {
-		raw, err := r.readPaid(t.ctx, t.origin, call.id, ref)
+		raw, err := r.readPaid(t.ctx, t.origin, call.id, ref, claimed)
 		if err != nil {
 			return err
 		}
@@ -249,11 +285,27 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	}
 	if len(tools) == 0 {
 		manifest := loopFinalMessage{Schema: 1, Kind: "final_message", Origin: t.origin, TurnID: t.id, Provider: t.profile.Provider, Model: t.profile.ModelID, TextObjects: texts}
-		ref, err := s.publishLoopMetadata(t.ctx, t.origin, t.credential, manifest)
+		var ref ledger.ObjectRef
+		owner, err := s.updateContinuation(t.ctx, t.origin, t.id, "owner.advance", &call.token, func(a *ledger.ContinuationArguments, owner continuationState, command uuid.UUID) error {
+			if a.StopReason != "" {
+				return ErrContinuationStale
+			}
+			var err error
+			ref, err = s.publishLoopMetadata(t.ctx, t.origin, t.credential, manifest)
+			if err != nil {
+				return err
+			}
+			a.State, a.Pending, a.FinalMessageObject = "finishing", []ledger.ContinuationPending{}, &ref
+			return nil
+		})
 		if err != nil {
 			return err
 		}
 		r.mu.Lock()
+		if t.owner.Version != owner.Snapshot.Version {
+			r.mu.Unlock()
+			return ErrContinuationStale
+		}
 		t.answer = &ref
 		r.mu.Unlock()
 	} else {
@@ -264,9 +316,16 @@ func (r *loopRuntime) model(t *loopTurn) error {
 		if _, err := requestStorageBound(next); err != nil {
 			return err
 		}
-		t.request = next
+		owner, err := r.completeOwner(t, call.token, nil)
+		if err != nil {
+			return err
+		}
 		r.mu.Lock()
-		t.tools = tools
+		if t.owner.Version != owner.Snapshot.Version {
+			r.mu.Unlock()
+			return ErrContinuationStale
+		}
+		t.request, t.tools = next, tools
 		r.mu.Unlock()
 	}
 	if err := call.prepared.Close(); err != nil {

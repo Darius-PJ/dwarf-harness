@@ -124,6 +124,13 @@ func (f *turnFixture) finishedFor(t testing.TB, view session.Session, turn uuid.
 	ctx := context.Background()
 	var events []session.Event
 	var cursor uint64
+	f.service.loop.mu.Lock()
+	live := f.service.loop.turns[turn]
+	f.service.loop.mu.Unlock()
+	var done <-chan struct{}
+	if live != nil {
+		done = live.done
+	}
 	for {
 		page, err := view.Since(ctx, cursor, 128)
 		if err != nil {
@@ -135,11 +142,27 @@ func (f *turnFixture) finishedFor(t testing.TB, view session.Session, turn uuid.
 			}
 			events = append(events, event)
 			if result, ok := event.Data.(ledger.RuntimeTurnResult); ok {
+				f.service.loop.mu.Lock()
+				live := f.service.loop.turns[turn]
+				f.service.loop.mu.Unlock()
+				if live != nil {
+					<-live.done
+					if live.terminalError != nil {
+						t.Fatalf("turn result was not followed by owner closure: %v", live.terminalError)
+					}
+				}
 				return result, events
 			}
 		}
 		cursor = page.ThroughSequence
-		<-page.Wake
+		select {
+		case <-page.Wake:
+		case <-done:
+			if live.terminalError != nil {
+				t.Fatalf("turn became recovery-pending before a recorded result: %v", live.terminalError)
+			}
+			done = nil
+		}
 	}
 }
 func turnRequest(t testing.TB, r *http.Request) (string, []byte) {

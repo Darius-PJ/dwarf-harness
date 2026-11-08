@@ -112,19 +112,18 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 		}
 		st := s.p.scopes[keyFor(ids, "context")]
 		view := session.ContextView{ContextID: ids.context, Revision: st.revision, ThroughSequence: s.p.through, Turns: []session.TurnView{}}
-		for id, turn := range s.p.loopTurns {
-			if turn.origin == originOf(ids) {
-				view.Turns = append(view.Turns, session.TurnView{TurnID: id, State: "recovery_pending", BoundSequence: turn.sequence})
+		for _, turn := range s.p.pendingLoopViews() {
+			if turn.Origin == originOf(ids) && turn.ToolID == (uuid.UUID{}) {
+				view.Turns = append(view.Turns, session.TurnView{TurnID: turn.TurnID})
 			}
 		}
 		s.mu.Unlock()
-		r.mu.Lock()
 		for i, turn := range view.Turns {
-			if live := r.turns[turn.TurnID]; live != nil {
-				view.Turns[i] = r.turnView(live)
+			view.Turns[i], err = v.status(ctx, reads, ids, turn.TurnID)
+			if err != nil {
+				return result, err
 			}
 		}
-		r.mu.Unlock()
 		return session.CommandResult{CommandID: command.CommandID, Outcome: "ok", Data: view}, nil
 	case session.PromotionRequest:
 		if command.Operation != "promotion.request" || !validID(args.WorkspaceID) {
@@ -141,21 +140,49 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 }
 func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids submissionIDs, id uuid.UUID) (session.TurnView, error) {
 	r, s := v.service.loop, v.service
-	r.mu.Lock()
-	if t := r.turns[id]; t != nil {
-		if t.origin != originOf(ids) {
-			r.mu.Unlock()
-			return session.TurnView{}, ErrDenied
-		}
-		view := r.turnView(t)
-		r.mu.Unlock()
-		return view, nil
-	}
-	r.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var view session.TurnView
 	err := s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		view = session.TurnView{}
+		target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(originOf(ids))), Scope: "context", Slots: []string{}}
+		if _, err := s.loopGrantLocked(ctx, reads, originOf(ids), "turn.inspect", []ledger.Resource{target}, 0); err != nil {
+			return err
+		}
+		r.mu.Lock()
+		live := r.turns[id]
+		if live != nil && live.state == "admitted" {
+			// Still binding: no owner or binding yet; report from the journal.
+			live = nil
+		}
+		if live != nil && live.origin == originOf(ids) {
+			view = r.turnView(live)
+		}
+		r.mu.Unlock()
+		if live != nil {
+			if view.TurnID == (uuid.UUID{}) {
+				return ErrDenied
+			}
+			owner, err := s.loadContinuation(ctx, reads, id, s.p.through)
+			if err != nil {
+				return err
+			}
+			if owner.Origin != originOf(ids) {
+				return ErrDenied
+			}
+			copyContinuationView(&view, owner)
+			view.Pending = s.p.remainingContinuationPending(owner.Snapshot.Pending)
+			// A stop or resume can already be durable while the worker still
+			// carries the preceding park's RAM label. That is runnable work,
+			// not a park under the new owner snapshot.
+			if view.State == "waiting_resource" && owner.Snapshot.State != "waiting_resource" {
+				view.State = "ready"
+			}
+			if owner.Snapshot.State != "terminal" {
+				return nil
+			}
+			view = session.TurnView{}
+		}
 		var err error
 		view, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryTurnStatus, id: id}, 0, s.p.through, directoryReadSelection{Purpose: "loop_status", Origin: originOf(ids)}, func(view *session.TurnView, c ledger.Commit) error {
 			for _, record := range c.Records {
@@ -175,7 +202,21 @@ func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids sub
 			}
 			return nil
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		owner, err := s.loadContinuation(ctx, reads, id, s.p.through)
+		if err != nil {
+			return err
+		}
+		if owner.Snapshot.Version != 0 {
+			if owner.Origin != originOf(ids) {
+				return ErrDenied
+			}
+			copyContinuationView(&view, owner)
+			view.Pending = s.p.remainingContinuationPending(owner.Snapshot.Pending)
+		}
+		return nil
 	})
 	view.TurnID = id
 	if view.State == "" {
@@ -188,7 +229,7 @@ func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids sub
 }
 func (v *loopSession) cancelTurn(ctx context.Context, reads *historyReadSet, ids submissionIDs, command, id uuid.UUID) (session.CommandResult, error) {
 	result := session.CommandResult{CommandID: command, Outcome: "refused", TurnID: id}
-	r, s := v.service.loop, v.service
+	s := v.service
 	// Historical retries resolve globally before selecting a live cancellation.
 	s.mu.Lock()
 	var match commandMatch
@@ -202,42 +243,24 @@ func (v *loopSession) cancelTurn(ctx context.Context, reads *historyReadSet, ids
 		return result, err
 	}
 	if match.found {
+		if g := match.continuation; g != nil {
+			if g.receipt.Submission.Operation != "owner.stop" || g.receipt.Submission.Actor != "owner" || g.receipt.Submission.Origin != originOf(ids) || g.change.TurnID != id || g.change.StopReason != "cancelled" {
+				return result, ErrCommandMismatch
+			}
+			receipt := g.result()
+			return session.CommandResult{CommandID: command, Outcome: "accepted", TurnID: id, ReceiptSequence: receipt.Sequence, EffectSequence: receipt.EffectSequence, Data: receipt}, nil
+		}
 		if match.scoped == nil || match.scoped.receipt.Submission.Operation != "turn.cancel" || match.scoped.receipt.Submission.Origin != originOf(ids) || match.scoped.ending == nil || match.scoped.ending.WorkID != id {
 			return result, ErrCommandMismatch
 		}
 		receipt := scopedReceipt(match.scoped)
 		return session.CommandResult{CommandID: command, Outcome: "applied", TurnID: id, ReceiptSequence: receipt.Sequence, EffectSequence: match.scoped.first + uint64(match.scoped.effectIndex), Data: receipt}, nil
 	}
-	r.mu.Lock()
-	t := r.turns[id]
-	if t == nil || t.origin != originOf(ids) {
-		r.mu.Unlock()
-		return result, ErrUnavailable
-	}
-	if t.cancelID != (uuid.UUID{}) && t.cancelID != command {
-		r.mu.Unlock()
-		return result, ErrCommandMismatch
-	}
-	t.cancelID, t.reason = command, "cancelled"
-	t.cancel()
-	done := t.done
-	r.mu.Unlock()
-	r.notify()
-	select {
-	case <-ctx.Done():
-		return result, ctx.Err()
-	case <-done:
-	}
-	r.mu.Lock()
-	receipt, err := t.cancelReceipt, t.terminalError
-	r.mu.Unlock()
-	if receipt == nil {
-		if err == nil {
-			err = ErrUnavailable
-		}
+	receipt, outcome, err := s.stopContinuation(ctx, originOf(ids), id, command, "cancelled", "owner")
+	if err != nil {
 		return result, err
 	}
-	return session.CommandResult{CommandID: command, Outcome: "applied", TurnID: id, ReceiptSequence: receipt.Sequence, EffectSequence: receipt.Sequence - 1, Data: *receipt}, nil
+	return session.CommandResult{CommandID: command, Outcome: outcome, TurnID: id, ReceiptSequence: receipt.Sequence, EffectSequence: receipt.EffectSequence, Data: receipt}, nil
 }
 
 var errLoopPageFull = errors.New("loop event page complete")

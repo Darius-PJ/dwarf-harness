@@ -66,11 +66,30 @@ func testLoopLateNativeEffect(t *testing.T) {
 	capacity.BufferBytes, capacity.MaxOperationBytes = 512<<20, 4<<20
 	before := f.store.Durable()
 	_, err := f.service.ConfigureCapacity(context.Background(), bindingOf(f.origin), CapacitySpec{CommandID: effect, ExpectedVersion: uint64(version), Scope: scope, Limits: capacity})
+	if !errors.Is(err, ErrContinuationStale) || len(captured) != 0 || f.store.Durable() != before {
+		t.Fatalf("late promised ID reached native submission: %v", err)
+	}
+	_, err = f.service.ConfigureCapacity(context.Background(), bindingOf(f.origin), CapacitySpec{CommandID: uuid.NewV7(), ExpectedVersion: uint64(version), Scope: scope, Limits: capacity})
 	f.service.mu.Lock()
 	f.service.deps.beforeSubmit = nil
 	f.service.mu.Unlock()
 	if err == nil || len(captured) == 0 || f.store.Durable() != before {
 		t.Fatal("could not capture a valid, uncommitted native group")
+	}
+	command := scopedDecode(t, ledger.DecodeCommand, captured[0].Payload)
+	command.CommandID = effect
+	captured[0].Payload, err = command.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, captured[len(captured)-1].Payload)
+	receipt.CommandID = effect
+	captured[len(captured)-1].Payload, err = receipt.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range captured {
+		captured[i].OperationID = effect
 	}
 	if err := f.service.Close(); err != nil {
 		t.Fatal(err)

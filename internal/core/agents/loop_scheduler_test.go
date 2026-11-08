@@ -89,7 +89,6 @@ func waitLoopState(t *testing.T, view session.Session, contextID, turn uuid.UUID
 
 func TestTurnLoopAdmissionAndFairness(t *testing.T) {
 	t.Parallel()
-	t.Run("physical_release_without_commit", func(t *testing.T) { testLoopPhysicalRelease(t, false) })
 	gates := map[string]chan struct{}{"schedule-general": make(chan struct{}), "schedule-first": make(chan struct{}), "schedule-second": make(chan struct{}), "schedule-peer": make(chan struct{})}
 	type request struct {
 		label string

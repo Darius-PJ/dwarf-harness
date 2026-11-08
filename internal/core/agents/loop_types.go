@@ -42,12 +42,23 @@ type LoopContextSettings struct {
 type LoopOptions struct{ Contexts []LoopContextSettings }
 
 type LoopRecovery struct {
-	Origin          ledger.Origin `json:"origin"`
-	TurnID          uuid.UUID     `json:"turn_id"`
-	ToolID          uuid.UUID     `json:"tool_id,omitzero"`
-	BoundSequence   uint64        `json:"bound_sequence"`
-	StartedSequence uint64        `json:"started_sequence,omitempty"`
-	State           string        `json:"state"`
+	Origin          ledger.Origin                `json:"origin"`
+	TurnID          uuid.UUID                    `json:"turn_id"`
+	ToolID          uuid.UUID                    `json:"tool_id,omitzero"`
+	BoundSequence   uint64                       `json:"bound_sequence"`
+	StartedSequence uint64                       `json:"started_sequence,omitempty"`
+	State           string                       `json:"state"`
+	Reason          string                       `json:"reason,omitempty"`
+	OwnerVersion    int64                        `json:"owner_version"`
+	OperationID     uuid.UUID                    `json:"operation_id,omitzero"`
+	Generation      int64                        `json:"generation"`
+	SavedPhase      string                       `json:"saved_phase,omitempty"`
+	ResumeState     string                       `json:"resume_state,omitempty"`
+	WaitReason      string                       `json:"wait_reason,omitempty"`
+	Pending         []ledger.ContinuationPending `json:"pending,omitempty"`
+	DeadlineUTCNS   int64                        `json:"deadline_utc_ns"`
+	ModelCalls      int64                        `json:"model_calls"`
+	ToolDispatches  int64                        `json:"tool_dispatches"`
 }
 
 func (p TurnPolicy) validTemplate() bool {
@@ -73,9 +84,23 @@ func (p *projection) pendingLoopViews() []LoopRecovery {
 	for id, turn := range p.loopTurns {
 		out = append(out, LoopRecovery{Origin: turn.origin, TurnID: id, BoundSequence: turn.sequence, State: "recovery_pending"})
 	}
+	for id, owner := range p.owners {
+		if _, found := p.loopTurns[id]; !found {
+			out = append(out, LoopRecovery{Origin: owner.Origin, TurnID: id, BoundSequence: uint64(owner.Snapshot.BoundSequence), State: "recovery_pending"})
+		}
+	}
 	for id, tool := range p.loopTools {
 		turn := p.loopTurns[tool.start.ParentTurnID]
 		out = append(out, LoopRecovery{Origin: tool.origin, TurnID: tool.start.ParentTurnID, ToolID: id, BoundSequence: turn.sequence, StartedSequence: tool.sequence, State: "recovery_pending"})
+	}
+	for i := range out {
+		if owner, found := p.owners[out[i].TurnID]; found {
+			c := owner.Snapshot
+			out[i].OwnerVersion, out[i].OperationID, out[i].Generation = c.Version, c.OperationID, c.Generation
+			out[i].SavedPhase, out[i].ResumeState, out[i].WaitReason, out[i].Reason = c.State, c.ResumeState, c.WaitReason, c.StopReason
+			out[i].Pending, out[i].DeadlineUTCNS = p.remainingContinuationPending(c.Pending), c.DeadlineUTCNS
+			out[i].ModelCalls, out[i].ToolDispatches = owner.ModelCalls, owner.ToolDispatches
+		}
 	}
 	slices.SortFunc(out, func(a, b LoopRecovery) int {
 		if c := bytes.Compare(a.TurnID[:], b.TurnID[:]); c != 0 {

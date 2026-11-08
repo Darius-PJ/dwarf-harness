@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"uuid"
@@ -135,7 +136,7 @@ func (s *Service) publishLoopMetadata(ctx context.Context, origin ledger.Origin,
 	return ledger.ObjectRef{SHA256: digest, Bytes: int64(len(raw))}, err
 }
 
-func (r *loopRuntime) manifest(t *loopTurn, outcome, reason string, final *ledger.ObjectRef) (loopManifest, error) {
+func (r *loopRuntime) manifest(t *loopTurn, outcome, reason string, final *ledger.ObjectRef, owner *continuationState) (loopManifest, error) {
 	s := r.service
 	manifest := loopManifest{Schema: 1, Entries: []loopEntry{}}
 	appendEntry := func(kind string, attempt, tool uuid.UUID, content any) {
@@ -174,7 +175,7 @@ func (r *loopRuntime) manifest(t *loopTurn, outcome, reason string, final *ledge
 				if result.Kind != "usage" || result.EvidenceObject == nil {
 					continue
 				}
-				raw, err := s.readLoopObject(context.Background(), t.origin, *result.EvidenceObject)
+				raw, err := s.readLoopObjectForOwner(context.Background(), t.origin, *result.EvidenceObject, owner)
 				if err != nil {
 					return err
 				}
@@ -214,7 +215,7 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 		// A busy capture or step leaves everything for the retry: writers, live
 		// text, the reservation and the turn context stay, and the scheduler
 		// parks the turn. Steps already done are skipped on re-entry.
-		if finishBusy(err) {
+		if finishBusy(err) || errors.Is(err, ErrContinuationStale) {
 			return
 		}
 		if err != nil {
@@ -226,11 +227,19 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 			r.mu.Unlock()
 			t.live.close("discarded", nil, ErrUnavailable)
 		}
-		t.cancel()
+		r.mu.Lock()
+		stopped := t.owner.StopReason != ""
+		r.mu.Unlock()
+		if err == nil || stopped {
+			t.cancel()
+		}
 		s.mu.Lock()
 		s.releaseScopedLocked(&t.reservation)
 		s.mu.Unlock()
 	}()
+	if err := r.resumeFinishWait(t); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	call := t.paid
 	r.mu.Unlock()
@@ -274,6 +283,26 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 			}
 		}
 	}
+	if _, err := s.updateContinuation(context.Background(), t.origin, t.id, "owner.advance", nil, func(a *ledger.ContinuationArguments, owner continuationState, command uuid.UUID) error {
+		a.Pending = []ledger.ContinuationPending{}
+		if a.State == "stopping" {
+			a.State, a.ResumeState, a.WaitReason = "finishing", "", "none"
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	waitReason := t.owner.WaitReason
+	r.mu.Unlock()
+	if waitReason == "child_quiescence" || waitReason == "effect_reconciliation" {
+		if _, err := r.resumeOwner(t, waitReason); err != nil {
+			return err
+		}
+	}
+	if err := r.finishMerge(t); err != nil {
+		return err
+	}
 	ids := make([]uuid.UUID, 0, len(t.writers))
 	for id := range t.writers {
 		ids = append(ids, id)
@@ -282,7 +311,11 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 	for _, id := range ids {
 		writer := t.writers[id]
 		scratch := writer.Scratch()
-		var err error
+		owner, err := s.currentContinuation(context.Background(), t.origin, t.id)
+		if err != nil {
+			return err
+		}
+		t.finishWait = loopFinishWait{kind: "workspace_capture", id: id, operation: owner.Snapshot.OperationID, generation: owner.Snapshot.Generation}
 		if s.deps.beforeFinishCommit != nil {
 			err = s.deps.beforeFinishCommit(t.id)
 		}
@@ -295,30 +328,31 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 		writer.Close()
 		delete(t.writers, id)
 		if scratch.ParentScratchID != (uuid.UUID{}) {
-			if _, err := r.workspace.MergeBack(context.Background(), scratch.ID); err != nil {
-				r.mu.Lock()
-				if t.reason == "" {
-					t.reason = "scratch_pending"
-				}
-				r.mu.Unlock()
-			}
+			t.mergeScratch = scratch.ID
+		}
+		t.finishWait.owed = true
+		if err := r.resumeFinishWait(t); err != nil {
+			return err
+		}
+		if err := r.finishMerge(t); err != nil {
+			return err
 		}
 	}
-	ending, err := r.endNative(t)
-	if err != nil {
-		return err
-	}
-	outcome, reason, final, endingID := ending.outcome, ending.reason, ending.final, ending.endingID
-	manifest, err := r.manifest(t, outcome, reason, final)
-	if err != nil {
-		return err
-	}
-	idsBinding := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
-	unlock, err := s.acquireScope(context.Background(), keyFor(idsBinding, "context"))
+	ending, unlock, err := r.endNative(t)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	outcome, reason, final, endingID := ending.outcome, ending.reason, ending.final, ending.endingID
+	manifestOwner, err := s.currentContinuation(context.Background(), t.origin, t.id)
+	if err != nil {
+		return err
+	}
+	manifest, err := r.manifest(t, outcome, reason, final, &manifestOwner)
+	if err != nil {
+		return err
+	}
+	idsBinding := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
 	ref, err := s.publishLoopMetadata(context.Background(), t.origin, t.credential, manifest)
 	if err != nil {
 		return err
@@ -328,15 +362,30 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 	version, prior := state.revision, state.heads["transcript"].SHA256
 	s.mu.Unlock()
 	revision := ledger.PrivateTurnRevision{Scope: "context", ExpectedVersion: int64(version), Revision: int64(version + 1), Changes: []ledger.PrivateChange{{Slot: "transcript", Mode: "append", SHA256: ref.SHA256, Bytes: ref.Bytes, PreviousSHA256: prior}}}
-	r.mu.Lock()
-	modelCalls, toolCalls := t.modelCalls, t.toolCalls
-	r.mu.Unlock()
+	owner, err := s.currentContinuation(context.Background(), t.origin, t.id)
+	if err != nil {
+		return err
+	}
+	modelCalls, toolCalls := owner.ModelCalls, owner.ToolDispatches
 	_, err = s.commitLoop(context.Background(), t.endCommandID, ledger.LoopSubmission{Schema: 6, Actor: "core", Origin: t.origin, TurnID: t.id, Operation: "loop.end", ExpectedVersion: 1, Arguments: ledger.LoopEndArguments{TurnID: t.id, BoundSequence: int64(t.binding.first + 1), Outcome: outcome, Reason: reason, ModelCalls: modelCalls, ToolDispatches: toolCalls, FinalMessageObject: final, EndingCommandID: endingID}}, &revision)
 	if err != nil {
 		return err
 	}
+	owner, err = s.currentContinuation(context.Background(), t.origin, t.id)
+	if err != nil {
+		return err
+	}
+	a := continuationArguments(owner.Snapshot)
+	a.State, a.ResumeState, a.WaitReason, a.Pending = "terminal", "", "none", []ledger.ContinuationPending{}
+	a.ModelCalls, a.ToolDispatches, a.NativeEndingSequence = owner.ModelCalls, owner.ToolDispatches, int64(ending.sequence)
+	closed, err := s.commitContinuation(context.Background(), uuid.NewV7(), continuationSubmission(owner, "owner.close", a), nil)
+	if err != nil {
+		return err
+	}
+	s.publishContinuation(closed)
 	r.mu.Lock()
 	t.state, t.reason = "finished", reason
+	t.modelCalls, t.toolCalls = owner.ModelCalls, owner.ToolDispatches
 	r.mu.Unlock()
 	liveState := "discarded"
 	if outcome == "finished" {
@@ -346,66 +395,201 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 	return nil
 }
 
+// The workspace claim and its effects happen inside one call. After success,
+// Close/delete make that step irreversible in RAM; a refused resume is owed
+// before the next claim, never permission to repeat the workspace operation.
+func (r *loopRuntime) resumeFinishWait(t *loopTurn) error {
+	if !t.finishWait.owed {
+		return nil
+	}
+	owner, err := r.service.currentContinuation(context.Background(), t.origin, t.id)
+	if err != nil {
+		return err
+	}
+	if owner.Snapshot.OperationID != t.finishWait.operation || owner.Snapshot.Generation != t.finishWait.generation {
+		// Only a newer durable stop can void a successful old operation's
+		// owed resume; it must never resume a new park under that stop.
+		if owner.Snapshot.StopReason == "" || owner.Snapshot.Generation <= t.finishWait.generation {
+			return ErrContinuationStale
+		}
+		if owner.Snapshot.State == "stopping" {
+			if _, err := r.ownerPhase(t, "finishing", nil); err != nil {
+				return err
+			}
+		}
+		t.finishWait = loopFinishWait{}
+		return nil
+	}
+	switch owner.Snapshot.State {
+	case "waiting_resource":
+		if owner.Snapshot.ResumeState != "finishing" || owner.Snapshot.WaitReason != t.finishWait.kind {
+			return ErrContinuationStale
+		}
+		if _, err := r.service.updateContinuation(context.Background(), t.origin, t.id, "owner.advance", nil, func(a *ledger.ContinuationArguments, _ continuationState, _ uuid.UUID) error {
+			if a.OperationID != t.finishWait.operation || a.Generation != t.finishWait.generation || a.State != "waiting_resource" || a.ResumeState != "finishing" || a.WaitReason != t.finishWait.kind {
+				return ErrContinuationStale
+			}
+			a.State, a.ResumeState, a.WaitReason = "finishing", "", "none"
+			return nil
+		}); err != nil {
+			return err
+		}
+	case "stopping":
+		if _, err := r.ownerPhase(t, "finishing", nil); err != nil {
+			return err
+		}
+	case "finishing":
+	default:
+		return ErrContinuationStale
+	}
+	t.finishWait = loopFinishWait{}
+	return nil
+}
+
+func (r *loopRuntime) finishMerge(t *loopTurn) error {
+	if t.mergeScratch == (uuid.UUID{}) {
+		return nil
+	}
+	owner, err := r.ownerPhase(t, "finishing", nil)
+	if err != nil {
+		return err
+	}
+	t.finishWait = loopFinishWait{kind: "workspace_merge_back", id: t.mergeScratch, operation: owner.Snapshot.OperationID, generation: owner.Snapshot.Generation}
+	if err := r.parkOwner(t, "workspace_merge_back"); err != nil {
+		return err
+	}
+	_, mergeErr := r.workspace.MergeBack(context.Background(), t.mergeScratch)
+	t.mergeScratch, t.finishWait.owed = uuid.UUID{}, true
+	if mergeErr != nil {
+		if err := r.noteStop(t, "scratch_pending"); err != nil {
+			return err
+		}
+	}
+	return r.resumeFinishWait(t)
+}
+
 // loopEnding is a finishing turn's committed native ending, as loop.end and
 // the turn's manifest record it.
 type loopEnding struct {
 	outcome, reason string
 	final           *ledger.ObjectRef
 	endingID        uuid.UUID
+	sequence        uint64
 }
 
-// endNative returns the turn's committed native ending, first committing it
-// unless an earlier attempt of this finish already has. The ending is kept on
-// the turn and decides the outcome from then on: a finish re-entered after a
-// busy step skips this step, and a stop reason that arrives after the ending
-// changes nothing.
-func (r *loopRuntime) endNative(t *loopTurn) (loopEnding, error) {
-	r.mu.Lock()
-	committed := t.ending
-	r.mu.Unlock()
-	if committed != nil {
-		return *committed, nil
-	}
+// endNative transfers the context gate to finish, which retains it through
+// loop.end and owner.close. No workspace operation runs under this gate.
+func (r *loopRuntime) endNative(t *loopTurn) (loopEnding, func(), error) {
 	s := r.service
 	if reason := s.loopBoundary(t); reason != "" {
-		r.noteStop(t, reason)
+		if err := r.noteStop(t, reason); err != nil {
+			return loopEnding{}, nil, err
+		}
 	}
-	r.mu.Lock()
-	reason, final := t.reason, t.answer
-	cancelID := t.cancelID
-	r.mu.Unlock()
+	ids := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	unlock, err := s.acquireScope(context.Background(), keyFor(ids, "context"))
+	if err != nil {
+		return loopEnding{}, nil, err
+	}
+	ending, err := r.endNativeLocked(t)
+	if err != nil {
+		unlock()
+		return loopEnding{}, nil, err
+	}
+	owner, err := s.currentContinuation(context.Background(), t.origin, t.id)
+	if err != nil {
+		unlock()
+		return loopEnding{}, nil, err
+	}
+	if owner.Snapshot.State == "waiting_resource" {
+		return ending, unlock, nil
+	}
+	a := continuationArguments(owner.Snapshot)
+	a.NativeEndingSequence = int64(ending.sequence)
+	a.ModelCalls, a.ToolDispatches = owner.ModelCalls, owner.ToolDispatches
+	if !sameScopedValue(a, continuationArguments(owner.Snapshot)) {
+		g, err := s.commitContinuation(context.Background(), uuid.NewV7(), continuationSubmission(owner, "owner.advance", a), nil)
+		if err != nil {
+			unlock()
+			return loopEnding{}, nil, err
+		}
+		s.publishContinuation(g)
+	}
+	return ending, unlock, nil
+}
+
+func (r *loopRuntime) endNativeLocked(t *loopTurn) (loopEnding, error) {
+	s := r.service
+	ids := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	owner, err := s.currentContinuation(context.Background(), t.origin, t.id)
+	if err != nil {
+		return loopEnding{}, err
+	}
+	if owner.Snapshot.Version == 0 || !owner.supported() {
+		return loopEnding{}, ErrIntegrity
+	}
+	work, err := queryHistory(context.Background(), s, &ids, func(reads *historyReadSet) (scopedWorkState, error) {
+		work, found, err := s.loadWork(context.Background(), reads, t.id, s.p.through)
+		if err == nil && (!found || work.origin != t.origin) {
+			err = ErrIntegrity
+		}
+		return work, err
+	})
+	if err != nil {
+		return loopEnding{}, err
+	}
+	reason, final := owner.Snapshot.StopReason, owner.Snapshot.FinalMessageObject
+	if owner.Snapshot.State == "reconciling" {
+		final = t.answer // recovery supplies only a validated, already-selected final
+		if !work.ended && reason == "" {
+			reason, final = "shutdown", nil
+		}
+	}
 	outcome, native := "finished", "released"
 	if reason == "" {
 		reason = "natural_stop"
 	} else {
-		final = nil
-		outcome = "failed"
+		final, outcome = nil, "failed"
 		if reason == "cancelled" {
 			outcome, native = "cancelled", "cancelled"
-		} else if reason == "shutdown" {
+		}
+		if reason == "shutdown" {
 			outcome, native = "interrupted", "interrupted"
 		}
 	}
 	ending := loopEnding{outcome: outcome, reason: reason, final: final, endingID: t.endingID}
-	var receipt *ScopedReceipt
-	if native == "cancelled" {
-		if cancelID == (uuid.UUID{}) {
-			return loopEnding{}, ErrIntegrity
+	receipt := work.receipt
+	if !work.ended {
+		if native == "cancelled" {
+			ending.endingID = owner.Snapshot.CancelCommandID
+			if !validID(ending.endingID) {
+				return loopEnding{}, ErrIntegrity
+			}
+			receipt, err = s.executeScoped(context.Background(), scopedCaller{actor: "core"}, "turn.cancel", TurnCancellation{CommandID: ending.endingID, TurnID: t.id, ExpectedVersion: uint64(work.version)})
+		} else {
+			receipt, err = s.EndTurn(context.Background(), TurnEnding{CommandID: ending.endingID, TurnID: t.id, ExpectedVersion: uint64(work.version), Outcome: native})
 		}
-		ending.endingID = cancelID
-		cancelled, err := s.CancelTurn(context.Background(), bindingOf(t.origin), TurnCancellation{CommandID: cancelID, TurnID: t.id, ExpectedVersion: 1})
 		if err != nil {
 			return loopEnding{}, err
 		}
-		receipt = &cancelled
-	} else if _, err := s.EndTurn(context.Background(), TurnEnding{CommandID: ending.endingID, TurnID: t.id, ExpectedVersion: 1, Outcome: native}); err != nil {
-		return loopEnding{}, err
+	} else {
+		ending.endingID = receipt.CommandID
+		if work.outcome == "cancelled" {
+			ending.outcome, ending.reason, ending.final = "cancelled", "cancelled", nil
+		}
+		if work.outcome == "interrupted" {
+			ending.outcome, ending.final = "interrupted", nil
+			if ending.reason == "natural_stop" {
+				ending.reason = "shutdown"
+			}
+		}
+		if work.outcome == "released" && final == nil && owner.Snapshot.StopReason == "" {
+			ending.outcome, ending.reason = "failed", "unresolved_result"
+		}
 	}
+	ending.sequence = receipt.Sequence - 1
 	r.mu.Lock()
-	if receipt != nil {
-		t.cancelReceipt = receipt
-	}
-	t.ending = &ending
+	t.ending, t.cancelReceipt = &ending, &receipt
 	r.mu.Unlock()
 	return ending, nil
 }
@@ -625,7 +809,7 @@ func (r *loopRuntime) finalText(ctx context.Context, origin ledger.Origin, turn 
 		if !found || attempt.origin != origin || attempt.admission.ParentTurnID != turn || attempt.profile.Provider != manifest.Provider || attempt.profile.ModelID != manifest.Model || attempt.result == nil || !slices.Contains(attempt.result.MessageObjects, object) {
 			return "", ErrDenied
 		}
-		if _, err := r.readPaid(ctx, origin, output.AttemptID, object); err != nil {
+		if _, err := r.readPaid(ctx, origin, output.AttemptID, object, nil); err != nil {
 			return "", err
 		}
 		text.WriteString(output.Block.Text)

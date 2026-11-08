@@ -22,7 +22,7 @@ func loopGoldenGroups(t testing.TB) ([]ledger.Commit, []loopGoldenGroup) {
 	_, commits := scopedGoldenFixture(t, "15", 0)
 	var groups []loopGoldenGroup
 	for index, commit := range commits {
-		_, _, _, _, _, group, err := decodeFamily(draftsOf(commit), commit.First)
+		_, _, _, _, _, group, _, err := decodeFamily(draftsOf(commit), commit.First)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +56,7 @@ func loopPreflight(t testing.TB, s, baseline *Service, drafts []ledger.Draft) (*
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _, _, _, _, group, err := decodeFamily(drafts, s.p.through+1)
+	_, _, _, _, _, group, _, err := decodeFamily(drafts, s.p.through+1)
 	if err == nil {
 		if group == nil {
 			err = ErrInvalid
@@ -139,7 +139,7 @@ func testLoopGroupRules(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer baseline.Close()
-			_, _, _, _, _, g, err := decodeFamily(draftsOf(commits[chosen.index]), commits[chosen.index].First)
+			_, _, _, _, _, g, _, err := decodeFamily(draftsOf(commits[chosen.index]), commits[chosen.index].First)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,7 +169,7 @@ func testLoopGroupRules(t *testing.T) {
 			}
 			defer baseline.Close()
 			started := first("tool.begin")
-			_, _, _, _, _, g, err := decodeFamily(draftsOf(commits[started.index]), commits[started.index].First)
+			_, _, _, _, _, g, _, err := decodeFamily(draftsOf(commits[started.index]), commits[started.index].First)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -17,7 +17,7 @@ type PaidObjectLookup struct {
 
 // ReadPaidObject is an owner-only passive read of an attempt's selected object.
 func (s *Service) ReadPaidObject(ctx context.Context, request PaidObjectLookup) ([]byte, error) {
-	return s.readPaidObject(ctx, nil, request)
+	return s.readPaidObject(ctx, nil, request, nil)
 }
 
 // ReadPaidObject requires current private.read over every originating context
@@ -26,7 +26,7 @@ func (a *Agent) ReadPaidObject(ctx context.Context, request PaidObjectLookup) ([
 	if a == nil || a.service == nil {
 		return nil, ErrNotBound
 	}
-	return a.service.readPaidObject(ctx, &a.ids, request)
+	return a.service.readPaidObject(ctx, &a.ids, request, nil)
 }
 
 func (s *Service) paidObjectSelected(ctx context.Context, reads *historyReadSet, a paidAttempt, ref ledger.ObjectRef) (bool, error) {
@@ -43,7 +43,7 @@ func (s *Service) paidObjectSelected(ctx context.Context, reads *historyReadSet,
 	// historical query, not a scan in dispatch or an ordinary settlement.
 	id, after, through := a.admission.AttemptID, a.sequence-2, s.p.through
 	return foldDirectory(ctx, s, reads, directoryKey{kind: directoryPaid, id: id}, after, through, directoryReadSelection{Purpose: "paid_object_selected", Object: ref}, func(found *bool, c ledger.Commit) error {
-		_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
+		_, _, _, g, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err == nil && g != nil && g.receipt.AttemptID == id && selected(g.result) {
 			*found = true
 		}
@@ -51,7 +51,7 @@ func (s *Service) paidObjectSelected(ctx context.Context, reads *historyReadSet,
 	})
 }
 
-func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, request PaidObjectLookup) ([]byte, error) {
+func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, request PaidObjectLookup, claimed func() error) ([]byte, error) {
 	if s == nil {
 		return nil, ErrNotBound
 	}
@@ -106,7 +106,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 			if replayEvidence == (ledger.ObjectRef{}) {
 				id := a.admission.AttemptID
 				evidenceBytes, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryPaid, id: id}, a.sequence-2, selectedThrough, directoryReadSelection{Purpose: "paid_evidence_bound"}, func(size *int64, c ledger.Commit) error {
-					_, _, _, group, _, _, err := decodeFamily(draftsOf(c), c.First)
+					_, _, _, group, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 					if err == nil && group != nil && group.result != nil && group.receipt.AttemptID == id && group.result.EvidenceObject != nil {
 						*size = max(*size, group.result.EvidenceObject.Bytes)
 					}
@@ -151,6 +151,11 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 	directory := s.p.agents[a.origin.AgentID].directory
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); s.releaseScopedLocked(&reservation); s.mu.Unlock() }()
+	if claimed != nil {
+		if err := claimed(); err != nil {
+			return nil, err
+		}
+	}
 	if s.deps.beforeRead != nil {
 		if err := s.deps.beforeRead(bindingOf(a.origin), "paid_object"); err != nil {
 			return nil, err
@@ -166,7 +171,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 				if replayEvidence != (ledger.ObjectRef{}) {
 					return nil
 				}
-				_, _, _, group, _, _, err := decodeFamily(draftsOf(c), c.First)
+				_, _, _, group, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 				if err != nil {
 					return err
 				}

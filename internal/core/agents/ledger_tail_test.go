@@ -510,19 +510,40 @@ func TestTurnLoopCommittedEndingStands(t *testing.T) {
 	}
 	turn := start.TurnID
 	finishBusyState(t, f.view, f.origin.ContextID, turn, "waiting_resource", "")
-	cancelled := make(chan error, 1)
-	go func() {
-		_, err := f.view.Do(ctx, session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: turn}})
-		cancelled <- err
-	}()
-	// The cancellation reruns the finish once; it keeps the ending and parks.
-	finishBusyState(t, f.view, f.origin.ContextID, turn, "waiting_resource", "cancelled")
+	status := finishBusyStatus(t, f.view, f.origin.ContextID, turn)
+	if status.ResumeState != "finishing" || status.WaitReason != "local_slot" {
+		t.Fatalf("finishing read did not publish its slot wait: %+v", status)
+	}
+	parkedThrough := f.store.Durable()
+	runtime := f.service.loop
+	for range 2 {
+		generation := runtime.generation.Load() + 1
+		runtime.notify()
+		for {
+			runtime.mu.Lock()
+			live, changed := runtime.turns[turn], runtime.changed
+			parked := live != nil && !live.running && live.state == "waiting_resource" && live.waitGeneration >= generation
+			runtime.mu.Unlock()
+			if f.store.Durable() != parkedThrough {
+				t.Fatal("still-busy finishing read resumed or re-parked without its claim")
+			}
+			if parked {
+				break
+			}
+			<-changed
+		}
+	}
+	beforeCancel := f.store.Durable()
+	reply, err := f.view.Do(ctx, session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: turn}})
+	if err != nil || reply.Outcome != "too_late" || f.store.Durable() != beforeCancel {
+		t.Fatalf("cancel replaced or appended after the committed native ending: %+v %v", reply, err)
+	}
+	if status := finishBusyStatus(t, f.view, f.origin.ContextID, turn); status.Reason != "" {
+		t.Fatalf("too-late cancel relabelled the live finish: %+v", status)
+	}
 	close(release)
 	if err := <-readDone; !errors.Is(err, ErrDenied) {
 		t.Fatalf("holder did not abandon its read: %v", err)
-	}
-	if err := <-cancelled; !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("turn.cancel after the committed ending = %v, want ErrUnavailable", err)
 	}
 	result, _ := f.finished(t, turn)
 	if result.Outcome != "finished" || result.Reason != "natural_stop" || result.FinalMessageObject == nil {

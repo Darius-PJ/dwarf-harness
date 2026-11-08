@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"uuid"
 
@@ -81,6 +80,9 @@ func finishBusyStatus(t *testing.T, view session.Session, contextID, turn uuid.U
 	}
 	if status.State == "recovery_pending" {
 		t.Fatalf("turn %s left the scheduler without a recorded ending", turn)
+	}
+	if status.State == "waiting_resource" && (status.SavedPhase != "waiting_resource" || status.OwnerVersion == 0 || status.WaitReason == "none") {
+		t.Fatalf("turn parked before its durable wait: %+v", status)
 	}
 	return status
 }
@@ -260,7 +262,6 @@ func TestTurnLoopFinishBusy(t *testing.T) {
 	t.Parallel()
 	t.Run("concurrent_captures_park_not_strand", func(t *testing.T) { testLoopFinishBusyStranding(t, true) })
 	t.Run("concurrent_captures_and_ledger_writes", func(t *testing.T) { testLoopFinishBusyStranding(t, false) })
-	t.Run("cancel_while_parked", testLoopFinishBusyCancel)
 }
 
 // Three turns with file writes are held before their turn-end observation and
@@ -353,6 +354,7 @@ func testLoopFinishBusyStranding(t *testing.T, gated bool) {
 				t.Fatalf("turn %s ended %s/%s with %d tools", turn, result.Outcome, result.Reason, result.ToolDispatches)
 			}
 		}
+		assertContinuationCaptureCollision(t, f, round, cursor)
 		gate.mu.Lock()
 		for turn := range round {
 			if gate.attempts[turn] > 1 {
@@ -379,125 +381,38 @@ func testLoopFinishBusyStranding(t *testing.T, gated bool) {
 	}
 }
 
-// The test answers a real workspace busy for the turn's observation while it
-// holds the budget, cancels the parked turn, then stops answering and releases
-// a real writer lease on another scratch: a release with no ledger commit, so
-// only the workspace release notifier can wake the turn.
-func testLoopFinishBusyCancel(t *testing.T) {
-	t.Parallel()
-	var mu sync.Mutex
-	holding, answered, passed := true, 0, 0
-	answer := make(chan struct{})
-	var posts atomic.Int32
-	var arguments string
-	f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
-		model, _ := turnRequest(t, r)
-		w.Header().Set("Content-Type", "text/event-stream")
-		if posts.Add(1) == 1 {
-			_, _ = io.WriteString(w, turnAnthropic(model, turnCalls("file_write_v1", arguments), ""))
-		} else {
-			_, _ = io.WriteString(w, turnAnthropic(model, nil, "Answer the cancellation replaces."))
-		}
-	}, func(deps *serviceDeps) {
-		deps.beforeFinishCommit = func(uuid.UUID) error {
-			mu.Lock()
-			defer mu.Unlock()
-			if !holding {
-				passed++
-				return nil
+func assertContinuationCaptureCollision(t *testing.T, f *turnFixture, round map[uuid.UUID]uuid.UUID, after uint64) {
+	t.Helper()
+	observed := map[uuid.UUID][]uint64{}
+	parks, resumes := map[uuid.UUID][]uint64{}, map[uuid.UUID][]uint64{}
+	if err := f.service.scan(context.Background(), after, f.store.Durable(), func(c ledger.Commit) error {
+		for _, record := range c.Records {
+			if record.Type == ledger.TypeScratchChanged {
+				v := scopedDecode(t, ledger.DecodeScratchChanged, record.Payload)
+				observed[v.ContextID] = append(observed[v.ContextID], record.Seq)
 			}
-			answered++
-			close(answer)
-			answer = make(chan struct{})
-			return &workspace.BusyError{Reason: "capture_budget"}
+			if _, mine := round[record.TurnID]; !mine || record.Type != ledger.TypeRuntimeContinuationReceipt {
+				continue
+			}
+			v := scopedDecode(t, ledger.DecodeRuntimeContinuationReceipt, record.Payload)
+			if v.Submission.Arguments.State == "waiting_resource" && v.Submission.Arguments.WaitReason == "workspace_capture" {
+				parks[record.TurnID] = append(parks[record.TurnID], uint64(v.EffectSequence))
+			}
+			if v.Submission.ExpectedState == "waiting_resource" && v.Submission.Arguments.State == "finishing" {
+				resumes[record.TurnID] = append(resumes[record.TurnID], uint64(v.EffectSequence))
+			}
 		}
-	})
-	// waitAnswers returns once more than n busy answers have been given.
-	waitAnswers := func(n int) int {
-		mu.Lock()
-		for answered <= n {
-			next := answer
-			mu.Unlock()
-			<-next
-			mu.Lock()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for turn, contextID := range round {
+		p, r, o := parks[turn], resumes[turn], observed[contextID]
+		if len(o) != 1 || len(p) != len(r) || len(p) > 1 {
+			t.Fatalf("capture repeated observation or wait transition: turn=%s observations=%v parks=%v resumes=%v", turn, o, p, r)
 		}
-		defer mu.Unlock()
-		return answered
-	}
-	registered := f.finishBusyWorkspace(t)
-	// Runs before the fixture's Close: a failed row must not leave the turn
-	// parked on an answer that never stops.
-	t.Cleanup(func() {
-		mu.Lock()
-		holding = false
-		mu.Unlock()
-	})
-	scratch := f.finishBusyFiles(t, registered, bindingOf(f.origin))
-	arguments = finishBusyWrite(registered.ID, "cancel-while-parked")
-	other := scopedWorkContext(t, f.service, bindingOf(f.origin), 53000, 53001)
-	otherScratch, err := f.workspace.Scratch(context.Background(), other.ContextID, registered.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	holder, err := f.workspace.BeginWrite(context.Background(), workspace.WriteBinding{WriterID: uuid.NewV7(), ContextID: other.ContextID, AgentID: other.AgentID, TaskAgentID: other.AgentID, TaskScratchID: otherScratch.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer holder.Close()
-	releaseLease, err := holder.Lease(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer releaseLease()
-	f.enable(t)
-	_, start := f.send(t)
-	finishBusyState(t, f.view, f.origin.ContextID, start.TurnID, "waiting_resource", "")
-	parked := waitAnswers(0)
-	cancelled := make(chan loopCancelReply, 1)
-	command := session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: start.TurnID}}
-	go func() {
-		result, err := f.view.Do(context.Background(), command)
-		cancelled <- loopCancelReply{command, result, err}
-	}()
-	waitAnswers(parked)
-	finishBusyState(t, f.view, f.origin.ContextID, start.TurnID, "waiting_resource", "cancelled")
-	mu.Lock()
-	spun := answered != parked+1
-	holding = false
-	mu.Unlock()
-	if spun {
-		t.Fatal("cancellation did not rerun the parked finish exactly once")
-	}
-	select {
-	case <-cancelled:
-		t.Fatal("cancellation acknowledged before the capture budget was released")
-	default:
-	}
-	releaseLease()
-	reply := <-cancelled
-	if reply.err != nil || reply.result.Outcome != "applied" {
-		t.Fatalf("cancellation did not acknowledge its recorded ending: %v", reply.err)
-	}
-	f.service.mu.Lock()
-	effect, effectFound, effectErr := f.service.sourceRecord(context.Background(), nil, int64(reply.result.EffectSequence), f.service.p.through)
-	receipt, receiptFound, receiptErr := f.service.sourceRecord(context.Background(), nil, int64(reply.result.ReceiptSequence), f.service.p.through)
-	f.service.mu.Unlock()
-	if effectErr != nil || receiptErr != nil || !effectFound || !receiptFound || effect.Type != ledger.TypeRuntimeWorkEnded || receipt.Type != ledger.TypeRuntimeScopedReceipt {
-		t.Fatal("cancellation acknowledgement did not name CancelTurn's effect and receipt")
-	}
-	native, err := ledger.DecodeRuntimeWorkEnded(effect.Payload)
-	if err != nil || native.WorkID != start.TurnID || native.Outcome != "cancelled" || effect.OperationID != command.CommandID {
-		t.Fatal("native ending is not the turn's cancellation")
-	}
-	result, _ := f.finished(t, start.TurnID)
-	if result.Outcome != "cancelled" || result.Reason != "cancelled" || result.ToolDispatches != 1 {
-		t.Fatalf("parked turn ended %s/%s", result.Outcome, result.Reason)
-	}
-	mu.Lock()
-	commits := passed
-	mu.Unlock()
-	ended, observed := finishBusyLedger(t, f)
-	if commits != 1 || observed[scratch.ID] != 1 || ended[start.TurnID] != 1 {
-		t.Fatalf("writer commits=%d observations=%d loop.end=%d", commits, observed[scratch.ID], ended[start.TurnID])
+		if len(p) == 1 && (p[0] >= o[0] || r[0] <= o[0]) {
+			t.Fatalf("real capture collision resumed before success: park=%d observation=%d resume=%d", p[0], o[0], r[0])
+		}
 	}
 }

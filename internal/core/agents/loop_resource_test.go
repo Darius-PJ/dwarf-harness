@@ -13,6 +13,11 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 )
 
+func TestTurnLoopWaitingHolds(t *testing.T) {
+	t.Run("physical_release_without_commit", func(t *testing.T) { testLoopPhysicalRelease(t, false) })
+	t.Run("released_unsent", func(t *testing.T) { testLoopPhysicalRelease(t, true) })
+}
+
 func testLoopPhysicalRelease(t *testing.T, cancelBeforeSend bool) {
 	t.Parallel()
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -94,7 +99,14 @@ func testLoopPhysicalRelease(t *testing.T, cancelBeforeSend bool) {
 	f.service.mu.Unlock()
 	f.enable(t)
 	_, start := f.send(t)
-	waitLoopState(t, f.view, f.origin.ContextID, start.TurnID, "waiting_resource")
+	waiting := continuationWait(t, f, start.TurnID, "paid_prepare")
+	if waiting.ResumeState != "model_pending" || waiting.ModelCalls != 0 || len(waiting.Pending) != 1 || waiting.Pending[0].Kind != "paid_attempt" || waiting.Pending[0].SourceSequence == 0 {
+		t.Fatalf("paid wait lost its admitted hold or counted an unsent request: %+v", waiting)
+	}
+	pending, err := f.service.PaidAttemptStatus(context.Background(), PaidAttemptLookup{AttemptID: waiting.Pending[0].ID})
+	if err != nil || pending.Intent != nil || pending.Ended || pending.HeldMicros == "0" || pending.SettledMicros != "0" {
+		t.Fatalf("waiting released or settled an unsent hold: %+v %v", pending, err)
+	}
 	if posts.Load() != 0 {
 		t.Fatal("model dispatched despite held physical capacity")
 	}

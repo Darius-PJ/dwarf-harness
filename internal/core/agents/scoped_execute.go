@@ -23,7 +23,7 @@ func (s *Service) reserveScopedProcessLocked(reservation *scopedReservation) err
 		return nil
 	}
 	if s.preparing >= s.limits.MaxConcurrentWrites {
-		return &BusyError{Reason: "preparing"}
+		return &BusyError{Reason: "preparing", waitKind: "local_slot"}
 	}
 	s.preparing++
 	reservation.process = true
@@ -225,7 +225,7 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 			return scopedResult{}, err
 		}
 	}
-	_, group, match, err := s.prepareScopedLocked(ctx, reads, input, &reservation, false)
+	_, group, match, err := s.prepareScopedLocked(ctx, reads, input, &reservation, true, false)
 	if err == nil && match.found {
 		s.releaseScopedLocked(&reservation)
 		return s.replayScopedLocked(ctx, reads, input, match, scopeHeld)
@@ -235,6 +235,30 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 	}
 	if err == nil {
 		err = s.reserveScopedBudgetLocked(&reservation, input, group.usage, false)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return scopedResult{}, err
+	}
+	if s.deps.afterScopedClaim != nil {
+		s.deps.afterScopedClaim(input.sub)
+	}
+	if err := s.resumeLocalClaim(ctx, input.sub.Origin, input.id); err != nil {
+		return scopedResult{}, err
+	}
+	match, err = s.lookupScoped(ctx, reads, input)
+	if err != nil {
+		s.mu.Unlock()
+		return scopedResult{}, err
+	}
+	if match.found {
+		s.releaseScopedLocked(&reservation)
+		return s.replayScopedLocked(ctx, reads, input, match, scopeHeld)
+	}
+	_, _, match, err = s.prepareScopedLocked(ctx, reads, input, &reservation, false, false)
+	if err == nil && match.found {
+		s.releaseScopedLocked(&reservation)
+		return s.replayScopedLocked(ctx, reads, input, match, scopeHeld)
 	}
 	s.mu.Unlock()
 	if err != nil {
@@ -263,7 +287,7 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 			s.releaseScopedLocked(&reservation)
 			return s.replayScopedLocked(ctx, reads, input, match, true)
 		}
-		_, _, match, err = s.prepareScopedLocked(ctx, reads, input, &reservation, false)
+		_, _, match, err = s.prepareScopedLocked(ctx, reads, input, &reservation, false, false)
 		if err == nil && match.found {
 			s.releaseScopedLocked(&reservation)
 			return s.replayScopedLocked(ctx, reads, input, match, true)
@@ -290,7 +314,7 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 		s.mu.Unlock()
 		return scopedResult{}, ioErr
 	}
-	drafts, _, match, err := s.prepareScopedLocked(ctx, reads, input, &reservation, true)
+	drafts, _, match, err := s.prepareScopedLocked(ctx, reads, input, &reservation, false, true)
 	if err == nil && match.found {
 		result, input.changes = scopedResult{}, nil
 		s.releaseScopedLocked(&reservation)
@@ -425,6 +449,9 @@ func (s *Service) replayScopedLocked(ctx context.Context, reads *historyReadSet,
 	if err != nil {
 		return scopedResult{}, err
 	}
+	if err := s.resumeLocalClaim(ctx, input.sub.Origin, input.id); err != nil {
+		return scopedResult{}, err
+	}
 	if operation == "private.read" && !scopeHeld {
 		unlock, err := s.acquireScope(ctx, keyFor(ids, input.sub.Target.Scope))
 		if err != nil {
@@ -438,6 +465,9 @@ func (s *Service) replayScopedLocked(ctx context.Context, reads *historyReadSet,
 			return err
 		}
 		if err := s.scopedPrivateStateLocked(input); err != nil {
+			return err
+		}
+		if err := s.guardPromisedCommand(ctx, reads, input.sub.Origin, input.id, s.p.through); err != nil {
 			return err
 		}
 		if operation == "artifact.read" {
@@ -468,7 +498,7 @@ func (s *Service) replayScopedLocked(ctx context.Context, reads *historyReadSet,
 
 // prepareScopedLocked contains only guards and plans. Any suspended read reruns
 // the whole phase, including deduplication and current preparation checks.
-func (s *Service) prepareScopedLocked(ctx context.Context, reads *historyReadSet, input scopedInput, reservation *scopedReservation, submitting bool) ([]ledger.Draft, *scopedGroup, commandMatch, error) {
+func (s *Service) prepareScopedLocked(ctx context.Context, reads *historyReadSet, input scopedInput, reservation *scopedReservation, claiming, submitting bool) ([]ledger.Draft, *scopedGroup, commandMatch, error) {
 	ids := submissionIDs{input.sub.Origin.AgentID, input.sub.Origin.SessionID, input.sub.Origin.ContextID}
 	var drafts []ledger.Draft
 	var group *scopedGroup
@@ -496,7 +526,22 @@ func (s *Service) prepareScopedLocked(ctx context.Context, reads *historyReadSet
 		if submitting && s.deps.beforeSubmit != nil {
 			drafts = s.deps.beforeSubmit(drafts)
 		}
-		group, err = s.preflightScoped(ctx, reads, input, drafts)
+		claimWait := false
+		if claiming {
+			owner, _, claimErr := s.localContinuationClaim(ctx, reads, input.sub.Origin, input.id)
+			if claimErr != nil {
+				return claimErr
+			}
+			claimWait = owner.Snapshot.State == "waiting_resource"
+		}
+		if claimWait {
+			group, err = decodeScopedGroup(drafts, s.p.through+1)
+			if err == nil {
+				_, err = matchScopedReceipt(commandMatch{found: true, command: group.command, scoped: group}, input)
+			}
+		} else {
+			group, err = s.preflightScoped(ctx, reads, input, drafts)
+		}
 		if err != nil {
 			return err
 		}

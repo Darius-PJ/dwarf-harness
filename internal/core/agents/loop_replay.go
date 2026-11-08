@@ -184,6 +184,9 @@ func (s *Service) planLoop(ctx context.Context, reads *historyReadSet, g *loopGr
 		if !bound || turn.origin != sub.Origin || g.start == nil || !sameScopedValue(ledger.RuntimeToolStarted(a), *g.start) {
 			return plan, ErrInvalid
 		}
+		if err := s.guardedContinuation(ctx, reads, sub.Origin, sub.TurnID, "tool", a.ToolID, a.EffectCommandID, through); err != nil {
+			return plan, err
+		}
 		work, found, err := s.loadWork(ctx, reads, sub.TurnID, through)
 		if err != nil {
 			return plan, err

@@ -177,6 +177,9 @@ func TestTurnLoopFinalMessage(t *testing.T) {
 		if _, err := f.view.FinalText(ctx, heldTurn); !errors.Is(err, ErrDenied) {
 			t.Fatal("a cancelled turn produced a durable answer")
 		}
+		if result, _ := f.finished(t, heldTurn); result.Outcome != "cancelled" {
+			t.Fatal("accepted cancellation did not reach its durable ending")
+		}
 		kept := turnMessage(f.origin.ContextID, "kept request")
 		if _, err := f.view.Do(ctx, kept); err != nil {
 			t.Fatal(err)

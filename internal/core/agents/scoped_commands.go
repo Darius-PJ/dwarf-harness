@@ -273,7 +273,7 @@ func makeScopedInput(actor string, ids submissionIDs, operation string, request 
 		input.id, input.sub.Expected.Version = request.CommandID, int64(request.ExpectedVersion)
 		input.sub.Arguments = ledger.WorkEndArguments{WorkID: request.TurnID, Outcome: request.Outcome}
 	case TurnCancellation:
-		if operation != "turn.cancel" || actor != "owner" && actor != "agent" || actor == "owner" && request.GrantID != (uuid.UUID{}) || request.ExpectedVersion != 1 {
+		if operation != "turn.cancel" || actor != "owner" && actor != "agent" && actor != "core" || actor != "agent" && request.GrantID != (uuid.UUID{}) || request.ExpectedVersion != 1 {
 			return input, ErrInvalid
 		}
 		input.id, input.sub.GrantID, input.sub.Expected.Version = request.CommandID, request.GrantID, int64(request.ExpectedVersion)

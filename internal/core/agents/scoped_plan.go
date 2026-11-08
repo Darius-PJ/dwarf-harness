@@ -14,6 +14,11 @@ func (s *Service) planScoped(ctx context.Context, reads *historyReadSet, g *scop
 	if !s.p.registeredOrigin(sub.Origin) {
 		return plan, ErrNotBound
 	}
+	if g.admission == nil && g.dispatch == nil && g.ending == nil {
+		if err := s.guardPromisedCommand(ctx, reads, sub.Origin, g.command.CommandID, first-1); err != nil {
+			return plan, err
+		}
+	}
 	var chain []grantRules
 	var size int64
 	var err error

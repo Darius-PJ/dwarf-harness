@@ -70,7 +70,7 @@ func refuseInitialMarkdown(path privateScope) error {
 func (s *Service) scopeHistory(ctx context.Context, ids submissionIDs, scope string, through, revision uint64, visit func(string, Head, string) error) (uint64, error) {
 	var current uint64
 	err := s.scan(ctx, 0, through, func(c ledger.Commit) error {
-		g, scoped, _, _, _, loop, err := decodeFamily(draftsOf(c), c.First)
+		g, scoped, _, _, _, loop, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return err
 		}
@@ -163,9 +163,23 @@ func (s *Service) inspectOpen(ctx context.Context) (Reconciliation, error) {
 	// One global traversal preserves every occurrence in all revision families.
 	// Reports are collected per scope to retain sorted-scope/occurrence order.
 	err := s.scan(ctx, 0, s.p.through, func(c ledger.Commit) error {
-		g, scoped, _, _, _, loop, err := decodeFamily(draftsOf(c), c.First)
+		g, scoped, _, _, _, loop, continuation, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return err
+		}
+		if continuation != nil && continuation.change.FinalMessageObject != nil {
+			k := keyFor(continuation.ids, "context")
+			st, check := s.p.scopes[k], scopes[k]
+			if st == nil || check == nil || st.ids.session != continuation.ids.session {
+				return ErrIntegrity
+			}
+			ref := continuation.change.FinalMessageObject
+			h := Head{ref.SHA256, ref.Bytes, uint64(continuation.change.Version), c.First + 1}
+			if _, err := readObject(check.path, h); err != nil {
+				issue := s.objectIssue(check.path, ReadBinding{Binding{st.ids.agent, st.ids.context}, "context"}, "final_message", h)
+				check.issues = append(check.issues, issue)
+				st.issues = append(st.issues, issue)
+			}
 		}
 		ids, revisions, indexes := scopedRevisions(g, scoped, loop)
 		for i, rev := range revisions {

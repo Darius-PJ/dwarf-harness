@@ -62,13 +62,21 @@ type CommandResult struct {
 }
 
 type TurnView struct {
-	TurnID         uuid.UUID                 `json:"turn_id"`
-	State          string                    `json:"state"`
-	Reason         string                    `json:"reason,omitempty"`
-	ModelCalls     int64                     `json:"model_calls"`
-	ToolDispatches int64                     `json:"tool_dispatches"`
-	BoundSequence  uint64                    `json:"bound_sequence"`
-	Result         *ledger.RuntimeTurnResult `json:"result,omitempty"`
+	TurnID         uuid.UUID                    `json:"turn_id"`
+	State          string                       `json:"state"`
+	Reason         string                       `json:"reason,omitempty"`
+	ModelCalls     int64                        `json:"model_calls"`
+	ToolDispatches int64                        `json:"tool_dispatches"`
+	BoundSequence  uint64                       `json:"bound_sequence"`
+	Result         *ledger.RuntimeTurnResult    `json:"result,omitempty"`
+	OwnerVersion   int64                        `json:"owner_version"`
+	OperationID    uuid.UUID                    `json:"operation_id,omitzero"`
+	Generation     int64                        `json:"generation"`
+	SavedPhase     string                       `json:"saved_phase,omitempty"`
+	ResumeState    string                       `json:"resume_state,omitempty"`
+	WaitReason     string                       `json:"wait_reason,omitempty"`
+	Pending        []ledger.ContinuationPending `json:"pending,omitempty"`
+	DeadlineUTCNS  int64                        `json:"deadline_utc_ns"`
 }
 
 type ContextView struct {

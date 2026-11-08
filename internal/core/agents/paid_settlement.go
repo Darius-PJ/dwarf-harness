@@ -407,7 +407,7 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 			if err != nil {
 				return err
 			}
-			_, _, _, g, _, _, err := decodeFamily(draftsOf(c), c.First)
+			_, _, _, g, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 			if err == nil && g != nil && c.Last == sequence {
 				receipt, err = copyPaidReceipt(g, s.p.through)
 			}

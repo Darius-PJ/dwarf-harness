@@ -91,10 +91,12 @@ func (r *loopRuntime) toolAuthority(t *loopTurn, inv *loopInvocation) error {
 
 func (r *loopRuntime) tool(t *loopTurn) error {
 	if reason := r.service.loopBoundary(t); reason != "" {
-		r.noteStop(t, reason)
-		return nil
+		return r.noteStop(t, reason)
 	}
 	inv := &t.tools[0]
+	if inv.completed {
+		return r.deliverTool(t, inv)
+	}
 	denied := false
 	if inv.correction != nil && (inv.correction.Code == "unrecognized" || inv.name == "tools_invoke_v1" && inv.correction.Field == "tool_path") {
 		denied = true
@@ -137,29 +139,37 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 				grant = inv.grant
 			}
 		}
+		owner, err := r.recordPending(t, ledger.ContinuationPending{Kind: "tool", ID: inv.id, CommandID: effect, ExpectedVersion: 1})
+		if err != nil {
+			return err
+		}
+		if owner.Snapshot.StopReason != "" {
+			return ErrContinuationStale
+		}
 		ref, err := r.service.publishLoopObject(t.ctx, t.origin, t.credential, request)
 		if err != nil {
 			return err
 		}
-		start := ledger.RuntimeToolStarted{ToolID: uuid.NewV7(), ParentTurnID: t.id, AttemptID: inv.attempt, ProviderCallID: inv.callID, ToolName: name, ToolSchema: 1, RequestObject: ref, RequestSHA256: ref.SHA256, Operation: operation, Target: target, GrantID: grant, EffectCommandID: effect}
+		start := ledger.RuntimeToolStarted{ToolID: inv.id, ParentTurnID: t.id, AttemptID: inv.attempt, ProviderCallID: inv.callID, ToolName: name, ToolSchema: 1, RequestObject: ref, RequestSHA256: ref.SHA256, Operation: operation, Target: target, GrantID: grant, EffectCommandID: effect}
 		g, err := r.service.commitLoop(t.ctx, uuid.NewV7(), ledger.LoopSubmission{Schema: 6, Actor: "agent", Origin: t.origin, TurnID: t.id, Operation: "tool.begin", Arguments: ledger.LoopToolBeginArguments(start)}, nil)
 		if err != nil {
 			return err
 		}
 		inv.started = g
 	}
-	if !inv.counted {
-		r.mu.Lock()
-		t.toolCalls++
-		inv.counted = true
-		r.mu.Unlock()
+	owner, err := r.recordPending(t, ledger.ContinuationPending{Kind: "tool", ID: inv.id, CommandID: inv.started.start.EffectCommandID, ExpectedVersion: 1, SourceSequence: int64(inv.started.first + 1)})
+	if err != nil {
+		return err
 	}
+	if owner.Snapshot.StopReason != "" {
+		return ErrContinuationStale
+	}
+	inv.token = owner.token(inv.id)
 	if inv.started.start.Operation == "unrecognized" {
 		denied = true
 	}
 	var data any
 	var receipt uint64
-	var err error
 	outcome := "ok"
 	var correction *modelToolCorrection
 	if denied {
@@ -172,7 +182,7 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 		// commits, and the tool never runs twice.
 		if inv.executed == nil {
 			if reason := r.service.loopBoundary(t); reason != "" {
-				return r.stopTool(t, inv)
+				return r.noteStop(t, reason)
 			}
 			if strings.HasPrefix(inv.normalized.Operation, "file.") {
 				data, receipt, err = r.file(t, inv)
@@ -180,10 +190,6 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 				data, receipt, err = r.coreTool(t, inv)
 			}
 			if loopBusy(err) {
-				r.mu.Lock()
-				t.toolCalls--
-				inv.counted = false
-				r.mu.Unlock()
 				return err
 			}
 			executed := loopToolExecution{data: data, receipt: receipt, outcome: "ok"}
@@ -192,6 +198,12 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 				executed.correction = &modelToolCorrection{Code: executed.outcome}
 			}
 			inv.executed = &executed
+			ids := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+			if _, err := queryHistory(context.Background(), r.service, &ids, func(reads *historyReadSet) (continuationState, error) {
+				return r.service.continuationCallback(context.Background(), reads, inv.token)
+			}); err != nil {
+				return err
+			}
 		}
 		data, receipt, outcome, correction = inv.executed.data, inv.executed.receipt, inv.executed.outcome, inv.executed.correction
 		// Native effects and reads already checked their own authority. This
@@ -203,15 +215,33 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 			}
 		}
 	}
-	raw, err := r.recordToolResult(t, inv, outcome, data, correction, receipt)
+	_, err = r.recordToolResult(t, inv, outcome, data, correction, receipt)
 	if err != nil {
 		return err
 	}
+	return r.deliverTool(t, inv)
+}
+
+func (r *loopRuntime) deliverTool(t *loopTurn, inv *loopInvocation) error {
+	raw, outcome := inv.delivery, inv.resultOutcome
 	var delivered struct {
 		Status string `json:"status"`
 	}
 	if json.Unmarshal(raw, &delivered) != nil {
 		return ErrIntegrity
+	}
+	if outcome == "unknown_effect" {
+		return r.noteStop(t, "unresolved_result")
+	}
+	owner, err := r.completeOwner(t, inv.token, nil)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	current := t.owner.Version == owner.Snapshot.Version
+	r.mu.Unlock()
+	if !current {
+		return ErrContinuationStale
 	}
 	isError := delivered.Status != "ok"
 	t.toolResults = append(t.toolResults, providers.Block{Type: "tool_result", ToolUseID: inv.callID, Content: []providers.Text{{Type: "text", Text: string(raw)}}, IsError: &isError})
@@ -219,10 +249,6 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 	t.tools = t.tools[1:]
 	remaining := len(t.tools)
 	r.mu.Unlock()
-	if outcome == "unknown_effect" {
-		r.noteStop(t, "unresolved_result")
-		return nil
-	}
 	if remaining == 0 {
 		next := t.request
 		next.Messages = append(slices.Clone(next.Messages), providers.Message{Role: "user", Content: t.toolResults})
@@ -257,16 +283,20 @@ func (r *loopRuntime) recheckTool(t *loopTurn, inv *loopInvocation) error {
 	if reason := r.service.loopBoundary(t); reason != "" {
 		return ErrDenied
 	}
+	return r.toolResultAuthority(t.ctx, t, inv)
+}
+
+func (r *loopRuntime) toolResultAuthority(ctx context.Context, t *loopTurn, inv *loopInvocation) error {
 	s := r.service
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
-	return s.prepareHistoryLocked(t.ctx, &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
+	return s.prepareHistoryLocked(ctx, &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
 		if inv.normalized.Operation == "artifact.read" {
-			_, err := s.artifactAuthority(t.ctx, reads, t.origin, inv.normalized.Target.Artifact, inv.grant, s.p.through, nil)
+			_, err := s.artifactAuthority(ctx, reads, t.origin, inv.normalized.Target.Artifact, inv.grant, s.p.through, nil)
 			return err
 		}
-		return s.loopPassiveAuthority(t.ctx, reads, t.origin, ledger.RuntimeToolStarted{Operation: inv.normalized.Operation, Target: inv.normalized.Target, GrantID: inv.grant}, s.p.through)
+		return s.loopPassiveAuthority(ctx, reads, t.origin, ledger.RuntimeToolStarted{Operation: inv.normalized.Operation, Target: inv.normalized.Target, GrantID: inv.grant}, s.p.through)
 	})
 }
 func (r *loopRuntime) recordToolResult(t *loopTurn, inv *loopInvocation, outcome string, data any, correction *modelToolCorrection, receipt uint64) ([]byte, error) {
@@ -301,17 +331,15 @@ func (r *loopRuntime) recordToolResult(t *loopTurn, inv *loopInvocation, outcome
 		fixed := loopRefusal{Schema: 1, ToolID: id, Status: "error", Error: loopFixedError{Code: outcome}}
 		raw = modelJSON(fixed)
 		ref, err = r.service.publishLoopMetadata(context.Background(), t.origin, t.credential, fixed)
-		r.mu.Lock()
-		if t.reason == "" {
-			t.reason = "content_invalid"
+		if stopErr := r.noteStop(t, "content_invalid"); stopErr != nil {
+			return nil, stopErr
 		}
-		r.mu.Unlock()
 	}
 	if err != nil {
 		return nil, err
 	}
 	if correction == nil && outcome == "ok" {
-		if e := r.recheckTool(t, inv); e != nil {
+		if e := r.toolResultAuthority(context.Background(), t, inv); e != nil {
 			outcome = "denied"
 			fixed := loopRefusal{Schema: 1, ToolID: id, Status: "error", Error: loopFixedError{Code: outcome}}
 			raw = modelJSON(fixed)
@@ -323,7 +351,14 @@ func (r *loopRuntime) recordToolResult(t *loopTurn, inv *loopInvocation, outcome
 	}
 	_, err = r.service.commitLoop(context.Background(), uuid.NewV7(), ledger.LoopSubmission{Schema: 6, Actor: "core", Origin: t.origin, TurnID: t.id, Operation: "tool.result", ExpectedVersion: 1, Arguments: ledger.LoopToolResultArguments{ToolID: id, StartedSequence: int64(inv.started.first + 1), Outcome: outcome, ResultObject: ref, EffectReceiptSequence: int64(receipt)}}, nil)
 	if err == nil {
+		r.mu.Lock()
+		if !inv.counted {
+			t.toolCalls++
+			inv.counted = true
+		}
+		r.mu.Unlock()
 		inv.started, inv.executed = nil, nil
+		inv.completed, inv.delivery, inv.resultOutcome = true, raw, outcome
 	}
 	return raw, err
 }
@@ -333,6 +368,7 @@ func (r *loopRuntime) stopTool(t *loopTurn, inv *loopInvocation) error {
 	}
 	s := r.service
 	var sequence uint64
+	outcome := "unavailable"
 	if effect := inv.started.start.EffectCommandID; effect != (uuid.UUID{}) {
 		s.mu.Lock()
 		var match commandMatch
@@ -359,12 +395,15 @@ func (r *loopRuntime) stopTool(t *loopTurn, inv *loopInvocation) error {
 			if match.scoped.admission != nil {
 				if work.ended {
 					sequence = work.receipt.Sequence
-				} else {
-					outcome := "released_unsent"
-					if work.dispatched {
-						outcome = "unknown"
+					if work.outcome == "unknown" {
+						outcome = "unknown_effect"
 					}
-					receipt, err := s.EndLocal(context.Background(), LocalEnding{CommandID: uuid.NewV7(), WorkID: work.admission.WorkID, ExpectedVersion: uint64(work.version), Outcome: outcome})
+				} else {
+					nativeOutcome := "released_unsent"
+					if work.dispatched {
+						nativeOutcome, outcome = "unknown", "unknown_effect"
+					}
+					receipt, err := s.EndLocal(context.Background(), LocalEnding{CommandID: uuid.NewV7(), WorkID: work.admission.WorkID, ExpectedVersion: uint64(work.version), Outcome: nativeOutcome})
 					if err != nil {
 						return err
 					}
@@ -373,12 +412,14 @@ func (r *loopRuntime) stopTool(t *loopTurn, inv *loopInvocation) error {
 			}
 		}
 	}
-	if !inv.counted {
-		r.mu.Lock()
-		t.toolCalls++
-		inv.counted = true
-		r.mu.Unlock()
+	if inv.executed != nil {
+		executed := *inv.executed
+		if executed.receipt != 0 {
+			sequence = executed.receipt
+		}
+		_, err := r.recordToolResult(t, inv, executed.outcome, executed.data, executed.correction, sequence)
+		return err
 	}
-	_, err := r.recordToolResult(t, inv, "unavailable", nil, &modelToolCorrection{Code: "unavailable"}, sequence)
+	_, err := r.recordToolResult(t, inv, outcome, nil, &modelToolCorrection{Code: outcome}, sequence)
 	return err
 }

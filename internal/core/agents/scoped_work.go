@@ -100,6 +100,9 @@ func (s *Service) planWork(ctx context.Context, reads *historyReadSet, g *scoped
 		if work.admission.Kind != "local" || work.version != 1 || work.dispatched || work.ended || p.WorkID != id || p.ExpectedVersion != work.version || p.AuthorityVersion != s.p.authority || p.GrantID != work.admission.GrantID || p.ArgumentsSHA256 != work.admission.ArgumentsSHA256 || !sameScopedValue(sub.Arguments, ledger.WorkDispatchArguments{WorkID: id, ArgumentsSHA256: p.ArgumentsSHA256}) {
 			return plan, ErrInvalid
 		}
+		if err := s.guardedContinuation(ctx, reads, work.origin, work.admission.ParentTurnID, "local_work", id, work.receipt.CommandID, through); err != nil {
+			return plan, err
+		}
 		if _, err := s.authorize(ctx, reads, work.origin, work.admission.GrantID, work.admission.Operation, []ledger.Resource{work.admission.Target}, nil, *work.admission.MaxBytes, through); err != nil {
 			return plan, err
 		}
@@ -137,6 +140,15 @@ func (s *Service) planWork(ctx context.Context, reads *historyReadSet, g *scoped
 			if sub.Operation == "turn.cancel" {
 				if p.Outcome != "cancelled" {
 					return plan, ErrInvalid
+				}
+				if sub.Actor == "core" {
+					owner, err := s.loadContinuation(ctx, reads, id, through)
+					if err != nil {
+						return plan, err
+					}
+					if owner.Snapshot.Version == 0 || owner.Origin != work.origin || owner.Snapshot.StopReason != "cancelled" || owner.Snapshot.CancelCommandID != g.command.CommandID {
+						return plan, ErrDenied
+					}
 				}
 				if sub.Actor == "agent" {
 					if work.version != 1 {

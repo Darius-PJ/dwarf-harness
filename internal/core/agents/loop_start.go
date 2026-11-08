@@ -224,18 +224,33 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 	if err != nil {
 		return nil, err
 	}
+	// A view can read turn.started as soon as loop.bind is installed, before
+	// owner.initialize commits, so LiveText must already find the turn. It
+	// stays "admitted", which the scheduler, the deadline sweep, shutdown,
+	// status and otherWork all skip, until its owner exists.
+	r.mu.Lock()
+	r.turns[t.id] = t
+	r.mu.Unlock()
+	defer func() {
+		if owned {
+			r.mu.Lock()
+			delete(r.turns, t.id)
+			r.mu.Unlock()
+			t.live.close("discarded", nil, ErrUnavailable)
+		}
+	}()
 	g, err := s.commitLoop(ctx, id, ledger.LoopSubmission{Schema: 6, Actor: "owner", Origin: origin, TurnID: t.id, Operation: "loop.bind", Arguments: ledger.LoopBindArguments{TurnID: t.id, AdmissionCommandID: admissionID, InputObject: inputRef, PolicyObject: policyRef, RenderObject: renderRef}}, nil)
 	if err != nil {
 		return nil, err
 	}
-	bound, owned, t.binding = true, false, g
-	r.mu.Lock()
-	if r.stopping {
-		t.reason = "shutdown"
-		t.cancel()
+	bound = true
+	owner, err := s.initializeContinuation(ctx, g, policy, "ready", &t.reservation)
+	if err != nil {
+		return nil, err
 	}
-	t.state = "ready"
-	r.turns[t.id] = t
+	owned = false
+	r.mu.Lock()
+	t.binding, t.owner, t.state = g, owner.change, "ready"
 	r.enqueue(t)
 	r.mu.Unlock()
 	r.notify()
@@ -247,7 +262,7 @@ func (r *loopRuntime) otherWork(t *loopTurn) []string {
 	defer r.mu.Unlock()
 	var turns []*loopTurn
 	for _, other := range r.turns {
-		if other.origin.AgentID == t.origin.AgentID && other.origin.ContextID != t.origin.ContextID {
+		if other.state != "admitted" && other.origin.AgentID == t.origin.AgentID && other.origin.ContextID != t.origin.ContextID {
 			turns = append(turns, other)
 		}
 	}
@@ -404,6 +419,10 @@ func decodeLoopInput(raw []byte, out *loopInputObject) error {
 }
 
 func (s *Service) readLoopObject(ctx context.Context, origin ledger.Origin, ref ledger.ObjectRef) ([]byte, error) {
+	return s.readLoopObjectForOwner(ctx, origin, ref, nil)
+}
+
+func (s *Service) readLoopObjectForOwner(ctx context.Context, origin ledger.Origin, ref ledger.ObjectRef, owner *continuationState) ([]byte, error) {
 	if ref.Bytes <= 0 || ref.Bytes > maxObjectBytes {
 		return nil, ErrIntegrity
 	}
@@ -421,6 +440,16 @@ func (s *Service) readLoopObject(ctx context.Context, origin ledger.Origin, ref 
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if owner != nil {
+		if owner.Origin != origin {
+			return nil, ErrContinuationStale
+		}
+		next, err := s.resumeFinishingClaim(ctx, *owner)
+		if err != nil {
+			return nil, err
+		}
+		*owner = next
 	}
 	return readObject(path, Head{SHA256: ref.SHA256, Bytes: ref.Bytes})
 }

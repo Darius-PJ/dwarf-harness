@@ -23,6 +23,22 @@ func (s *Service) planPaid(ctx context.Context, reads *historyReadSet, g *paidGr
 	if !s.p.registeredOrigin(originOf(g.ids)) {
 		return paidPlan{}, ErrNotBound
 	}
+	if g.receipt.Submission.Operation == "paid.dispatch" {
+		args, ok := g.receipt.Submission.Arguments.(ledger.PaidAttemptArguments)
+		if !ok {
+			return paidPlan{}, ErrInvalid
+		}
+		attempt, found, err := s.loadPaid(ctx, reads, args.AttemptID, first-1, ledger.Digest{})
+		if err != nil {
+			return paidPlan{}, err
+		}
+		if !found {
+			return paidPlan{}, ErrUnavailable
+		}
+		if err := s.guardedContinuation(ctx, reads, attempt.origin, attempt.admission.ParentTurnID, "paid_attempt", args.AttemptID, attempt.receipt.CommandID, first-1); err != nil {
+			return paidPlan{}, err
+		}
+	}
 	switch {
 	case g.route != nil:
 		return s.planPaidRoute(g)

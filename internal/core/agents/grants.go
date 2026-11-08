@@ -160,7 +160,13 @@ func chainAuthorizes(chain []grantRules, request authorityRequest) bool {
 			return false
 		}
 		if request.operation != "grant.issue" && request.operation != "grant.revoke" {
-			if target.Kind == "workspace" || target.Kind == "context" && target.Scope == "context" {
+			if target.Kind == "workspace" {
+				// D23 routes a same-agent sibling write through a fresh
+				// temporary; it never grants a sibling read of the task.
+				if target.Binding.AgentID != request.origin.AgentID || target.Binding.ContextID != request.origin.ContextID && request.operation != "file.write" && request.operation != "file.edit" {
+					return false
+				}
+			} else if target.Kind == "context" && target.Scope == "context" {
 				if target.Binding != ledger.Binding(request.origin) {
 					return false
 				}

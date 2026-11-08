@@ -16,6 +16,12 @@
 // EffectSequence name committed records, and queries carry none. Retrying a
 // command ID with the same meaning returns its original sequences; a changed
 // meaning is refused.
+// turn.cancel's accepted outcome means its stop was recorded, not that the
+// turn has ended. too_late means a native ending already committed and writes
+// nothing. TurnView exposes copied saved phase/wait, owner version, operation,
+// generation, pending, deadline and effective counters; recovery_pending is
+// current availability, not a rewritten saved phase. Current turn.inspect
+// authority controls status disclosure.
 //
 // Since pages the committed records of the view's agent and session after a
 // cursor, at most 128 events and 1 MiB per page. Wake closes at the next

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"math"
 	"slices"
 	"uuid"
 
@@ -461,11 +462,11 @@ func (s *Service) prepareCommitLocked(ctx context.Context, reads *historyReadSet
 // caller discards every local plan and reruns this function from its top.
 func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, c ledger.Commit, expected *scopedInput) (commandMatch, func(), error) {
 	d := draftsOf(c)
-	g, scoped, review, paid, registration, loop, err := decodeFamily(d, c.First)
+	g, scoped, review, paid, registration, loop, continuation, err := decodeFamily(d, c.First)
 	if err != nil {
 		return commandMatch{}, nil, err
 	}
-	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}
+	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation}
 	switch {
 	case g != nil:
 		match.command, match.found = g.command, true
@@ -479,6 +480,8 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		match.command, match.found = registration.command, true
 	case loop != nil:
 		match.command, match.found = loop.command, true
+	case continuation != nil:
+		match.command, match.found = continuation.command, true
 	}
 	if expected != nil {
 		if !match.found || match.command.CommandID != expected.id || match.scoped == nil {
@@ -508,6 +511,7 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 	var paidNext paidPlan
 	var registrationNext registrationPlan
 	var loopNext loopPlan
+	var continuationNext continuationState
 	if g != nil {
 		privateNext, err = s.p.planGroup(g, c.First)
 		if err != nil {
@@ -559,6 +563,15 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 			return commandMatch{}, nil, inconsistent(c.First, "invalid loop transition")
 		}
 	}
+	if continuation != nil {
+		continuationNext, err = s.planContinuation(ctx, reads, continuation, c.First)
+		if err != nil {
+			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, nil, err
+			}
+			return commandMatch{}, nil, inconsistent(c.First, "invalid continuation transition: "+err.Error())
+		}
+	}
 	// Stage the shared envelope effects too: a later invalid closure in an
 	// otherwise unconsumed group must not publish an earlier scratch or maximum.
 	maxCommand := s.p.maxCommand
@@ -604,6 +617,12 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 			scratches[p.ScratchID] = old
 		}
 	}
+	for _, record := range c.Records {
+		owner, found := s.p.owners[record.TurnID]
+		if found && (record.Type == ledger.TypeRuntimePaidDispatchIntent && owner.ModelCalls == math.MaxInt64 || record.Type == ledger.TypeRuntimeToolResult && owner.ToolDispatches == math.MaxInt64) {
+			return commandMatch{}, nil, inconsistent(c.First, "continuation counter overflow")
+		}
+	}
 	return match, func() {
 		if g != nil {
 			s.p.install(g, privateNext)
@@ -622,6 +641,22 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 		if loop != nil {
 			s.p.installLoop(loopNext)
+		}
+		if continuation != nil {
+			s.p.installContinuation(continuationNext)
+		}
+		for _, record := range c.Records {
+			owner, found := s.p.owners[record.TurnID]
+			if !found {
+				continue
+			}
+			switch record.Type {
+			case ledger.TypeRuntimePaidDispatchIntent:
+				owner.ModelCalls++
+			case ledger.TypeRuntimeToolResult:
+				owner.ToolDispatches++
+			}
+			s.p.owners[record.TurnID] = owner
 		}
 		s.p.maxCommand = maxCommand
 		maps.Copy(s.p.scratches, scratches)
@@ -643,6 +678,7 @@ type commandMatch struct {
 	paid         *paidGroup
 	registration *registrationGroup
 	loop         *loopGroup
+	continuation *continuationGroup
 }
 
 func (s *Service) findCommand(ctx context.Context, reads *historyReadSet, id uuid.UUID, after, through uint64) (commandMatch, error) {
@@ -693,7 +729,7 @@ func (s *Service) findCommandLegacy(ctx context.Context, reads *historyReadSet, 
 				if matched.First != 0 {
 					return inconsistent(c.First, "duplicate command")
 				}
-				if _, _, _, _, _, _, err := decodeFamily(draftsOf(c), c.First); err != nil {
+				if _, _, _, _, _, _, _, err := decodeFamily(draftsOf(c), c.First); err != nil {
 					return err
 				}
 				matched = c
@@ -731,11 +767,11 @@ func (s *Service) commandFromCommit(ctx context.Context, reads *historyReadSet, 
 		if cmd.CommandID != id {
 			continue
 		}
-		g, scoped, review, paid, registration, loop, err := decodeFamily(draftsOf(c), c.First)
+		g, scoped, review, paid, registration, loop, continuation, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return commandMatch{}, err
 		}
-		match := commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}
+		match := commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation}
 		if s.deps.beforeHistoryFill != nil {
 			s.deps.beforeHistoryFill(historyKey{kind: historyCommand, id: id})
 		}

@@ -734,7 +734,7 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 				return commandMatch{found: true, command: command}, true
 			}
 			if uint64(len(v.Drafts)) == e.last-e.first+1 {
-				g, scoped, review, paid, registration, loop, err := decodeFamily(v.Drafts, e.first)
+				g, scoped, review, paid, registration, loop, continuation, err := decodeFamily(v.Drafts, e.first)
 				occurrences := 0
 				for _, draft := range v.Drafts {
 					if draft.Type == ledger.TypeCommand {
@@ -746,8 +746,8 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 						}
 					}
 				}
-				if err == nil && occurrences == 1 && (g != nil || scoped != nil || review != nil || paid != nil || registration != nil || loop != nil) {
-					return commandMatch{found: true, command: command, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop}, true
+				if err == nil && occurrences == 1 && (g != nil || scoped != nil || review != nil || paid != nil || registration != nil || loop != nil || continuation != nil) {
+					return commandMatch{found: true, command: command, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation}, true
 				}
 			}
 		}
@@ -766,7 +766,7 @@ func (h *historyIndex) putCommand(id uuid.UUID, after, through uint64, match com
 		v := historyCommandValue{Command: command}
 		// Unconsumed families need only the F0 identity, not arbitrary
 		// payloads that this service neither interprets nor retains.
-		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil || match.registration != nil || match.loop != nil {
+		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil || match.registration != nil || match.loop != nil || match.continuation != nil {
 			v.Drafts = draftsOf(commit)
 		}
 		e.first, e.last = commit.First, commit.Last
@@ -881,6 +881,8 @@ const (
 	directoryRoute
 	directoryTurn
 	directoryTurnStatus
+	directoryContinuation
+	directoryPromisedCommand
 )
 
 type directoryKey struct {
@@ -1034,6 +1036,20 @@ func (d *commandDirectory) advance(c ledger.Commit, generation uint64) {
 		case ledger.TypeRuntimeTurnResult:
 			key = directoryKey{kind: directoryTurnResult, id: r.TurnID}
 			d.add(directoryKey{kind: directoryTurnStatus, id: r.TurnID}, row)
+		case ledger.TypeRuntimeContinuationChanged:
+			var v ledger.RuntimeContinuationChanged
+			v, err = ledger.DecodeRuntimeContinuationChanged(r.Payload)
+			key = directoryKey{kind: directoryContinuation, id: r.TurnID}
+			d.add(directoryKey{kind: directoryTurnStatus, id: r.TurnID}, row)
+			if err == nil {
+				for _, pending := range v.Pending {
+					if pending.CommandID != (uuid.UUID{}) {
+						promised := row
+						promised.link = r.TurnID
+						d.add(directoryKey{kind: directoryPromisedCommand, id: pending.CommandID}, promised)
+					}
+				}
+			}
 		case ledger.TypeRuntimeToolStarted:
 			var v ledger.RuntimeToolStarted
 			v, err = ledger.DecodeRuntimeToolStarted(r.Payload)
@@ -1043,6 +1059,7 @@ func (d *commandDirectory) advance(c ledger.Commit, generation uint64) {
 			var v ledger.RuntimeToolResult
 			v, err = ledger.DecodeRuntimeToolResult(r.Payload)
 			key = directoryKey{kind: directoryToolResult, id: v.ToolID}
+			d.add(directoryKey{kind: directoryContinuation, id: r.TurnID}, row)
 			if err == nil && v.EffectReceiptSequence == 0 {
 				startKey := directoryKey{kind: directoryToolStart, id: v.ToolID}
 				starts := d.rows[startKey]
@@ -1068,6 +1085,7 @@ func (d *commandDirectory) advance(c ledger.Commit, generation uint64) {
 			var v ledger.RuntimePaidDispatchIntent
 			v, err = ledger.DecodeRuntimePaidDispatchIntent(r.Payload)
 			key = directoryKey{kind: directoryPaid, id: v.AttemptID}
+			d.add(directoryKey{kind: directoryContinuation, id: r.TurnID}, row)
 		case ledger.TypeRuntimePaidResult:
 			var v ledger.RuntimePaidResult
 			v, err = ledger.DecodeRuntimePaidResult(r.Payload)

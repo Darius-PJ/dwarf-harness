@@ -153,6 +153,9 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 		}
 		s.mu.Unlock()
 	}()
+	if err := s.resumePaidClaim(ctx, a); err != nil {
+		return out, err
+	}
 
 	// Borrow before the final transition. Revocation removes authorization under
 	// mu, then releases the secret outside it, avoiding a lock-order inversion.

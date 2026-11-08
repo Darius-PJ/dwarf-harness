@@ -37,12 +37,14 @@ type loopRuntime struct {
 	stopping   bool
 	paidTokens map[uuid.UUID]struct{} // Service.mu; shared with ordinary paid dispatch.
 	starting   int
+	failure    error
 }
 
 type loopTurn struct {
 	origin                ledger.Origin
 	id                    uuid.UUID
 	binding               *loopGroup
+	owner                 ledger.RuntimeContinuationChanged
 	settings              LoopContextSettings
 	policy                TurnPolicy
 	credential            uuid.UUID
@@ -64,6 +66,8 @@ type loopTurn struct {
 	toolResults           []providers.Block
 	answer                *ledger.ObjectRef
 	writers               map[uuid.UUID]*workspace.Writer
+	finishWait            loopFinishWait
+	mergeScratch          uuid.UUID
 	live                  *loopLive
 	cancelID              uuid.UUID
 	cancelReceipt         *ScopedReceipt
@@ -72,6 +76,14 @@ type loopTurn struct {
 	endCommandID          uuid.UUID
 	done                  chan struct{}
 	terminalError         error
+}
+
+type loopFinishWait struct {
+	kind       string
+	id         uuid.UUID
+	operation  uuid.UUID
+	generation int64
+	owed       bool
 }
 
 type loopCompletion struct {
@@ -86,6 +98,8 @@ type loopPaidCall struct {
 	id, admitID, dispatchID, observeID, reconcileID uuid.UUID
 	grant                                           uuid.UUID
 	prepared                                        *PreparedPaidCall
+	sourceSequence                                  uint64
+	token                                           continuationToken
 	admitted, counted                               bool
 }
 
@@ -173,12 +187,9 @@ func (r *loopRuntime) changedLocked() {
 	close(r.changed)
 	r.changed = make(chan struct{})
 }
-func (r *loopRuntime) noteStop(t *loopTurn, reason string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if t.reason != "cancelled" && t.reason != "shutdown" {
-		t.reason = reason
-	}
+func (r *loopRuntime) noteStop(t *loopTurn, reason string) error {
+	_, _, err := r.service.stopContinuation(context.Background(), t.origin, t.id, uuid.NewV7(), reason, "core")
+	return err
 }
 func (r *loopRuntime) enqueue(t *loopTurn) {
 	if t.running || r.queued[t.id] {
@@ -236,18 +247,34 @@ func (r *loopRuntime) claimPaid(t *loopTurn) (bool, uint64) {
 	r.paidTokens[t.paid.id] = struct{}{}
 	return true, 0
 }
-func (r *loopRuntime) shutdown() {
+func (r *loopRuntime) shutdown() error {
 	r.mu.Lock()
 	r.stopping = true
+	turns := make([]*loopTurn, 0, len(r.turns))
 	for _, t := range r.turns {
-		if t.reason != "cancelled" && t.state != "finished" {
-			t.reason = "shutdown"
+		// A turn still binding has no owner to stop; once enqueued, its first
+		// quantum reads r.stopping and records the shutdown stop.
+		if t.state != "admitted" {
+			turns = append(turns, t)
 		}
-		t.cancel()
 	}
 	r.mu.Unlock()
+	for _, t := range turns {
+		if err := r.noteStop(t, "shutdown"); err != nil {
+			r.ownerFailure(t, err)
+		}
+	}
+	r.mu.Lock()
+	err := r.failure
+	r.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	r.notify()
 	<-r.done
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.failure
 }
 
 func (r *loopRuntime) run() {
@@ -263,7 +290,7 @@ func (r *loopRuntime) run() {
 		generation := r.generation.Load()
 		r.changedLocked()
 		for _, t := range r.turns {
-			if !t.running && (t.state != "waiting_resource" || t.waitGeneration < generation || t.reason != t.parkedReason) {
+			if !t.running && t.state != "recovery_pending" && t.state != "admitted" && (t.state != "waiting_resource" || t.waitGeneration < generation || t.reason != t.parkedReason) {
 				r.enqueue(t)
 			}
 		}
@@ -279,32 +306,23 @@ func (r *loopRuntime) run() {
 			if t == nil {
 				break
 			}
-			reason := r.service.loopBoundary(t)
-			r.mu.Lock()
-			if t.reason == "cancelled" || t.reason == "shutdown" {
-				reason = t.reason
-			}
-			if reason != "" {
-				t.reason, t.state = reason, "stopping"
-				t.cancel()
-			}
-			model := reason == "" && len(t.tools) == 0 && t.answer == nil
-			r.mu.Unlock()
-			if model {
-				if claimed, generation := r.claimPaid(t); !claimed {
+			model, parked, err := r.prepareQuantum(t, r.service.loopBoundary(t))
+			if err != nil {
+				if errors.Is(err, ErrContinuationStale) || loopBusy(err) {
 					r.mu.Lock()
-					// Park under the reason selection decided with, so a
-					// cancellation racing the claim still reselects the turn.
-					t.state, t.waitGeneration, t.parkedReason = "waiting_resource", generation, reason
 					r.enqueue(t)
-					r.changedLocked()
 					r.mu.Unlock()
-					continue
+				} else {
+					r.ownerFailure(t, err)
 				}
+				continue
+			}
+			if parked {
+				continue
 			}
 			r.mu.Lock()
 			t.running = true
-			if reason == "" {
+			if t.reason == "" {
 				if model {
 					t.state = "model_running"
 				} else if len(t.tools) != 0 {
@@ -322,15 +340,9 @@ func (r *loopRuntime) run() {
 		r.mu.Lock()
 		var earliest int64
 		var expired []*loopTurn
-		stopped := false
 		for _, t := range r.turns {
-			if clockErr != nil && t.reason == "" {
-				t.reason = "integrity"
-				t.cancel()
-				stopped = true
-			}
-			if t.reason == "" {
-				if now >= t.policy.DeadlineUTCNS {
+			if t.reason == "" && t.state != "recovery_pending" && t.state != "admitted" {
+				if clockErr != nil || now >= t.policy.DeadlineUTCNS {
 					expired = append(expired, t)
 				} else if earliest == 0 || t.policy.DeadlineUTCNS < earliest {
 					earliest = t.policy.DeadlineUTCNS
@@ -340,15 +352,11 @@ func (r *loopRuntime) run() {
 		r.mu.Unlock()
 		for _, t := range expired {
 			reason := r.service.loopBoundary(t)
-			r.mu.Lock()
-			if reason != "" && t.state != "finished" && t.state != "recovery_pending" && t.reason != "cancelled" && t.reason != "shutdown" {
-				t.reason = reason
-				t.cancel()
+			if reason != "" {
+				if err := r.noteStop(t, reason); err != nil {
+					r.ownerFailure(t, err)
+				}
 			}
-			r.mu.Unlock()
-		}
-		if stopped || len(expired) != 0 {
-			r.notify()
 		}
 		if !timer.Stop() {
 			select {
@@ -369,8 +377,9 @@ func (r *loopRuntime) run() {
 			r.mu.Lock()
 			t := completion.turn
 			t.running = false
-			if completion.err != nil && t.reason == "" {
-				t.reason = loopFailureReason(completion.err)
+			if completion.err != nil {
+				t.state = "recovery_pending"
+				r.failure = errors.Join(r.failure, completion.err)
 			}
 			if t.state == "finished" || t.state == "recovery_pending" {
 				t.terminalError = completion.err
@@ -431,6 +440,34 @@ func (r *loopRuntime) quantum(t *loopTurn, model bool) {
 		busy = finishBusy(err)
 	}
 	var waitGeneration uint64
+	waitReason := ""
+	var refusal *BusyError
+	var paidRead *loopPaidReadError
+	if errors.As(err, &refusal) {
+		switch {
+		case refusal.Reason == "ledger_tail":
+			busy, err = false, nil
+		case refusal.Reason == "paid_active":
+			waitReason = "paid_exchange"
+		case refusal.Reason == "child_unended":
+			waitReason = "child_quiescence"
+		case model && !errors.As(err, &paidRead):
+			waitReason = "paid_prepare"
+		case refusal.waitKind != "":
+			waitReason = refusal.waitKind
+		case finishing:
+			waitReason = "effect_reconciliation"
+		default:
+			waitReason = "local_slot"
+		}
+	}
+	var workspaceRefusal *workspace.BusyError
+	if finishing && errors.As(err, &workspaceRefusal) {
+		switch workspaceRefusal.Reason {
+		case "context_busy", "scratch_busy", "capture_budget", "checkpoint_slots":
+			waitReason = "workspace_capture"
+		}
+	}
 	if busy {
 		s.mu.Lock()
 		// The generation is read before the release count: a release the
@@ -442,6 +479,22 @@ func (r *loopRuntime) quantum(t *loopTurn, model bool) {
 			busy = false
 		}
 		err = nil
+		if busy && waitReason != "" {
+			err = r.parkOwner(t, waitReason)
+			if errors.Is(err, ErrContinuationStale) {
+				busy, err = false, nil
+			}
+			var tail *BusyError
+			if errors.As(err, &tail) && tail.Reason == "ledger_tail" {
+				busy, err = false, nil
+			}
+		}
+	}
+	if errors.Is(err, ErrContinuationStale) {
+		err = nil
+	}
+	if err != nil && !busy && !finishing {
+		err = r.noteStop(t, loopFailureReason(err))
 	}
 	r.completed <- loopCompletion{turn: t, busy: busy, finishing: finishing, waitGeneration: waitGeneration, err: err}
 }
@@ -557,7 +610,9 @@ func (s *Service) loopBoundary(t *loopTurn) string {
 }
 
 func (r *loopRuntime) turnView(t *loopTurn) session.TurnView {
-	return session.TurnView{TurnID: t.id, State: t.state, Reason: t.reason, ModelCalls: t.modelCalls, ToolDispatches: t.toolCalls, BoundSequence: t.binding.first + 1}
+	view := session.TurnView{TurnID: t.id, State: t.state, Reason: t.reason, ModelCalls: t.modelCalls, ToolDispatches: t.toolCalls, BoundSequence: t.binding.first + 1}
+	copyContinuationView(&view, continuationState{Origin: t.origin, Snapshot: t.owner, ModelCalls: t.modelCalls, ToolDispatches: t.toolCalls})
+	return view
 }
 
 func loopBusy(err error) bool {

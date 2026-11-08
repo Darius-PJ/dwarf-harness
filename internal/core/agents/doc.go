@@ -945,19 +945,21 @@
 // message.send is StartTurn's admitted-or-busy entrance: a busy start retains
 // nothing, and a start that fails before loop.bind ends its native turn
 // released and binds nothing. Its result names the loop.bind receipt and the
-// runtime.turn_bound effect. turn.cancel acknowledges only after the turn's
-// recorded ending and names the native turn.cancel receipt and its
-// runtime.work_ended effect; retrying the command returns the same sequences.
-// turn.status and context.status are queries without receipts, and
+// runtime.turn_bound effect. turn.cancel returns accepted when its durable
+// schema-7 owner.stop commits, before the native ending; its command ID names
+// that stop, not the distinct native cancel_command_id recorded by the stop.
+// Same-ID retries return the original receipt, including historical schema-2
+// cancellations. A committed native ending wins with too_late and no new
+// record. Status queries require current turn.inspect and carry no receipts;
 // promotion.request stays the owner's unavailable RequestPromotion path.
 // FinalText reads a finished turn's durable answer through the loop's own
 // final-message read, only for a turn result recorded for the Session's agent
 // and session and only with its context's current private.read chain;
 // another agent's turn, an unknown or unended turn, a turn without a final
 // message and a revoked source all return ErrDenied.
-// Closing a Session detaches only its views; Service.Close stops the scheduler
-// after draining every running turn to a recorded ending, interrupted unless a
-// cancellation was already requested.
+// Closing a Session detaches only its views. Service.Close first persists the
+// shutdown stop for each live turn, without replacing an earlier stop, then
+// drains its native and loop endings; a stop-persistence failure is returned.
 //
 // One scheduler goroutine visits de-duplicated rings of ready agents, then
 // their ready contexts, and runs one model call or one tool call per selection
@@ -998,8 +1000,8 @@
 // until the native ending commits: the turn keeps its committed ending, a
 // finish re-entered after it skips that step, and a stop reason that arrives
 // later changes neither the ending nor the recorded outcome, so turn.cancel
-// then answers ErrUnavailable. A busy never deletes a turn without its
-// recorded ending, and Service.Close waits for a parked finish's release.
+// then answers too_late. A busy never deletes a turn without its recorded
+// ending, and Service.Close waits for a parked finish's release.
 //
 // F3-15 records every bound turn: loop.bind after the native admission,
 // tool.begin before any tool effect, tool.result after it and loop.end after
@@ -1008,7 +1010,7 @@
 // private-head consumer reads all three revision types. finished and failed
 // end the native turn released, cancelled ends it through CancelTurn and
 // interrupted (shutdown) ends it interrupted. Receipt and effect sequences are
-// read back, never predicted, and command IDs are unique across all six
+// read back, never predicted, and command IDs are unique across all seven
 // submission families. Later turns render earlier manifests only as prior
 // owner input and completed answers.
 //
@@ -1024,6 +1026,65 @@
 // never runs twice; loop.end reruns the finish after the committed ending;
 // and message.send answers loop.bind's busy after ending its native turn
 // released, as for any start that fails before loop.bind.
+//
+// # Durable continuation owner
+//
+// F3-16 extends that scheduler, not a second executor. owner.initialize follows
+// loop.bind before scheduling. The turn is listed, not runnable, before
+// loop.bind is written, so a view that reads turn.started attaches to its live
+// text instead of being refused. Ready quanta open an operation/generation;
+// actual resource refusals persist waiting_resource and its resume state before
+// parking. Successful claims resume that same operation before the first effect.
+// Repeated busy wakes write nothing; ledger_tail is never a durable wait.
+// Pending identities are bounded to 128, sorted by raw kind/ID/command bytes,
+// and source-linked to native admissions or tool starts. Encoding uses the
+// existing preparation book and codec payload bound. Counters fold committed
+// dispatch intents and tool results, never starts or refusals.
+//
+// The frozen resume-placement sentence has exactly two ruled exceptions:
+// workspace_merge_back (amendment 8) and workspace_capture (clarification 1),
+// whose claims occur inside workspace calls. Merge-back parks before its call;
+// capture parks only after an actual busy. Both resume after successful return,
+// before the next claim. Capture closes/deletes its writer first. A RAM step
+// note preserves an owed resume across tail refusals without repeating either
+// operation. No agents gate or mutex spans a workspace call. This ticket emits
+// no scratch_observation or merge_back pending entries; their frozen kinds
+// remain readable, with id = command_id equal to the F2 record's own identity.
+//
+// A workspace target whose binding is another context of the same agent is
+// authorized for file.write and file.edit only, served through this turn's
+// temporary of that task, forked from its acknowledged tip on the first write
+// (D23); file.read and file.search require the turn's own binding, so a sibling
+// never reads a task's dedicated scratch or its temporary through the file tool,
+// and another agent's binding is always denied.
+//
+// Initialize/advance/park/resume/close take Service.mu for planned-tail CAS,
+// never a scope gate. Atomic tools retain their successful reservation across
+// resume and rerun the whole guarded phase before I/O/Submit, without acquiring
+// an already-held scope gate. Gate order is agent, context, Service.mu,
+// loopRuntime.mu, historyIndex.mu. Stops take the context gate before durable
+// acceptance, cancellation or notification; native ending retains that gate
+// through loop.end and owner.close. The first persisted stop wins. Callback
+// origin, turn, operation, generation, phase, version and result identity must
+// still match; stale callbacks cannot advance ready or reopen a terminal owner.
+// Native dispatch preflight/replay enforce the same owner fence while old
+// ownerless families retain their rules. Unknown owner tokens/outcomes stay
+// inert, and terminal owner metadata is read through the history directory.
+//
+// Open is inert. ReconcileLoop is explicit bookkeeping, before credential
+// binding/EnableTurnLoop at executable startup, never model/tool/workspace
+// execution. Hold 1 of the context gate refreshes and refuses live turns, then
+// accepts the caller's exact owner-version preimage. Children reconcile with
+// the gate released through existing paid/local/tool entrances. Hold 2
+// rechecks owner identity, stops, native ending and children, then remains held
+// through the native ending, loop.end and owner.close. Unknown paid exposure
+// remains held. Recovery writes no owner.stop or same-state progress: a legacy
+// unmatched bind uses the caller's owner.initialize; another phase uses its
+// owner.reconcile; an already-reconciling owner defers that ID to owner.close.
+// Same-ID retries are global receipt lookups only. A no-transition refusal has
+// no receipt; typed recovery_pending permits unrelated contexts to start.
+// Views copy saved phase/wait, owner identity/version, deadline, pending and
+// effective counters without claiming that recovery_pending was a saved phase.
 //
 // Each new turn's input names the display titles of the agent's other admitted
 // active contexts, sorted by context ID, and nothing else about them.
@@ -1096,8 +1157,7 @@
 // artifacts; whether the providers accept the replayed bytes is unproved.
 // TurnPolicy values are host safety settings, not performance bounds, and
 // loopback runs prove local mechanics only. Restart never resumes a turn or
-// re-executes a started tool; mid-turn crash and cancellation-race proof
-// belongs to ticket 16.
+// re-executes a started tool; only explicit journal reconciliation may end it.
 //
 // One owner-authorized live OpenAI drill ran one tool turn through the turn
 // loop and a Session (gpt-6-luna; two model calls; one tool dispatch). No live

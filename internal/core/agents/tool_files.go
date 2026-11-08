@@ -260,14 +260,32 @@ func (r *loopRuntime) file(t *loopTurn, inv *loopInvocation) (data any, receipt 
 	if err != nil {
 		return nil, 0, err
 	}
+	sourceSequence := work.sequence
 	if !found {
-		_, err := agent.AdmitLocal(t.ctx, LocalAdmission{CommandID: inv.effectID, GrantID: inv.grant, WorkID: inv.workID, ParentTurnID: t.id, LocalOperation: inv.normalized.Operation, Target: *inv.normalized.Target, ArgumentsSHA256: inv.normalized.SHA256, ToolSchema: 1, MaxBytes: maxBytes, TaskBinding: t.settings.TaskBinding})
+		admitted, err := agent.AdmitLocal(t.ctx, LocalAdmission{CommandID: inv.effectID, GrantID: inv.grant, WorkID: inv.workID, ParentTurnID: t.id, LocalOperation: inv.normalized.Operation, Target: *inv.normalized.Target, ArgumentsSHA256: inv.normalized.SHA256, ToolSchema: 1, MaxBytes: maxBytes, TaskBinding: t.settings.TaskBinding})
 		if err != nil {
 			return nil, 0, err
 		}
+		sourceSequence = admitted.Sequence - 1
 	} else if work.dispatched || work.ended {
 		return nil, work.receipt.Sequence, ErrUnavailable
 	}
+	owner, err := r.recordPending(t, ledger.ContinuationPending{Kind: "local_work", ID: inv.workID, CommandID: inv.effectID, ExpectedVersion: 1, SourceSequence: int64(sourceSequence)})
+	if err != nil {
+		return nil, 0, err
+	}
+	reason := owner.Snapshot.WaitReason
+	if reason == "none" {
+		reason = "local_slot"
+	}
+	if reason != "local_slot" && reason != "local_buffer" {
+		return nil, 0, ErrContinuationStale
+	}
+	owner, err = r.resumeOwner(t, reason)
+	if err != nil {
+		return nil, 0, err
+	}
+	inv.token = owner.token(inv.id)
 	started := false
 	uncertain := false
 	physicalSucceeded := false
