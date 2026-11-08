@@ -11,7 +11,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/Darius-PJ/dwarf-harness/internal/core/durable"
 	"golang.org/x/sys/windows"
 )
 
@@ -487,14 +486,6 @@ func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool
 	if err != nil {
 		return result, false, err
 	}
-	dir := filepath.Dir(o.fencePath(f.RunID))
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		return result, false, err
-	}
-	if err := durable.SyncDir(filepath.Dir(dir)); err != nil {
-		o.retain(f)
-		return result, false, unconfirmed(f.RunID, "directory_sync_failed", err)
-	}
 	if err := o.writeFence(f); err != nil {
 		o.retain(f)
 		return result, false, unconfirmed(f.RunID, "fence_write_failed", err)
@@ -561,59 +552,63 @@ func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool
 		pipes.closeParents()
 	}
 	result.RootExited, result.IOJoined = pi.Process == 0, !started
+	type rootWaitResult struct {
+		state uint32
+		err   error
+	}
+	var rootDone <-chan rootWaitResult
+	if pi.Process != 0 {
+		done := make(chan rootWaitResult, 1)
+		rootDone = done
+		go func(process windows.Handle) {
+			state, err := windows.WaitForSingleObject(process, windows.INFINITE)
+			done <- rootWaitResult{state, err}
+		}(pi.Process)
+	}
 	completed := 0
 	var stopAt time.Time
-	terminated := false
 	var runErr = setupErr
-	tick := time.NewTicker(time.Millisecond)
-	defer tick.Stop()
+	var tick *time.Ticker
+	var proofTick <-chan time.Time
+	defer func() {
+		if tick != nil {
+			tick.Stop()
+		}
+	}()
 	cancelled := ctx.Done()
 	for {
 		if ctx.Err() != nil && !errors.Is(runErr, ctx.Err()) {
 			runErr = errors.Join(runErr, ctx.Err())
 		}
-		if !result.RootExited {
-			state, err := windows.WaitForSingleObject(pi.Process, 0)
-			if err != nil {
-				runErr = errors.Join(runErr, err)
-			} else if state == windows.WAIT_OBJECT_0 {
-				var code uint32
-				if err := windows.GetExitCodeProcess(pi.Process, &code); err != nil {
-					runErr = errors.Join(runErr, err)
-				} else {
-					result.RootExited, result.ExitCode = true, int(code)
-					o.observation("root_exited", f)
-				}
-			}
-		}
 		if (runErr != nil || result.RootExited) && stopAt.IsZero() {
 			stopAt = time.Now()
-		}
-		if !stopAt.IsZero() && !terminated {
-			terminated = true
 			runErr = errors.Join(runErr, windows.TerminateJobObject(job, 1))
 			if pipes != nil && pipes.parent[0] != nil {
 				_ = pipes.parent[0].Close()
 			}
+			tick = time.NewTicker(time.Millisecond)
+			proofTick = tick.C
 		}
-		var a accounting
-		var zero bool
-		var queryErr error
-		if o.queryFault != nil {
-			queryErr = o.queryFault()
-		}
-		if queryErr == nil {
-			a, zero, queryErr = jobZero(job)
-		}
-		if queryErr != nil {
-			runErr = errors.Join(runErr, queryErr)
-			break
-		}
-		result.TreeClosed = zero
-		if zero {
-			result.TotalProcesses = a.Total
-			result.User100ns = uint64(a.User)
-			result.Kernel100ns = uint64(a.Kernel)
+		if !stopAt.IsZero() {
+			var a accounting
+			var zero bool
+			var queryErr error
+			if o.queryFault != nil {
+				queryErr = o.queryFault()
+			}
+			if queryErr == nil {
+				a, zero, queryErr = jobZero(job)
+			}
+			if queryErr != nil {
+				runErr = errors.Join(runErr, queryErr)
+				break
+			}
+			result.TreeClosed = zero
+			if zero {
+				result.TotalProcesses = a.Total
+				result.User100ns = uint64(a.User)
+				result.Kernel100ns = uint64(a.Kernel)
+			}
 		}
 		if result.RootExited && result.TreeClosed && result.IOJoined {
 			break
@@ -626,11 +621,26 @@ func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool
 			done = pipes.done
 		}
 		select {
+		case waited := <-rootDone:
+			rootDone = nil
+			if waited.err != nil {
+				runErr = errors.Join(runErr, waited.err)
+			} else if waited.state != windows.WAIT_OBJECT_0 {
+				runErr = errors.Join(runErr, ErrInvalid)
+			} else {
+				var code uint32
+				if err := windows.GetExitCodeProcess(pi.Process, &code); err != nil {
+					runErr = errors.Join(runErr, err)
+				} else {
+					result.RootExited, result.ExitCode = true, int(code)
+					o.observation("root_exited", f)
+				}
+			}
 		case err := <-done:
 			completed++
 			runErr = errors.Join(runErr, err)
 			result.IOJoined = completed == 3
-		case <-tick.C:
+		case <-proofTick:
 		case <-cancelled:
 			cancelled = nil
 		}
@@ -667,17 +677,12 @@ func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool
 			return result, true, unconfirmed(f.RunID, "root_handle_unclosed", errors.Join(runErr, err))
 		}
 	}
-	f.State, f.Proof, f.TotalProcesses = "closed", "live", &result.TotalProcesses
-	if err := o.writeFence(f); err != nil {
-		o.retain(f)
-		_ = windows.CloseHandle(job)
-		return result, false, unconfirmed(f.RunID, "fence_write_failed", errors.Join(runErr, err))
-	}
-	o.observation("closed", f)
 	if err := windows.CloseHandle(job); err != nil {
 		o.retain(f)
 		return result, true, unconfirmed(f.RunID, "job_close_failed", err)
 	}
+	f.State, f.Proof, f.TotalProcesses = "closed", "live", &result.TotalProcesses
+	o.observation("closed", f)
 	if err := o.removeFence(f); err != nil {
 		o.retain(f)
 		return result, false, unconfirmed(f.RunID, "cleanup_failed", err)
@@ -716,32 +721,24 @@ func (o *Owner) removeFence(f fence) error {
 	if f.State != "closed" {
 		return ErrUnconfirmed
 	}
-	dir := filepath.Dir(o.fencePath(f.RunID))
 	if err := o.checkRoot(); err != nil {
 		return err
 	}
-	if _, err := realDirectory(dir); err != nil {
-		return err
+	path := o.fencePath(f.RunID)
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+		return errors.Join(ErrInvalid, err)
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.Name() != "fence.json" && entry.Name() != "fence.json.pending" {
+	pending := path + ".pending"
+	info, err := os.Lstat(pending)
+	if err == nil {
+		if !info.Mode().IsRegular() {
 			return ErrInvalid
 		}
-		if info, err := os.Lstat(filepath.Join(dir, entry.Name())); err != nil || !info.Mode().IsRegular() {
-			return errors.Join(ErrInvalid, err)
-		}
-	}
-	for _, entry := range entries {
-		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
-			return err
-		}
-	}
-	if err := os.Remove(dir); err != nil {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return durable.SyncDir(filepath.Dir(dir))
+	if err := os.Remove(pending); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Remove(path)
 }
