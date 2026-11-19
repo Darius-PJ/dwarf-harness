@@ -18,14 +18,38 @@ import (
 )
 
 type loopInputObject struct {
-	Schema    int                  `json:"schema"`
-	Kind      string               `json:"kind"`
-	Origin    ledger.Origin        `json:"origin"`
-	TurnID    uuid.UUID            `json:"turn_id"`
-	Text      string               `json:"text"`
-	Artifacts []ledger.ArtifactRef `json:"artifacts"`
-	OtherWork []string             `json:"other_work"`
+	Schema        int                               `json:"schema"`
+	Kind          string                            `json:"kind"`
+	Origin        ledger.Origin                     `json:"origin"`
+	TurnID        uuid.UUID                         `json:"turn_id"`
+	Text          string                            `json:"text"`
+	Artifacts     []ledger.ArtifactRef              `json:"artifacts"`
+	OtherWork     []string                          `json:"other_work"`
+	TaskResults   []loopTaskResult                  `json:"task_results,omitzero"`
+	NoticeCursors []ledger.ContinuationNoticeCursor `json:"notice_cursors,omitzero"`
 }
+
+type loopTaskResult struct {
+	Sequence           uint64        `json:"sequence"`
+	MergeBackID        uuid.UUID     `json:"merge_back_id"`
+	ScratchID          uuid.UUID     `json:"scratch_id"`
+	ParentScratchID    uuid.UUID     `json:"parent_scratch_id"`
+	AuthoringContextID uuid.UUID     `json:"authoring_context_id"`
+	Outcome            string        `json:"outcome"`
+	WrittenPaths       []string      `json:"written_paths"`
+	ChangedPaths       []string      `json:"changed_paths"`
+	ConflictSHA256     ledger.Digest `json:"conflict_sha256,omitzero"`
+}
+
+type loopNoticeSelection struct {
+	task   ledger.TaskBinding
+	cursor ledger.ContinuationNoticeCursor
+}
+
+func loopNoticeResult(notice workspace.ScratchNotice) loopTaskResult {
+	return loopTaskResult{notice.Sequence, notice.MergeBackID, notice.ScratchID, notice.ParentScratchID, notice.AuthoringContextID, notice.Outcome, append([]string{}, notice.WrittenPaths...), append([]string{}, notice.ChangedPaths...), notice.ConflictSHA256}
+}
+
 type loopSource struct {
 	Scope    string `json:"scope"`
 	Slot     string `json:"slot"`
@@ -125,12 +149,8 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 		if match.loop == nil || match.loop.bound == nil || match.loop.ids != ids || match.loop.bound.TurnID != input.TurnID {
 			return nil, ErrCommandMismatch
 		}
-		raw, err := s.readLoopObject(ctx, originOf(ids), match.loop.bound.InputObject)
+		prior, err := s.readLoopInput(ctx, originOf(ids), match.loop.bound.InputObject)
 		if err != nil {
-			return nil, err
-		}
-		var prior loopInputObject
-		if err := decodeLoopInput(raw, &prior); err != nil {
 			return nil, err
 		}
 		if prior.Origin != originOf(ids) || prior.TurnID != input.TurnID || prior.Text != input.Text || !slices.Equal(prior.Artifacts, input.Artifacts) {
@@ -188,7 +208,7 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 			t.cancel()
 		}
 	}()
-	request, sources, err := r.render(ctx, t, inputObject)
+	request, sources, err := r.render(ctx, t, &inputObject)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +294,7 @@ func (r *loopRuntime) otherWork(t *loopTurn) []string {
 	return titles
 }
 
-func (r *loopRuntime) render(ctx context.Context, t *loopTurn, input loopInputObject) (providers.Request, []loopSource, error) {
+func (r *loopRuntime) render(ctx context.Context, t *loopTurn, input *loopInputObject) (providers.Request, []loopSource, error) {
 	s := r.service
 	agent := &Agent{service: s, ids: submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}}
 	request := providers.Request{MaxTokens: t.settings.MaxOutputTokens, Tools: modelToolDefinitions(), ToolChoice: &providers.ToolChoice{Type: "auto"}}
@@ -374,6 +394,12 @@ func (r *loopRuntime) render(ctx context.Context, t *loopTurn, input loopInputOb
 			return request, nil, ErrTooLarge
 		}
 	}
+	if err := r.selectLoopNotices(ctx, reads, t, input); err != nil {
+		return request, nil, err
+	}
+	if err := renderLoopNotices(&contextText, *input); err != nil {
+		return request, nil, err
+	}
 	contextText.WriteString("\nOwner input:\n")
 	contextText.WriteString(input.Text)
 	if len(input.OtherWork) != 0 {
@@ -389,9 +415,208 @@ func (r *loopRuntime) render(ctx context.Context, t *loopTurn, input loopInputOb
 	return request, sources, nil
 }
 
+// The initial pure phase fixes the schema predicate and the eligible own
+// scratches. Workspace reads happen without Service.mu. The final pure phase
+// rechecks the saved binding and permissions, never selecting a replacement.
+func (r *loopRuntime) selectLoopNotices(ctx context.Context, reads *historyReadSet, t *loopTurn, input *loopInputObject) error {
+	s := r.service
+	ids := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
+	var selections []loopNoticeSelection
+	var through uint64
+	s.mu.Lock()
+	err := s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		input.Schema, input.TaskResults, input.NoticeCursors = 1, nil, nil
+		selections, through = nil, s.p.through
+		if t.settings.TaskBinding == nil {
+			return nil
+		}
+		for id, scratch := range s.p.scratches {
+			if scratch.ContextID != t.origin.ContextID || scratch.ParentScratchID != (uuid.UUID{}) || scratch.closed {
+				continue
+			}
+			input.Schema = 2
+			selection := loopNoticeSelection{task: *t.settings.TaskBinding, cursor: ledger.ContinuationNoticeCursor{WorkspaceID: scratch.WorkspaceID, ScratchID: id}}
+			if err := s.loopNoticeAuthority(ctx, reads, t.origin, selection); err != nil {
+				if err == ErrDenied {
+					continue
+				}
+				return err
+			}
+			cursors := s.p.noticeCursors[scopeKey{t.origin.AgentID, t.origin.ContextID}]
+			if i, found := slices.BinarySearchFunc(cursors, selection.cursor, compareNoticeCursor); found {
+				selection.cursor.AfterSequence = cursors[i].AfterSequence
+			}
+			selections = append(selections, selection)
+		}
+		return nil
+	})
+	s.mu.Unlock()
+	if err != nil || input.Schema == 1 {
+		return err
+	}
+	slices.SortFunc(selections, func(a, b loopNoticeSelection) int { return compareNoticeCursor(a.cursor, b.cursor) })
+	notices := make([][]workspace.ScratchNotice, len(selections))
+	for i, selection := range selections {
+		notices[i], err = r.workspace.ScratchNotices(ctx, t.origin.ContextID, selection.cursor.ScratchID, uint64(selection.cursor.AfterSequence))
+		if err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+		input.TaskResults, input.NoticeCursors = []loopTaskResult{}, []ledger.ContinuationNoticeCursor{}
+		t.notices, t.owedNoticeCursors = nil, nil
+		size := len(modelJSON(*input))
+		for i, selection := range selections {
+			if err := s.loopNoticeAuthority(ctx, reads, t.origin, selection); err != nil {
+				if err == ErrDenied {
+					continue
+				}
+				return err
+			}
+			after := selection.cursor.AfterSequence
+			current := s.p.noticeCursors[scopeKey{t.origin.AgentID, t.origin.ContextID}]
+			if at, found := slices.BinarySearchFunc(current, selection.cursor, compareNoticeCursor); found {
+				after = max(after, current[at].AfterSequence)
+			}
+			for _, notice := range notices[i] {
+				if notice.Sequence > through || notice.Sequence <= uint64(after) {
+					continue
+				}
+				result := loopNoticeResult(notice)
+				size += len(modelJSON(result)) + 1
+				if size > maxObjectBytes {
+					return ErrTooLarge
+				}
+				input.TaskResults = append(input.TaskResults, result)
+				selection.cursor.AfterSequence = int64(notice.Sequence)
+			}
+			if selection.cursor.AfterSequence > after {
+				input.NoticeCursors = append(input.NoticeCursors, selection.cursor)
+				t.notices = append(t.notices, selection)
+			}
+		}
+		slices.SortFunc(input.TaskResults, func(a, b loopTaskResult) int {
+			if a.Sequence < b.Sequence {
+				return -1
+			}
+			if a.Sequence > b.Sequence {
+				return 1
+			}
+			return 0
+		})
+		if len(input.NoticeCursors) > 1024 || len(modelJSON(*input)) > maxObjectBytes {
+			return ErrTooLarge
+		}
+		if err := s.verifyLoopNotices(ctx, reads, *input); err != nil {
+			return err
+		}
+		t.owedNoticeCursors = slices.Clone(input.NoticeCursors)
+		return nil
+	})
+}
+
+// A current task assignment is necessary but not read permission. Root file
+// authority or private context inspection is checked before scratch readiness.
+func (s *Service) loopNoticeAuthority(ctx context.Context, reads *historyReadSet, origin ledger.Origin, selection loopNoticeSelection) error {
+	task, found, err := s.contextTask(ctx, reads, origin, s.p.through)
+	if err != nil {
+		return err
+	}
+	if !found || task.record.TaskID != selection.task.TaskID || task.record.Assignment == nil || task.record.Assignment.AssignmentID != selection.task.AssignmentID || task.record.Assignment.Generation != selection.task.Generation || task.record.Assignment.Assignee != ledger.Binding(bindingOf(origin)) {
+		return ErrDenied
+	}
+	target := ledger.Resource{Kind: "workspace", Binding: ledger.Binding(bindingOf(origin)), WorkspaceID: selection.cursor.WorkspaceID}
+	if _, err := s.loopGrantLocked(ctx, reads, origin, "file.read", []ledger.Resource{target}, 0); err != nil {
+		if err != ErrDenied {
+			return err
+		}
+		private := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{}}
+		if _, err := s.loopGrantLocked(ctx, reads, origin, "context.inspect", []ledger.Resource{private}, 0); err != nil {
+			return err
+		}
+	}
+	if err := s.workspaceReady(ctx, reads, target, s.p.through); err != nil {
+		return err
+	}
+	scratch, found := s.p.scratches[selection.cursor.ScratchID]
+	if !found || scratch.closed || scratch.ContextID != origin.ContextID || scratch.WorkspaceID != selection.cursor.WorkspaceID || scratch.ParentScratchID != (uuid.UUID{}) {
+		return ErrDenied
+	}
+	return nil
+}
+
+func renderLoopNotices(out *strings.Builder, input loopInputObject) error {
+	if input.Schema != 2 || len(input.TaskResults) == 0 {
+		return nil
+	}
+	const heading = "\nTask scratch results:\n"
+	if out.Len() > providers.RequestLimit-len(heading) {
+		return ErrTooLarge
+	}
+	out.WriteString(heading)
+	for _, result := range input.TaskResults {
+		line := modelJSON(result)
+		if len(line)+3 > providers.RequestLimit-out.Len() {
+			return ErrTooLarge
+		}
+		out.WriteString("- ")
+		out.Write(line)
+		out.WriteByte('\n')
+	}
+	return nil
+}
+
+func (s *Service) verifyLoopNotices(ctx context.Context, reads *historyReadSet, input loopInputObject) error {
+	for _, result := range input.TaskResults {
+		source, found, err := s.sourceRecord(ctx, reads, int64(result.Sequence), s.p.through)
+		if err != nil {
+			return err
+		}
+		if !found || source.Type != ledger.TypeScratchMergeBack {
+			return ErrIntegrity
+		}
+		record, err := ledger.DecodeScratchMergeBack(source.Payload)
+		if err != nil || record.Outcome == ledger.MergeBackPrepared || record.ContextID != input.Origin.ContextID {
+			return ErrIntegrity
+		}
+		exact := loopNoticeResult(workspace.ScratchNotice{Sequence: source.Seq, MergeBackID: record.MergeBackID, ScratchID: record.ScratchID, ParentScratchID: record.ParentScratchID, AuthoringContextID: record.AuthoringContextID, Outcome: record.Outcome, WrittenPaths: record.WrittenPaths, ChangedPaths: record.ChangedPaths, ConflictSHA256: record.ConflictSHA256})
+		if !sameScopedValue(exact, result) || !slices.ContainsFunc(input.NoticeCursors, func(cursor ledger.ContinuationNoticeCursor) bool {
+			return cursor.WorkspaceID == record.WorkspaceID && cursor.ScratchID == record.ParentScratchID && cursor.AfterSequence >= int64(result.Sequence)
+		}) {
+			return ErrIntegrity
+		}
+	}
+	return nil
+}
+
+func (s *Service) readLoopInput(ctx context.Context, origin ledger.Origin, ref ledger.ObjectRef) (loopInputObject, error) {
+	var input loopInputObject
+	raw, err := s.readLoopObject(ctx, origin, ref)
+	if err != nil {
+		return input, err
+	}
+	if err := decodeLoopInput(raw, &input); err != nil {
+		return input, err
+	}
+	if input.Origin != origin {
+		return input, ErrIntegrity
+	}
+	if input.Schema == 2 {
+		s.mu.Lock()
+		ids := submissionIDs{origin.AgentID, origin.SessionID, origin.ContextID}
+		err = s.prepareHistoryLocked(ctx, &historyReadSet{}, &ids, true, func(reads *historyReadSet) error {
+			return s.verifyLoopNotices(ctx, reads, input)
+		})
+		s.mu.Unlock()
+	}
+	return input, err
+}
+
 func decodeLoopInput(raw []byte, out *loopInputObject) error {
 	// Digest fields use the frozen ledger parser, not array JSON unmarshalling.
-	var wire struct {
+	type inputWire struct {
 		Schema    int           `json:"schema"`
 		Kind      string        `json:"kind"`
 		Origin    ledger.Origin `json:"origin"`
@@ -404,10 +629,11 @@ func decodeLoopInput(raw []byte, out *loopInputObject) error {
 		} `json:"artifacts"`
 		OtherWork []string `json:"other_work"`
 	}
-	if json.Unmarshal(raw, &wire) != nil || wire.Schema != 1 || wire.Kind != "owner_input" {
+	var wire inputWire
+	if json.Unmarshal(raw, &wire) != nil || wire.Schema != 1 && wire.Schema != 2 || wire.Kind != "owner_input" {
 		return ErrIntegrity
 	}
-	*out = loopInputObject{Schema: 1, Kind: wire.Kind, Origin: wire.Origin, TurnID: wire.TurnID, Text: wire.Text, Artifacts: []ledger.ArtifactRef{}, OtherWork: wire.OtherWork}
+	*out = loopInputObject{Schema: wire.Schema, Kind: wire.Kind, Origin: wire.Origin, TurnID: wire.TurnID, Text: wire.Text, Artifacts: []ledger.ArtifactRef{}, OtherWork: wire.OtherWork}
 	for _, ref := range wire.Artifacts {
 		digest, err := ledger.ParseDigest(ref.SHA256)
 		if err != nil {
@@ -415,7 +641,97 @@ func decodeLoopInput(raw []byte, out *loopInputObject) error {
 		}
 		out.Artifacts = append(out.Artifacts, ledger.ArtifactRef{SourceSequence: ref.SourceSequence, SHA256: digest, Bytes: ref.Bytes})
 	}
+	if wire.Schema == 2 {
+		var next struct {
+			inputWire
+			TaskResults   []json.RawMessage                 `json:"task_results"`
+			NoticeCursors []ledger.ContinuationNoticeCursor `json:"notice_cursors"`
+		}
+		var keys map[string]json.RawMessage
+		if decodeLoopJSON(raw, &next) != nil || json.Unmarshal(raw, &keys) != nil || len(keys) != 9 || next.Artifacts == nil || next.OtherWork == nil || next.TaskResults == nil || next.NoticeCursors == nil || len(next.NoticeCursors) > 1024 || !validID(wire.Origin.AgentID) || !validID(wire.Origin.SessionID) || !validID(wire.Origin.ContextID) || !validID(wire.TurnID) {
+			return ErrIntegrity
+		}
+		out.TaskResults, out.NoticeCursors = []loopTaskResult{}, next.NoticeCursors
+		for i, cursor := range out.NoticeCursors {
+			if !validID(cursor.WorkspaceID) || !validID(cursor.ScratchID) || cursor.AfterSequence <= 0 || i > 0 && compareNoticeCursor(out.NoticeCursors[i-1], cursor) >= 0 {
+				return ErrIntegrity
+			}
+		}
+		latest := map[uuid.UUID]int64{}
+		for _, raw := range next.TaskResults {
+			var result struct {
+				Sequence           uint64    `json:"sequence"`
+				MergeBackID        uuid.UUID `json:"merge_back_id"`
+				ScratchID          uuid.UUID `json:"scratch_id"`
+				ParentScratchID    uuid.UUID `json:"parent_scratch_id"`
+				AuthoringContextID uuid.UUID `json:"authoring_context_id"`
+				Outcome            string    `json:"outcome"`
+				WrittenPaths       []string  `json:"written_paths"`
+				ChangedPaths       []string  `json:"changed_paths"`
+				ConflictSHA256     *string   `json:"conflict_sha256,omitempty"`
+			}
+			var keys map[string]json.RawMessage
+			if decodeLoopJSON(raw, &result) != nil || json.Unmarshal(raw, &keys) != nil || len(keys) != 8 && len(keys) != 9 || result.Sequence == 0 || result.Sequence > math.MaxInt64 || !validID(result.MergeBackID) || !validID(result.ScratchID) || !validID(result.ParentScratchID) || !validID(result.AuthoringContextID) || result.ScratchID == result.ParentScratchID || !loopNoticePaths(result.WrittenPaths) || !loopNoticePaths(result.ChangedPaths) {
+				return ErrIntegrity
+			}
+			if len(out.TaskResults) != 0 && out.TaskResults[len(out.TaskResults)-1].Sequence >= result.Sequence {
+				return ErrIntegrity
+			}
+			var digest ledger.Digest
+			switch result.Outcome {
+			case ledger.MergeBackConflict:
+				if result.ConflictSHA256 == nil || len(result.ChangedPaths) != 0 {
+					return ErrIntegrity
+				}
+				var err error
+				digest, err = ledger.ParseDigest(*result.ConflictSHA256)
+				if err != nil || digest == (ledger.Digest{}) {
+					return ErrIntegrity
+				}
+			case ledger.MergeBackWriteFailed:
+				if len(result.ChangedPaths) != 0 {
+					return ErrIntegrity
+				}
+			case ledger.MergeBackFastForward, ledger.MergeBackMerged:
+			default:
+				return ErrIntegrity
+			}
+			if _, present := keys["conflict_sha256"]; present != (result.Outcome == ledger.MergeBackConflict) {
+				return ErrIntegrity
+			}
+			out.TaskResults = append(out.TaskResults, loopTaskResult{result.Sequence, result.MergeBackID, result.ScratchID, result.ParentScratchID, result.AuthoringContextID, result.Outcome, result.WrittenPaths, result.ChangedPaths, digest})
+			latest[result.ParentScratchID] = int64(result.Sequence)
+		}
+		for _, cursor := range out.NoticeCursors {
+			if latest[cursor.ScratchID] != cursor.AfterSequence {
+				return ErrIntegrity
+			}
+			delete(latest, cursor.ScratchID)
+		}
+		if len(latest) != 0 {
+			return ErrIntegrity
+		}
+	}
 	return nil
+}
+
+// The frozen F2 repository-path grammar is host-independent and less
+// restrictive than the file tool's resource grammar; do not normalize it.
+func loopNoticePaths(paths []string) bool {
+	if paths == nil {
+		return false
+	}
+	for i, path := range paths {
+		if path == "" || strings.ContainsAny(path, "\x00\\") || i > 0 && paths[i-1] >= path {
+			return false
+		}
+		for component := range strings.SplitSeq(path, "/") {
+			if component == "" || component == "." || component == ".." {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *Service) readLoopObject(ctx context.Context, origin ledger.Origin, ref ledger.ObjectRef) ([]byte, error) {

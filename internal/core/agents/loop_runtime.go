@@ -54,6 +54,8 @@ type loopTurn struct {
 	request               providers.Request
 	sources               []loopSource
 	artifacts             []ledger.ArtifactRef
+	notices               []loopNoticeSelection
+	owedNoticeCursors     []ledger.ContinuationNoticeCursor
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	state, reason         string
@@ -263,12 +265,6 @@ func (r *loopRuntime) shutdown() error {
 		if err := r.noteStop(t, "shutdown"); err != nil {
 			r.ownerFailure(t, err)
 		}
-	}
-	r.mu.Lock()
-	err := r.failure
-	r.mu.Unlock()
-	if err != nil {
-		return err
 	}
 	r.notify()
 	<-r.done
@@ -588,6 +584,11 @@ func (s *Service) loopBoundary(t *loopTurn) string {
 		}
 		for _, ref := range t.artifacts {
 			if _, err := s.artifactAuthority(context.Background(), reads, t.origin, ref, uuid.UUID{}, s.p.through, nil); err != nil {
+				return lost(err)
+			}
+		}
+		for _, notice := range t.notices {
+			if err := s.loopNoticeAuthority(context.Background(), reads, t.origin, notice); err != nil {
 				return lost(err)
 			}
 		}

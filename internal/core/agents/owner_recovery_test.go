@@ -29,6 +29,7 @@ type continuationCrashSignal struct {
 	Through        uint64
 	Scratch        workspace.Scratch
 	CaptureCalls   int
+	Settings       []LoopContextSettings
 }
 
 type continuationRestart struct {
@@ -136,7 +137,7 @@ func TestContinuationCrashChild(t *testing.T) {
 	var once sync.Once
 	barrier := func() {
 		once.Do(func() {
-			if err := gob.NewEncoder(os.Stdout).Encode(continuationCrashSignal{Root: f.root, Boundary: boundary, Origin: f.origin, Turn: turn, Through: f.store.Durable(), Scratch: scratch, CaptureCalls: captureCalls}); err != nil {
+			if err := gob.NewEncoder(os.Stdout).Encode(continuationCrashSignal{Root: f.root, Boundary: boundary, Origin: f.origin, Turn: turn, Through: f.store.Durable(), Scratch: scratch, CaptureCalls: captureCalls, Settings: f.service.loop.options.Contexts}); err != nil {
 				t.Fatal(err)
 			}
 			var one [1]byte
@@ -151,6 +152,13 @@ func TestContinuationCrashChild(t *testing.T) {
 	if strings.HasPrefix(boundary, "capture_") {
 		continuationCaptureCrashChild(t, boundary, func(capture *continuationCaptureFixture, id uuid.UUID, source workspace.Scratch) {
 			f, turn, scratch, captureCalls = capture.turnFixture, id, source, capture.probe.count()
+			barrier()
+		})
+		return
+	}
+	if boundary == "merge_after_prepared" || boundary == "passive_before_cursor" {
+		continuationIntegratedCrashChild(t, boundary, func(local *turnFixture, id uuid.UUID, source workspace.Scratch) {
+			f, turn, scratch = local, id, source
 			barrier()
 		})
 		return

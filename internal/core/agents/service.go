@@ -102,6 +102,7 @@ type projection struct {
 	loopTurns            map[uuid.UUID]loopTurnState
 	loopTools            map[uuid.UUID]loopToolState
 	owners               map[uuid.UUID]continuationState
+	noticeCursors        map[scopeKey][]ledger.ContinuationNoticeCursor
 	maxLoopEffect        uuid.UUID
 	maxLoopTool          uuid.UUID
 	paidCapabilities     map[string]ledger.Digest
@@ -130,6 +131,7 @@ func newProjection() projection {
 		paidAttempts:    map[uuid.UUID]paidAttempt{}, paidChildren: map[uuid.UUID]int{},
 		toolChildren: map[uuid.UUID]int{}, loopTurns: map[uuid.UUID]loopTurnState{}, loopTools: map[uuid.UUID]loopToolState{},
 		owners:           map[uuid.UUID]continuationState{},
+		noticeCursors:    map[scopeKey][]ledger.ContinuationNoticeCursor{},
 		paidHotLimit:     128,
 		paidCapabilities: map[string]ledger.Digest{}, paidTariffs: map[string]ledger.Digest{}, retiredProfiles: map[ledger.Digest]bool{},
 	}
@@ -222,10 +224,9 @@ func (s *Service) Close() error {
 	s.loopClosing = true
 	runtime := s.loop
 	s.mu.Unlock()
+	var shutdownErr error
 	if runtime != nil {
-		if err := runtime.shutdown(); err != nil {
-			return err
-		}
+		shutdownErr = runtime.shutdown()
 	}
 	s.mu.Lock()
 	first := !s.closed
@@ -247,7 +248,7 @@ func (s *Service) Close() error {
 	s.closePaidLocked()
 	s.history.close()
 	s.mu.Unlock()
-	return nil
+	return shutdownErr
 }
 func (s *Service) enter(ctx context.Context) error {
 	s.mu.Lock()

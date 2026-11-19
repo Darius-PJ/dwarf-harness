@@ -1002,6 +1002,8 @@
 // later changes neither the ending nor the recorded outcome, so turn.cancel
 // then answers too_late. A busy never deletes a turn without its recorded
 // ending, and Service.Close waits for a parked finish's release.
+// A runtime failure still joins the scheduler and completes the service's
+// existing close fence and teardown before Close returns that failure.
 //
 // F3-15 records every bound turn: loop.bind after the native admission,
 // tool.begin before any tool effect, tool.result after it and loop.end after
@@ -1013,6 +1015,47 @@
 // read back, never predicted, and command IDs are unique across all seven
 // submission families. Later turns render earlier manifests only as prior
 // owner input and completed answers.
+//
+// Loop turns are the only consumer of task scratch notices. At an explicit
+// natural turn's render, a current task binding with an open dedicated scratch
+// selects owner_input schema 2, even when no notice is selected. The predicate
+// is evaluated once under the selection's history read set. Other turns keep
+// schema 1's bytes. Stored inputs are decoded by their own schema, never
+// upgraded; each stored result is checked against its immutable F2 notice.
+// Schema 2 keeps the first seven keys and appends required task_results and
+// notice_cursors arrays. Results are in notice sequence order, with sequence,
+// merge_back_id, scratch_id, parent_scratch_id, authoring_context_id, outcome,
+// written_paths and changed_paths; conflict_sha256 appears only for a conflict.
+// An unapplied result has an empty changed_paths array. Paths retain F2's byte
+// order. Cursors use F3-16's workspace_id, scratch_id and after_sequence shape
+// and raw-byte pair order. These are private class-none input objects.
+//
+// Before any notice existence, path or digest is read, selection checks the
+// current task assignment and generation and the origin's root file.read or
+// private context-inspection authority. It selects only that task's current
+// dedicated scratch after the context's projected cursor. Author identity
+// grants no read: an authoring or unrelated sibling receives no notice. Each
+// paid send repeats the task, assignment, scratch and read checks under the
+// existing boundary read set; loss stops authority_lost, without rebinding.
+// Only a conflict report's digest is selected; its body requires a separate
+// authorized artifact read.
+//
+// A nonempty stored task_results array renders exactly a newline followed by
+// "Task scratch results:", then one newline-prefixed "- " and the fixed result
+// JSON per notice, ending in a newline. The block follows selected artifacts
+// and precedes "Owner input:" and the active-work tail. Empty arrays add no
+// request bytes. Existing request and object bounds refuse excess, not truncate.
+//
+// The first owner.advance after the turn's first committed dispatch intent,
+// whatever its edge, folds the owed cursor vector by per-pair maximum. There
+// is no separate cursor record; owner.stop, owner.reconcile and owner.close do
+// not carry the owed fold. The RAM note is read in Service.mu -> runtime.mu
+// order and cleared only after commit. owner.initialize still starts empty.
+// installContinuation retains each context's maxima across owner eviction and
+// rebuilds them on Open. A pre-intent failed or busy start consumes nothing;
+// a crash before the carrying advance may repeat the same notice identity.
+// Cursors are presentation progress, not deletion or permission. Neither a
+// cursor nor a completed merge starts or wakes a turn or makes a provider call.
 //
 // Each loop group predicts its receipt's effect sequence from the tail, so,
 // like a paid admission, it is written only at the tail it was planned at.
