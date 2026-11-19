@@ -85,8 +85,11 @@ type Pending struct {
 // Debris counts only shapes that cannot have launched a native child.
 type Debris struct{ PendingRuns, PendingIdentities int }
 type Report struct {
-	Pending            []Pending
-	Closed             []Result
+	Pending []Pending
+	Closed  []Result
+	// Reservations counts loaded containers still requiring reconciliation,
+	// including containers with no reportable invocation.
+	Reservations       int
 	TreeProofSupported bool
 	Debris             Debris
 }

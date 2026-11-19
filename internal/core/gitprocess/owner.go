@@ -21,23 +21,24 @@ var unconfirmedOwners sync.Map
 // native resources and stream pumps are joined. It must not be copied.
 type Owner struct {
 	platformState
-	mu         sync.Mutex
-	root       string
-	rootID     uuid.UUID
-	identity   os.FileInfo
-	lock       *durable.Lock
-	options    Options
-	ctx        context.Context
-	cancel     context.CancelFunc
-	slots      chan struct{}
-	ops        sync.WaitGroup
-	closed     bool
-	closeDone  chan struct{}
-	closeErr   error
-	runFailure error
-	retained   bool
-	pending    map[uuid.UUID]fence
-	debris     Debris
+	mu          sync.Mutex
+	root        string
+	rootID      uuid.UUID
+	identity    os.FileInfo
+	lock        *durable.Lock
+	options     Options
+	ctx         context.Context
+	cancel      context.CancelFunc
+	slots       chan struct{}
+	ops         sync.WaitGroup
+	closed      bool
+	closeDone   chan struct{}
+	closeErr    error
+	runFailure  error
+	retained    bool
+	pending     map[uuid.UUID]fence
+	debris      Debris
+	loadedSlots map[uuid.UUID]*slotBatch
 }
 
 // Open claims root without launching a process. A valid pending fence returns
@@ -89,7 +90,7 @@ func Open(ctx context.Context, root string, options Options) (*Owner, Report, er
 	return o, o.report(), nil
 }
 func (o *Owner) report() Report {
-	r := Report{TreeProofSupported: runtime.GOOS == "windows", Debris: o.debris}
+	r := Report{TreeProofSupported: runtime.GOOS == "windows", Debris: o.debris, Reservations: o.reservationCount()}
 	for id := range o.pending {
 		r.Pending = append(r.Pending, Pending{id, "closure_unconfirmed"})
 	}
@@ -118,9 +119,9 @@ func (o *Owner) Run(ctx context.Context, spec Spec) (Result, error) {
 		return result, ErrClosed
 	}
 	o.mu.Lock()
-	if o.closed || o.ctx.Err() != nil || len(o.pending) != 0 {
+	if o.closed || o.ctx.Err() != nil || o.retained || len(o.pending) != 0 || o.hasUnreconciledReservations() {
 		err := ErrClosed
-		if len(o.pending) != 0 {
+		if o.retained || len(o.pending) != 0 || o.hasUnreconciledReservations() {
 			err = ErrUnconfirmed
 		}
 		o.mu.Unlock()
@@ -160,9 +161,12 @@ func (o *Owner) Reconcile(ctx context.Context) (Report, error) {
 	if o.retained || len(o.slots) != 0 {
 		return o.report(), ErrUnconfirmed
 	}
-	var closed []Result
-	var failures []error
+	closed, reservationErr := o.reconcileReservations(ctx)
+	failures := []error{reservationErr}
 	for _, p := range o.report().Pending {
+		if o.reservedRun(p.RunID) {
+			continue
+		}
 		f := o.pending[p.RunID]
 		result, err := o.reconcile(ctx, f)
 		if err != nil {
@@ -192,10 +196,20 @@ func (o *Owner) Close() error {
 	o.mu.Unlock()
 	o.ops.Wait()
 	o.mu.Lock()
-	if o.retained || len(o.pending) != 0 {
+	if o.retained || len(o.pending) != 0 || o.hasUnreconciledReservations() {
 		o.closeErr = errors.Join(ErrUnconfirmed, o.runFailure)
 		o.retained = true
 		unconfirmedOwners.Store(o, struct{}{})
+	}
+	if !o.retained {
+		o.mu.Unlock()
+		err := o.closeReservations()
+		o.mu.Lock()
+		if err != nil {
+			o.closeErr = unconfirmed(uuid.UUID{}, "cleanup_failed", err)
+			o.retained = true
+			unconfirmedOwners.Store(o, struct{}{})
+		}
 	}
 	if !o.retained {
 		o.closeErr = errors.Join(o.closeErr, o.lock.Close())
