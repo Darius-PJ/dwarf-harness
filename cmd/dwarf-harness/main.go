@@ -32,6 +32,10 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, interrupts))
 }
 
+// workspaceCloseOverride substitutes the workspace drain only in closure tests.
+// Production leaves it nil.
+var workspaceCloseOverride func(*agents.Service, func() error) error
+
 // run returns 0 after a drained exit, 1 after a refusal and 2 for usage.
 // Every refusal prints a fixed error class, never a path, value or locator.
 func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.Signal) int {
@@ -80,7 +84,11 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 		stop()
 		return refuse("workspace", err)
 	}
-	drain = []func() error{service.Close, ws.Close, store.Close}
+	closeWorkspace := ws.Close
+	if override := workspaceCloseOverride; override != nil {
+		closeWorkspace = func() error { return override(service, ws.Close) }
+	}
+	drain = []func() error{service.Close, closeWorkspace, store.Close}
 	fmt.Fprintf(stdout, "[terminal] colony opened: %d integrity issues, %d pending paid attempts, %d unresumable turns\n", len(report.Issues), len(report.PendingPaid), len(report.PendingLoops))
 	for _, pending := range report.PendingLoops {
 		if pending.ToolID != (uuid.UUID{}) {

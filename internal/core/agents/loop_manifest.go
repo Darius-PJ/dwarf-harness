@@ -684,12 +684,11 @@ func (r *loopRuntime) renderTranscript(ctx context.Context, t *loopTurn, raw []b
 			if !selected {
 				return "", ErrDenied
 			}
-			input, err := r.service.readLoopObject(ctx, t.origin, ref)
+			parsed, err := r.service.readLoopInput(ctx, t.origin, ref)
 			if err != nil {
 				return "", err
 			}
-			var parsed loopInputObject
-			if decodeLoopInput(input, &parsed) != nil || parsed.Origin != t.origin || parsed.TurnID != turn {
+			if parsed.TurnID != turn {
 				return "", errLoopContent
 			}
 			rendered.WriteString("\nPrior owner input:\n" + parsed.Text)

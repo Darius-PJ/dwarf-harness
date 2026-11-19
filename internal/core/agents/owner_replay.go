@@ -323,6 +323,10 @@ func (s *Service) continuationEnding(ctx context.Context, reads *historyReadSet,
 }
 
 func (p *projection) installContinuation(o continuationState) {
+	if o.Outcome == "recorded" && len(o.Snapshot.NoticeCursors) != 0 {
+		key := scopeKey{o.Origin.AgentID, o.Origin.ContextID}
+		p.noticeCursors[key] = mergeNoticeCursors(p.noticeCursors[key], o.Snapshot.NoticeCursors)
+	}
 	if o.Snapshot.State == "terminal" && o.supported() {
 		delete(p.owners, o.Snapshot.TurnID)
 	} else {

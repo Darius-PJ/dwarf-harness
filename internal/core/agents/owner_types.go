@@ -106,6 +106,26 @@ func sortContinuationPending(p []ledger.ContinuationPending) {
 	})
 }
 
+func compareNoticeCursor(a, b ledger.ContinuationNoticeCursor) int {
+	if c := bytes.Compare(a.WorkspaceID[:], b.WorkspaceID[:]); c != 0 {
+		return c
+	}
+	return bytes.Compare(a.ScratchID[:], b.ScratchID[:])
+}
+
+func mergeNoticeCursors(prior, next []ledger.ContinuationNoticeCursor) []ledger.ContinuationNoticeCursor {
+	out := slices.Clone(prior)
+	for _, cursor := range next {
+		i, found := slices.BinarySearchFunc(out, cursor, compareNoticeCursor)
+		if found {
+			out[i].AfterSequence = max(out[i].AfterSequence, cursor.AfterSequence)
+		} else {
+			out = slices.Insert(out, i, cursor)
+		}
+	}
+	return out
+}
+
 func continuationKnownState(state string) bool {
 	switch state {
 	case "ready", "model_pending", "tool_pending", "waiting_resource", "finishing", "stopping", "reconciling", "terminal":

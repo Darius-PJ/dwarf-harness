@@ -226,6 +226,7 @@ func TestTerminalAttribution(t *testing.T) {
 // detaches.
 func TestTerminalCancel(t *testing.T) {
 	t.Parallel()
+	t.Run("integrated_merge_back_wait", testTerminalIntegratedMergeCancel)
 	t.Run("interrupt_and_named_cancel", func(t *testing.T) {
 		t.Parallel()
 		var posts atomic.Int64

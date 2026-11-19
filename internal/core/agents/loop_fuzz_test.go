@@ -222,7 +222,8 @@ func FuzzLoopTranscript(f *testing.F) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, turnAnthropic(model, nil, "Verified prior answer."))
 	}, nil)
-	fixture.enable(f)
+	taskSetting, taskScratch := prepareLoopTranscriptTask(f, fixture)
+	fixture.enable(f, taskSetting)
 	_, start := fixture.send(f)
 	result, _ := fixture.finished(f, start.TurnID)
 	if result.Outcome != "finished" {
@@ -238,8 +239,18 @@ func FuzzLoopTranscript(f *testing.F) {
 	}
 	seed := bytes.Clone(page.Chunks[0].Bytes)
 	origin := fixture.origin
+	taskOrigin, taskSeeds := loopTranscriptTaskSeeds(f, fixture, taskSetting, taskScratch)
+	if err := fixture.service.Close(); err != nil {
+		f.Fatal(err)
+	}
+	if err := fixture.workspace.Close(); err != nil {
+		f.Fatal(err)
+	}
 	prefix := retainLoopFuzzPrefix(f, fixture.serviceFixture)
 	f.Add(seed)
+	for _, taskSeed := range taskSeeds {
+		f.Add(taskSeed)
+	}
 	f.Add([]byte(`{"schema":1,"schema":1,"entries":[]}`))
 	f.Add(bytes.ReplaceAll(seed, []byte(origin.ContextID.String()), []byte(uuid.NewV7().String())))
 	f.Add([]byte(`{"schema":1,"entries":null}`))
@@ -250,7 +261,12 @@ func FuzzLoopTranscript(f *testing.F) {
 			return
 		}
 		runtime := &loopRuntime{service: prefix.fixture.service}
-		turn := &loopTurn{origin: origin, ctx: context.Background()}
+		inputOrigin := origin
+		var manifest loopManifest
+		if json.Unmarshal(input, &manifest) == nil && len(manifest.Entries) != 0 && manifest.Entries[0].Origin == taskOrigin {
+			inputOrigin = taskOrigin
+		}
+		turn := &loopTurn{origin: inputOrigin, ctx: context.Background()}
 		renderMu.Lock()
 		text, err := runtime.renderTranscript(context.Background(), turn, input)
 		prefix.fixture.service.mu.Lock()
@@ -261,7 +277,7 @@ func FuzzLoopTranscript(f *testing.F) {
 			t.Fatal("transcript parsing changed its authority or ledger")
 		}
 		if err != nil {
-			if bytes.Equal(input, seed) {
+			if bytes.Equal(input, seed) || bytes.Equal(input, taskSeeds[0]) || bytes.Equal(input, taskSeeds[1]) {
 				t.Fatal("producer transcript refused", err)
 			}
 			return

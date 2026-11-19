@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"slices"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -328,6 +329,21 @@ func (s *Service) updateContinuation(ctx context.Context, origin ledger.Origin, 
 	if err := change(&a, owner, command); err != nil {
 		return owner, err
 	}
+	var owed []ledger.ContinuationNoticeCursor
+	if operation == "owner.advance" {
+		// Copy only, in Service.mu -> runtime.mu order. An admitted turn
+		// cannot publish progress; the first committed intent makes it owed.
+		s.mu.Lock()
+		if r := s.loop; r != nil {
+			r.mu.Lock()
+			if t := r.turns[turn]; t != nil && t.origin == origin && t.state != "admitted" && t.modelCalls != 0 {
+				owed = slices.Clone(t.owedNoticeCursors)
+			}
+			r.mu.Unlock()
+		}
+		s.mu.Unlock()
+		a.NoticeCursors = mergeNoticeCursors(a.NoticeCursors, owed)
+	}
 	sortContinuationPending(a.Pending)
 	if sameScopedValue(a, continuationArguments(owner.Snapshot)) {
 		return owner, nil
@@ -337,6 +353,17 @@ func (s *Service) updateContinuation(ctx context.Context, origin ledger.Origin, 
 		return owner, err
 	}
 	s.publishContinuation(g)
+	if len(owed) != 0 {
+		s.mu.Lock()
+		if r := s.loop; r != nil {
+			r.mu.Lock()
+			if t := r.turns[turn]; t != nil && t.origin == origin {
+				t.owedNoticeCursors = nil
+			}
+			r.mu.Unlock()
+		}
+		s.mu.Unlock()
+	}
 	return continuationState{Origin: origin, Snapshot: g.change, Sequence: g.first + 1, Outcome: g.receipt.Outcome, ModelCalls: g.change.ModelCalls, ToolDispatches: g.change.ToolDispatches}, nil
 }
 
