@@ -501,6 +501,9 @@ func (r *loopRuntime) ownerFailure(t *loopTurn, err error) {
 		t.state = "recovery_pending"
 	}
 	r.changedLocked()
+	if r.stopping {
+		r.notify()
+	}
 	r.mu.Unlock()
 }
 

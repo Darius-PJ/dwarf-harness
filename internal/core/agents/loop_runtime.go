@@ -273,6 +273,31 @@ func (r *loopRuntime) shutdown() error {
 	return r.failure
 }
 
+// discardFailed runs only on the scheduler, after dequeue and outside a
+// quantum. A refused owner transition has no ending to publish; release its
+// process-local resources and leave the durable turn for reconciliation.
+func (r *loopRuntime) discardFailed(t *loopTurn) {
+	for _, writer := range t.writers {
+		writer.Close()
+	}
+	t.live.close("discarded", nil, ErrUnavailable)
+	r.service.mu.Lock()
+	if t.paid != nil {
+		delete(r.paidTokens, t.paid.id)
+	}
+	r.service.releaseScopedLocked(&t.reservation)
+	r.service.mu.Unlock()
+	r.mu.Lock()
+	if t.owner.StopReason != "" {
+		t.cancel()
+	}
+	delete(r.turns, t.id)
+	close(t.done)
+	r.changedLocked()
+	r.mu.Unlock()
+	r.notify()
+}
+
 func (r *loopRuntime) run() {
 	defer close(r.done)
 	timer := time.NewTimer(time.Hour)
@@ -286,7 +311,7 @@ func (r *loopRuntime) run() {
 		generation := r.generation.Load()
 		r.changedLocked()
 		for _, t := range r.turns {
-			if !t.running && t.state != "recovery_pending" && t.state != "admitted" && (t.state != "waiting_resource" || t.waitGeneration < generation || t.reason != t.parkedReason) {
+			if !t.running && (t.state != "recovery_pending" || r.stopping) && t.state != "admitted" && (t.state != "waiting_resource" || t.waitGeneration < generation || t.reason != t.parkedReason) {
 				r.enqueue(t)
 			}
 		}
@@ -298,9 +323,14 @@ func (r *loopRuntime) run() {
 		for {
 			r.mu.Lock()
 			t := r.next()
+			failed := t != nil && r.stopping && t.state == "recovery_pending"
 			r.mu.Unlock()
 			if t == nil {
 				break
+			}
+			if failed {
+				r.discardFailed(t)
+				continue
 			}
 			model, parked, err := r.prepareQuantum(t, r.service.loopBoundary(t))
 			if err != nil {
@@ -317,6 +347,13 @@ func (r *loopRuntime) run() {
 				continue
 			}
 			r.mu.Lock()
+			// shutdown may have refused a stop while prepareQuantum was
+			// outside runtime.mu. Do not launch a failed turn's next quantum.
+			if r.stopping && t.state == "recovery_pending" {
+				r.mu.Unlock()
+				r.discardFailed(t)
+				continue
+			}
 			t.running = true
 			if t.reason == "" {
 				if model {

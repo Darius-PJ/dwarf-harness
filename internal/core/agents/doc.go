@@ -1002,8 +1002,11 @@
 // later changes neither the ending nor the recorded outcome, so turn.cancel
 // then answers too_late. A busy never deletes a turn without its recorded
 // ending, and Service.Close waits for a parked finish's release.
-// A runtime failure still joins the scheduler and completes the service's
-// existing close fence and teardown before Close returns that failure.
+// On a runtime failure, shutdown joins turns that can finish under their
+// persisted stops. A non-running recovery-pending turn instead releases its
+// writers, live stream and preparation without writing an ending; Open leaves
+// it pending for ReconcileLoop. Close completes its existing fence and teardown
+// before returning the runtime failure.
 //
 // F3-15 records every bound turn: loop.bind after the native admission,
 // tool.begin before any tool effect, tool.result after it and loop.end after
