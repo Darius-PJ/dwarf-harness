@@ -416,16 +416,19 @@ func TestOpenAIPaidBoundResults(t *testing.T) {
 	var f *paidFixture
 	server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {
 		model := paidRequestModel(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Request-Id", "synthetic-openai-request")
+		w.Header().Set("Request-Id", "excluded-anthropic-header")
+		w.Header().Set("Set-Cookie", "excluded")
+		// The other bound context is created while this response body is held.
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
 		close(entered)
 		select {
 		case <-release:
 		case <-r.Context().Done():
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("X-Request-Id", "synthetic-openai-request")
-		w.Header().Set("Request-Id", "excluded-anthropic-header")
-		w.Header().Set("Set-Cookie", "excluded")
 		output := strings.TrimSuffix(paidOpenAIText, "]") + "," + strings.TrimPrefix(paidOpenAIReasoning, "[")
 		_, _ = io.WriteString(w, paidOpenAIEvent(model, "completed", paidOpenAIUsage(20, 4, 8, 16), output, "", 1))
 	})

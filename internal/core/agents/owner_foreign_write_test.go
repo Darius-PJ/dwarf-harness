@@ -372,6 +372,9 @@ func testContinuationMergeWaits(t *testing.T) {
 					_, _ = io.WriteString(w, turnAnthropic(model, turnCalls("file_write_v1", finishBusyWrite(f.registered.ID, "parent-change")), ""))
 					return
 				}
+				// Hold the body, not the headers, while the other turn reaches merge-back.
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
 				close(entered)
 				<-release
 			} else if authorCalls.Add(1) == 1 {
