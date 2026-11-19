@@ -28,7 +28,7 @@ func TestGitProcessPortable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer o.Close()
-	if report.TreeProofSupported || len(report.Pending) != 0 {
+	if report.TreeProofSupported || len(report.Pending) != 0 || report.Reservations != 0 {
 		t.Fatalf("portable tree claim: %+v", report)
 	}
 	_, err = o.Run(context.Background(), Spec{Program: program, Args: []string{"not-a-git-command"}, Env: os.Environ()})
@@ -63,7 +63,7 @@ func TestGitProcessPortable(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened, report, err := Open(context.Background(), root, Options{})
-	if err != nil || len(report.Pending) != 0 {
+	if err != nil || len(report.Pending) != 0 || report.Reservations != 0 {
 		t.Fatalf("portable reopen fenced: %+v %v", report, err)
 	}
 	if err := reopened.Close(); err != nil {

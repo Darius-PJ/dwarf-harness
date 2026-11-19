@@ -40,20 +40,53 @@
 // member's termination before releasing the name; the root is waited, but
 // descendants are not individually waitable. Already-issued kernel I/O may
 // complete after termination; no Git logic runs after that point.
-// The flat runs/<uuid>.json layout publishes launch_pending and running only.
-// Live closure is proved natively; after the port, process and Job handles close,
-// the fence is removed without a directory flush. A crash between proof and
-// removal leaves running, which recovery closes by name_absent or retained_job,
-// with ExitCode -1 and no success inferred. A fence that cannot be removed keeps
-// its Owner retained. Reconcile alone publishes closed before removal; existing
-// closed fences, including closed/live, remain decodable and recoverable.
-// Open removes only a lone <uuid>.json.pending that strictly decodes as
-// launch_pending for this root and run. Before the first launch it can finish or
-// replace an interrupted identity.json.pending; Report.Debris counts these
-// shapes. A stale .json.pending beside an authoritative .json is removed only
-// after positive reconciliation. Every runs entry must be a regular file with
-// a canonical UUIDv7 name and one of those two suffixes. Unknown entries,
-// directories and unsafe pending-only states fail closed without a sweep.
+//
+// Each runs/<batch>.slots container reserves 32 sorted, never-reused UUIDv7
+// names. Its exact 20,992 bytes are a 4096-byte canonical JSON header with zero
+// padding, 32 write-once 512-byte root frames, and a 512-byte footer (32 hint
+// bytes followed by zeros). The initial all-zero frames/footer, file length and
+// name are published through <batch>.slots.pending before any Job is created:
+// one file FlushFileBuffers and one write-through rename with a directory
+// FlushFileBuffers per batch. One cached writable handle is held per container.
+// Each root writes its exact PID/creation identity with one WriteAt and requires
+// its own successful File.Sync before resume; a sibling's Sync never substitutes.
+// Frame alignment is a layout property, not an atomicity guarantee.
+//
+// After native closure and all port/process/Job handles close, the closed
+// observation precedes a cached retirement byte. The root frame never changes.
+// The last completing member of an exhausted batch instead leaves its hint zero,
+// closes the writer and deletes the container; successful Close does the same
+// for a partial batch after joining all calls. There are no exit-path flushes or
+// renames. Any write, close or removal failure retains the Owner and its lock.
+// Metadata seams are per Owner and nil in production; they may run under
+// reservationMu but cannot call Owner APIs or wait for another Run. Lifecycle
+// observation callbacks never hold reservationMu, nor does a root's File.Sync.
+//
+// Open validates the entire layout before any sweep and reports loaded containers
+// in Report.Reservations, even when Pending is empty. Reopened containers never
+// allocate. Reconcile checks every reserved name: an all-zero frame takes the
+// launch_pending proof; a valid running frame takes the running/root-identity
+// proof even when its retirement hint is one. Hints suppress duplicate reports,
+// not native proof. A nonzero invalid or torn frame refuses pending manual
+// investigation, rather than being guessed unused. Completed root PIDs linger
+// until container retirement, widening the ACCESS_DENIED unconfirmed exposure
+// to at most 32 roots per live container. A container resurrected by a lost
+// unflushed deletion is re-proved beside any newer container, never reused.
+//
+// Reconcile publishes a full canonical closed <run>.json before removing it for
+// every root-bearing candidate or found Job. Only a zero frame with exact name
+// absence elides that publication and produces no Closed result. A linked
+// closed-only .json.pending is not proof: re-prove the candidate. On zero-frame
+// name absence, remove that validated temp and sync the directory before retiring
+// the container. Authoritative linked closed records consume durable proof.
+// Standalone v1 fences (including closed/live) retain their original recovery.
+// Open sweeps only valid matching initial .slots.pending or standalone
+// launch_pending .json.pending files, with Report.Debris counting files, not
+// names. Stale container temps survive until positive reconciliation. Before
+// the first launch Open can finish or replace identity.json.pending.
+// Unknown entries, nonregular files, wrong lengths, duplicate membership,
+// invalid headers/frames/footer bytes and unsafe cross-links refuse without
+// sweeping neighboring valid debris.
 //
 // Elsewhere the Owner keeps the root lock, cancellable admission and root/I/O
 // joins, but writes no fences and never claims tree closure. RequireTree refuses

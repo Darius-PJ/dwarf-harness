@@ -5,11 +5,18 @@ package gitprocess
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"uuid"
 )
 
 type platformState struct {
 	unjoined []*exec.Cmd
+}
+
+type slotBatch struct {
+	data     slotsContainer
+	identity os.FileInfo
 }
 
 func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool, error) {
@@ -45,3 +52,9 @@ func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool
 func (o *Owner) reconcile(context.Context, fence) (Result, error) {
 	return Result{ExitCode: -1}, ErrUnsupported
 }
+
+func (o *Owner) hasUnreconciledReservations() bool                       { return false }
+func (o *Owner) reservationCount() int                                   { return 0 }
+func (o *Owner) closeReservations() error                                { return nil }
+func (o *Owner) reconcileReservations(context.Context) ([]Result, error) { return nil, nil }
+func (o *Owner) reservedRun(uuid.UUID) bool                              { return false }

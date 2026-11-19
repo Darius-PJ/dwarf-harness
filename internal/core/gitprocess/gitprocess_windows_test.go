@@ -25,10 +25,13 @@ import (
 )
 
 type processNotice struct {
-	Kind  string
-	PID   int
-	Job   string
-	RunID uuid.UUID
+	Kind    string
+	PID     int
+	Job     string
+	RunID   uuid.UUID
+	Batch   string
+	Syncs   int
+	Renames int
 }
 
 func nativeOwner(t *testing.T, root string) *Owner {
@@ -320,6 +323,9 @@ func TestGitProcessTree(t *testing.T) {
 // an OS signal, not a sleep or a test deadline, independently of Core's pipes.
 func TestGitProcessHelper(t *testing.T) {
 	switch os.Getenv("DWARF_GITPROCESS_HELPER") {
+	case "slot":
+		slotHelper(t, os.Getenv("DWARF_GITPROCESS_SLOT_MODE"))
+		os.Exit(0)
 	case "breakaway":
 		system, err := windows.GetSystemDirectory()
 		if err != nil {
@@ -368,6 +374,7 @@ func TestGitProcessHelper(t *testing.T) {
 			t.Fatal(err)
 		}
 		var rootObserver, heldFence windows.Handle
+		var batchPath string
 		defer func() {
 			if rootObserver != 0 {
 				_ = windows.CloseHandle(rootObserver)
@@ -376,7 +383,29 @@ func TestGitProcessHelper(t *testing.T) {
 				_ = windows.CloseHandle(heldFence)
 			}
 		}()
+		if mode == "cleanup-failure" {
+			o.observe = func(phase string, f fence) {
+				if phase == "suspended" {
+					if err := json.NewEncoder(os.Stdout).Encode(processNotice{Kind: "prefill", PID: int(f.RootPID), RunID: f.RunID}); err != nil {
+						t.Fatal(err)
+					}
+					var ack [1]byte
+					if _, err := io.ReadFull(os.Stdin, ack[:]); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			for range slotCount - 1 {
+				r, err := o.Run(context.Background(), Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()})
+				if err != nil || !r.TreeClosed {
+					t.Fatalf("cleanup prefill failed: %+v %v", r, err)
+				}
+			}
+		}
 		o.observe = func(phase string, f fence) {
+			if phase == "suspended" {
+				batchPath, _, _ = readSlotRun(t, o.root, f.RunID)
+			}
 			if phase == "suspended" && mode == "proven-closure" {
 				// Keep the exited PID openable, without retaining the Job.
 				rootObserver, err = windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, f.RootPID)
@@ -388,16 +417,16 @@ func TestGitProcessHelper(t *testing.T) {
 				return
 			}
 			if mode == "cleanup-failure" {
-				path, err := windows.UTF16PtrFromString(o.fencePath(f.RunID))
+				path, err := windows.UTF16PtrFromString(batchPath)
 				if err != nil {
 					t.Fatal(err)
 				}
-				heldFence, err = windows.CreateFile(path, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+				heldFence, err = windows.CreateFile(path, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := json.NewEncoder(os.Stdout).Encode(processNotice{Kind: "closed", PID: int(f.RootPID), RunID: f.RunID}); err != nil {
+			if err := json.NewEncoder(os.Stdout).Encode(processNotice{Kind: "closed", PID: int(f.RootPID), RunID: f.RunID, Batch: batchPath}); err != nil {
 				t.Fatal(err)
 			}
 			if mode == "proven-closure" {
@@ -419,7 +448,8 @@ func TestGitProcessHelper(t *testing.T) {
 				t.Fatal("Close hid cleanup failure", err)
 			}
 		}
-		raw, err := readRegular(o.fencePath(r.RunID))
+		_, stored, _ := readSlotRun(t, o.root, r.RunID)
+		raw, err := canonicalJSON(stored)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -612,8 +642,17 @@ func closureRecovery(t *testing.T, crash bool) {
 	}()
 	var notice processNotice
 	decoder := json.NewDecoder(stdout)
-	if err := decoder.Decode(&notice); err != nil {
-		t.Fatalf("closure helper failed readiness: %v %s", err, stderr.String())
+	for {
+		if err := decoder.Decode(&notice); err != nil {
+			t.Fatalf("closure helper failed readiness: %v %s", err, stderr.String())
+		}
+		if notice.Kind != "prefill" {
+			break
+		}
+		observer(t, notice.PID, time.Now())
+		if _, err := stdin.Write([]byte{1}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if notice.Kind != "closed" || !validID(notice.RunID) || notice.PID == 0 {
 		t.Fatalf("invalid closure notice: %+v", notice)
@@ -661,7 +700,7 @@ func closureRecovery(t *testing.T, crash bool) {
 	if closed.RunID != notice.RunID || closed.Proof != "name_absent" || closed.ExitCode != -1 || closed.TotalProcesses != 0 {
 		t.Fatalf("recovery inferred live success or retained the Job: %+v", closed)
 	}
-	if _, err := os.Stat(o.fencePath(notice.RunID)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(notice.Batch); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("reconciled fence survived", err)
 	}
 	r, err := o.Run(context.Background(), Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()})
@@ -852,5 +891,1116 @@ func TestGitProcessNameCollision(t *testing.T) {
 	}
 	if err := verifyJob(job, 4); err != nil {
 		t.Fatal("collision changed another Job's limits", err)
+	}
+}
+
+func readSlotRun(t *testing.T, root string, id uuid.UUID) (string, fence, byte) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, "runs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".slots") {
+			continue
+		}
+		path := filepath.Join(root, "runs", entry.Name())
+		raw, err := readRegularBounded(path, slotsSize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := decodeSlots(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, run := range c.Header.RunIDs {
+			if run == id {
+				return path, c.Frames[i], c.Retired[i]
+			}
+		}
+	}
+	t.Fatalf("reserved invocation %s lost its container", id)
+	return "", fence{}, 0
+}
+
+type slotHelperProcess struct {
+	cmd     *exec.Cmd
+	input   io.WriteCloser
+	output  io.ReadCloser
+	decoder *json.Decoder
+	stderr  bytes.Buffer
+	waited  bool
+}
+
+func startSlotHelper(t *testing.T, root, mode string) *slotHelperProcess {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &slotHelperProcess{cmd: exec.Command(exe, "-test.run=^TestGitProcessHelper$")}
+	p.cmd.Env = append(os.Environ(), "DWARF_GITPROCESS_HELPER=slot", "DWARF_GITPROCESS_ROOT="+root, "DWARF_GITPROCESS_SLOT_MODE="+mode)
+	p.input, err = p.cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := p.cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.output = output
+	p.decoder = json.NewDecoder(output)
+	p.cmd.Stderr = &p.stderr
+	if err := p.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !p.waited {
+			_ = p.cmd.Process.Kill()
+			_ = p.cmd.Wait()
+		}
+		_ = p.input.Close()
+	})
+	return p
+}
+
+func (p *slotHelperProcess) notice(t *testing.T) processNotice {
+	t.Helper()
+	var n processNotice
+	if err := p.decoder.Decode(&n); err != nil {
+		_ = p.cmd.Process.Kill()
+		output, _ := io.ReadAll(io.MultiReader(p.decoder.Buffered(), p.output))
+		_ = p.cmd.Wait()
+		p.waited = true
+		t.Fatalf("slot helper readiness: %v %s %s", err, output, p.stderr.String())
+	}
+	return n
+}
+func (p *slotHelperProcess) ack(t *testing.T) {
+	t.Helper()
+	if _, err := p.input.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+}
+func (p *slotHelperProcess) kill(t *testing.T) {
+	t.Helper()
+	if err := p.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.cmd.Wait(); err == nil {
+		t.Fatal("slot crash helper survived")
+	}
+	p.waited = true
+}
+func (p *slotHelperProcess) finish(t *testing.T) {
+	t.Helper()
+	remaining, readErr := io.ReadAll(io.MultiReader(p.decoder.Buffered(), p.output))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if err := p.cmd.Wait(); err != nil {
+		t.Fatalf("slot helper failed: %v %s %s", err, remaining, p.stderr.String())
+	}
+	p.waited = true
+}
+
+func slotHelper(t *testing.T, mode string) {
+	if strings.HasPrefix(mode, "error:") {
+		slotErrorHelper(t, strings.TrimPrefix(mode, "error:"))
+		return
+	}
+	o, _, err := Open(context.Background(), os.Getenv("DWARF_GITPROCESS_ROOT"), Options{RequireTree: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()}
+	var recoverySyncs, recoveryRenames int
+	emit := func(kind string, f fence, path string) {
+		if err := json.NewEncoder(os.Stdout).Encode(processNotice{Kind: kind, PID: int(f.RootPID), Job: f.JobName, RunID: f.RunID, Batch: path, Syncs: recoverySyncs, Renames: recoveryRenames}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ack := func() {
+		var b [1]byte
+		if _, err := io.ReadFull(os.Stdin, b[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	park := func(kind string, f fence, path string) {
+		emit(kind, f, path)
+		ack()
+		t.Fatal("crash barrier was released")
+	}
+	if mode == "recovery_closed" || mode == "recovery_temp" {
+		o.observe = func(phase string, f fence) {
+			if mode == "recovery_closed" && phase == "reconciled" {
+				park(phase, f, o.fencePath(f.RunID))
+			}
+		}
+		o.metadataHook = func(op, path string, success bool) error {
+			if success && strings.HasSuffix(path, ".json") {
+				if op == "temp_sync" {
+					recoverySyncs++
+				} else if op == "rename" {
+					recoveryRenames++
+				}
+			}
+			if mode == "recovery_temp" && op == "temp_sync" && success && strings.HasSuffix(path, ".json") {
+				raw, err := readRegular(path + ".pending")
+				if err != nil {
+					t.Fatal(err)
+				}
+				f, err := decodeFence(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				park("recovery_temp", f, path)
+			}
+			return nil
+		}
+		if _, err := o.Reconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("recovery failed to publish closed proof")
+	}
+	assertBeforeJob := func(phase string, f fence) {
+		if phase != "launch_pending" {
+			return
+		}
+		h, err := openJob(f.JobName)
+		if h != 0 {
+			_ = windows.CloseHandle(h)
+		}
+		if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+			// The exhaustion helper may be in a goroutine whose parent awaits
+			// readiness; fail the subprocess rather than strand that parent.
+			fmt.Fprintln(os.Stderr, "reserved Job existed before publication admission", err)
+			os.Exit(1)
+		}
+	}
+	if mode == "exhausted_with_prelaunch_member" {
+		ready, parked := make(chan struct{}), make(chan struct{})
+		var target uuid.UUID
+		o.observe = func(phase string, f fence) {
+			assertBeforeJob(phase, f)
+			if phase == "root_created" && target == (uuid.UUID{}) {
+				target = f.RunID
+				path, _, _ := readSlotRun(t, o.root, f.RunID)
+				emit("root_created", f, path)
+				close(ready)
+				<-parked
+			} else if phase == "suspended" {
+				emit("prefill", f, "")
+				ack()
+			}
+		}
+		go func() {
+			if _, err := o.Run(context.Background(), spec); err != nil {
+				t.Error(err)
+			}
+		}()
+		<-ready
+		ack()
+		for range slotCount - 1 {
+			r, err := o.Run(context.Background(), spec)
+			if err != nil || !r.TreeClosed {
+				t.Fatalf("exhaustion prefill: %+v %v", r, err)
+			}
+		}
+		path, _, _ := readSlotRun(t, o.root, target)
+		park("exhausted", fence{RunID: target}, path)
+	}
+	if mode == "temp_written" || mode == "file_synced" || mode == "renamed" {
+		wanted := map[string]string{"temp_written": "temp_write", "file_synced": "temp_sync", "renamed": "rename"}[mode]
+		o.metadataHook = func(op, path string, success bool) error {
+			if op == wanted && success {
+				file := path + ".pending"
+				if mode == "renamed" {
+					file = path
+				}
+				raw, err := readRegularBounded(file, slotsSize)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c, err := decodeSlots(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				park(mode, c.Header.candidate(0), path)
+			}
+			return nil
+		}
+	}
+	retirement := mode == "before_remove" || mode == "after_remove" || mode == "partial_at_close"
+	if retirement && mode != "partial_at_close" {
+		o.observe = func(phase string, f fence) {
+			if phase == "suspended" {
+				emit("prefill", f, "")
+				ack()
+			}
+		}
+		for range slotCount - 1 {
+			r, err := o.Run(context.Background(), spec)
+			if err != nil || !r.TreeClosed {
+				t.Fatalf("retirement prefill: %+v %v", r, err)
+			}
+		}
+	}
+	var path string
+	var rootObserver windows.Handle
+	o.observe = func(phase string, f fence) {
+		assertBeforeJob(phase, f)
+		if phase == "root_created" {
+			path, _, _ = readSlotRun(t, o.root, f.RunID)
+			if mode == "fresh" {
+				park(phase, f, path)
+			}
+		}
+		if phase == "suspended" && (retirement || mode == "running_durable") {
+			rootObserver, err = windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, f.RootPID)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if mode == "published" && phase == "reservation_published" {
+			path, _, _ = readSlotRun(t, o.root, f.RunID)
+			park(phase, f, path)
+		}
+		if mode == "running_durable" && phase == "suspended" {
+			park(phase, f, path)
+		}
+		if retirement && phase == "closed" {
+			emit("target", f, path)
+			ack()
+		}
+		if (mode == "before_remove" || mode == "partial_at_close") && phase == "retirement_before_remove" {
+			park(phase, f, path)
+		}
+		if mode == "after_remove" && phase == "retirement_after_remove" {
+			park(phase, f, path)
+		}
+	}
+	r, err := o.Run(context.Background(), spec)
+	if err != nil || !r.TreeClosed {
+		t.Fatalf("slot helper run: %+v %v", r, err)
+	}
+	if mode == "partial_at_close" {
+		if err := o.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rootObserver != 0 {
+		_ = windows.CloseHandle(rootObserver)
+	}
+	t.Fatal("slot helper missed its crash boundary")
+}
+
+func readSlotsFile(t *testing.T, path string) slotsContainer {
+	t.Helper()
+	raw, err := readRegularBounded(path, slotsSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := decodeSlots(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func assertFreshSlotRun(t *testing.T, o *Owner, old []uuid.UUID) {
+	t.Helper()
+	r, err := o.Run(context.Background(), Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()})
+	if err != nil || !r.TreeClosed || r.ExitCode != 0 {
+		t.Fatalf("fresh admission failed: %+v %v", r, err)
+	}
+	for _, id := range old {
+		if r.RunID == id {
+			t.Fatal("reopened Owner reused a reserved identity")
+		}
+	}
+}
+
+func TestGitProcessSlotCrash(t *testing.T) {
+	for _, mode := range []string{"temp_written", "file_synced", "renamed", "published", "running_durable", "recovery_closed", "recovery_temp"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			start := mode
+			if mode == "recovery_closed" || mode == "recovery_temp" {
+				start = "fresh"
+			}
+			p := startSlotHelper(t, root, start)
+			n := p.notice(t)
+			path := n.Batch
+			file := path
+			debris := mode == "temp_written" || mode == "file_synced"
+			if debris {
+				file += ".pending"
+			}
+			c := readSlotsFile(t, file)
+			var rootHandle, job windows.Handle
+			if n.PID != 0 {
+				rootHandle = observer(t, n.PID, time.Now())
+			}
+			if start == "fresh" {
+				var err error
+				job, err = openJob(n.Job)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if job != 0 {
+						_ = windows.TerminateJobObject(job, 1)
+						_ = windows.CloseHandle(job)
+					}
+				}()
+			}
+			p.kill(t)
+			if mode == "running_durable" {
+				assertExited(t, rootHandle)
+			}
+			if start == "fresh" {
+				recovery := startSlotHelper(t, root, mode)
+				proofNotice := recovery.notice(t)
+				wantRenames := 1
+				if mode == "recovery_temp" {
+					wantRenames = 0
+				}
+				if proofNotice.Syncs != 1 || proofNotice.Renames != wantRenames {
+					t.Fatalf("found-Job recovery skipped full publication: %+v", proofNotice)
+				}
+				proofPath := proofNotice.Batch
+				if mode == "recovery_temp" {
+					proofPath += ".pending"
+				}
+				raw, err := readRegular(proofPath)
+				if err != nil {
+					t.Fatal("recovery did not persist its closed publication", err)
+				}
+				proof, err := decodeFence(raw)
+				if err != nil || proof.State != "closed" || proof.Proof != "retained_job" || proof.RunID != n.RunID || proof.RootPID != 0 {
+					t.Fatalf("recovery publication lost retained zero-slot proof: %+v %v", proof, err)
+				}
+				recovery.kill(t)
+				assertExited(t, rootHandle)
+				if err := windows.CloseHandle(job); err != nil {
+					t.Fatal(err)
+				}
+				job = 0
+			}
+			o := nativeOwner(t, root)
+			report := o.report()
+			wantPending, wantReservations := 0, 1
+			if debris {
+				wantReservations = 0
+			}
+			if mode == "running_durable" {
+				wantPending = 1
+			}
+			if len(report.Pending) != wantPending || report.Reservations != wantReservations {
+				t.Fatalf("crash classification lost reservations or invented invocations: %+v", report)
+			}
+			if debris {
+				if report.Debris.PendingRuns != 1 {
+					t.Fatal("initial publication temp not counted as one debris file", report)
+				}
+			} else if _, err := o.Run(context.Background(), Spec{Program: gitProgram(t)}); !errors.Is(err, ErrUnconfirmed) {
+				t.Fatal("loaded reservation admitted Git before reconciliation", err)
+			}
+			counts := make(map[string]int)
+			o.metadataHook = func(op, _ string, success bool) error {
+				if success {
+					counts[op]++
+				}
+				return nil
+			}
+			report, err := o.Reconcile(context.Background())
+			wantClosed := 0
+			if mode == "running_durable" || mode == "recovery_closed" {
+				wantClosed = 1
+			}
+			if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != wantClosed {
+				t.Fatalf("crash recovery failed or invented runs: %+v %v", report, err)
+			}
+			if mode == "running_durable" {
+				r := report.Closed[0]
+				if r.RunID != n.RunID || r.Proof != "name_absent" || r.ExitCode != -1 || r.TotalProcesses != 0 || counts["temp_sync"] != 1 || counts["rename"] != 1 {
+					t.Fatalf("root-bearing recovery skipped durable proof: %+v counts=%v", r, counts)
+				}
+			}
+			if mode == "recovery_closed" && (report.Closed[0].Proof != "retained_job" || report.Closed[0].ExitCode != -1) {
+				t.Fatalf("durable recovered proof was discarded: %+v", report)
+			}
+			if mode == "recovery_temp" && (counts["temp_sync"] != 0 || counts["rename"] != 0 || counts["directory_sync"] != 1) {
+				t.Fatalf("zero-slot stale closure did not elide and durably sweep: %v", counts)
+			}
+			o.metadataHook = nil
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("proved container survived", err)
+			}
+			entries, err := os.ReadDir(filepath.Join(root, "runs"))
+			if err != nil || len(entries) != 0 {
+				t.Fatal("recovery left a sidecar or temp", entries, err)
+			}
+			assertFreshSlotRun(t, o, c.Header.RunIDs)
+		})
+	}
+}
+
+func TestGitProcessSlotPreResumeCrash(t *testing.T) {
+	for _, mode := range []string{"fresh", "exhausted_with_prelaunch_member"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			p := startSlotHelper(t, root, mode)
+			n := p.notice(t)
+			if n.Kind != "root_created" || n.PID == 0 {
+				t.Fatalf("missing suspended pre-frame root: %+v", n)
+			}
+			h := observer(t, n.PID, time.Now())
+			job, err := openJob(n.Job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = windows.TerminateJobObject(job, 1); _ = windows.CloseHandle(job) }()
+			if mode != "fresh" {
+				p.ack(t)
+				for range slotCount - 1 {
+					prefill := p.notice(t)
+					if prefill.Kind != "prefill" {
+						t.Fatalf("missing real prefill: %+v", prefill)
+					}
+					observer(t, prefill.PID, time.Now())
+					p.ack(t)
+				}
+				exhausted := p.notice(t)
+				if exhausted.Kind != "exhausted" || exhausted.Batch != n.Batch {
+					t.Fatal("exhaustion changed pending batch", exhausted)
+				}
+			}
+			c := readSlotsFile(t, n.Batch)
+			for i, id := range c.Header.RunIDs {
+				if id == n.RunID && (c.Frames[i] != (fence{}) || c.Retired[i] != 0) {
+					t.Fatal("pre-frame slot acquired an invented root or closure")
+				}
+			}
+			p.kill(t)
+			state, err := windows.WaitForSingleObject(h, 0)
+			if err != nil || state != uint32(windows.WAIT_TIMEOUT) {
+				t.Fatal("retained pre-resume root was not live", state, err)
+			}
+			o := nativeOwner(t, root)
+			before := o.report()
+			if before.Reservations != 1 || len(before.Pending) != 0 {
+				t.Fatalf("prelaunch member was retired or invented: %+v", before)
+			}
+			if _, err := o.Run(context.Background(), Spec{Program: gitProgram(t)}); !errors.Is(err, ErrUnconfirmed) {
+				t.Fatal("pre-resume reservation admitted Git", err)
+			}
+			report, err := o.Reconcile(context.Background())
+			if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != 1 {
+				t.Fatalf("retained zero-slot resource lost or duplicated: %+v %v", report, err)
+			}
+			r := report.Closed[0]
+			if r.RunID != n.RunID || r.Proof != "retained_job" || r.ExitCode != -1 || r.TotalProcesses != 1 {
+				t.Fatalf("zero-slot resource proof lost: %+v", r)
+			}
+			assertExited(t, h)
+			assertFreshSlotRun(t, o, c.Header.RunIDs)
+		})
+	}
+}
+
+func TestGitProcessSlotRetirementCrash(t *testing.T) {
+	for _, mode := range []string{"before_remove", "after_remove", "partial_at_close"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			p := startSlotHelper(t, root, mode)
+			var target processNotice
+			for {
+				n := p.notice(t)
+				if n.Kind == "prefill" {
+					observer(t, n.PID, time.Now())
+					p.ack(t)
+					continue
+				}
+				target = n
+				break
+			}
+			if target.Kind != "target" {
+				t.Fatal("missing proven target", target)
+			}
+			h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(target.PID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer windows.CloseHandle(h)
+			c := readSlotsFile(t, target.Batch)
+			p.ack(t)
+			n := p.notice(t)
+			if !strings.HasPrefix(n.Kind, "retirement_") {
+				t.Fatal("missing retirement boundary", n)
+			}
+			p.kill(t)
+			assertExited(t, h)
+			o := nativeOwner(t, root)
+			report := o.report()
+			wantReservations, wantPending := 1, 0
+			if mode == "after_remove" {
+				wantReservations = 0
+			}
+			if mode == "before_remove" {
+				wantPending = 1
+			}
+			if report.Reservations != wantReservations || len(report.Pending) != wantPending {
+				t.Fatalf("retirement lost unfinished target or invented completed runs: %+v", report)
+			}
+			report, err = o.Reconcile(context.Background())
+			if err != nil || len(report.Pending) != 0 || report.Reservations != 0 || len(report.Closed) != wantPending {
+				t.Fatalf("retirement recovery failed: %+v %v", report, err)
+			}
+			if wantPending == 1 && (report.Closed[0].RunID != target.RunID || report.Closed[0].Proof != "name_absent" || report.Closed[0].ExitCode != -1) {
+				t.Fatalf("retirement proof changed: %+v", report)
+			}
+			if _, err := os.Stat(target.Batch); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("retired container survived", err)
+			}
+			assertFreshSlotRun(t, o, c.Header.RunIDs)
+		})
+	}
+}
+
+func TestGitProcessSlotSetupFailure(t *testing.T) {
+	t.Parallel()
+	o := nativeOwner(t, t.TempDir())
+	started := false
+	r, err := o.Run(context.Background(), Spec{Program: filepath.Join(o.root, "nonexistent.exe"), Started: func(int) { started = true }})
+	if err == nil || errors.Is(err, ErrUnconfirmed) || started || !r.RootExited || !r.TreeClosed || !r.IOJoined {
+		t.Fatalf("definitive setup failure stranded resources or resumed: %+v %v", r, err)
+	}
+	_, frame, hint := readSlotRun(t, o.root, r.RunID)
+	if frame != (fence{}) || hint != 0 {
+		t.Fatal("setup failure invented a durable root or retired zero slot")
+	}
+	assertFreshSlotRun(t, o, []uuid.UUID{r.RunID})
+}
+
+func TestGitProcessDurableBound(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	o := nativeOwner(t, root)
+	var mu sync.Mutex
+	counts, attempts := make(map[string]int), make(map[string]int)
+	reserved := make(map[uuid.UUID]string)
+	frames := make(map[uuid.UUID]fence)
+	identities := make(map[uint32]fence)
+	oldFrames := make(map[string]map[int][]byte)
+	o.metadataHook = func(op, path string, success bool) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if success {
+			counts[op]++
+		} else {
+			attempts[op]++
+		}
+		if success && op == "rename" && strings.HasSuffix(path, ".slots") {
+			c := readSlotsFile(t, path)
+			if !c.initial() {
+				t.Error("new reservation published nonzero frames")
+			}
+			for _, id := range c.Header.RunIDs {
+				if _, exists := reserved[id]; exists {
+					t.Error("batch reused a reserved name")
+				}
+				reserved[id] = path
+			}
+		}
+		if op == "frame_write" && !success || op == "footer_write" && success {
+			raw, err := readRegularBounded(path, slotsSize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, old := range oldFrames[path] {
+				if !bytes.Equal(raw[slotHeaderSize+i*slotFrameSize:slotHeaderSize+(i+1)*slotFrameSize], old) {
+					t.Error("write-once root frame changed after its durable barrier")
+				}
+			}
+		}
+		return nil
+	}
+	o.observe = func(phase string, f fence) {
+		if phase == "launch_pending" || phase == "root_created" {
+			mu.Lock()
+			path, exists := reserved[f.RunID]
+			mu.Unlock()
+			if !exists || path == "" {
+				t.Error("native root preceded durable reservation publication")
+			}
+			if phase == "launch_pending" {
+				h, err := openJob(f.JobName)
+				if h != 0 {
+					_ = windows.CloseHandle(h)
+				}
+				if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+					t.Error("Job existed before launch_pending", err)
+				}
+			}
+		}
+		if phase == "suspended" {
+			o.reservationMu.Lock()
+			path, stored, _ := readSlotRun(t, o.root, f.RunID)
+			c := readSlotsFile(t, path)
+			o.reservationMu.Unlock()
+			if stored != f {
+				t.Error("suspended root was not recorded exactly")
+			}
+			mu.Lock()
+			if _, exists := frames[f.RunID]; exists {
+				t.Error("invocation reused a consumed identity")
+			}
+			frames[f.RunID], identities[f.RootPID] = f, f
+			if oldFrames[path] == nil {
+				oldFrames[path] = make(map[int][]byte)
+			}
+			for i, frame := range c.Frames {
+				if frame != (fence{}) {
+					encoded, err := encodeSlotFrame(frame)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if old, exists := oldFrames[path][i]; exists && !bytes.Equal(old, encoded) {
+						t.Error("old root frame was rewritten")
+					}
+					oldFrames[path][i] = encoded
+				}
+			}
+			mu.Unlock()
+		}
+	}
+	program := gitProgram(t)
+	started := func(pid int) {
+		h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+		if err != nil {
+			t.Fatal(err)
+		}
+		created, err := processCreated(h)
+		_ = windows.CloseHandle(h)
+		mu.Lock()
+		f, exists := identities[uint32(pid)]
+		mu.Unlock()
+		if err != nil || !exists || f.RootPID != uint32(pid) || f.RootCreated != created {
+			t.Error("resumed root identity disagreed with independent handle query", err)
+		}
+	}
+	checkCounts := func(flushes, renames, opens, closes int) {
+		t.Helper()
+		mu.Lock()
+		defer mu.Unlock()
+		if counts["temp_sync"]+counts["frame_sync"]+counts["rename"]+counts["directory_sync"] != flushes || counts["rename"] != renames || counts["writer_open"] != opens || counts["writer_close"] != closes {
+			t.Fatalf("durable admission bound exceeded or barrier omitted: %v want flush/rename/open/close=%d/%d/%d/%d", counts, flushes, renames, opens, closes)
+		}
+	}
+	for range 33 {
+		r, err := o.Run(context.Background(), Spec{Program: program, Args: []string{"version"}, Env: os.Environ(), Started: started})
+		if err != nil || !r.TreeClosed {
+			t.Fatalf("serial bound run: %+v %v", r, err)
+		}
+	}
+	checkCounts(37, 2, 2, 1)
+	ready, ended := make(chan struct{}, 8), make(chan error, 8)
+	var writers []*io.PipeWriter
+	for range 8 {
+		reader, writer := io.Pipe()
+		writers = append(writers, writer)
+		t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+		go func() {
+			r, err := o.Run(context.Background(), Spec{Program: program, Args: []string{"hash-object", "--stdin"}, Env: os.Environ(), Stdin: reader, Started: func(pid int) { started(pid); ready <- struct{}{} }})
+			if !r.TreeClosed || !r.IOJoined {
+				err = errors.Join(err, ErrUnconfirmed)
+			}
+			ended <- err
+		}()
+	}
+	for range 8 {
+		<-ready
+	}
+	for _, writer := range writers {
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 8 {
+		if err := <-ended; err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkCounts(45, 2, 2, 1)
+	if len(frames) != 41 || counts["frame_write"] != 41 || counts["frame_sync"] != 41 || counts["temp_sync"] != 2 {
+		t.Fatal("a resumed child lacked its own durability completion", counts)
+	}
+	var all []uuid.UUID
+	for id := range reserved {
+		all = append(all, id)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	checkCounts(45, 2, 2, 2)
+	for op, count := range counts {
+		if attempts[op] != count {
+			t.Fatal("successful bound run concealed a failed operation", op, counts, attempts)
+		}
+	}
+	t.Logf("serial=37/2/2 overlap=45/2/2 final writer closes=2; operations=%v", counts)
+	reopened := nativeOwner(t, root)
+	assertFreshSlotRun(t, reopened, all)
+}
+
+func TestGitProcessSlotErrors(t *testing.T) {
+	t.Run("layout", slotLayoutErrors)
+	t.Run("native", slotNativeErrors)
+	t.Run("io", slotIOErrors)
+}
+
+func slotNativeErrors(t *testing.T) {
+	for _, row := range []string{"session", "access-denied", "limits", "query", "cancel", "live-retired", "recovered-sync", "zero-temp-remove", "zero-temp-sync"} {
+		t.Run(row, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			seed := nativeOwner(t, root)
+			if err := seed.Close(); err != nil {
+				t.Fatal(err)
+			}
+			c := fixtureSlots(t, seed)
+			session := c.Header.Session
+			f := c.Header.candidate(0)
+			var job windows.Handle
+			var pi windows.ProcessInformation
+			var err error
+			switch row {
+			case "session":
+				c.Header.Session++
+			case "access-denied", "limits", "query", "recovered-sync":
+				limit := seed.options.MaxDescendants
+				if row == "limits" {
+					limit++
+				}
+				job, err = createJob(f.JobName, limit)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if row == "access-denied" {
+					sd, err := windows.SecurityDescriptorFromString("D:P(D;;GA;;;WD)")
+					if err != nil {
+						t.Fatal(err)
+					}
+					dacl, _, err := sd.DACL()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := windows.SetSecurityInfo(job, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+						t.Fatal(err)
+					}
+					probe, err := openJob(f.JobName)
+					if probe != 0 {
+						_ = windows.CloseHandle(probe)
+					}
+					if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+						t.Fatal("reservation deny DACL control failed", err)
+					}
+				}
+			case "live-retired":
+				job, err = createJob(jobName(seed.rootID, uuid.NewV7()), seed.options.MaxDescendants)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pipes, err := newPipes(false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pi, err = createSuspended(Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()}, job, pipes)
+				_ = pipes.closeChildren()
+				pipes.closeParents()
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.State, f.RootPID = "running", pi.ProcessId
+				f.RootCreated, err = processCreated(pi.Process)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.Frames[0], c.Retired[0] = f, 1
+			}
+			defer func() {
+				if job != 0 {
+					_ = windows.TerminateJobObject(job, 1)
+					_ = windows.CloseHandle(job)
+				}
+				if pi.Process != 0 {
+					assertExited(t, pi.Process)
+					_ = windows.CloseHandle(pi.Process)
+					_ = windows.CloseHandle(pi.Thread)
+				}
+			}()
+			raw, err := encodeSlots(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := seed.slotsPath(c.Header.BatchID)
+			if err := writeMarkerBytes(path, raw, nil); err != nil {
+				t.Fatal(err)
+			}
+			if row == "zero-temp-remove" || row == "zero-temp-sync" {
+				total := uint32(1)
+				f.State, f.Proof, f.TotalProcesses = "closed", "retained_job", &total
+				encoded, err := canonicalJSON(f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(seed.fencePath(f.RunID)+".pending", encoded, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			o := nativeOwner(t, root)
+			o.options.StopGrace = 20 * time.Millisecond
+			if row == "query" {
+				o.queryFault = func() error { return windows.ERROR_INVALID_HANDLE }
+			}
+			if row == "recovered-sync" {
+				o.metadataHook = func(op, path string, success bool) error {
+					if op == "temp_sync" && !success && strings.HasSuffix(path, ".json") {
+						return windows.ERROR_WRITE_FAULT
+					}
+					return nil
+				}
+			}
+			if row == "zero-temp-remove" || row == "zero-temp-sync" {
+				o.metadataHook = func(op, path string, success bool) error {
+					if !success && (row == "zero-temp-remove" && op == "remove" && strings.HasSuffix(path, ".json.pending") || row == "zero-temp-sync" && op == "directory_sync") {
+						return windows.ERROR_WRITE_FAULT
+					}
+					return nil
+				}
+			}
+			ctx := context.Background()
+			if row == "cancel" {
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+			}
+			report, err := o.Reconcile(ctx)
+			if !errors.Is(err, ErrUnconfirmed) || report.Reservations != 1 || len(report.Pending) != 0 || len(report.Closed) != 0 {
+				t.Fatalf("reservation-only or retired state accepted without exact proof: %+v %v", report, err)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(raw, after) {
+				t.Fatal("unconfirmed reservation bytes changed", err)
+			}
+			if _, err := o.Run(context.Background(), Spec{Program: gitProgram(t)}); !errors.Is(err, ErrUnconfirmed) {
+				t.Fatal("unproved reservation admitted Git", err)
+			}
+			if job != 0 {
+				if err := windows.TerminateJobObject(job, 1); err != nil {
+					t.Fatal(err)
+				}
+				if pi.Process != 0 {
+					assertExited(t, pi.Process)
+				}
+				if err := windows.CloseHandle(job); err != nil {
+					t.Fatal(err)
+				}
+				job = 0
+			}
+			o.queryFault, o.metadataHook = nil, nil
+			retrySyncs := 0
+			if row == "zero-temp-remove" || row == "zero-temp-sync" {
+				o.metadataHook = func(op, _ string, success bool) error {
+					if op == "directory_sync" && success {
+						retrySyncs++
+					}
+					return nil
+				}
+			}
+			if row == "session" {
+				batch := o.loadedSlots[c.Header.BatchID]
+				batch.data.Header.Session = session
+				fixed, err := encodeSlots(batch.data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n, err := batch.writer.WriteAt(fixed, 0); err != nil || n != len(fixed) {
+					t.Fatal("fixture session repair failed", err)
+				}
+			}
+			report, err = o.Reconcile(context.Background())
+			if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != 0 {
+				t.Fatal("unobstructed reservation recovery failed", report, err)
+			}
+			if (row == "zero-temp-remove" || row == "zero-temp-sync") && retrySyncs != 1 {
+				t.Fatal("recovery retired before completing the interrupted debris barrier", retrySyncs)
+			}
+		})
+	}
+}
+
+func slotIOErrors(t *testing.T) {
+	for _, operation := range []string{"temp_sync", "rename", "writer_open", "frame_write", "frame_sync", "footer_write", "short_footer", "writer_close", "partial_delete"} {
+		t.Run(operation, func(t *testing.T) {
+			root := t.TempDir()
+			p := startSlotHelper(t, root, "error:"+operation)
+			var done processNotice
+			for {
+				n := p.notice(t)
+				if n.Kind == "pin" {
+					observer(t, n.PID, time.Now())
+					p.ack(t)
+					continue
+				}
+				done = n
+				break
+			}
+			if done.Kind != "done" {
+				t.Fatal("fault helper omitted retention proof", done)
+			}
+			p.finish(t)
+			o := nativeOwner(t, root)
+			report := o.report()
+			wantClosed := 0
+			if operation == "frame_sync" || operation == "footer_write" || operation == "short_footer" {
+				wantClosed = 1
+			}
+			if len(report.Pending) != wantClosed {
+				t.Fatal("fault changed root-frame recovery obligations", report)
+			}
+			report, err := o.Reconcile(context.Background())
+			if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != wantClosed {
+				t.Fatal("fault's surviving layout could not recover", report, err)
+			}
+			if wantClosed == 1 && (report.Closed[0].RunID != done.RunID || report.Closed[0].Proof != "name_absent" || report.Closed[0].ExitCode != -1) {
+				t.Fatal("fault recovery inferred success", report)
+			}
+			assertFreshSlotRun(t, o, []uuid.UUID{done.RunID})
+		})
+	}
+}
+
+func slotErrorHelper(t *testing.T, operation string) {
+	o, _, err := Open(context.Background(), os.Getenv("DWARF_GITPROCESS_ROOT"), Options{RequireTree: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c slotsContainer
+	var path string
+	faultSeen, resumed, roots := false, 0, 0
+	var held windows.Handle
+	defer func() {
+		if held != 0 {
+			_ = windows.CloseHandle(held)
+		}
+	}()
+	o.metadataHook = func(op, file string, success bool) error {
+		if op == "temp_write" && success && strings.HasSuffix(file, ".slots") {
+			c = readSlotsFile(t, file+".pending")
+			path = file
+		}
+		target := operation
+		if target == "short_footer" {
+			target = "footer_write"
+		}
+		if op == target && !success {
+			faultSeen = true
+			if operation == "short_footer" {
+				return io.ErrShortWrite
+			}
+			return windows.ERROR_WRITE_FAULT
+		}
+		return nil
+	}
+	o.observe = func(phase string, f fence) {
+		if phase == "root_created" {
+			roots++
+			if err := json.NewEncoder(os.Stdout).Encode(processNotice{Kind: "pin", PID: int(f.RootPID), RunID: f.RunID}); err != nil {
+				t.Fatal(err)
+			}
+			var b [1]byte
+			if _, err := io.ReadFull(os.Stdin, b[:]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if phase == "resumed" {
+			resumed++
+		}
+		if phase == "closed" && operation == "partial_delete" {
+			p, err := windows.UTF16PtrFromString(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			held, err = windows.CreateFile(p, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+			if err != nil {
+				t.Fatal("compatible deletion obstruction failed", err)
+			}
+		}
+	}
+	spec := Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()}
+	r, runErr := o.Run(context.Background(), spec)
+	atClose := operation == "writer_close" || operation == "partial_delete"
+	if atClose {
+		if runErr != nil || !r.TreeClosed {
+			t.Fatalf("partial batch failed before Close: %+v %v", r, runErr)
+		}
+		runErr = o.Close()
+	}
+	if !errors.Is(runErr, ErrUnconfirmed) || operation != "partial_delete" && !faultSeen {
+		t.Fatalf("metadata failure authorized reuse or skipped its barrier: %+v %v fault=%v resumed=%d", r, runErr, faultSeen, resumed)
+	}
+	if operation == "frame_write" || operation == "frame_sync" {
+		if resumed != 0 || !r.RootExited || !r.TreeClosed || !r.IOJoined {
+			t.Fatalf("failed frame barrier resumed or lost suspended cleanup: %+v resumed=%d", r, resumed)
+		}
+	}
+	if operation == "temp_sync" || operation == "rename" || operation == "writer_open" {
+		if roots != 0 || resumed != 0 {
+			t.Fatal("failed reservation publication created a native root")
+		}
+		for _, id := range c.Header.RunIDs {
+			h, err := openJob(jobName(c.Header.RootID, id))
+			if h != 0 {
+				_ = windows.CloseHandle(h)
+			}
+			if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+				t.Fatal("failed publication created a reserved Job", err)
+			}
+		}
+	}
+	if _, err := o.Run(context.Background(), spec); !errors.Is(err, ErrUnconfirmed) && !(atClose && errors.Is(err, ErrClosed)) {
+		t.Fatal("metadata failure admitted another Run", err)
+	}
+	first, second := o.Close(), o.Close()
+	if !errors.Is(first, ErrUnconfirmed) || first != second {
+		t.Fatal("Close discarded or changed retained metadata failure", first, second)
+	}
+	reopened, _, err := Open(context.Background(), o.root, Options{RequireTree: true})
+	if reopened != nil {
+		_ = reopened.Close()
+	}
+	if !errors.Is(err, durable.ErrLocked) {
+		t.Fatal("metadata failure released the Owner lock", err)
+	}
+	if operation == "footer_write" || operation == "short_footer" || atClose {
+		_, frame, hint := readSlotRun(t, o.root, r.RunID)
+		if frame.State != "running" || frame.RunID != r.RunID {
+			t.Fatal("cleanup failure cleared or rewrote root frame", frame)
+		}
+		if !atClose && hint != 0 {
+			t.Fatal("failed footer write retired the invocation")
+		}
+	}
+	if held != 0 {
+		if err := windows.CloseHandle(held); err != nil {
+			t.Fatal(err)
+		}
+		held = 0
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(processNotice{Kind: "done", RunID: r.RunID, Batch: path}); err != nil {
+		t.Fatal(err)
 	}
 }

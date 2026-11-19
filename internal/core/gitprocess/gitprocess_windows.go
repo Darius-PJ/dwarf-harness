@@ -1,24 +1,46 @@
 package gitprocess
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
+	"uuid"
 
+	"github.com/Darius-PJ/dwarf-harness/internal/core/durable"
 	"golang.org/x/sys/windows"
 )
 
 type platformState struct {
 	retainedResources []any
 	// Native fault/observation seams are nil in production.
-	observe    func(string, fence)
-	queryFault func() error
+	observe            func(string, fence)
+	queryFault         func() error
+	reservationMu      sync.Mutex
+	currentBatch       *slotBatch
+	batches            map[uuid.UUID]*slotBatch
+	reservationFailure error
+	// Metadata hooks may run under reservationMu. They must not call Owner
+	// APIs or await another Run; lifecycle observations never hold that mutex.
+	metadataHook func(operation, path string, success bool) error
+}
+
+type slotBatch struct {
+	data             slotsContainer
+	identity         os.FileInfo
+	writer           *os.File
+	next, complete   int
+	attempted, done  [slotCount]bool
+	failed, retiring bool
+	unsyncedTemps    map[uuid.UUID]bool
 }
 
 var (
@@ -229,6 +251,10 @@ func drainNotifications(port windows.Handle) (bool, error) {
 	}
 }
 func (o *Owner) reconcile(ctx context.Context, f fence) (Result, error) {
+	return o.reconcileCandidate(ctx, f, false)
+}
+
+func (o *Owner) reconcileCandidate(ctx context.Context, f fence, reservedZero bool) (Result, error) {
 	r := Result{RunID: f.RunID, ExitCode: -1}
 	fail := func(reason string, err error) (Result, error) { return r, unconfirmed(f.RunID, reason, err) }
 	if err := ctx.Err(); err != nil {
@@ -272,6 +298,10 @@ func (o *Owner) reconcile(ctx context.Context, f fence) (Result, error) {
 			}
 			job = 0
 		} else if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+			if reservedZero {
+				r.RootExited, r.TreeClosed, r.IOJoined, r.Proof = true, true, true, "name_absent"
+				return r, nil
+			}
 			if f.State == "running" {
 				if err := waitRootGone(ctx, f, o.options.StopGrace); err != nil {
 					return fail("root_unconfirmed", err)
@@ -480,15 +510,11 @@ func createSuspended(spec Spec, job windows.Handle, pipes *nativePipes) (windows
 }
 
 func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool, error) {
-	f := fence{Format: fenceFormat, Version: 1, RootID: o.rootID, RunID: result.RunID, JobName: jobName(o.rootID, result.RunID), State: "launch_pending"}
-	var err error
-	f.Session, err = currentSession()
+	batch, index, f, err := o.reserveSlot(result.RunID)
+	result.RunID = f.RunID
 	if err != nil {
-		return result, false, err
-	}
-	if err := o.writeFence(f); err != nil {
 		o.retain(f)
-		return result, false, unconfirmed(f.RunID, "fence_write_failed", err)
+		return result, false, unconfirmed(f.RunID, "reservation_failed", err)
 	}
 	o.observation("launch_pending", f)
 	job, err := createJob(f.JobName, o.options.MaxDescendants)
@@ -509,6 +535,7 @@ func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool
 		setupErr = errors.Join(setupErr, pipes.closeChildren())
 	}
 	started := false
+	var frameErr error
 	if setupErr == nil {
 		setupErr = memberOf(pi.Process, job)
 	}
@@ -520,7 +547,9 @@ func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool
 	}
 	if setupErr == nil {
 		f.RootPID, f.State = pi.ProcessId, "running"
-		setupErr = o.writeFence(f)
+		o.observation("root_created", f)
+		frameErr = o.writeRootFrame(batch, index, f)
+		setupErr = frameErr
 	}
 	if setupErr == nil {
 		o.observation("suspended", f)
@@ -681,9 +710,13 @@ func (o *Owner) run(ctx context.Context, spec Spec, result Result) (Result, bool
 		o.retain(f)
 		return result, true, unconfirmed(f.RunID, "job_close_failed", err)
 	}
+	if frameErr != nil {
+		o.retain(f)
+		return result, false, unconfirmed(f.RunID, "frame_write_failed", errors.Join(runErr, frameErr))
+	}
 	f.State, f.Proof, f.TotalProcesses = "closed", "live", &result.TotalProcesses
 	o.observation("closed", f)
-	if err := o.removeFence(f); err != nil {
+	if err := o.completeSlot(batch, index, f); err != nil {
 		o.retain(f)
 		return result, false, unconfirmed(f.RunID, "cleanup_failed", err)
 	}
@@ -715,7 +748,11 @@ func (o *Owner) writeFence(f fence) error {
 	if err := o.checkRoot(); err != nil {
 		return err
 	}
-	return writeMarker(o.fencePath(f.RunID), f)
+	raw, err := canonicalJSON(f)
+	if err != nil {
+		return err
+	}
+	return writeMarkerBytes(o.fencePath(f.RunID), raw, o.metadataHook)
 }
 func (o *Owner) removeFence(f fence) error {
 	if f.State != "closed" {
@@ -741,4 +778,387 @@ func (o *Owner) removeFence(f fence) error {
 		return err
 	}
 	return os.Remove(path)
+}
+
+func (o *Owner) hasUnreconciledReservations() bool { return len(o.loadedSlots) != 0 }
+func (o *Owner) reservationCount() int             { return len(o.loadedSlots) }
+func (o *Owner) reservedRun(id uuid.UUID) bool {
+	for _, batch := range o.loadedSlots {
+		if slices.Contains(batch.data.Header.RunIDs, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *Owner) reserveSlot(candidate uuid.UUID) (*slotBatch, int, fence, error) {
+	session, err := currentSession()
+	f := fence{Format: fenceFormat, Version: 1, RootID: o.rootID, RunID: candidate, JobName: jobName(o.rootID, candidate), Session: session, State: "launch_pending"}
+	if err != nil {
+		return nil, 0, f, err
+	}
+	o.reservationMu.Lock()
+	batch, fresh := o.currentBatch, false
+	if o.reservationFailure != nil {
+		err = o.reservationFailure
+		o.reservationMu.Unlock()
+		return nil, 0, f, err
+	}
+	if batch == nil {
+		fresh = true
+		h := slotsHeader{Format: slotsFormat, Version: 1, RootID: o.rootID, BatchID: uuid.NewV7(), Session: session, RunIDs: []uuid.UUID{candidate}}
+		for len(h.RunIDs) < slotCount {
+			h.RunIDs = append(h.RunIDs, uuid.NewV7())
+		}
+		slices.SortFunc(h.RunIDs, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+		batch = &slotBatch{data: slotsContainer{Header: h}}
+		f = h.candidate(0)
+		if o.batches == nil {
+			o.batches = make(map[uuid.UUID]*slotBatch)
+		}
+		o.batches[h.BatchID] = batch
+		var raw []byte
+		raw, err = encodeSlots(batch.data)
+		if err == nil {
+			err = o.checkRoot()
+		}
+		if err == nil {
+			err = writeMarkerBytes(o.slotsPath(h.BatchID), raw, o.metadataHook)
+		}
+		if err == nil {
+			err = o.openBatchWriter(batch)
+		}
+		if err != nil {
+			batch.failed, o.reservationFailure = true, err
+			o.reservationMu.Unlock()
+			return batch, 0, f, err
+		}
+		o.currentBatch = batch
+	}
+	index := batch.next
+	f = batch.data.Header.candidate(index)
+	batch.next++
+	if batch.next == slotCount {
+		o.currentBatch = nil
+	}
+	o.reservationMu.Unlock()
+	if fresh {
+		o.observation("reservation_published", f)
+	}
+	return batch, index, f, nil
+}
+
+func (o *Owner) openBatchWriter(batch *slotBatch) error {
+	if err := o.checkRoot(); err != nil {
+		return err
+	}
+	path := o.slotsPath(batch.data.Header.BatchID)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || batch.identity != nil && !os.SameFile(info, batch.identity) {
+		return errors.Join(ErrInvalid, err)
+	}
+	if batch.writer == nil {
+		if err := metadataCall(o.metadataHook, "writer_open", path, func() error {
+			var err error
+			batch.writer, err = os.OpenFile(path, os.O_RDWR, 0)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	opened, err := batch.writer.Stat()
+	if err != nil || !os.SameFile(info, opened) || opened.Size() != slotsSize {
+		return errors.Join(ErrInvalid, err)
+	}
+	raw := make([]byte, slotsSize)
+	if _, err := batch.writer.ReadAt(raw, 0); err != nil {
+		return err
+	}
+	if _, err := decodeSlots(raw); err != nil {
+		return err
+	}
+	expected, err := encodeSlots(batch.data)
+	if err != nil || !bytes.Equal(raw, expected) {
+		return errors.Join(ErrInvalid, err)
+	}
+	batch.identity = opened
+	return nil
+}
+
+func (o *Owner) writeRootFrame(batch *slotBatch, index int, f fence) error {
+	frame, err := encodeSlotFrame(f)
+	if err != nil {
+		return err
+	}
+	o.reservationMu.Lock()
+	err = func() error {
+		if batch.failed || batch.retiring || batch.attempted[index] || batch.writer == nil {
+			return ErrUnconfirmed
+		}
+		if err := o.checkRoot(); err != nil {
+			return err
+		}
+		info, err := batch.writer.Stat()
+		if err != nil || info.Size() != slotsSize || !os.SameFile(info, batch.identity) {
+			return errors.Join(ErrInvalid, err)
+		}
+		zero := make([]byte, slotFrameSize)
+		if _, err := batch.writer.ReadAt(zero, int64(slotHeaderSize+index*slotFrameSize)); err != nil {
+			return err
+		}
+		var hint [1]byte
+		if _, err := batch.writer.ReadAt(hint[:], int64(slotFooterOffset+index)); err != nil {
+			return err
+		}
+		if !bytes.Equal(zero, make([]byte, slotFrameSize)) || hint[0] != 0 {
+			return ErrInvalid
+		}
+		batch.attempted[index] = true
+		err = metadataCall(o.metadataHook, "frame_write", o.slotsPath(batch.data.Header.BatchID), func() error {
+			n, err := batch.writer.WriteAt(frame, int64(slotHeaderSize+index*slotFrameSize))
+			if err == nil && n != len(frame) {
+				err = io.ErrShortWrite
+			}
+			return err
+		})
+		if err == nil {
+			batch.data.Frames[index] = f
+		}
+		return err
+	}()
+	if err != nil {
+		batch.failed, o.reservationFailure = true, err
+	}
+	o.reservationMu.Unlock()
+	if err != nil {
+		return err
+	}
+	// Each root owes its own completion, even if a sibling Sync also flushes
+	// these bytes. Outstanding members prevent closing this shared handle.
+	err = metadataCall(o.metadataHook, "frame_sync", o.slotsPath(batch.data.Header.BatchID), batch.writer.Sync)
+	if err != nil {
+		o.reservationMu.Lock()
+		batch.failed, o.reservationFailure = true, err
+		o.reservationMu.Unlock()
+	}
+	return err
+}
+
+func (o *Owner) writeRetiredHint(batch *slotBatch, index int) error {
+	if batch.data.Frames[index] == (fence{}) || batch.writer == nil {
+		return ErrInvalid
+	}
+	if err := o.checkRoot(); err != nil {
+		return err
+	}
+	err := metadataCall(o.metadataHook, "footer_write", o.slotsPath(batch.data.Header.BatchID), func() error {
+		n, err := batch.writer.WriteAt([]byte{1}, int64(slotFooterOffset+index))
+		if err == nil && n != 1 {
+			err = io.ErrShortWrite
+		}
+		return err
+	})
+	if err == nil {
+		batch.data.Retired[index] = 1
+	}
+	return err
+}
+
+func (o *Owner) completeSlot(batch *slotBatch, index int, f fence) error {
+	o.reservationMu.Lock()
+	if batch.failed || batch.retiring || batch.done[index] {
+		o.reservationMu.Unlock()
+		return ErrUnconfirmed
+	}
+	last := batch.next == slotCount && batch.complete+1 == slotCount
+	if last {
+		batch.retiring = true
+	} else if batch.data.Frames[index] != (fence{}) {
+		if err := o.writeRetiredHint(batch, index); err != nil {
+			batch.failed, o.reservationFailure = true, err
+			o.reservationMu.Unlock()
+			return err
+		}
+	}
+	if !last {
+		batch.done[index] = true
+		batch.complete++
+	}
+	o.reservationMu.Unlock()
+	if !last {
+		return nil
+	}
+	err := o.removeBatch(batch, f)
+	o.reservationMu.Lock()
+	defer o.reservationMu.Unlock()
+	if err != nil {
+		batch.failed, o.reservationFailure = true, err
+		return err
+	}
+	batch.done[index] = true
+	batch.complete++
+	delete(o.batches, batch.data.Header.BatchID)
+	return nil
+}
+
+func (o *Owner) removeBatch(batch *slotBatch, f fence) error {
+	if err := o.checkRoot(); err != nil {
+		return err
+	}
+	path := o.slotsPath(batch.data.Header.BatchID)
+	if batch.writer != nil {
+		if err := metadataCall(o.metadataHook, "writer_close", path, batch.writer.Close); err != nil {
+			return err
+		}
+		batch.writer = nil
+	}
+	o.observation("retirement_before_remove", f)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(info, batch.identity) {
+		return errors.Join(ErrInvalid, err)
+	}
+	pending := path + ".pending"
+	if info, err := os.Lstat(pending); err == nil {
+		if !info.Mode().IsRegular() {
+			return ErrInvalid
+		}
+		if err := metadataCall(o.metadataHook, "remove", pending, func() error { return os.Remove(pending) }); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := metadataCall(o.metadataHook, "remove", path, func() error { return os.Remove(path) }); err != nil {
+		return err
+	}
+	o.observation("retirement_after_remove", f)
+	return nil
+}
+
+func (o *Owner) closeReservations() error {
+	o.reservationMu.Lock()
+	var batches []*slotBatch
+	for _, batch := range o.batches {
+		if batch.failed || batch.retiring || batch.complete != batch.next {
+			o.reservationMu.Unlock()
+			return ErrUnconfirmed
+		}
+		batch.retiring = true
+		batches = append(batches, batch)
+	}
+	o.reservationMu.Unlock()
+	for _, batch := range batches {
+		f := batch.data.Header.candidate(batch.next - 1)
+		if err := o.removeBatch(batch, f); err != nil {
+			return err
+		}
+		o.reservationMu.Lock()
+		delete(o.batches, batch.data.Header.BatchID)
+		o.reservationMu.Unlock()
+	}
+	return nil
+}
+
+func (o *Owner) reconcileReservations(ctx context.Context) ([]Result, error) {
+	var ids []uuid.UUID
+	for id := range o.loadedSlots {
+		ids = append(ids, id)
+	}
+	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	var closed []Result
+	var failures []error
+	for _, id := range ids {
+		batch := o.loadedSlots[id]
+		if err := o.openBatchWriter(batch); err != nil {
+			failures = append(failures, unconfirmed(id, "writer_open_failed", err))
+			continue
+		}
+		processed := 0
+		for i, run := range batch.data.Header.RunIDs {
+			f := batch.data.Frames[i]
+			zero := f == (fence{})
+			if zero {
+				f = batch.data.Header.candidate(i)
+			}
+			proof, readErr := readRegular(o.fencePath(run))
+			if readErr == nil {
+				decoded, err := decodeFence(proof)
+				if err != nil || !closedSlotMatches(batch.data, decoded) {
+					failures = append(failures, unconfirmed(run, "invalid_closed", errors.Join(ErrInvalid, err)))
+					continue
+				}
+				f = decoded
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				failures = append(failures, unconfirmed(run, "closed_read_failed", readErr))
+				continue
+			}
+			r, err := o.reconcileCandidate(ctx, f, zero)
+			if err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			if zero && r.Proof == "name_absent" {
+				if err := o.removeZeroClosedTemp(batch, f); err != nil {
+					failures = append(failures, unconfirmed(run, "cleanup_failed", err))
+					continue
+				}
+			}
+			report := r.Proof == "retained_job" || !zero && batch.data.Retired[i] == 0
+			if !zero {
+				o.reservationMu.Lock()
+				err := o.writeRetiredHint(batch, i)
+				o.reservationMu.Unlock()
+				if err != nil {
+					failures = append(failures, unconfirmed(run, "cleanup_failed", err))
+					continue
+				}
+			}
+			delete(o.pending, run)
+			processed++
+			if report {
+				closed = append(closed, r)
+			}
+		}
+		if processed == slotCount {
+			if err := o.removeBatch(batch, batch.data.Header.candidate(slotCount-1)); err != nil {
+				failures = append(failures, unconfirmed(id, "cleanup_failed", err))
+				continue
+			}
+			delete(o.loadedSlots, id)
+		}
+	}
+	return closed, errors.Join(failures...)
+}
+
+// An unpublished zero-slot closure is not proof. Exact name absence permits
+// its removal, but the recovery-only directory barrier must finish before the
+// container can disappear, so a lost removal cannot leave an orphan temp.
+func (o *Owner) removeZeroClosedTemp(batch *slotBatch, f fence) error {
+	if err := o.checkRoot(); err != nil {
+		return err
+	}
+	path := o.fencePath(f.RunID) + ".pending"
+	raw, err := readRegular(path)
+	if err == nil {
+		proof, err := decodeFence(raw)
+		if err != nil || !closedSlotMatches(batch.data, proof) {
+			return errors.Join(ErrInvalid, err)
+		}
+		if err := metadataCall(o.metadataHook, "remove", path, func() error { return os.Remove(path) }); err != nil {
+			return err
+		}
+		if batch.unsyncedTemps == nil {
+			batch.unsyncedTemps = make(map[uuid.UUID]bool)
+		}
+		batch.unsyncedTemps[f.RunID] = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if batch.unsyncedTemps[f.RunID] {
+		if err := metadataCall(o.metadataHook, "directory_sync", filepath.Dir(path), func() error { return durable.SyncDir(filepath.Dir(path)) }); err != nil {
+			return err
+		}
+		delete(batch.unsyncedTemps, f.RunID)
+	}
+	return nil
 }
