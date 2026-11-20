@@ -522,7 +522,7 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 	}
 	if scoped != nil {
-		scopedNext, err = s.planScoped(ctx, reads, scoped, c.First, eligibilityReplay)
+		scopedNext, err = s.planScoped(ctx, reads, scoped, c.First)
 		if err != nil {
 			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 				return commandMatch{}, nil, err
@@ -540,7 +540,7 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 	}
 	if paid != nil {
-		paidNext, err = s.planPaid(ctx, reads, paid, c.First, eligibilityReplay)
+		paidNext, err = s.planPaid(ctx, reads, paid, c.First)
 		if err != nil {
 			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 				return commandMatch{}, nil, err
@@ -558,7 +558,7 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 	}
 	if loop != nil {
-		loopNext, err = s.planLoop(ctx, reads, loop, c.First, eligibilityReplay)
+		loopNext, err = s.planLoop(ctx, reads, loop, c.First)
 		if err != nil {
 			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 				return commandMatch{}, nil, err

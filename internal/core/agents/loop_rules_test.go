@@ -61,7 +61,7 @@ func loopPreflight(t testing.TB, s, baseline *Service, drafts []ledger.Draft) (*
 		if group == nil {
 			err = ErrInvalid
 		} else {
-			_, err = s.planLoop(context.Background(), nil, group, s.p.through+1, eligibilityReplay)
+			_, err = s.planLoop(context.Background(), nil, group, s.p.through+1)
 		}
 	}
 	if !sameProjectionState(s.p, baseline.p) {

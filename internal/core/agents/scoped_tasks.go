@@ -72,8 +72,8 @@ func (s *Service) executionAuthorized(ctx context.Context, reads *historyReadSet
 	return s.anyPermission(ctx, reads, origin, "turn.start", ledger.Resource{Kind: "context", Binding: binding, Scope: "context", Slots: []string{}}, through)
 }
 
-func (s *Service) planTask(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64, mode eligibilityMode) (scopedPlan, []grantRules, error) {
-	plan, chain, err := s.deriveTask(ctx, reads, g.receipt.Submission, first, mode)
+func (s *Service) planTask(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64) (scopedPlan, []grantRules, error) {
+	plan, chain, err := s.deriveTask(ctx, reads, g.receipt.Submission, first)
 	if err != nil {
 		return scopedPlan{}, nil, err
 	}
@@ -83,7 +83,7 @@ func (s *Service) planTask(ctx context.Context, reads *historyReadSet, g *scoped
 	return plan, chain, nil
 }
 
-func (s *Service) deriveTask(ctx context.Context, reads *historyReadSet, sub ledger.ScopedSubmission, first uint64, mode eligibilityMode) (scopedPlan, []grantRules, error) {
+func (s *Service) deriveTask(ctx context.Context, reads *historyReadSet, sub ledger.ScopedSubmission, first uint64) (scopedPlan, []grantRules, error) {
 	plan := scopedPlan{authority: s.p.authority}
 	through := first - 1
 	var action taskAction
@@ -202,7 +202,7 @@ func (s *Service) deriveTask(ctx context.Context, reads *historyReadSet, sub led
 		a := previous.record.Assignment
 		origin := ledger.Origin{AgentID: a.Assignee.AgentID, SessionID: s.p.agents[a.Assignee.AgentID].session, ContextID: a.Assignee.ContextID}
 		binding := ledger.TaskBinding{TaskID: previous.record.TaskID, AssignmentID: a.AssignmentID, Generation: a.Generation}
-		if err := s.guardEligibility(origin, eligibilityWork{task: &binding, taskStart: true}, mode, through); err != nil {
+		if err := s.guardEligibility(origin, eligibilityWork{task: &binding, taskStart: true}, through); err != nil {
 			return plan, nil, err
 		}
 	}

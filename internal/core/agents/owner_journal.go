@@ -181,91 +181,104 @@ func (s *Service) stopContinuation(ctx context.Context, origin ledger.Origin, tu
 		return receipt, "", err
 	}
 	defer unlock()
-	var owner continuationState
-	var prior *continuationGroup
-	var ended bool
-	s.mu.Lock()
-	err = s.prepareHistoryLocked(ctx, &historyReadSet{}, &ids, true, func(reads *historyReadSet) error {
-		owner, prior, ended = continuationState{}, nil, false
-		match, err := s.findCommand(ctx, reads, command, 0, s.p.through)
-		if err != nil {
-			return err
-		}
-		if match.found {
-			g := match.continuation
-			if g == nil || g.receipt.Submission.Actor != actor || g.receipt.Submission.Origin != origin || g.change.TurnID != turn || g.receipt.Submission.Operation != "owner.stop" || g.change.StopReason != reason {
-				return ErrCommandMismatch
+	for attempt := 1; ; attempt++ {
+		var owner continuationState
+		var prior *continuationGroup
+		var ended bool
+		s.mu.Lock()
+		err = s.prepareHistoryLocked(ctx, &historyReadSet{}, &ids, true, func(reads *historyReadSet) error {
+			owner, prior, ended = continuationState{}, nil, false
+			match, err := s.findCommand(ctx, reads, command, 0, s.p.through)
+			if err != nil {
+				return err
 			}
-			if g.receipt.Outcome != "recorded" {
+			if match.found {
+				g := match.continuation
+				if g == nil || g.receipt.Submission.Actor != actor || g.receipt.Submission.Origin != origin || g.change.TurnID != turn || g.receipt.Submission.Operation != "owner.stop" || g.change.StopReason != reason {
+					return ErrCommandMismatch
+				}
+				if g.receipt.Outcome != "recorded" {
+					return ErrUnavailable
+				}
+				prior = g
+				return nil
+			}
+			owner, err = s.loadContinuation(ctx, reads, turn, s.p.through)
+			if err != nil {
+				return err
+			}
+			if owner.Snapshot.Version == 0 {
 				return ErrUnavailable
 			}
-			prior = g
-			return nil
-		}
-		owner, err = s.loadContinuation(ctx, reads, turn, s.p.through)
-		if err != nil {
-			return err
-		}
-		if owner.Snapshot.Version == 0 {
-			return ErrUnavailable
-		}
-		if owner.Origin != origin {
-			return ErrDenied
-		}
-		if !owner.supported() {
-			return ErrUnavailable
-		}
-		work, found, err := s.loadWork(ctx, reads, turn, s.p.through)
-		if err != nil {
-			return err
-		}
-		if !found || work.origin != origin {
-			return ErrIntegrity
-		}
-		ended = work.ended
-		if ended || owner.Snapshot.StopReason != "" {
-			records, err := s.sourceRecords(ctx, reads, []int64{int64(owner.Sequence)}, s.p.through)
+			if owner.Origin != origin {
+				return ErrDenied
+			}
+			if !owner.supported() {
+				return ErrUnavailable
+			}
+			work, found, err := s.loadWork(ctx, reads, turn, s.p.through)
 			if err != nil {
 				return err
 			}
-			match, err := s.findCommand(ctx, reads, records[int64(owner.Sequence)].OperationID, 0, s.p.through)
-			if err != nil {
-				return err
-			}
-			if match.continuation == nil {
+			if !found || work.origin != origin {
 				return ErrIntegrity
 			}
-			prior = match.continuation
+			ended = work.ended
+			if ended || owner.Snapshot.StopReason != "" {
+				records, err := s.sourceRecords(ctx, reads, []int64{int64(owner.Sequence)}, s.p.through)
+				if err != nil {
+					return err
+				}
+				match, err := s.findCommand(ctx, reads, records[int64(owner.Sequence)].OperationID, 0, s.p.through)
+				if err != nil {
+					return err
+				}
+				if match.continuation == nil {
+					return ErrIntegrity
+				}
+				prior = match.continuation
+			}
+			return nil
+		})
+		s.mu.Unlock()
+		if err != nil {
+			return receipt, "", err
 		}
-		return nil
-	})
-	s.mu.Unlock()
-	if err != nil {
-		return receipt, "", err
-	}
-	if prior != nil {
-		outcome := "accepted"
-		if ended {
-			outcome = "too_late"
+		if prior != nil {
+			outcome := "accepted"
+			if ended {
+				outcome = "too_late"
+			}
+			return prior.result(), outcome, nil
 		}
-		return prior.result(), outcome, nil
+		if s.deps.afterStopSnapshot != nil {
+			s.deps.afterStopSnapshot(owner.Snapshot)
+		}
+		a := continuationArguments(owner.Snapshot)
+		a.State, a.ResumeState, a.WaitReason = "stopping", "", "none"
+		a.OperationID, a.Generation = command, a.Generation+1
+		a.StopReason, a.FinalMessageObject = reason, nil
+		a.ModelCalls, a.ToolDispatches = owner.ModelCalls, owner.ToolDispatches
+		if reason == "cancelled" {
+			a.CancelCommandID = uuid.NewV7()
+		}
+		sub := continuationSubmission(owner, "owner.stop", a)
+		sub.Actor = actor
+		g, err := s.commitContinuation(ctx, command, sub, nil)
+		if errors.Is(err, ErrContinuationStale) {
+			// A scheduler advance does not invalidate the stop. Re-read the
+			// owner and native ending without releasing the context gate.
+			if attempt == tailAttempts {
+				return receipt, "", &BusyError{Reason: "ledger_tail"}
+			}
+			continue
+		}
+		if err != nil {
+			return receipt, "", err
+		}
+		s.publishContinuation(g)
+		return g.result(), "accepted", nil
 	}
-	a := continuationArguments(owner.Snapshot)
-	a.State, a.ResumeState, a.WaitReason = "stopping", "", "none"
-	a.OperationID, a.Generation = command, a.Generation+1
-	a.StopReason, a.FinalMessageObject = reason, nil
-	a.ModelCalls, a.ToolDispatches = owner.ModelCalls, owner.ToolDispatches
-	if reason == "cancelled" {
-		a.CancelCommandID = uuid.NewV7()
-	}
-	sub := continuationSubmission(owner, "owner.stop", a)
-	sub.Actor = actor
-	g, err := s.commitContinuation(ctx, command, sub, nil)
-	if err != nil {
-		return receipt, "", err
-	}
-	s.publishContinuation(g)
-	return g.result(), "accepted", nil
 }
 
 func (s *Service) publishContinuation(g *continuationGroup) {

@@ -270,7 +270,7 @@ func (s *Service) scopedDrafts(ctx context.Context, reads *historyReadSet, input
 		}
 		appendPayload(ledger.TypeRuntimeCapacityConfigured, ledger.ActorOwner, payload)
 	case ledger.TaskCreateArguments, ledger.TaskMutationArguments:
-		plan, taskChain, taskErr := s.deriveTask(ctx, reads, sub, s.p.through+1, eligibilityLive)
+		plan, taskChain, taskErr := s.deriveTask(ctx, reads, sub, s.p.through+1)
 		if taskErr != nil {
 			return nil, taskErr
 		}
@@ -416,7 +416,7 @@ func (s *Service) preflightScoped(ctx context.Context, reads *historyReadSet, in
 	if private != nil || review != nil || paid != nil || registration != nil || loop != nil || continuation != nil || eligibility != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin {
 		return nil, ErrInvalid
 	}
-	if _, err := s.planScoped(ctx, reads, group, s.p.through+1, eligibilityLive); err != nil {
+	if _, err := s.planScoped(ctx, reads, group, s.p.through+1); err != nil {
 		return nil, err
 	}
 	return group, nil

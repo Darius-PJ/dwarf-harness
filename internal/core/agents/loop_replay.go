@@ -133,7 +133,7 @@ func (s *Service) loopNative(ctx context.Context, reads *historyReadSet, id uuid
 	return m.scoped, nil
 }
 
-func (s *Service) planLoop(ctx context.Context, reads *historyReadSet, g *loopGroup, first uint64, mode eligibilityMode) (loopPlan, error) {
+func (s *Service) planLoop(ctx context.Context, reads *historyReadSet, g *loopGroup, first uint64) (loopPlan, error) {
 	plan := loopPlan{}
 	sub, through := g.receipt.Submission, first-1
 	if !s.p.registeredOrigin(sub.Origin) {
@@ -179,7 +179,7 @@ func (s *Service) planLoop(ctx context.Context, reads *historyReadSet, g *loopGr
 		if duplicate {
 			return plan, ErrInvalid
 		}
-		if err := s.guardEligibilityBind(sub.Origin, sub.TurnID, a.AdmissionCommandID, g.command.CommandID, mode, through); err != nil {
+		if err := s.guardEligibilityBind(sub.Origin, sub.TurnID, a.AdmissionCommandID, through); err != nil {
 			return plan, err
 		}
 		plan.turn = &loopTurnState{origin: sub.Origin, bound: want, sequence: first + 1, calls: map[loopCall]uuid.UUID{}}
@@ -246,7 +246,7 @@ func (s *Service) planLoop(ctx context.Context, reads *historyReadSet, g *loopGr
 				return plan, err
 			}
 		}
-		if err := s.guardEligibility(sub.Origin, eligibilityWork{turn: sub.TurnID}, mode, through); err != nil {
+		if err := s.guardEligibility(sub.Origin, eligibilityWork{turn: sub.TurnID}, through); err != nil {
 			return plan, err
 		}
 		plan.tool = &loopToolState{origin: sub.Origin, start: ledger.RuntimeToolStarted(a), sequence: first + 1}

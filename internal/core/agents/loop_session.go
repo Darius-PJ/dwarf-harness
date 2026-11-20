@@ -82,18 +82,19 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 		if command.Operation != "message.send" || !validID(args.TurnID) || !utf8.ValidString(args.Text) || len(args.Text) > maxObjectBytes || len(args.Artifacts) > s.limits.MaxSelectedObjects {
 			return result, ErrInvalid
 		}
-		if err := s.sessionEligibility(ctx, reads, ids, command.CommandID); err != nil {
-			var held *EligibilityHeldError
-			if errors.As(err, &held) {
-				result.Outcome, result.Data = "held", held.EligibilityView
-			}
-			return result, err
-		}
 		g, err := r.start(ctx, reads, ids, command.CommandID, args)
 		if err != nil {
 			var held *EligibilityHeldError
 			if errors.As(err, &held) {
 				result.Outcome, result.Data = "held", held.EligibilityView
+			}
+			if result.Data == nil {
+				eligibility, viewErr := queryHistory(ctx, s, &ids, func(reads *historyReadSet) (session.EligibilityView, error) {
+					return s.filterEligibility(ctx, reads, originOf(ids), eligibilityView(s.p.agents[ids.agent].eligibility, s.p.through))
+				})
+				if viewErr == nil {
+					result.Data = eligibility
+				}
 			}
 			return result, err
 		}
@@ -119,9 +120,6 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 		s.mu.Lock()
 		var view session.ContextView
 		err := s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
-			if _, err := s.loopGrantLocked(ctx, reads, originOf(ids), "context.inspect", []ledger.Resource{eligibilityInspectTarget(originOf(ids))}, 0); err != nil {
-				return err
-			}
 			st := s.p.scopes[keyFor(ids, "context")]
 			view = session.ContextView{ContextID: ids.context, Revision: st.revision, ThroughSequence: s.p.through, Turns: []session.TurnView{}}
 			for _, turn := range s.p.pendingLoopViews() {
@@ -142,9 +140,6 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 			}
 		}
 		eligibility, err := queryHistory(ctx, s, &ids, func(reads *historyReadSet) (session.EligibilityView, error) {
-			if _, err := s.loopGrantLocked(ctx, reads, originOf(ids), "context.inspect", []ledger.Resource{eligibilityInspectTarget(originOf(ids))}, 0); err != nil {
-				return session.EligibilityView{}, err
-			}
 			return s.filterEligibility(ctx, reads, originOf(ids), eligibilityView(s.p.agents[ids.agent].eligibility, s.p.through))
 		})
 		if err != nil {
@@ -180,10 +175,11 @@ func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids sub
 		if err != nil {
 			return err
 		}
-		held := errors.Is(s.guardEligibility(originOf(ids), eligibilityWork{turn: id}, eligibilityLive, s.p.through), session.ErrEligibilityHeld)
+		held := errors.Is(s.guardEligibility(originOf(ids), eligibilityWork{turn: id}, s.p.through), session.ErrEligibilityHeld)
+		liveView := false
 		defer func() {
 			view.Eligibility = &eligibility
-			if held && view.Result == nil && view.SavedPhase != "stopping" && view.SavedPhase != "finishing" {
+			if liveView && held && view.Result == nil && view.SavedPhase != "stopping" && view.SavedPhase != "finishing" {
 				view.State = "eligibility_held"
 			}
 		}()
@@ -195,6 +191,7 @@ func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids sub
 		}
 		if live != nil && live.origin == originOf(ids) {
 			view = r.turnView(live)
+			liveView = true
 		}
 		r.mu.Unlock()
 		if live != nil {
@@ -220,6 +217,7 @@ func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids sub
 				return nil
 			}
 			view = session.TurnView{}
+			liveView = false
 		}
 		err = nil
 		view, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryTurnStatus, id: id}, 0, s.p.through, directoryReadSelection{Purpose: "loop_status", Origin: originOf(ids)}, func(view *session.TurnView, c ledger.Commit) error {

@@ -125,7 +125,7 @@ func TestEligibilityReplay(t *testing.T) {
 			}
 		}
 	})
-	t.Run("historical_tuple_and_live_interim_hold", func(t *testing.T) {
+	t.Run("historical_and_live_exact_tuple", func(t *testing.T) {
 		t.Parallel()
 		f, commits := eligibilityGolden(t, 84)
 		var native ledger.Commit
@@ -139,21 +139,23 @@ func TestEligibilityReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.service.mu.Lock()
-		_, historical := f.service.planScoped(context.Background(), nil, g, native.First, eligibilityReplay)
-		_, live := f.service.planScoped(context.Background(), nil, g, native.First, eligibilityLive)
+		_, historical := f.service.planScoped(context.Background(), nil, g, native.First)
 		f.service.mu.Unlock()
 		if historical != nil {
 			t.Fatal("exact historical first tuple refused", historical)
 		}
-		requireEligibilityHeld(t, live)
 		wrong := *g
 		wrong.command.CommandID = uuid.NewV7()
 		f.service.mu.Lock()
-		_, err = f.service.planScoped(context.Background(), nil, &wrong, native.First, eligibilityReplay)
+		_, err = f.service.planScoped(context.Background(), nil, &wrong, native.First)
 		f.service.mu.Unlock()
 		requireEligibilityHeld(t, err)
-		if f.store.Durable() != 84 {
-			t.Fatal("pure validation consumed a turn")
+		agent := scopedBound(t, f.service, bindingOf(g.receipt.Submission.Origin))
+		if _, err := agent.StartTurn(context.Background(), TurnAdmission{CommandID: g.command.CommandID, TurnID: g.turn, GrantID: g.admission.GrantID, TaskBinding: g.admission.TaskBinding}); err != nil {
+			t.Fatal("exact live first tuple refused", err)
+		}
+		if f.store.Durable() != 87 {
+			t.Fatal("live tuple did not admit exactly once")
 		}
 	})
 	t.Run("bound_identity_and_native_source", func(t *testing.T) {
@@ -174,16 +176,18 @@ func TestEligibilityReplay(t *testing.T) {
 			t.Fatalf("native source lost: %+v %v", view, err)
 		}
 		f.service.mu.Lock()
-		_, err = f.service.planLoop(context.Background(), nil, g, bind.First, eligibilityReplay)
+		_, err = f.service.planLoop(context.Background(), nil, g, bind.First)
 		f.service.mu.Unlock()
 		if err != nil {
 			t.Fatal("exact historical binding refused", err)
 		}
 		g.command.CommandID = uuid.NewV7()
 		f.service.mu.Lock()
-		_, err = f.service.planLoop(context.Background(), nil, g, bind.First, eligibilityReplay)
+		_, err = f.service.planLoop(context.Background(), nil, g, bind.First)
 		f.service.mu.Unlock()
-		requireEligibilityHeld(t, err)
+		if err != nil {
+			t.Fatal("fresh binding command refused by extra eligibility fence", err)
+		}
 	})
 	t.Run("derived_snapshot_not_trusted_payload", func(t *testing.T) {
 		t.Parallel()

@@ -249,7 +249,7 @@ func (s *Service) preflightPaidLocked(ctx context.Context, reads *historyReadSet
 		err = ErrInvalid
 	}
 	if err == nil {
-		_, err = s.planPaid(ctx, reads, g, s.p.through+1, eligibilityLive)
+		_, err = s.planPaid(ctx, reads, g, s.p.through+1)
 	}
 	if err == nil {
 		err = s.usableLocked(ctx)

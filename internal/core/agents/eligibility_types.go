@@ -27,6 +27,32 @@ type EligibilityRelease struct {
 	ExpectedOperationID uuid.UUID
 }
 
+// FirstActionTurn supplies the exact owner input; only its digest is journaled.
+type FirstActionTurn struct {
+	ContextID, TurnID, StartCommandID, AdmissionCommandID uuid.UUID
+	Input                                                 session.MessageSend
+	TaskBinding                                           *ledger.TaskBinding
+}
+
+// EligibilityRequireFirst declares an action without admitting or starting it.
+type EligibilityRequireFirst struct {
+	CommandID, AgentID  uuid.UUID
+	ExpectedVersion     int64
+	ExpectedOperationID uuid.UUID
+	Reason              string
+	ActionID            uuid.UUID
+	FirstActionTurn     FirstActionTurn
+}
+
+// EligibilityFirstNext advances the same action after its permitted attempt ends.
+type EligibilityFirstNext struct {
+	CommandID, AgentID  uuid.UUID
+	ExpectedVersion     int64
+	ExpectedOperationID uuid.UUID
+	ActionID            uuid.UUID
+	FirstActionTurn     FirstActionTurn
+}
+
 type EligibilityReceipt struct {
 	CommandID                uuid.UUID
 	SubmissionSHA256         ledger.Digest

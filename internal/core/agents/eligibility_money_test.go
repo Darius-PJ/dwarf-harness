@@ -14,6 +14,12 @@ import (
 
 func TestEligibilityMoney(t *testing.T) {
 	t.Parallel()
+	for _, boundary := range []string{"first_before_intent", "first_after_intent"} {
+		t.Run(boundary, func(t *testing.T) {
+			t.Parallel()
+			testEligibilityFirstRestart(t, boundary)
+		})
+	}
 	ctx := context.Background()
 	var posts atomic.Int32
 	server := paidServer(t, func(w http.ResponseWriter, r *http.Request) {

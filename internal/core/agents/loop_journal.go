@@ -171,7 +171,7 @@ func (s *Service) planLoopDraftsLocked(ctx context.Context, reads *historyReadSe
 		err = ErrInvalid
 	}
 	if err == nil {
-		_, err = s.planLoop(ctx, reads, g, s.p.through+1, eligibilityLive)
+		_, err = s.planLoop(ctx, reads, g, s.p.through+1)
 	}
 	if err != nil {
 		return nil, err

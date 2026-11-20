@@ -18,9 +18,10 @@ import (
 const artifactReadBufferBytes = int64(ledgerstore.MaxBodyBytes) + 1
 
 type scopedResult struct {
-	receipt ScopedReceipt
-	page    PrivatePage
-	body    []byte
+	receipt        ScopedReceipt
+	page           PrivatePage
+	body           []byte
+	nativeAdmitted bool // This call committed a new native turn, not a receipt retry.
 }
 
 func agentError(err error) error {

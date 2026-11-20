@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"math"
 	"slices"
 	"strings"
@@ -59,10 +60,7 @@ type loopSource struct {
 
 func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids submissionIDs, id uuid.UUID, input session.MessageSend) (_ *loopGroup, err error) {
 	s := r.service
-	setting, ok := r.settings[Binding{ids.agent, ids.context}]
-	if !ok {
-		return nil, ErrUnavailable
-	}
+	setting, configured := r.settings[Binding{ids.agent, ids.context}]
 	r.mu.Lock()
 	if r.stopping {
 		r.mu.Unlock()
@@ -77,14 +75,19 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 	var sample int64
 	var route ledger.RuntimePaidRouteConfigured
 	var scopes []ledger.ScopeKey
+	var first *ledger.RuntimeEligibilityChanged
+	defer func() { err = s.firstActionRefused(ctx, ids.agent, first, err) }()
 	s.mu.Lock()
 	err = s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
 		grant, credential, sample, scopes = uuid.UUID{}, uuid.UUID{}, 0, nil
+		first = nil
 		var err error
 		match, err = s.findCommand(ctx, reads, id, 0, s.p.through)
 		if err != nil || match.found {
 			return err
 		}
+		var eligibilityErr error
+		first, eligibilityErr = s.classifyFirstAction(origin, id, input, setting.TaskBinding)
 		work, found, err := s.loadWork(ctx, reads, input.TurnID, s.p.through)
 		if err != nil {
 			return err
@@ -101,6 +104,20 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 			return err
 		}
 		if err == nil {
+			if eligibilityErr != nil {
+				var held *EligibilityHeldError
+				if errors.As(eligibilityErr, &held) {
+					view, filterErr := s.filterEligibility(ctx, reads, origin, eligibilityView(s.p.agents[ids.agent].eligibility, s.p.through))
+					if filterErr != nil {
+						return filterErr
+					}
+					return &EligibilityHeldError{AgentID: ids.agent, EligibilityView: view}
+				}
+				return eligibilityErr
+			}
+			if !configured {
+				return ErrUnavailable
+			}
 			sample, err = s.samplePaidLocked()
 		}
 		if err == nil && sample > math.MaxInt64-setting.TimeoutMS*int64(time.Millisecond) {
@@ -146,17 +163,7 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 	}
 	if match.found {
 		s.mu.Unlock()
-		if match.loop == nil || match.loop.bound == nil || match.loop.ids != ids || match.loop.bound.TurnID != input.TurnID {
-			return nil, ErrCommandMismatch
-		}
-		prior, err := s.readLoopInput(ctx, originOf(ids), match.loop.bound.InputObject)
-		if err != nil {
-			return nil, err
-		}
-		if prior.Origin != originOf(ids) || prior.TurnID != input.TurnID || prior.Text != input.Text || !slices.Equal(prior.Artifacts, input.Artifacts) {
-			return nil, ErrCommandMismatch
-		}
-		return match.loop, nil
+		return s.retryLoopStart(ctx, ids, id, input, setting.TaskBinding, match.loop)
 	}
 	policy := setting.Policy
 	policy.DeadlineUTCNS = sample + setting.TimeoutMS*int64(time.Millisecond)
@@ -182,11 +189,25 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 			s.mu.Unlock()
 		}
 	}()
-	agent := &Agent{service: s, ids: ids}
 	admissionID := uuid.NewV7()
-	_, err = agent.StartTurn(ctx, TurnAdmission{CommandID: admissionID, GrantID: grant, TurnID: t.id, TaskBinding: setting.TaskBinding})
+	if first != nil {
+		admissionID = first.FirstAction.PermittedTurn.AdmissionCommandID
+	}
+	native, err := s.executeScopedResult(ctx, scopedCaller{actor: "agent", binding: bindingOf(origin), fixed: ids}, "turn.start", TurnAdmission{CommandID: admissionID, GrantID: grant, TurnID: t.id, TaskBinding: setting.TaskBinding})
 	if err != nil {
-		return nil, err
+		return nil, agentError(err)
+	}
+	if !native.nativeAdmitted {
+		match, err := queryHistory(ctx, s, &ids, func(reads *historyReadSet) (commandMatch, error) {
+			return s.findCommand(ctx, reads, id, 0, s.p.through)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !match.found {
+			return nil, ErrUnavailable
+		}
+		return s.retryLoopStart(ctx, ids, id, input, setting.TaskBinding, match.loop)
 	}
 	bound := false
 	defer func() {
@@ -275,6 +296,30 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 	r.mu.Unlock()
 	r.notify()
 	return g, nil
+}
+
+func (s *Service) retryLoopStart(ctx context.Context, ids submissionIDs, id uuid.UUID, input session.MessageSend, task *ledger.TaskBinding, group *loopGroup) (*loopGroup, error) {
+	if group == nil || group.bound == nil || group.ids != ids || group.bound.TurnID != input.TurnID {
+		return nil, ErrCommandMismatch
+	}
+	origin := originOf(ids)
+	target := ledger.Resource{Kind: "context", Binding: ledger.Binding(bindingOf(origin)), Scope: "context", Slots: []string{}}
+	if _, err := s.loopGrant(ctx, origin, "turn.inspect", []ledger.Resource{target}, 0); err != nil {
+		return nil, err
+	}
+	prior, err := s.readLoopInput(ctx, origin, group.bound.InputObject)
+	if err != nil {
+		return nil, err
+	}
+	want, digestErr := s.eligibilityInputDigest(origin, id, input, task)
+	have, priorErr := s.eligibilityInputDigest(prior.Origin, id, session.MessageSend{TurnID: prior.TurnID, Text: prior.Text, Artifacts: prior.Artifacts}, task)
+	if digestErr != nil || priorErr != nil || want != have {
+		return nil, ErrCommandMismatch
+	}
+	if _, err := s.loopGrant(ctx, origin, "turn.inspect", []ledger.Resource{target}, 0); err != nil {
+		return nil, err
+	}
+	return group, nil
 }
 
 func (r *loopRuntime) otherWork(t *loopTurn) []string {

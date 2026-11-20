@@ -122,13 +122,35 @@
 // return outcome held and ErrEligibilityHeld without consuming a command/turn.
 // Starts refused before release must be explicitly submitted again.
 //
-// During S2, first_action_required is reachable only through replay and every
-// live work entrance remains held until S3 supplies verified first-action input.
-// Replay permits only the declared native admission tuple and matching loop bind;
-// dispatch requires that binding. It does not read private input or hash it.
+// RequireFirstAction and DeclareNextFirstAction derive the initial/next input
+// digest from the owner's typed Session request, never a caller privilege flag.
+// An unused start/admission ID cannot equal the declaring owner command: that
+// commit would consume the ID needed by the later Session/native admission.
+// The digest is compact UTF-8 JSON, without a newline: ordered schema=1, origin,
+// command_id, turn_id, text, artifacts, and optional task_binding. Origin and
+// nested references retain ledger field order; nil artifacts alone becomes [].
+// Text is unchanged, JSON controls and U+2028/U+2029 are escaped, and HTML is not.
+// It is not owner_input or a rendered prompt. Live Session start and bound
+// retries use the same helper; Open verifies only ledger identity and never
+// reads private objects. Raw native admission permits the declared tuple but
+// cannot dispatch paid/local work before its matching loop.bind.
+// Scoped execution distinguishes a new native commit from its receipt retry:
+// two callers may classify before either commits. A receipt follower is
+// unavailable until bound, then compares and returns the original binding,
+// without rendering, initializing or ending the other caller's native turn.
+//
+// Definite pre-native admission refusals are observations, not release or work;
+// a stale observation loses to release, next declaration or native admission.
+// Cold directory selectors are used only for administrative first_next freshness
+// against recorded declarations (like receipt lookup), never admission/dispatch.
+// Their coverage/generation validation and authoritative fallback are identical
+// in owner preflight and replay. First-turn completion still requires release.
 // Owner status returns the full declaration. Agent/session inspection discloses
 // it only in its declared context with current context.inspect authority;
 // eligibility remains separate from saved continuation phase and wait reason.
+// A live idle held turn can retain model_pending/tool_pending and its pending
+// entry, not only ready. Inert recovered turns remain recovery_pending, never
+// the live eligibility_held overlay; no status or release enqueues them.
 //
 // # Scoped authority, tasks and accounting
 //
@@ -976,7 +998,11 @@
 // that stop, not the distinct native cancel_command_id recorded by the stop.
 // Same-ID retries return the original receipt, including historical schema-2
 // cancellations. A committed native ending wins with too_late and no new
-// record. Status queries require current turn.inspect and carry no receipts;
+// record. A scheduler advance between the stop snapshot and commit triggers
+// a fresh owner/native-ending decision under the same context gate, at most
+// three attempts. Exhaustion returns retryable ledger_tail busy, never the
+// internal stale-continuation sentinel. The first durable stop still wins.
+// Status queries require current turn.inspect and carry no receipts;
 // promotion.request stays the owner's unavailable RequestPromotion path.
 // FinalText reads a finished turn's durable answer through the loop's own
 // final-message read, only for a turn result recorded for the Session's agent

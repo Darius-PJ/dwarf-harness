@@ -47,6 +47,236 @@ func eligibilityIdle(t testing.TB, f *turnFixture, turn uuid.UUID) session.TurnV
 
 func TestEligibilityRace(t *testing.T) {
 	t.Parallel()
+	type stopResult struct {
+		result session.CommandResult
+		err    error
+	}
+	countStops := func(t *testing.T, s *Service, turn uuid.UUID) int {
+		t.Helper()
+		count := 0
+		if err := s.scan(context.Background(), 0, s.store.Durable(), func(commit ledger.Commit) error {
+			for _, record := range commit.Records {
+				if record.Type == ledger.TypeRuntimeContinuationReceipt && record.TurnID == turn {
+					receipt := scopedDecode(t, ledger.DecodeRuntimeContinuationReceipt, record.Payload)
+					if receipt.Submission.Operation == "owner.stop" {
+						count++
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	t.Run("first_cancel_repark_wins_snapshot_gap", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		snapshot, resume := make(chan ledger.RuntimeContinuationChanged, 1), make(chan struct{})
+		selected, permit := make(chan struct{}, 1), make(chan struct{})
+		var stopped, gate atomic.Bool
+		var resumeOnce, permitOnce sync.Once
+		var posts atomic.Int32
+		f := newTurnFixture(t, "anthropic", func(http.ResponseWriter, *http.Request) { posts.Add(1) }, func(deps *serviceDeps) {
+			deps.afterStopSnapshot = func(owner ledger.RuntimeContinuationChanged) {
+				if stopped.CompareAndSwap(false, true) {
+					gate.Store(true)
+					snapshot <- owner
+					<-resume
+				}
+			}
+			deps.afterLoopPrepare = func(uuid.UUID) {
+				if !gate.Load() {
+					return
+				}
+				select {
+				case selected <- struct{}{}:
+				default:
+				}
+				<-permit
+			}
+		})
+		t.Cleanup(func() {
+			resumeOnce.Do(func() { close(resume) })
+			permitOnce.Do(func() { close(permit) })
+		})
+		f.liveSpend(t, ledger.PaidScope{Kind: "colony"}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000001", PeriodKind: "utc_day"})
+		f.enable(t)
+		command := turnMessage(f.origin.ContextID, "cancel across paid re-park")
+		request := firstActionRequest(f.origin, command, nil)
+		requireFirstAction(t, f.service, request)
+		if _, err := f.view.Do(ctx, command); err != nil {
+			t.Fatal(err)
+		}
+		waitLoopState(t, f.view, f.origin.ContextID, request.FirstActionTurn.TurnID, "waiting_resource")
+		cancel := session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: request.FirstActionTurn.TurnID}}
+		cancelled := make(chan stopResult, 1)
+		go func() {
+			result, err := f.view.Do(ctx, cancel)
+			cancelled <- stopResult{result, err}
+		}()
+		prior := <-snapshot
+		f.service.loop.notify()
+		<-selected
+		permit <- struct{}{}
+		for {
+			f.service.loop.mu.Lock()
+			changed := f.service.loop.changed
+			f.service.loop.mu.Unlock()
+			owner, err := f.service.currentContinuation(ctx, f.origin, request.FirstActionTurn.TurnID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if owner.Snapshot.Version > prior.Version && owner.Snapshot.State == "waiting_resource" && owner.Snapshot.WaitReason == "paid_prepare" {
+				break
+			}
+			select {
+			case <-selected:
+				permit <- struct{}{}
+			case <-changed:
+			}
+		}
+		resumeOnce.Do(func() { close(resume) })
+		result := <-cancelled
+		if result.err != nil || result.result.Outcome != "accepted" {
+			t.Fatalf("paid re-park leaked internal stale cancellation: %+v %v", result.result, result.err)
+		}
+		permitOnce.Do(func() { close(permit) })
+		terminal, _ := f.finished(t, request.FirstActionTurn.TurnID)
+		if terminal.Outcome != "cancelled" || countStops(t, f.service, request.FirstActionTurn.TurnID) != 1 || posts.Load() != 0 {
+			t.Fatal("re-parked cancel lost first durable stop or dispatched", terminal, posts.Load())
+		}
+	})
+	t.Run("first_cancel_native_ending_wins_snapshot_gap", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		snapshot, resume := make(chan struct{}), make(chan struct{})
+		finishing, finish := make(chan struct{}), make(chan struct{})
+		var prepared, stopped atomic.Bool
+		var resumeOnce, finishOnce sync.Once
+		var f *turnFixture
+		f = newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+			model, _ := turnRequest(t, r)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, turnAnthropic(model, nil, "natural first completion"))
+		}, func(deps *serviceDeps) {
+			deps.afterStopSnapshot = func(ledger.RuntimeContinuationChanged) {
+				if stopped.CompareAndSwap(false, true) {
+					close(snapshot)
+					<-resume
+				}
+			}
+			deps.afterLoopPrepare = func(turn uuid.UUID) {
+				owner, err := f.service.currentContinuation(ctx, f.origin, turn)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if owner.Snapshot.State == "finishing" && prepared.CompareAndSwap(false, true) {
+					close(finishing)
+					<-finish
+				}
+			}
+		})
+		t.Cleanup(func() {
+			resumeOnce.Do(func() { close(resume) })
+			finishOnce.Do(func() { close(finish) })
+		})
+		f.enable(t)
+		command := turnMessage(f.origin.ContextID, "cancel across native ending")
+		request := firstActionRequest(f.origin, command, nil)
+		requireFirstAction(t, f.service, request)
+		if _, err := f.view.Do(ctx, command); err != nil {
+			t.Fatal(err)
+		}
+		<-finishing
+		cancelled := make(chan stopResult, 1)
+		go func() {
+			result, err := f.view.Do(ctx, session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: request.FirstActionTurn.TurnID}})
+			cancelled <- stopResult{result, err}
+		}()
+		<-snapshot
+		if _, err := f.service.EndTurn(ctx, TurnEnding{CommandID: uuid.NewV7(), TurnID: request.FirstActionTurn.TurnID, ExpectedVersion: 1, Outcome: "released"}); err != nil {
+			t.Fatal(err)
+		}
+		resumeOnce.Do(func() { close(resume) })
+		result := <-cancelled
+		if result.err != nil || result.result.Outcome != "too_late" || countStops(t, f.service, request.FirstActionTurn.TurnID) != 0 {
+			t.Fatalf("native ending did not win late cancel without a stop: %+v %v", result.result, result.err)
+		}
+		finishOnce.Do(func() { close(finish) })
+		terminal, _ := f.finished(t, request.FirstActionTurn.TurnID)
+		if terminal.Outcome != "finished" {
+			t.Fatal("late cancellation changed natural outcome", terminal)
+		}
+	})
+	for _, winner := range []string{"release", "next", "native"} {
+		t.Run("first_refusal_loses_to_"+winner, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			f := newTurnFixture(t, "anthropic", func(http.ResponseWriter, *http.Request) { t.Error("refusal race dispatched") }, nil)
+			command := turnMessage(f.origin.ContextID, "first refusal race")
+			request := firstActionRequest(f.origin, command, nil)
+			receipt := requireFirstAction(t, f.service, request)
+			f.service.mu.Lock()
+			observed := f.service.p.agents[f.origin.AgentID].eligibility.current()
+			f.service.mu.Unlock()
+			// The observer holds the snapshot taken at live classification while
+			// an owner command or native admission wins the commit boundary.
+			pending, resume := make(chan struct{}), make(chan struct{})
+			defer func() {
+				select {
+				case <-resume:
+				default:
+					close(resume)
+				}
+			}()
+			done := make(chan error, 1)
+			go func() {
+				close(pending)
+				<-resume
+				done <- f.service.firstActionRefused(ctx, f.origin.AgentID, &observed, ErrDenied)
+			}()
+			<-pending
+			switch winner {
+			case "release":
+				releaseEligibility(t, f.service, f.origin.AgentID, receipt)
+			case "native":
+				agent := scopedBound(t, f.service, bindingOf(f.origin))
+				if _, err := agent.StartTurn(ctx, TurnAdmission{CommandID: request.FirstActionTurn.AdmissionCommandID, TurnID: request.FirstActionTurn.TurnID, GrantID: f.privateGrant}); err != nil {
+					t.Fatal(err)
+				}
+			case "next":
+				if err := f.service.firstActionRefused(ctx, f.origin.AgentID, &observed, ErrUnavailable); err != ErrUnavailable {
+					t.Fatal(err)
+				}
+				view := firstActionStatus(t, f.service, f.origin.AgentID)
+				if _, err := f.service.DeclareNextFirstAction(ctx, EligibilityFirstNext{CommandID: uuid.NewV7(), AgentID: f.origin.AgentID, ExpectedVersion: view.Version, ExpectedOperationID: view.OperationID, ActionID: request.ActionID, FirstActionTurn: firstActionRequest(f.origin, turnMessage(f.origin.ContextID, "next input"), nil).FirstActionTurn}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := f.store.Durable()
+			close(resume)
+			if err := <-done; err != ErrDenied || f.store.Durable() != before {
+				t.Fatal("stale first refusal overwrote winner or changed cause", winner, err)
+			}
+		})
+	}
+	t.Run("first_busy_is_not_a_durable_refusal", func(t *testing.T) {
+		t.Parallel()
+		f := newTurnFixture(t, "anthropic", func(http.ResponseWriter, *http.Request) { t.Error("busy observer dispatched") }, nil)
+		requireFirstAction(t, f.service, firstActionRequest(f.origin, turnMessage(f.origin.ContextID, "first"), nil))
+		f.service.mu.Lock()
+		observed := f.service.p.agents[f.origin.AgentID].eligibility.current()
+		f.service.mu.Unlock()
+		before := f.store.Durable()
+		for _, reason := range []string{"capacity", "ledger_tail"} {
+			cause := &BusyError{Reason: reason}
+			if err := f.service.firstActionRefused(context.Background(), f.origin.AgentID, &observed, cause); err != cause || f.store.Durable() != before {
+				t.Fatal("transient busy became a durable first refusal", reason, err)
+			}
+		}
+	})
 	t.Run("hold_wins_unlocked_cold_lookup", func(t *testing.T) {
 		t.Parallel()
 		entered, resume := make(chan struct{}), make(chan struct{})

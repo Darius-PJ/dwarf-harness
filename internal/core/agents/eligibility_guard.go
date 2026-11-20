@@ -9,24 +9,15 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 )
 
-// Replay validates the recorded identity, never private input bytes. S2 has no
-// live first-action producer; S3 will verify its input before using an exception.
-type eligibilityMode uint8
-
-const (
-	eligibilityLive eligibilityMode = iota
-	eligibilityReplay
-)
-
 type eligibilityWork struct {
-	turn, command, start          uuid.UUID
+	turn, command                 uuid.UUID
 	task                          *ledger.TaskBinding
 	admission, binding, taskStart bool
 }
 
 // guardEligibility is deliberately beside, not inside, the continuation guard:
 // a turn need not have a loop owner to be ordinary work.
-func (s *Service) guardEligibility(origin ledger.Origin, work eligibilityWork, mode eligibilityMode, through uint64) error {
+func (s *Service) guardEligibility(origin ledger.Origin, work eligibilityWork, through uint64) error {
 	agent, found := s.p.agents[origin.AgentID]
 	if !found || agent.session != origin.SessionID || s.p.contexts[origin.ContextID] != origin.AgentID {
 		return ErrNotBound
@@ -36,7 +27,7 @@ func (s *Service) guardEligibility(origin ledger.Origin, work eligibilityWork, m
 	if v.Version == 0 || v.State == "eligible" && e.outcome == "recorded" {
 		return nil
 	}
-	if mode == eligibilityReplay && v.State == "first_action_required" && e.outcome == "recorded" && v.FirstAction != nil {
+	if v.State == "first_action_required" && e.outcome == "recorded" && v.FirstAction != nil {
 		turn := v.FirstAction.PermittedTurn
 		if turn.ContextID == origin.ContextID {
 			switch {
@@ -49,7 +40,7 @@ func (s *Service) guardEligibility(origin ledger.Origin, work eligibilityWork, m
 					return nil
 				}
 			case work.binding:
-				if work.turn == turn.TurnID && work.command == turn.AdmissionCommandID && work.start == turn.StartCommandID && e.nativeSequence != 0 && e.boundSequence == 0 {
+				if work.turn == turn.TurnID && work.command == turn.AdmissionCommandID {
 					return nil
 				}
 			default:
@@ -69,23 +60,23 @@ func (s *Service) guardEligibility(origin ledger.Origin, work eligibilityWork, m
 
 // An ordinary hold does not fence loop.bind itself: an already admitted native
 // turn must remain recoverable. first_action_required binds only its exact tuple.
-func (s *Service) guardEligibilityBind(origin ledger.Origin, turn, admission, start uuid.UUID, mode eligibilityMode, through uint64) error {
+func (s *Service) guardEligibilityBind(origin ledger.Origin, turn, admission uuid.UUID, through uint64) error {
 	if s.p.agents[origin.AgentID].eligibility.current().State == "ordinary_work_ineligible" {
 		return nil
 	}
-	return s.guardEligibility(origin, eligibilityWork{turn: turn, command: admission, start: start, binding: true}, mode, through)
+	return s.guardEligibility(origin, eligibilityWork{turn: turn, command: admission, binding: true}, through)
 }
 
 func eligibilityEffect(operation string) bool {
 	return operation == "private.write"
 }
 
-func (s *Service) guardEligibilityEffect(ctx context.Context, reads *historyReadSet, origin ledger.Origin, command uuid.UUID, mode eligibilityMode, through uint64) error {
+func (s *Service) guardEligibilityEffect(ctx context.Context, reads *historyReadSet, origin ledger.Origin, command uuid.UUID, through uint64) error {
 	turn, err := s.promisedContinuation(ctx, reads, command, through)
 	if err != nil {
 		return err
 	}
-	return s.guardEligibility(origin, eligibilityWork{turn: turn}, mode, through)
+	return s.guardEligibility(origin, eligibilityWork{turn: turn}, through)
 }
 
 func (s *Service) installEligibilityFlagsLocked() {
@@ -93,7 +84,7 @@ func (s *Service) installEligibilityFlagsLocked() {
 		r.mu.Lock()
 		changed := false
 		for _, t := range r.turns {
-			held := s.guardEligibility(t.origin, eligibilityWork{turn: t.id}, eligibilityLive, s.p.through) != nil
+			held := s.guardEligibility(t.origin, eligibilityWork{turn: t.id}, s.p.through) != nil
 			changed = changed || t.eligibilityHeld != held
 			t.eligibilityHeld = held
 		}
@@ -124,7 +115,7 @@ func (r *loopRuntime) eligibilityBoundary(t *loopTurn) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.prepareHistoryLocked(context.Background(), &historyReadSet{}, nil, true, func(*historyReadSet) error {
-		err := s.guardEligibility(t.origin, eligibilityWork{turn: t.id}, eligibilityLive, s.p.through)
+		err := s.guardEligibility(t.origin, eligibilityWork{turn: t.id}, s.p.through)
 		r.mu.Lock()
 		t.eligibilityHeld = errors.Is(err, session.ErrEligibilityHeld)
 		dispatch := eligibilityDispatch(t)
@@ -136,29 +127,22 @@ func (r *loopRuntime) eligibilityBoundary(t *loopTurn) error {
 	})
 }
 
-func (s *Service) sessionEligibility(ctx context.Context, reads *historyReadSet, ids submissionIDs, command uuid.UUID) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
-		match, err := s.findCommand(ctx, reads, command, 0, s.p.through)
-		if err != nil || match.found {
-			// r.start retains the original request/receipt comparison, including
-			// same-ID mismatches. A later hold cannot replace that result.
-			return err
-		}
-		origin := originOf(ids)
-		if _, err := s.loopGrantLocked(ctx, reads, origin, "turn.start", []ledger.Resource{eligibilityInspectTarget(origin)}, 0); err != nil {
-			return err
-		}
-		err = s.guardEligibility(origin, eligibilityWork{admission: true}, eligibilityLive, s.p.through)
-		var held *EligibilityHeldError
-		if errors.As(err, &held) {
-			view, filterErr := s.filterEligibility(ctx, reads, origin, eligibilityView(s.p.agents[ids.agent].eligibility, s.p.through))
-			if filterErr != nil {
-				return filterErr
+// classifyFirstAction is live-only input verification. The shared native and
+// replay planners enforce the same ledger tuple without reading private bytes.
+func (s *Service) classifyFirstAction(origin ledger.Origin, command uuid.UUID, input session.MessageSend, task *ledger.TaskBinding) (*ledger.RuntimeEligibilityChanged, error) {
+	e := s.p.agents[origin.AgentID].eligibility
+	v := e.current()
+	if v.State == "first_action_required" && e.outcome == "recorded" && v.FirstAction != nil {
+		turn := v.FirstAction.PermittedTurn
+		if turn.ContextID == origin.ContextID && turn.TurnID == input.TurnID && turn.StartCommandID == command && sameScopedValue(turn.TaskBinding, task) {
+			digest, err := s.eligibilityInputDigest(origin, command, input, task)
+			if err != nil {
+				return nil, err
 			}
-			return &EligibilityHeldError{AgentID: ids.agent, EligibilityView: view}
+			if digest == turn.InputSHA256 {
+				return &v, nil
+			}
 		}
-		return err
-	})
+	}
+	return nil, s.guardEligibility(origin, eligibilityWork{admission: true}, s.p.through)
 }

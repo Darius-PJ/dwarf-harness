@@ -114,6 +114,9 @@ func (s *Service) deriveEligibility(ctx context.Context, reads *historyReadSet, 
 		if old.State != "eligible" && (old.State != "ordinary_work_ineligible" || old.FirstAction != nil) {
 			return zero, ErrEligibilityStale
 		}
+		if a.Turn.StartCommandID == command || a.Turn.AdmissionCommandID == command {
+			return zero, ErrEligibilityStale
+		}
 		if err := s.checkEligibilityDeclaration(ctx, reads, sub.Origin, a.Turn, nil, through); err != nil {
 			return zero, err
 		}
@@ -133,6 +136,9 @@ func (s *Service) deriveEligibility(ctx context.Context, reads *historyReadSet, 
 		}
 		prior := old.FirstAction.PermittedTurn
 		if a.Turn.ContextID != prior.ContextID || !sameScopedValue(a.Turn.TaskBinding, prior.TaskBinding) {
+			return zero, ErrEligibilityStale
+		}
+		if a.Turn.StartCommandID == command || a.Turn.AdmissionCommandID == command {
 			return zero, ErrEligibilityStale
 		}
 		if err := s.checkEligibilityDeclaration(ctx, reads, sub.Origin, a.Turn, old.FirstAction, through); err != nil {

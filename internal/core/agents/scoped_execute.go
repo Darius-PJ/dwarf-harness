@@ -373,6 +373,7 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 		s.mu.Unlock()
 		return scopedResult{}, err
 	}
+	result.nativeAdmitted = operation == "turn.start"
 	// The committed U owns the consumed unit now. Retain only physical holds
 	// until materialization/disclosure finishes; never count that unit twice.
 	s.consumeScopedReservationLocked(&reservation)
@@ -514,7 +515,7 @@ func (s *Service) prepareScopedLocked(ctx context.Context, reads *historyReadSet
 			return err
 		}
 		if eligibilityEffect(input.sub.Operation) {
-			if err := s.guardEligibilityEffect(ctx, reads, input.sub.Origin, input.id, eligibilityLive, s.p.through); err != nil {
+			if err := s.guardEligibilityEffect(ctx, reads, input.sub.Origin, input.id, s.p.through); err != nil {
 				return err
 			}
 		}
