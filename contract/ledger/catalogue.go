@@ -67,7 +67,9 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypePrivateTurnRevision, TypeRuntimeTurnBound, TypeRuntimeToolStarted,
 // TypeRuntimeToolResult, TypeRuntimeTurnResult and TypeRuntimeLoopReceipt;
 // and F3-16, frozen (D169): TypeRuntimeContinuationChanged
-// and TypeRuntimeContinuationReceipt. All sixty-one are at version 1.
+// and TypeRuntimeContinuationReceipt; and F3-90, proposed for freeze (D125):
+// TypeRuntimeEligibilityChanged and TypeRuntimeEligibilityReceipt.
+// F3-90 adds two entries to the earlier families, each at version 1.
 // It never contains a type in the reserved fixture namespace.
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
@@ -132,5 +134,7 @@ func Defined() Catalogue {
 		{TypeRuntimeLoopReceipt, 1}:             true,
 		{TypeRuntimeContinuationChanged, 1}:     true,
 		{TypeRuntimeContinuationReceipt, 1}:     true,
+		{TypeRuntimeEligibilityChanged, 1}:      true,
+		{TypeRuntimeEligibilityReceipt, 1}:      true,
 	}}
 }

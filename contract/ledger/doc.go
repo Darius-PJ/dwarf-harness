@@ -182,8 +182,8 @@
 // the four F2-05 types, the three F2-06 types, the two F2-07 types, the three
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
 // F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
-// F3-13 types, the four F3-139 types, the six F3-15 types and the two
-// F3-16 types below, sixty-one in all, each at version 1.
+// F3-13 types, the four F3-139 types, the six F3-15 types, the two
+// F3-16 types and the two additive F3-90 types below, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -3272,4 +3272,194 @@
 // fixtures alone do not prove runtime recovery, concurrency or child shutdown.
 // No runtime policy, pending ceiling, scheduler setting, private object schema,
 // Session API or native process mechanism is frozen by this family.
+//
+// # F3-90: generic agent eligibility
+//
+// Ticket 90's runtime.eligibility_changed and runtime.eligibility_receipt,
+// both version 1, and canonical schema 8 are proposed for freeze (D125).
+// Defined adds two entries to the preceding families. Earlier codecs, schemas,
+// groups and goldens stay byte-identical. C3 owns this metadata-only family;
+// internal/core/agents is its designated producer through SubmitAt after freeze.
+// Consumers are Core preflight/Open, scheduling/admission and authorized views;
+// later C6/C7/C8 producers inherit the same Core boundary. No skill, alignment,
+// human approval, service-loss lifecycle or new authority is defined here.
+// All known members and envelope bindings are replay-essential. No raw input,
+// Purpose, private text, credential, approval token, native handle, locator,
+// measurement_path or body_refs belongs in this family.
+//
+// MaxEligibilityPayloadBytes is 65,536 bytes independently for each COMPLETE
+// input and compact output, including ignored extensions and the receipt's
+// embedded submission. Schema 8 has the same bound. F3-16's complete UTF-8 JSON,
+// recursive duplicate-key refusal (including ignored extensions), canonical
+// UUIDv7/nonzero digest and unsigned decimal integer rules apply. Integers run
+// through MaxInt64; version increments are checked, never wrapped. Absent
+// optionals are omitted, never null. Unknown optional members are ignored and
+// excluded from canonicalization. Malformed known values wrap ErrInvalid.
+//
+// Exact compact member order (? denotes omission when absent):
+//
+//	runtime.eligibility_changed:
+//	  expected_version, version, state, reason, operation_id, first_action?
+//	first_action:
+//	  action_id, initial_turn, permitted_turn, refusal?
+//	initial_turn / permitted_turn / submission turn:
+//	  context_id, turn_id, start_command_id, admission_command_id,
+//	  input_sha256, task_binding?
+//	task_binding:
+//	  task_id, assignment_id, generation
+//	refusal:
+//	  turn_id, start_command_id, stage, code
+//	runtime.eligibility_receipt:
+//	  command_id, submission_sha256, submission, outcome, effect_sequence
+//
+// State is CLOSED: eligible, ordinary_work_ineligible, first_action_required.
+// Unknown states fail decoding/Open, never become eligible. Reason, refusal
+// code and receipt outcome are open ^[a-z][a-z0-9_]*$ tokens, at most 64 bytes.
+// Current reasons are none, explicit_hold and first_action. Eligible uses none;
+// held states use a non-none reason. Any well-formed unfamiliar non-none reason
+// remains held. Writers emit receipt outcome recorded. Unfamiliar outcomes
+// remain opaque, not an implied release, success or executable transition.
+//
+// # Schema-8 canonical submission and group
+//
+// SHA-256 covers compact EligibilitySubmission.Encode JSON, in this order:
+//
+//	schema (8), actor, origin, operation, expected_version,
+//	  expected_operation_id?, arguments
+//
+// Schema, actor and operation are CLOSED. Arguments is the operation's concrete
+// value, never arbitrary JSON. Its exact order and actor are:
+//
+//	eligibility.hold           owner  {reason}
+//	eligibility.require_first  owner  {reason, action_id, turn}
+//	eligibility.first_next     owner  {action_id, turn}
+//	eligibility.release        owner  {}
+//	eligibility.first_refused  core   {action_id, turn_id, start_command_id,
+//	                                  stage, code}
+//
+// Known argument members belonging to another operation are forbidden even
+// when null. expected_operation_id is absent when hold/require_first opens a
+// new operation from eligible, and required when changing an existing hold:
+// hold from first_action_required, require_first from ordinary_work_ineligible,
+// first_next, release or first_refused. Version 0 denotes implicit eligibility;
+// later expectations are positive, including eligible after release.
+// Only the trusted owner Service seam sets/requires/advances/releases; there
+// is no Agent setter, role-derived permission, grant class or model tool.
+// A later Core-originated hold (ticket 131) requires an additive operation/actor
+// at that ticket's own freeze. Ticket 90 pre-authorizes no such transition.
+//
+// Every operation is exactly [ledger.command, runtime.eligibility_changed,
+// runtime.eligibility_receipt], in one SubmitAt at the preflighted tail, with
+// three moved-tail attempts then BusyError{ledger_tail}. Command/receipt actors
+// match the submission; change actor is core. All envelopes have the target
+// agent's registered sole session and general-context origin, no turn_id, and
+// operation_id equal to THIS command ID. Payload operation_id instead names
+// the held operation. No mixed, extra, missing or reordered records are allowed.
+// effect_sequence is positive and names the actual change after authoritative
+// readback. Receipt decoding re-encodes schema 8 and verifies submission_sha256.
+// The snapshot derives from the normalized command and preceding state, never
+// caller-supplied state. Prepare/decode/plan/stage/install is atomic before the
+// projection frontier advances; an invalid group installs nothing. The generic
+// Reader/EncodeCommit/ledgerstore do not enforce these producer history rules.
+//
+// Global command lookup extends schemas 1-7 to 1-8. A matching same-ID canonical
+// request returns its original receipt before CAS, after current disclosure
+// authorization; changed meaning is ErrCommandMismatch across all families.
+// A distinct no-change request is ErrNoEffect without a record. Version
+// disagreement is RevisionError; wrong operation/action identity or a
+// non-executable edge is ErrEligibilityStale; malformed shape is ErrInvalid.
+// Persistence uncertainty returns the real persistence failure.
+//
+// # Eligibility transitions, first identity and recovery
+//
+// Registration implies version 0, eligible, reason none without an initialization
+// record. Every recorded change increments eligibility version exactly once.
+// Hold from eligible opens operation_id equal to its command ID, writes
+// ordinary_work_ineligible and clears any historical declaration. Require-first
+// from eligible likewise opens an operation, writing first_action_required.
+// Require-first from an ordinary hold without a declaration retains the hold
+// operation. Hold from first_action_required retains that operation and the
+// declaration/refusal as history, writes ordinary_work_ineligible with the
+// supplied non-none reason, and withdraws the permitted turn's exception.
+// Release compares both current version and operation ID, writes eligible with
+// reason none, and retains the released operation/declaration as history only.
+// A later hold gets a new operation: a late release cannot release that hold.
+// No received task, message, verdict, natural ending or settlement changes
+// eligibility. Release means only this generic gate is released, not that any
+// alignment, grant, budget, activation, service restoration or promotion passed.
+//
+// first_action is required in first_action_required and absent on a new ordinary
+// hold. Its initial_turn is immutable within action_id; permitted_turn initially
+// equals it. Require-first/next validate a registered same-agent context and
+// exact task/assignment when present, with no existing work under the declared
+// turn/command identities. General context has no task binding; work context
+// requires one. Start/admission command IDs are distinct and unused.
+//
+// first_next is valid only in first_action_required for the same action_id,
+// after the permitted turn's native terminal ending and, when bound, its F3-15
+// ending/F3-16 terminal; alternatively a recorded turn_admission refusal with
+// no native work ends that attempt. It keeps ContextID and TaskBinding, chooses
+// fresh turn/start/admission IDs and input digest, preserves initial declaration,
+// first-admitted identity and hold operation, and clears the previous refusal.
+// It never runs automatically and never releases ordinary work.
+//
+// input_sha256 hashes the compact owner request in this order: schema (1),
+// origin {agent_id,session_id,context_id}, command_id (StartCommandID), turn_id,
+// text, artifacts, task_binding?. Nil artifacts normalize only to []; supplied
+// order and text are preserved. This is not the stored owner_input object,
+// actual rendered prompt or a permission. The live start verifies this digest
+// before admission and on same-ID retry. The loop.bind planner in preflight
+// and replay checks ledger identity only: the declared TurnID, AdmissionCommandID
+// and origin/context. No planner or Open reads a private object for this digest.
+//
+// first_refused is Core's observation, not permission: stage is CLOSED to
+// turn_admission, before any native admission or loop binding, for the current
+// exact declaration. It increments version but keeps state, reason and all
+// hold/action/turn identities. Only r.start writes it for a definite refusal,
+// with code denied, unavailable, invalid_argument, too_large or integrity.
+// Busy and ledger_tail write no refusal; raw Agent.StartTurn writes none.
+// Duplicate identical refusal writes nothing. Native admission supersedes it;
+// after binding, F3-16/F3-13 alone describe waits, stops and endings, with no
+// paid_admission refusal stage or observer. A release/next/admission that wins
+// first makes an old refusal observation stale and it writes nothing.
+//
+// Native admission consumes the declared identity. A same-ID unadmitted request
+// may be explicitly retried under ordinary admission rules; an admitted one is
+// never re-admitted on retransmission/restart. First-action dispositions derive
+// from journals: not_admitted, admission_refused, admitted_unbound, bound,
+// terminal or unsupported. First-admitted identity remains the first actual
+// native admission even across first_next. Open reconstructs state and identities
+// without writes, starts, paid admissions or enqueues. Explicit existing
+// reconciliation only ends/reconciles work; it cannot release eligibility.
+//
+// # Additive eligibility consumption
+//
+// ONLY where an F3-90 record exists for the agent at the historical prefix,
+// these commands by or for it require eligible or its exact permitted first turn
+// in BOTH producer preflight and replay: F3-11 turn.start (exact origin, TurnID,
+// AdmissionCommandID and TaskBinding), task.start (assignee agent, any actor),
+// local.admit, local.begin and atomic effect commands, with or without a promised
+// turn; F3-13 paid.admit and the paid.dispatch intent; F3-15 tool.begin. Under
+// the first-action exception local/paid/tool/effect dispatch additionally needs
+// the permitted turn's loop.bind in the current projection. A raw native
+// admission dispatches nothing. Ordinary grants, integrity, capacity and
+// BudgetBook admission remain necessary; declaration reserves nothing.
+//
+// Always allowed regardless of eligibility: every ending, result, settlement,
+// observe/release/correct, turn.end, turn.cancel, loop.end, every F3-16 owner
+// transition, task create/claim/assign/reassign/wait/resume/submit/complete/fail/
+// cancel, reads/inspection under ordinary grants, registration, grant and
+// credential administration. A dispatch/effect committed before a hold is
+// already in flight and may finish; a hold committed first prevents a new one.
+// A hold itself cancels nothing, extends no deadline, clears no reservation or
+// unknown exposure and retries nothing. Held is not busy, a park or a stop.
+// Agents without F3-90 records and older logs replay unchanged.
+//
+// testdata/f3/90 is generated only by TestGoldenF3_90 -update with fixed synthetic
+// identities/times and encoded hashes. It covers all five operations, both
+// require-first edges, refusal, a normally granted F3-11/F3-15/F3-16 first turn,
+// explicit next after terminal, hold from first-required, release and inert
+// reconstruction. Wrong-operation refusal leaves the prefix unchanged.
+// These codec/group fixtures are not runtime dispatch, recovery or money proof.
+// No Core/Session API, scheduler policy or private object schema is frozen here.
 package ledger
