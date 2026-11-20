@@ -183,7 +183,8 @@
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
 // F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
 // F3-13 types, the four F3-139 types, the six F3-15 types, the two
-// F3-16 types and the two additive F3-90 types below, each at version 1.
+// F3-16 types, the two F3-90 types and the five additive F3-91 types below,
+// each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -214,6 +215,9 @@
 // F3-90 is ticket 90's part of F3, frozen (D174),
 // also by addition to format version 1; record availability does not imply
 // an operational hold, fence, first-action entrance or held runtime behavior.
+// F3-91 is ticket 91's part of F3, frozen (D175),
+// also by addition to format version 1; record availability does not imply
+// operational service-loss detection, timers, restoration or owner notices.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -3468,14 +3472,14 @@
 // These codec/group fixtures are not runtime dispatch, recovery or money proof.
 // No Core/Session API, scheduler policy or private object schema is frozen here.
 //
-// # F3-91 service loss and restoration (proposed freeze, D125)
+// # F3-91 service loss and restoration (frozen, D175)
 //
 // F3-91 adds five version-1 types to Defined, without changing any earlier
 // family: runtime.service_observed (E), runtime.service_cause_changed (K),
 // runtime.service_agent_changed (M), runtime.service_outage_notice (N), and
 // runtime.service_receipt (R). ServiceSubmission uses schema 9, following
-// F3-16's schema 7 and F3-90's schema 8. The PM freezes this family after S1
-// review and before any Core producer imports it.
+// F3-16's schema 7 and F3-90's schema 8. The five types and schema 9 are
+// frozen (D175), before any Core producer imports them.
 //
 // A source group is exactly [ledger.command, E, R]. A state group is
 // [ledger.command, K?, M?, N?, R], in that order, with at least one effect,
@@ -3653,7 +3657,16 @@
 // In every successful-call state source (service.complete or service.clear,
 // including K/M), completion.permit is required and selects that cause's
 // captured entry. Codec presence checks do not replace the consumer's check
-// that the selected entry exactly matches E's object.
+// that the selected entry exactly matches E's object. The selected permit
+// names the cause_id of its submission, K or M; its cause_version equals the
+// submission's expected_cause_version, and its member_generation equals a
+// member submission's expected_generation and M's generation.
+// E's observation_id is its group's command ID and its source's
+// observation_id; a grace_expiry source's observation_id names no E. A
+// source's Origin, when present, names the agent_id of the E, M or member
+// submission carrying it, and observe's first_source and source name one
+// observation. source_sequence, spend_sequence, native_result_sequence and
+// proof_sequence are positive and at most the source's observed_through.
 //
 // K condition is active or cleared. Creation is expected_version=0,
 // version=1, active; real later changes increment exactly once. M phase is
@@ -3662,6 +3675,11 @@
 // immutable first refusal within that generation. Grace due is checked
 // first_source.observed_utc_ns + 120,000,000,000; no refreshed onset on reopen.
 // Due is present exactly for grace-bearing generations, including history.
+// The first refusal's reason decides: rate_limited, overloaded and unreachable
+// always bear grace; quota_exhausted and money_exhausted exactly when that
+// refusal carries reset_utc_ns; credential_denied, scoped_denied,
+// private_integrity and process_unconfirmed never; any other reason fixes no
+// presence. Pending and withdrawn snapshots always carry due.
 // outage_id is absent while pending/withdrawn and retained on lost/restored.
 // A fresh live timer sample must reach due even when clock_held; pure replay
 // validates recorded arithmetic, never samples time, arms a timer or appends.
@@ -3674,6 +3692,8 @@
 // membership list nor a delivery-ack store is serialized in N.
 // R outcome is recorded for new transitions only. Effects exactly name the
 // present envelopes in planned-tail order; no exact-no-op group is written.
+// A clear's effects are exactly K; every other state operation's include M.
+// source_through is below its group's command sequence.
 //
 // Canonical schema-9 submission order:
 //
@@ -3690,7 +3710,10 @@
 // forbids agent_id, and omits expected_member_version and expected_generation.
 // observe/expire/complete/withdraw require cause_id, agent_id and all three
 // expectations. An applicable zero means absence; an inapplicable expectation
-// is omitted, not zero. State cause_key/spec are required and must match.
+// is omitted, not zero. Only observe admits a zero: cause version zero for a
+// new cause, and member version and generation zero together for a new member;
+// clear, expire, complete and withdraw name existing nonzero versions.
+// State cause_key/spec are required and must match.
 // Observe supplies a failure source and first_source, due exactly for grace,
 // and an outage for immediate loss; only the first lost member adds notice_id.
 // Expire/complete/withdraw omit first_source/due and reuse the stored witness.

@@ -10,7 +10,7 @@ import (
 	"uuid"
 )
 
-// F3-91's five version-1 types are proposed for freeze (D125).
+// F3-91's five version-1 types are frozen (D175).
 const (
 	TypeRuntimeServiceObserved     = "runtime.service_observed"
 	TypeRuntimeServiceCauseChanged = "runtime.service_cause_changed"

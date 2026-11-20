@@ -69,7 +69,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // and F3-16, frozen (D169): TypeRuntimeContinuationChanged
 // and TypeRuntimeContinuationReceipt; and F3-90, frozen (D174):
 // TypeRuntimeEligibilityChanged and TypeRuntimeEligibilityReceipt; and F3-91,
-// proposed for freeze (D125): TypeRuntimeServiceObserved,
+// frozen (D175): TypeRuntimeServiceObserved,
 // TypeRuntimeServiceCauseChanged, TypeRuntimeServiceAgentChanged,
 // TypeRuntimeServiceOutageNotice and TypeRuntimeServiceReceipt.
 // F3-91 adds five entries to the preceding families, each at version 1.

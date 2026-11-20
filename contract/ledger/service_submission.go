@@ -9,8 +9,8 @@ import (
 	"uuid"
 )
 
-// ServiceSubmission is the canonical schema-9 preimage, proposed for freeze
-// (D125). Expectations are pointers because inapplicable members are omitted,
+// ServiceSubmission is the canonical schema-9 preimage, frozen (D175).
+// Expectations are pointers because inapplicable members are omitted,
 // while an applicable zero names absence. Actor is always host-fixed core.
 type ServiceSubmission struct {
 	Schema                int64     `json:"schema"`
