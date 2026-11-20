@@ -675,3 +675,530 @@ func TestServiceReceiptEffectGrammar(t *testing.T) {
 	r.CommandID = serviceID(99)
 	serviceRejectBoth(t, TypeRuntimeServiceReceipt, r)
 }
+
+func TestServiceFrozenSchema(t *testing.T) {
+	t.Parallel()
+	good := serviceSubmissionFixtures()[0]
+	wire, err := good.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeServiceSubmission(wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, schema := range []int64{8, 10} {
+		t.Run(fmt.Sprint(schema), func(t *testing.T) {
+			t.Parallel()
+			bad := good
+			bad.Schema = schema
+			serviceRejectBoth(t, "schema-9", bad)
+			raw := registrationReplace(t, wire, `"schema":9`, fmt.Sprintf(`"schema":%d`, schema))
+			if _, err := DecodeServiceSubmission(raw); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("accepted schema %d: %v", schema, err)
+			}
+		})
+	}
+}
+
+func TestServiceFrozenRequiredMembers(t *testing.T) {
+	t.Parallel()
+	for _, f := range serviceCodecs() {
+		t.Run(f.typ, func(t *testing.T) {
+			t.Parallel()
+			wire, err := f.p.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeF3_91(f.typ, wire); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range loopMemberOrder(t, wire) {
+				t.Run("without_"+key, func(t *testing.T) {
+					t.Parallel()
+					var fields map[string]json.RawMessage
+					if err := json.Unmarshal(wire, &fields); err != nil {
+						t.Fatal(err)
+					}
+					delete(fields, key)
+					raw, err := json.Marshal(fields)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := decodeF3_91(f.typ, raw); !errors.Is(err, ErrInvalid) {
+						t.Fatalf("accepted missing %s: %v", key, err)
+					}
+				})
+			}
+		})
+	}
+	t.Run("source", func(t *testing.T) {
+		t.Parallel()
+		e := serviceObservationFixture()
+		e.CauseKey, e.Cause = Digest{}, nil
+		e.Source = ServiceSource{Kind: "cause_clear", ObservationID: e.ObservationID, ObservedUTCNS: 1000, Reason: "integrity_verified"}
+		wire, err := e.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodeRuntimeServiceObserved(wire); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"kind", "observation_id", "observed_through", "observed_utc_ns", "clock_held", "reason"} {
+			t.Run("without_"+key, func(t *testing.T) {
+				t.Parallel()
+				var fields, source map[string]json.RawMessage
+				if err := json.Unmarshal(wire, &fields); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(fields["source"], &source); err != nil {
+					t.Fatal(err)
+				}
+				delete(source, key)
+				raw, err := json.Marshal(source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fields["source"] = raw
+				raw, err = json.Marshal(fields)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := DecodeRuntimeServiceObserved(raw); !errors.Is(err, ErrInvalid) {
+					t.Fatalf("accepted missing source %s: %v", key, err)
+				}
+			})
+		}
+	})
+}
+
+func TestServiceFrozenFailurePresence(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name string
+		edit func(*RuntimeServiceObserved)
+	}{
+		{"without_cause_id", func(p *RuntimeServiceObserved) { p.CauseID = uuid.UUID{} }},
+		{"without_cause_key_and_spec", func(p *RuntimeServiceObserved) { p.CauseKey, p.Cause = Digest{}, nil }},
+		{"with_completion_permits_object", func(p *RuntimeServiceObserved) {
+			p.CompletionPermitsObject = &ObjectRef{scopedHash("synthetic permits"), 16}
+		}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			good := serviceObservationFixture()
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeRuntimeServiceObserved(wire); err != nil {
+				t.Fatal(err)
+			}
+			row.edit(&good)
+			serviceRejectBoth(t, TypeRuntimeServiceObserved, good)
+		})
+	}
+}
+
+func TestServiceFrozenCauseKeyBindings(t *testing.T) {
+	t.Parallel()
+	other, err := serviceCauseFixtures()[0].Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := serviceObservationFixture()
+	badE := e
+	badE.CauseKey = other
+	k := serviceCodecs()[1].p.(RuntimeServiceCauseChanged)
+	badK := k
+	badK.CauseKey = other
+	s := serviceSubmissionFixtures()[1]
+	badS := s
+	a := s.Arguments.(ServiceStateArguments)
+	a.CauseKey = other
+	badS.Arguments = a
+	for _, row := range []struct {
+		name, typ string
+		good, bad payload
+	}{
+		{"E", TypeRuntimeServiceObserved, e, badE},
+		{"K", TypeRuntimeServiceCauseChanged, k, badK},
+		{"state", "schema-9", s, badS},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			wire, err := row.good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeF3_91(row.typ, wire); err != nil {
+				t.Fatal(err)
+			}
+			serviceRejectBoth(t, row.typ, row.bad)
+		})
+	}
+}
+
+func TestServiceFrozenMemberPhases(t *testing.T) {
+	t.Parallel()
+	for _, phase := range []string{"pending", "withdrawn", "lost", "restored"} {
+		t.Run(phase, func(t *testing.T) {
+			t.Parallel()
+			good := serviceCodecs()[2].p.(RuntimeServiceAgentChanged)
+			good.ExpectedVersion, good.Version, good.Phase = 1, 2, phase
+			switch phase {
+			case "withdrawn":
+				good.Source = serviceSubmissionFixtures()[5].Arguments.(ServiceStateArguments).Source
+			case "lost", "restored":
+				good.OutageID = serviceID(14)
+				if phase == "restored" {
+					good.Source = serviceSuccessFixture(true)
+					good.Source.ObservedUTCNS = *good.DueUTCNS + 1
+				}
+			}
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeRuntimeServiceAgentChanged(wire); err != nil {
+				t.Fatal(err)
+			}
+			if phase == "lost" || phase == "restored" {
+				good.OutageID = uuid.UUID{}
+				serviceRejectBoth(t, TypeRuntimeServiceAgentChanged, good)
+				return
+			}
+			t.Run("with_outage", func(t *testing.T) {
+				t.Parallel()
+				bad := good
+				bad.OutageID = serviceID(14)
+				serviceRejectBoth(t, TypeRuntimeServiceAgentChanged, bad)
+			})
+			t.Run("without_due", func(t *testing.T) {
+				t.Parallel()
+				// An open reason imposes no onset rule, isolating the phase rule.
+				good := good
+				good.FirstSource.Reason = "future_reason"
+				wire, err := good.Encode()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := DecodeRuntimeServiceAgentChanged(wire); err != nil {
+					t.Fatal(err)
+				}
+				good.DueUTCNS = nil
+				serviceRejectBoth(t, TypeRuntimeServiceAgentChanged, good)
+			})
+		})
+	}
+}
+
+func TestServiceFrozenCauseVersions(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name string
+		edit func(*RuntimeServiceCauseChanged)
+	}{
+		{"created_cleared", func(p *RuntimeServiceCauseChanged) { p.Condition = "cleared" }},
+		{"skipped_version", func(p *RuntimeServiceCauseChanged) { p.Version = 2 }},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			good := serviceCodecs()[1].p.(RuntimeServiceCauseChanged)
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeRuntimeServiceCauseChanged(wire); err != nil {
+				t.Fatal(err)
+			}
+			row.edit(&good)
+			serviceRejectBoth(t, TypeRuntimeServiceCauseChanged, good)
+		})
+	}
+}
+
+func TestServiceFrozenOnsetDue(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name, kind, reason, period string
+		reset, due                 bool
+	}{
+		{"overloaded", "paid_call", "overloaded", "", false, true},
+		{"credential_denied", "paid_call", "credential_denied", "", false, false},
+		{"quota_reset", "paid_call", "quota_exhausted", "", true, true},
+		{"quota_no_reset", "paid_call", "quota_exhausted", "", false, false},
+		{"money_day_reset", "money_refusal", "money_exhausted", "1970-01-01", true, true},
+		{"money_lifetime_no_reset", "money_refusal", "money_exhausted", "lifetime", false, false},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			first := serviceSourceFixture()
+			first.Kind, first.Reason = row.kind, row.reason
+			if row.kind == "money_refusal" {
+				first.Provenance, first.AttemptID, first.Object = "", uuid.UUID{}, nil
+				first.Money = &ServiceMoney{Scope: PaidScope{Kind: "colony"}, Period: row.period, SpendSequence: 18, Mode: "finite", OccupiedMicros: "10", CeilingMicros: new("10"), Coverage: "mandatory_scope"}
+			}
+			if row.reset {
+				first.ResetUTCNS = new(int64(86_400_000_000_000))
+			}
+			good := serviceCodecs()[2].p.(RuntimeServiceAgentChanged)
+			good.FirstSource, good.Source = first, first
+			good.Phase, good.OutageID = "lost", serviceID(14)
+			good.DueUTCNS = nil
+			if row.due {
+				good.DueUTCNS = new(first.ObservedUTCNS + ServiceGraceNS)
+			}
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeRuntimeServiceAgentChanged(wire); err != nil {
+				t.Fatal(err)
+			}
+			if row.due {
+				good.DueUTCNS = nil
+			} else {
+				good.DueUTCNS = new(first.ObservedUTCNS + ServiceGraceNS)
+			}
+			serviceRejectBoth(t, TypeRuntimeServiceAgentChanged, good)
+		})
+	}
+}
+
+func TestServiceFrozenMoneyReset(t *testing.T) {
+	t.Parallel()
+	for _, period := range []string{"lifetime", "1970-01-01"} {
+		t.Run(period, func(t *testing.T) {
+			t.Parallel()
+			good := serviceObservationFixture()
+			good.Cause = new(serviceCauseFixtures()[6])
+			good.CauseKey, _ = good.Cause.Key()
+			good.Source.Kind, good.Source.Reason = "money_refusal", "money_exhausted"
+			good.Source.Provenance, good.Source.AttemptID, good.Source.Object = "", uuid.UUID{}, nil
+			good.Source.Money = &ServiceMoney{Scope: PaidScope{Kind: "colony"}, Period: period, SpendSequence: 18, Mode: "finite", OccupiedMicros: "10", CeilingMicros: new("10"), Coverage: "mandatory_scope"}
+			if period != "lifetime" {
+				good.Source.ResetUTCNS = new(int64(86_400_000_000_000))
+			}
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeRuntimeServiceObserved(wire); err != nil {
+				t.Fatal(err)
+			}
+			if period == "lifetime" {
+				good.Source.ResetUTCNS = new(int64(86_400_000_000_000))
+			} else {
+				good.Source.ResetUTCNS = nil
+			}
+			serviceRejectBoth(t, TypeRuntimeServiceObserved, good)
+		})
+	}
+}
+
+func TestServiceFrozenObserveIncident(t *testing.T) {
+	t.Parallel()
+	for _, grace := range []bool{true, false} {
+		t.Run(fmt.Sprintf("grace_%t", grace), func(t *testing.T) {
+			t.Parallel()
+			good := serviceSubmissionFixtures()[1]
+			a := good.Arguments.(ServiceStateArguments)
+			if !grace {
+				a.Cause = serviceCauseFixtures()[0]
+				a.CauseKey, _ = a.Cause.Key()
+				a.Source.Reason = "credential_denied"
+				a.FirstSource = new(a.Source)
+				a.DueUTCNS, a.OutageID = nil, serviceID(14)
+				good.Arguments = a
+			}
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeServiceSubmission(wire); err != nil {
+				t.Fatal(err)
+			}
+			if grace {
+				a.OutageID = serviceID(14)
+			} else {
+				a.OutageID = uuid.UUID{}
+			}
+			good.Arguments = a
+			serviceRejectBoth(t, "schema-9", good)
+		})
+	}
+}
+
+func TestServiceFrozenOperationSourceKinds(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		index int
+		kind  string
+	}{
+		{4, "cause_clear"}, {4, "grace_expiry"}, {2, "paid_call"},
+		{1, "cause_clear"}, {5, "cause_clear"}, {3, "demand_withdrawn"}, {3, "paid_call"},
+	} {
+		good := serviceSubmissionFixtures()[row.index]
+		t.Run(good.Operation+"/"+row.kind, func(t *testing.T) {
+			t.Parallel()
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeServiceSubmission(wire); err != nil {
+				t.Fatal(err)
+			}
+			a := good.Arguments.(ServiceStateArguments)
+			switch row.kind {
+			case "cause_clear":
+				a.Source = ServiceSource{Kind: row.kind, ObservationID: a.Source.ObservationID, ObservedThrough: 20, ObservedUTCNS: 2000, Reason: "integrity_verified"}
+			case "grace_expiry":
+				a.Source = serviceSubmissionFixtures()[2].Arguments.(ServiceStateArguments).Source
+			case "paid_call":
+				a.Source = serviceSourceFixture()
+			case "demand_withdrawn":
+				a.Source = serviceSubmissionFixtures()[5].Arguments.(ServiceStateArguments).Source
+			}
+			good.Arguments = a
+			serviceRejectBoth(t, "schema-9", good)
+		})
+	}
+}
+
+func TestServiceFrozenSubmissionPresence(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name  string
+		index int
+		edit  func(*ServiceSubmission, *ServiceStateArguments)
+	}{
+		{"clear_with_agent", 3, func(p *ServiceSubmission, _ *ServiceStateArguments) { p.AgentID = serviceID(3) }},
+		{"member_without_agent", 2, func(p *ServiceSubmission, _ *ServiceStateArguments) { p.AgentID = uuid.UUID{} }},
+		{"state_without_cause", 1, func(p *ServiceSubmission, _ *ServiceStateArguments) { p.CauseID = uuid.UUID{} }},
+		{"expire_with_first_source", 2, func(_ *ServiceSubmission, a *ServiceStateArguments) { a.FirstSource = new(serviceSourceFixture()) }},
+		{"complete_with_due", 4, func(_ *ServiceSubmission, a *ServiceStateArguments) {
+			a.DueUTCNS = new(serviceSourceFixture().ObservedUTCNS + ServiceGraceNS)
+		}},
+		{"clear_with_outage", 3, func(_ *ServiceSubmission, a *ServiceStateArguments) { a.OutageID = serviceID(14) }},
+		{"withdraw_with_outage", 5, func(_ *ServiceSubmission, a *ServiceStateArguments) { a.OutageID = serviceID(14) }},
+		{"expire_without_outage", 2, func(_ *ServiceSubmission, a *ServiceStateArguments) { a.OutageID = uuid.UUID{} }},
+		{"complete_without_outage", 4, func(_ *ServiceSubmission, a *ServiceStateArguments) { a.OutageID = uuid.UUID{} }},
+		{"grace_observe_with_notice_without_outage", 1, func(_ *ServiceSubmission, a *ServiceStateArguments) { a.NoticeID = serviceID(15) }},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			good := serviceSubmissionFixtures()[row.index]
+			a := good.Arguments.(ServiceStateArguments)
+			// Optional notice evidence is absent so removing an outage tests
+			// the operation's requirement, not the notice/outage pairing.
+			a.NoticeID = uuid.UUID{}
+			good.Arguments = a
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeServiceSubmission(wire); err != nil {
+				t.Fatal(err)
+			}
+			row.edit(&good, &a)
+			good.Arguments = a
+			serviceRejectBoth(t, "schema-9", good)
+		})
+	}
+}
+
+func TestServiceFrozenReceiptEffects(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		index  int
+		effect string
+	}{
+		{3, TypeRuntimeServiceAgentChanged},
+		{4, TypeRuntimeServiceCauseChanged},
+	} {
+		s := serviceSubmissionFixtures()[row.index]
+		t.Run(s.Operation, func(t *testing.T) {
+			t.Parallel()
+			good := serviceReceiptFixture(s)
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeRuntimeServiceReceipt(wire); err != nil {
+				t.Fatal(err)
+			}
+			good.Effects = []ServiceEffect{{row.effect, 22}}
+			serviceRejectBoth(t, TypeRuntimeServiceReceipt, good)
+		})
+	}
+}
+
+func TestServiceFrozenSourceBindings(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name, typ string
+		makePair  func() (payload, payload)
+	}{
+		{"E_foreign_agent", TypeRuntimeServiceObserved, func() (payload, payload) {
+			good := serviceObservationFixture()
+			bad := good
+			bad.AgentID = serviceID(99)
+			return good, bad
+		}},
+		{"M_foreign_agent", TypeRuntimeServiceAgentChanged, func() (payload, payload) {
+			good := serviceCodecs()[2].p.(RuntimeServiceAgentChanged)
+			bad := good
+			bad.AgentID = serviceID(99)
+			return good, bad
+		}},
+		{"complete_foreign_agent", "schema-9", func() (payload, payload) {
+			good := serviceSubmissionFixtures()[4]
+			bad := good
+			bad.AgentID = serviceID(99)
+			return good, bad
+		}},
+		{"K_foreign_permit_cause", TypeRuntimeServiceCauseChanged, func() (payload, payload) {
+			good := serviceCodecs()[1].p.(RuntimeServiceCauseChanged)
+			good.ExpectedVersion, good.Version, good.Condition, good.Source = 1, 2, "cleared", serviceSuccessFixture(true)
+			bad := good
+			bad.Source = serviceSuccessFixture(true)
+			bad.Source.Completion.Permit.CauseID = serviceID(99)
+			return good, bad
+		}},
+		{"M_foreign_permit_cause", TypeRuntimeServiceAgentChanged, func() (payload, payload) {
+			good := serviceCodecs()[2].p.(RuntimeServiceAgentChanged)
+			good.ExpectedVersion, good.Version, good.Phase, good.OutageID = 1, 2, "restored", serviceID(14)
+			good.Source = serviceSuccessFixture(true)
+			good.Source.ObservedUTCNS = *good.DueUTCNS + 1
+			bad := good
+			bad.Source = serviceSuccessFixture(true)
+			bad.Source.ObservedUTCNS = good.Source.ObservedUTCNS
+			bad.Source.Completion.Permit.CauseID = serviceID(99)
+			return good, bad
+		}},
+		{"M_foreign_permit_generation", TypeRuntimeServiceAgentChanged, func() (payload, payload) {
+			good := serviceCodecs()[2].p.(RuntimeServiceAgentChanged)
+			good.ExpectedVersion, good.Version, good.Phase, good.OutageID = 1, 2, "restored", serviceID(14)
+			good.Source = serviceSuccessFixture(true)
+			good.Source.ObservedUTCNS = *good.DueUTCNS + 1
+			bad := good
+			bad.Source = serviceSuccessFixture(true)
+			bad.Source.ObservedUTCNS = good.Source.ObservedUTCNS
+			bad.Source.Completion.Permit.MemberGeneration = 2
+			return good, bad
+		}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			good, bad := row.makePair()
+			wire, err := good.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeF3_91(row.typ, wire); err != nil {
+				t.Fatal(err)
+			}
+			serviceRejectBoth(t, row.typ, bad)
+		})
+	}
+}
