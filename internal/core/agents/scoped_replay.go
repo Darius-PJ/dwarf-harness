@@ -40,8 +40,8 @@ func isScopedType(typ string) bool {
 
 // Dispatch complete groups before any family validator. Shared F0 records do
 // not select a family; no group may embed two F3 families.
-func decodeFamily(drafts []ledger.Draft, first uint64) (*privateGroup, *scopedGroup, *reviewGroup, *paidGroup, *registrationGroup, *loopGroup, *continuationGroup, error) {
-	var private, scoped, review, paid, registration, loop, continuation bool
+func decodeFamily(drafts []ledger.Draft, first uint64) (*privateGroup, *scopedGroup, *reviewGroup, *paidGroup, *registrationGroup, *loopGroup, *continuationGroup, *eligibilityGroup, error) {
+	var private, scoped, review, paid, registration, loop, continuation, eligibility bool
 	for _, draft := range drafts {
 		private = private || isPrivateType(draft.Type)
 		scoped = scoped || isScopedType(draft.Type)
@@ -50,36 +50,41 @@ func decodeFamily(drafts []ledger.Draft, first uint64) (*privateGroup, *scopedGr
 		registration = registration || isRegistrationType(draft.Type)
 		loop = loop || isLoopType(draft.Type)
 		continuation = continuation || isContinuationType(draft.Type)
+		eligibility = eligibility || isEligibilityType(draft.Type)
 	}
-	if private && scoped || review && (private || scoped) || paid && (private || scoped || review) || registration && (private || scoped || review || paid) || loop && (private || scoped || review || paid || registration) || continuation && (private || scoped || review || paid || registration || loop) {
-		return nil, nil, nil, nil, nil, nil, nil, inconsistent(first, "mixed record families")
+	if private && scoped || review && (private || scoped) || paid && (private || scoped || review) || registration && (private || scoped || review || paid) || loop && (private || scoped || review || paid || registration) || continuation && (private || scoped || review || paid || registration || loop) || eligibility && (private || scoped || review || paid || registration || loop || continuation) {
+		return nil, nil, nil, nil, nil, nil, nil, nil, inconsistent(first, "mixed record families")
+	}
+	if eligibility {
+		g, err := decodeEligibilityGroup(drafts, first)
+		return nil, nil, nil, nil, nil, nil, nil, g, err
 	}
 	if continuation {
 		g, err := decodeContinuationGroup(drafts, first)
-		return nil, nil, nil, nil, nil, nil, g, err
+		return nil, nil, nil, nil, nil, nil, g, nil, err
 	}
 	if loop {
 		g, err := decodeLoopGroup(drafts, first)
-		return nil, nil, nil, nil, nil, g, nil, err
+		return nil, nil, nil, nil, nil, g, nil, nil, err
 	}
 	if registration {
 		g, err := decodeRegistrationGroup(drafts, first)
-		return nil, nil, nil, nil, g, nil, nil, err
+		return nil, nil, nil, nil, g, nil, nil, nil, err
 	}
 	if paid {
 		g, err := decodePaidGroup(drafts, first)
-		return nil, nil, nil, g, nil, nil, nil, err
+		return nil, nil, nil, g, nil, nil, nil, nil, err
 	}
 	if review {
 		g, err := decodeReviewGroup(drafts, first)
-		return nil, nil, g, nil, nil, nil, nil, err
+		return nil, nil, g, nil, nil, nil, nil, nil, err
 	}
 	if scoped {
 		g, err := decodeScopedGroup(drafts, first)
-		return nil, g, nil, nil, nil, nil, nil, err
+		return nil, g, nil, nil, nil, nil, nil, nil, err
 	}
 	g, err := decodeGroup(drafts, first)
-	return g, nil, nil, nil, nil, nil, nil, err
+	return g, nil, nil, nil, nil, nil, nil, nil, err
 }
 
 func decodeScopedGroup(drafts []ledger.Draft, first uint64) (*scopedGroup, error) {

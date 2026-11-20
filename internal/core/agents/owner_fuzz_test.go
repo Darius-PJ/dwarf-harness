@@ -37,7 +37,7 @@ func FuzzContinuationGroupReplay(f *testing.F) {
 			return
 		}
 		prefix := prefixes[int(shape)%len(prefixes)]
-		_, _, _, _, _, _, original, err := decodeFamily(prefix.draft, prefix.through+1)
+		_, _, _, _, _, _, original, _, err := decodeFamily(prefix.draft, prefix.through+1)
 		if err != nil || original == nil {
 			t.Fatal("invalid frozen prefix", err)
 		}
@@ -89,7 +89,7 @@ func FuzzContinuationGroupReplay(f *testing.F) {
 		}
 		s := prefix.fixture.service
 		s.mu.Lock()
-		_, _, _, _, _, _, accepted, err := decodeFamily(drafts, s.p.through+1)
+		_, _, _, _, _, _, accepted, _, err := decodeFamily(drafts, s.p.through+1)
 		if err == nil {
 			if accepted == nil {
 				err = ErrInvalid

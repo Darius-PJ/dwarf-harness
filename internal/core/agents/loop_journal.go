@@ -166,12 +166,12 @@ func (s *Service) planLoopDraftsLocked(ctx context.Context, reads *historyReadSe
 	if s.deps.beforeSubmit != nil {
 		drafts = s.deps.beforeSubmit(drafts)
 	}
-	_, _, _, _, _, g, _, err := decodeFamily(drafts, s.p.through+1)
+	_, _, _, _, _, g, _, _, err := decodeFamily(drafts, s.p.through+1)
 	if err == nil && (g == nil || g.command.CommandID != id || g.command.SubmissionSHA256 != digest || !sameScopedValue(g.receipt.Submission, sub)) {
 		err = ErrInvalid
 	}
 	if err == nil {
-		_, err = s.planLoop(ctx, reads, g, s.p.through+1)
+		_, err = s.planLoop(ctx, reads, g, s.p.through+1, eligibilityLive)
 	}
 	if err != nil {
 		return nil, err

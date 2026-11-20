@@ -17,7 +17,7 @@ import (
 
 func TestContinuationFrozenReplay(t *testing.T) {
 	t.Parallel()
-	for _, chapter := range []string{"10", "11", "12", "13", "14", "139", "15", "16"} {
+	for _, chapter := range []string{"10", "11", "12", "13", "14", "139", "15", "16", "90"} {
 		t.Run("frozen_"+chapter, func(t *testing.T) {
 			t.Parallel()
 			f, commits := scopedGoldenFixture(t, chapter, -1)
@@ -57,6 +57,26 @@ func TestContinuationFrozenReplay(t *testing.T) {
 					}
 				}
 			}
+			if chapter == "90" {
+				if len(commits) != 44 || through != 139 {
+					t.Fatal("full F3-90 history was not replayed")
+				}
+				for _, c := range commits {
+					for _, r := range c.Records {
+						if r.Type != ledger.TypeRuntimeEligibilityReceipt {
+							continue
+						}
+						v, err := ledger.DecodeRuntimeEligibilityReceipt(r.Payload)
+						if err != nil {
+							t.Fatal(err)
+						}
+						m, err := s.findCommand(context.Background(), nil, v.CommandID, 0, through)
+						if err != nil || m.eligibility == nil || m.eligibility.receipt.SubmissionSHA256 != v.SubmissionSHA256 {
+							t.Fatalf("schema-8 receipt lost through command lookup: %v", err)
+						}
+					}
+				}
+			}
 		})
 	}
 }
@@ -66,7 +86,7 @@ func continuationFrozen(t testing.TB) ([]ledger.Commit, map[string]int) {
 	_, commits := scopedGoldenFixture(t, "16", 0)
 	at := map[string]int{}
 	for i, c := range commits {
-		_, scoped, _, _, _, _, owner, err := decodeFamily(draftsOf(c), c.First)
+		_, scoped, _, _, _, _, owner, _, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			t.Fatal(err)
 		}

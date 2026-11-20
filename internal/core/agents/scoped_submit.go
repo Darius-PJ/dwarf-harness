@@ -270,7 +270,7 @@ func (s *Service) scopedDrafts(ctx context.Context, reads *historyReadSet, input
 		}
 		appendPayload(ledger.TypeRuntimeCapacityConfigured, ledger.ActorOwner, payload)
 	case ledger.TaskCreateArguments, ledger.TaskMutationArguments:
-		plan, taskChain, taskErr := s.deriveTask(ctx, reads, sub, s.p.through+1)
+		plan, taskChain, taskErr := s.deriveTask(ctx, reads, sub, s.p.through+1, eligibilityLive)
 		if taskErr != nil {
 			return nil, taskErr
 		}
@@ -409,14 +409,14 @@ func (s *Service) scopedDrafts(ctx context.Context, reads *historyReadSet, input
 }
 
 func (s *Service) preflightScoped(ctx context.Context, reads *historyReadSet, input scopedInput, drafts []ledger.Draft) (*scopedGroup, error) {
-	private, group, review, paid, registration, loop, continuation, err := decodeFamily(drafts, s.p.through+1)
+	private, group, review, paid, registration, loop, continuation, eligibility, err := decodeFamily(drafts, s.p.through+1)
 	if err != nil {
 		return nil, err
 	}
-	if private != nil || review != nil || paid != nil || registration != nil || loop != nil || continuation != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin {
+	if private != nil || review != nil || paid != nil || registration != nil || loop != nil || continuation != nil || eligibility != nil || group == nil || group.command.CommandID != input.id || group.command.SubmissionSHA256 != input.digest || group.receipt.Submission.Actor != input.sub.Actor || group.receipt.Submission.Origin != input.sub.Origin {
 		return nil, ErrInvalid
 	}
-	if _, err := s.planScoped(ctx, reads, group, s.p.through+1); err != nil {
+	if _, err := s.planScoped(ctx, reads, group, s.p.through+1, eligibilityLive); err != nil {
 		return nil, err
 	}
 	return group, nil

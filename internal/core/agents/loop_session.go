@@ -82,8 +82,19 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 		if command.Operation != "message.send" || !validID(args.TurnID) || !utf8.ValidString(args.Text) || len(args.Text) > maxObjectBytes || len(args.Artifacts) > s.limits.MaxSelectedObjects {
 			return result, ErrInvalid
 		}
+		if err := s.sessionEligibility(ctx, reads, ids, command.CommandID); err != nil {
+			var held *EligibilityHeldError
+			if errors.As(err, &held) {
+				result.Outcome, result.Data = "held", held.EligibilityView
+			}
+			return result, err
+		}
 		g, err := r.start(ctx, reads, ids, command.CommandID, args)
 		if err != nil {
+			var held *EligibilityHeldError
+			if errors.As(err, &held) {
+				result.Outcome, result.Data = "held", held.EligibilityView
+			}
 			return result, err
 		}
 		return session.CommandResult{CommandID: command.CommandID, Outcome: "applied", ReceiptSequence: g.first + 2, EffectSequence: uint64(g.receipt.EffectSequence), TurnID: args.TurnID, Data: g.receipt}, nil
@@ -106,24 +117,40 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 			return result, ErrInvalid
 		}
 		s.mu.Lock()
-		if err := s.refreshLocked(ctx, reads, s.store.Durable()); err != nil {
-			s.mu.Unlock()
+		var view session.ContextView
+		err := s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
+			if _, err := s.loopGrantLocked(ctx, reads, originOf(ids), "context.inspect", []ledger.Resource{eligibilityInspectTarget(originOf(ids))}, 0); err != nil {
+				return err
+			}
+			st := s.p.scopes[keyFor(ids, "context")]
+			view = session.ContextView{ContextID: ids.context, Revision: st.revision, ThroughSequence: s.p.through, Turns: []session.TurnView{}}
+			for _, turn := range s.p.pendingLoopViews() {
+				if turn.Origin == originOf(ids) && turn.ToolID == (uuid.UUID{}) {
+					view.Turns = append(view.Turns, session.TurnView{TurnID: turn.TurnID})
+				}
+			}
+			return nil
+		})
+		s.mu.Unlock()
+		if err != nil {
 			return result, err
 		}
-		st := s.p.scopes[keyFor(ids, "context")]
-		view := session.ContextView{ContextID: ids.context, Revision: st.revision, ThroughSequence: s.p.through, Turns: []session.TurnView{}}
-		for _, turn := range s.p.pendingLoopViews() {
-			if turn.Origin == originOf(ids) && turn.ToolID == (uuid.UUID{}) {
-				view.Turns = append(view.Turns, session.TurnView{TurnID: turn.TurnID})
-			}
-		}
-		s.mu.Unlock()
 		for i, turn := range view.Turns {
 			view.Turns[i], err = v.status(ctx, reads, ids, turn.TurnID)
 			if err != nil {
 				return result, err
 			}
 		}
+		eligibility, err := queryHistory(ctx, s, &ids, func(reads *historyReadSet) (session.EligibilityView, error) {
+			if _, err := s.loopGrantLocked(ctx, reads, originOf(ids), "context.inspect", []ledger.Resource{eligibilityInspectTarget(originOf(ids))}, 0); err != nil {
+				return session.EligibilityView{}, err
+			}
+			return s.filterEligibility(ctx, reads, originOf(ids), eligibilityView(s.p.agents[ids.agent].eligibility, s.p.through))
+		})
+		if err != nil {
+			return result, err
+		}
+		view.Eligibility = &eligibility
 		return session.CommandResult{CommandID: command.CommandID, Outcome: "ok", Data: view}, nil
 	case session.PromotionRequest:
 		if command.Operation != "promotion.request" || !validID(args.WorkspaceID) {
@@ -149,6 +176,17 @@ func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids sub
 		if _, err := s.loopGrantLocked(ctx, reads, originOf(ids), "turn.inspect", []ledger.Resource{target}, 0); err != nil {
 			return err
 		}
+		eligibility, err := s.filterEligibility(ctx, reads, originOf(ids), eligibilityView(s.p.agents[ids.agent].eligibility, s.p.through))
+		if err != nil {
+			return err
+		}
+		held := errors.Is(s.guardEligibility(originOf(ids), eligibilityWork{turn: id}, eligibilityLive, s.p.through), session.ErrEligibilityHeld)
+		defer func() {
+			view.Eligibility = &eligibility
+			if held && view.Result == nil && view.SavedPhase != "stopping" && view.SavedPhase != "finishing" {
+				view.State = "eligibility_held"
+			}
+		}()
 		r.mu.Lock()
 		live := r.turns[id]
 		if live != nil && live.state == "admitted" {
@@ -183,7 +221,7 @@ func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids sub
 			}
 			view = session.TurnView{}
 		}
-		var err error
+		err = nil
 		view, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryTurnStatus, id: id}, 0, s.p.through, directoryReadSelection{Purpose: "loop_status", Origin: originOf(ids)}, func(view *session.TurnView, c ledger.Commit) error {
 			for _, record := range c.Records {
 				if record.AgentID != ids.agent || record.ExecutionSessionID != ids.session || record.ContextID != ids.context || record.TurnID != id {
@@ -309,6 +347,15 @@ func (v *loopSession) Since(ctx context.Context, cursor uint64, limit int) (sess
 			if record.AgentID != v.ids.agent || record.ExecutionSessionID != v.ids.session {
 				continue
 			}
+			if record.Type == ledger.TypeRuntimeEligibilityChanged {
+				g, err := decodeEligibilityGroup(draftsOf(c), c.First)
+				if err != nil {
+					return err
+				}
+				view := eligibilityView(eligibilityState{snapshot: g.change, outcome: g.receipt.Outcome, sequence: record.Seq}, record.Seq)
+				next = append(next, session.Event{Sequence: record.Seq, Type: "eligibility.changed", AgentID: record.AgentID, ExecutionSessionID: record.ExecutionSessionID, ContextID: record.ContextID, OperationID: record.OperationID, Data: view})
+				continue
+			}
 			events, err := loopEvents(record)
 			if err != nil {
 				return err
@@ -346,6 +393,24 @@ func (v *loopSession) Since(ctx context.Context, cursor uint64, limit int) (sess
 	}
 	if err == nil {
 		s.history.putCheckpoint(page.ThroughSequence, checkpoint)
+	}
+	if err == nil {
+		_, err = queryHistory(ctx, s, &ids, func(reads *historyReadSet) (struct{}, error) {
+			for i := range page.Events {
+				event := &page.Events[i]
+				if view, ok := event.Data.(session.EligibilityView); ok {
+					filtered, err := s.filterEligibility(ctx, reads, originOf(ids), view)
+					if err != nil {
+						return struct{}{}, err
+					}
+					event.Data = filtered
+				}
+			}
+			return struct{}{}, nil
+		})
+	}
+	if err != nil {
+		return session.EventPage{Events: []session.Event{}, ThroughSequence: cursor, Wake: wake}, err
 	}
 	return page, err
 }

@@ -104,6 +104,32 @@
 // No constant-latency or product-capacity claim follows from storage-only
 // measurements.
 //
+// # Generic eligibility
+//
+// F3-90 records an agent-wide gate independently of grants, capacity, task facts
+// and F3-16 continuation owners. Registered agents start eligible at version zero.
+// Trusted HoldOrdinaryWork and ReleaseEligibility use the target's registered
+// session/general origin and compare both version and held-operation identity.
+// Same-command retries return their original receipt before transition guards.
+// A release authorizes no grant, reserves no work and replays no refused request.
+//
+// Ordinary holds fence new native turns, task starts by the assignee, local/paid
+// admissions and dispatch intents, tool starts and atomic effects. Existing
+// results, endings, settlements, owner transitions and administrative/read
+// operations remain available, and preserve exact financial exposure.
+// Runtime eligibility is a derived scheduling flag, never a capacity wait,
+// stop reason, cancellation or replacement owner phase. Held session sends
+// return outcome held and ErrEligibilityHeld without consuming a command/turn.
+// Starts refused before release must be explicitly submitted again.
+//
+// During S2, first_action_required is reachable only through replay and every
+// live work entrance remains held until S3 supplies verified first-action input.
+// Replay permits only the declared native admission tuple and matching loop bind;
+// dispatch requires that binding. It does not read private input or hash it.
+// Owner status returns the full declaration. Agent/session inspection discloses
+// it only in its declared context with current context.inspect authority;
+// eligibility remains separate from saved continuation phase and wait reason.
+//
 // # Scoped authority, tasks and accounting
 //
 // A scoped mutation uses one selected owner-rooted grant and its complete

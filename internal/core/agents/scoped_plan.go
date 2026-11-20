@@ -8,7 +8,7 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-func (s *Service) planScoped(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64) (scopedPlan, error) {
+func (s *Service) planScoped(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64, mode eligibilityMode) (scopedPlan, error) {
 	plan := scopedPlan{authority: s.p.authority}
 	sub := g.receipt.Submission
 	if !s.p.registeredOrigin(sub.Origin) {
@@ -28,17 +28,22 @@ func (s *Service) planScoped(ctx context.Context, reads *historyReadSet, g *scop
 	case g.config != nil:
 		plan, err = s.planConfiguration(g)
 	case g.task != nil:
-		plan, chain, err = s.planTask(ctx, reads, g, first)
+		plan, chain, err = s.planTask(ctx, reads, g, first, mode)
 		if args, ok := sub.Arguments.(ledger.TaskCreateArguments); ok {
 			size = args.Description.Bytes
 		}
 	case g.admission != nil || g.dispatch != nil || g.ending != nil:
-		plan, err = s.planWork(ctx, reads, g, first)
+		plan, err = s.planWork(ctx, reads, g, first, mode)
 	default:
 		plan, chain, size, err = s.planScopedPrivate(ctx, reads, g, first)
 	}
 	if err != nil {
 		return scopedPlan{}, err
+	}
+	if eligibilityEffect(sub.Operation) {
+		if err := s.guardEligibilityEffect(ctx, reads, sub.Origin, g.command.CommandID, mode, first-1); err != nil {
+			return scopedPlan{}, err
+		}
 	}
 	if plan.work != nil {
 		plan.work.receipt = scopedReceipt(g)

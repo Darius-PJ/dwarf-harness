@@ -222,7 +222,7 @@ func (p *projection) planPrivateRevisions(ids submissionIDs, revisions []ledger.
 }
 func (p *projection) install(g *privateGroup, next map[scopeKey]*scopeState) {
 	if g.registration != nil {
-		p.agents[g.ids.agent] = agentState{g.ids.session, g.ids.context, g.registration.Directory}
+		p.agents[g.ids.agent] = agentState{session: g.ids.session, general: g.ids.context, directory: g.registration.Directory}
 		p.sessions[g.ids.session] = g.ids.agent
 	}
 	if g.kind != "" {
@@ -462,11 +462,11 @@ func (s *Service) prepareCommitLocked(ctx context.Context, reads *historyReadSet
 // caller discards every local plan and reruns this function from its top.
 func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, c ledger.Commit, expected *scopedInput) (commandMatch, func(), error) {
 	d := draftsOf(c)
-	g, scoped, review, paid, registration, loop, continuation, err := decodeFamily(d, c.First)
+	g, scoped, review, paid, registration, loop, continuation, eligibility, err := decodeFamily(d, c.First)
 	if err != nil {
 		return commandMatch{}, nil, err
 	}
-	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation}
+	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation, eligibility: eligibility}
 	switch {
 	case g != nil:
 		match.command, match.found = g.command, true
@@ -482,6 +482,8 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		match.command, match.found = loop.command, true
 	case continuation != nil:
 		match.command, match.found = continuation.command, true
+	case eligibility != nil:
+		match.command, match.found = eligibility.command, true
 	}
 	if expected != nil {
 		if !match.found || match.command.CommandID != expected.id || match.scoped == nil {
@@ -512,6 +514,7 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 	var registrationNext registrationPlan
 	var loopNext loopPlan
 	var continuationNext continuationState
+	var eligibilityNext eligibilityState
 	if g != nil {
 		privateNext, err = s.p.planGroup(g, c.First)
 		if err != nil {
@@ -519,7 +522,7 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 	}
 	if scoped != nil {
-		scopedNext, err = s.planScoped(ctx, reads, scoped, c.First)
+		scopedNext, err = s.planScoped(ctx, reads, scoped, c.First, eligibilityReplay)
 		if err != nil {
 			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 				return commandMatch{}, nil, err
@@ -537,7 +540,7 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 	}
 	if paid != nil {
-		paidNext, err = s.planPaid(ctx, reads, paid, c.First)
+		paidNext, err = s.planPaid(ctx, reads, paid, c.First, eligibilityReplay)
 		if err != nil {
 			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 				return commandMatch{}, nil, err
@@ -555,7 +558,7 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 	}
 	if loop != nil {
-		loopNext, err = s.planLoop(ctx, reads, loop, c.First)
+		loopNext, err = s.planLoop(ctx, reads, loop, c.First, eligibilityReplay)
 		if err != nil {
 			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 				return commandMatch{}, nil, err
@@ -570,6 +573,15 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 				return commandMatch{}, nil, err
 			}
 			return commandMatch{}, nil, inconsistent(c.First, "invalid continuation transition: "+err.Error())
+		}
+	}
+	if eligibility != nil {
+		eligibilityNext, err = s.planEligibility(ctx, reads, eligibility, c.First)
+		if err != nil {
+			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, nil, err
+			}
+			return commandMatch{}, nil, inconsistent(c.First, "invalid eligibility transition: "+err.Error())
 		}
 	}
 	// Stage the shared envelope effects too: a later invalid closure in an
@@ -645,6 +657,13 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		if continuation != nil {
 			s.p.installContinuation(continuationNext)
 		}
+		if eligibility != nil {
+			agent := s.p.agents[eligibility.ids.agent]
+			agent.eligibility = eligibilityNext
+			s.p.agents[eligibility.ids.agent] = agent
+		}
+		s.installEligibilitySources(match)
+		s.installEligibilityFlagsLocked()
 		for _, record := range c.Records {
 			owner, found := s.p.owners[record.TurnID]
 			if !found {
@@ -679,6 +698,7 @@ type commandMatch struct {
 	registration *registrationGroup
 	loop         *loopGroup
 	continuation *continuationGroup
+	eligibility  *eligibilityGroup
 }
 
 func (s *Service) findCommand(ctx context.Context, reads *historyReadSet, id uuid.UUID, after, through uint64) (commandMatch, error) {
@@ -729,7 +749,7 @@ func (s *Service) findCommandLegacy(ctx context.Context, reads *historyReadSet, 
 				if matched.First != 0 {
 					return inconsistent(c.First, "duplicate command")
 				}
-				if _, _, _, _, _, _, _, err := decodeFamily(draftsOf(c), c.First); err != nil {
+				if _, _, _, _, _, _, _, _, err := decodeFamily(draftsOf(c), c.First); err != nil {
 					return err
 				}
 				matched = c
@@ -767,11 +787,11 @@ func (s *Service) commandFromCommit(ctx context.Context, reads *historyReadSet, 
 		if cmd.CommandID != id {
 			continue
 		}
-		g, scoped, review, paid, registration, loop, continuation, err := decodeFamily(draftsOf(c), c.First)
+		g, scoped, review, paid, registration, loop, continuation, eligibility, err := decodeFamily(draftsOf(c), c.First)
 		if err != nil {
 			return commandMatch{}, err
 		}
-		match := commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation}
+		match := commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation, eligibility: eligibility}
 		if s.deps.beforeHistoryFill != nil {
 			s.deps.beforeHistoryFill(historyKey{kind: historyCommand, id: id})
 		}

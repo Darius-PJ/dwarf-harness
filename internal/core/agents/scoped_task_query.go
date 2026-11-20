@@ -202,6 +202,10 @@ func (s *Service) taskReadiness(ctx context.Context, reads *historyReadSet, task
 	if turn == "waiting_blocked" {
 		return turn, turnReason, nil
 	}
+	taskBinding := ledger.TaskBinding{TaskID: task.TaskID, AssignmentID: task.Assignment.AssignmentID, Generation: task.Assignment.Generation}
+	if err := s.guardEligibility(origin, eligibilityWork{task: &taskBinding, taskStart: true}, eligibilityLive, s.p.through); err != nil {
+		return "waiting_blocked", "eligibility_held", nil
+	}
 	if turn == "ready_queued" {
 		return turn, "turn_capacity", nil
 	}

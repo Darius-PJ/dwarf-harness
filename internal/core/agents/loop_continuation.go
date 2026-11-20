@@ -104,6 +104,9 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	if reason := s.loopBoundary(t); reason != "" {
 		return r.noteStop(t, reason)
 	}
+	if err := r.eligibilityBoundary(t); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	call := t.paid
 	r.mu.Unlock()
@@ -153,6 +156,9 @@ func (r *loopRuntime) model(t *loopTurn) error {
 	call.token = owner.token(call.id)
 	if reason := s.loopBoundary(t); reason != "" {
 		return r.noteStop(t, reason)
+	}
+	if err := r.eligibilityBoundary(t); err != nil {
+		return err
 	}
 	out, err := s.DispatchPaidStreaming(t.ctx, PaidDispatch{CommandID: call.dispatchID, AttemptID: call.id, ExpectedVersion: 1}, t.live.append)
 	if out.IntentReceipt.CommandID != (uuid.UUID{}) && !call.counted {

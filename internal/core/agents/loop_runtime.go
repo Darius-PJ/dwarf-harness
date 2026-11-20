@@ -60,6 +60,7 @@ type loopTurn struct {
 	cancel                context.CancelFunc
 	state, reason         string
 	running               bool
+	eligibilityHeld       bool // derived under Service.mu -> runtime.mu, never an owner phase
 	waitGeneration        uint64
 	parkedReason          string
 	modelCalls, toolCalls int64
@@ -221,6 +222,13 @@ func (r *loopRuntime) next() *loopTurn {
 		}
 		delete(r.queued, id)
 		t := r.turns[id]
+		if r.stopping && t.state == "recovery_pending" {
+			return t
+		}
+		if t.eligibilityHeld && eligibilityDispatch(t) {
+			r.enqueue(t)
+			continue
+		}
 		// A parked turn waits until a release follows its park or its stop
 		// reason changes, so a finish parked while stopping cannot spin.
 		if t.state == "waiting_resource" && t.waitGeneration >= r.generation.Load() && t.reason == t.parkedReason {
@@ -354,6 +362,11 @@ func (r *loopRuntime) run() {
 				r.discardFailed(t)
 				continue
 			}
+			if t.eligibilityHeld && eligibilityDispatch(t) {
+				r.enqueue(t)
+				r.mu.Unlock()
+				continue
+			}
 			t.running = true
 			if t.reason == "" {
 				if model {
@@ -457,10 +470,12 @@ func (r *loopRuntime) quantum(t *loopTurn, model bool) {
 	r.mu.Unlock()
 	if finishing {
 		err = r.finish(t)
-	} else if model {
-		err = r.model(t)
-	} else {
-		err = r.tool(t)
+	} else if err = r.eligibilityBoundary(t); err == nil {
+		if model {
+			err = r.model(t)
+		} else {
+			err = r.tool(t)
+		}
 	}
 	if model {
 		s.mu.Lock()
@@ -525,6 +540,12 @@ func (r *loopRuntime) quantum(t *loopTurn, model bool) {
 	}
 	if errors.Is(err, ErrContinuationStale) {
 		err = nil
+	}
+	if errors.Is(err, session.ErrEligibilityHeld) {
+		s.mu.Lock()
+		s.installEligibilityFlagsLocked()
+		s.mu.Unlock()
+		busy, err = false, nil
 	}
 	if err != nil && !busy && !finishing {
 		err = r.noteStop(t, loopFailureReason(err))

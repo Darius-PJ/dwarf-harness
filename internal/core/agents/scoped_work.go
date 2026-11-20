@@ -7,7 +7,7 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
-func (s *Service) planWork(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64) (scopedPlan, error) {
+func (s *Service) planWork(ctx context.Context, reads *historyReadSet, g *scopedGroup, first uint64, mode eligibilityMode) (scopedPlan, error) {
 	plan := scopedPlan{authority: s.p.authority}
 	sub, through := g.receipt.Submission, first-1
 	if g.admission != nil {
@@ -69,6 +69,13 @@ func (s *Service) planWork(ctx context.Context, reads *historyReadSet, g *scoped
 			}
 			delta.hold = [4]int64{0, 1, *p.MaxBytes, 1}
 		}
+		entry := eligibilityWork{turn: g.turn}
+		if p.Kind == "turn" {
+			entry = eligibilityWork{turn: p.WorkID, command: g.command.CommandID, task: p.TaskBinding, admission: true}
+		}
+		if err := s.guardEligibility(sub.Origin, entry, mode, through); err != nil {
+			return plan, err
+		}
 		plan.budget, err = s.p.book.plan(scopes, delta, size, true)
 		if err != nil {
 			return plan, err
@@ -122,6 +129,9 @@ func (s *Service) planWork(ctx context.Context, reads *historyReadSet, g *scoped
 		}
 		if !found || parent.ended || parent.released {
 			return plan, ErrDenied
+		}
+		if err := s.guardEligibility(work.origin, eligibilityWork{turn: work.admission.ParentTurnID}, mode, through); err != nil {
+			return plan, err
 		}
 		work.dispatched, work.version = true, p.Version
 		delta.charge[unitExposure] = 1

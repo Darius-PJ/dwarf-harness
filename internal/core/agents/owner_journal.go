@@ -100,7 +100,7 @@ func (s *Service) commitContinuation(ctx context.Context, id uuid.UUID, sub ledg
 			if s.deps.beforeSubmit != nil {
 				drafts = s.deps.beforeSubmit(drafts)
 			}
-			_, _, _, _, _, _, g, err := decodeFamily(drafts, s.p.through+1)
+			_, _, _, _, _, _, g, _, err := decodeFamily(drafts, s.p.through+1)
 			if err != nil {
 				return err
 			}
@@ -438,6 +438,21 @@ func (r *loopRuntime) prepareQuantum(t *loopTurn, reason string) (bool, bool, er
 	r.mu.Unlock()
 	if reason != "" {
 		if err := r.noteStop(t, reason); err != nil {
+			return false, false, err
+		}
+	}
+	r.mu.Lock()
+	dispatch := reason == "" && (t.answer == nil || len(t.tools) != 0)
+	r.mu.Unlock()
+	if dispatch {
+		if err := r.eligibilityBoundary(t); err != nil {
+			var held *EligibilityHeldError
+			if errors.As(err, &held) {
+				r.mu.Lock()
+				r.enqueue(t)
+				r.mu.Unlock()
+				return false, true, nil
+			}
 			return false, false, err
 		}
 	}

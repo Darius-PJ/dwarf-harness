@@ -513,6 +513,11 @@ func (s *Service) prepareScopedLocked(ctx context.Context, reads *historyReadSet
 		if err != nil || match.found {
 			return err
 		}
+		if eligibilityEffect(input.sub.Operation) {
+			if err := s.guardEligibilityEffect(ctx, reads, input.sub.Origin, input.id, eligibilityLive, s.p.through); err != nil {
+				return err
+			}
+		}
 		if err := s.scopedProducerGuards(input); err != nil {
 			return err
 		}

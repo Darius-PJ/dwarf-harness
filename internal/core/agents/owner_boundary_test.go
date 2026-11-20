@@ -19,7 +19,7 @@ func continuationReadyFixture(t *testing.T) (*serviceFixture, continuationState)
 		t.Fatal("invalid ready prefix", report, err)
 	}
 	f.service = s
-	_, _, _, _, _, _, next, err := decodeFamily(draftsOf(commits[at["owner.advance"]]), f.store.Durable()+1)
+	_, _, _, _, _, _, next, _, err := decodeFamily(draftsOf(commits[at["owner.advance"]]), f.store.Durable()+1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestContinuationUnknownWaitHeld(t *testing.T) {
 	t.Parallel()
 	commits, _ := continuationFrozen(t)
 	for index, commit := range commits {
-		_, _, _, _, _, _, group, err := decodeFamily(draftsOf(commit), commit.First)
+		_, _, _, _, _, _, group, _, err := decodeFamily(draftsOf(commit), commit.First)
 		if err != nil {
 			t.Fatal(err)
 		}

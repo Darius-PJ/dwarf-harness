@@ -43,7 +43,7 @@ func (s *Service) paidObjectSelected(ctx context.Context, reads *historyReadSet,
 	// historical query, not a scan in dispatch or an ordinary settlement.
 	id, after, through := a.admission.AttemptID, a.sequence-2, s.p.through
 	return foldDirectory(ctx, s, reads, directoryKey{kind: directoryPaid, id: id}, after, through, directoryReadSelection{Purpose: "paid_object_selected", Object: ref}, func(found *bool, c ledger.Commit) error {
-		_, _, _, g, _, _, _, err := decodeFamily(draftsOf(c), c.First)
+		_, _, _, g, _, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 		if err == nil && g != nil && g.receipt.AttemptID == id && selected(g.result) {
 			*found = true
 		}
@@ -106,7 +106,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 			if replayEvidence == (ledger.ObjectRef{}) {
 				id := a.admission.AttemptID
 				evidenceBytes, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryPaid, id: id}, a.sequence-2, selectedThrough, directoryReadSelection{Purpose: "paid_evidence_bound"}, func(size *int64, c ledger.Commit) error {
-					_, _, _, group, _, _, _, err := decodeFamily(draftsOf(c), c.First)
+					_, _, _, group, _, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 					if err == nil && group != nil && group.result != nil && group.receipt.AttemptID == id && group.result.EvidenceObject != nil {
 						*size = max(*size, group.result.EvidenceObject.Bytes)
 					}
@@ -171,7 +171,7 @@ func (s *Service) readPaidObject(ctx context.Context, bound *submissionIDs, requ
 				if replayEvidence != (ledger.ObjectRef{}) {
 					return nil
 				}
-				_, _, _, group, _, _, _, err := decodeFamily(draftsOf(c), c.First)
+				_, _, _, group, _, _, _, _, err := decodeFamily(draftsOf(c), c.First)
 				if err != nil {
 					return err
 				}

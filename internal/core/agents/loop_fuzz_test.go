@@ -101,7 +101,7 @@ func FuzzLoopGroupReplay(f *testing.F) {
 			return
 		}
 		prefix := prefixes[int(shape)%len(prefixes)]
-		_, _, _, _, _, g, _, err := decodeFamily(prefix.draft, prefix.through+1)
+		_, _, _, _, _, g, _, _, err := decodeFamily(prefix.draft, prefix.through+1)
 		if err != nil {
 			t.Fatal(err)
 		}

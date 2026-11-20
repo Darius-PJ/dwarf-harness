@@ -61,6 +61,7 @@ type scopeGate struct {
 type agentState struct {
 	session, general uuid.UUID
 	directory        string
+	eligibility      eligibilityState
 }
 type scopeState struct {
 	ids          submissionIDs
@@ -363,6 +364,7 @@ func privateConsumption() ledger.Consumption {
 		ledger.TypeRuntimeToolStarted: {1}, ledger.TypeRuntimeToolResult: {1},
 		ledger.TypeRuntimeTurnResult: {1}, ledger.TypeRuntimeLoopReceipt: {1},
 		ledger.TypeRuntimeContinuationChanged: {1}, ledger.TypeRuntimeContinuationReceipt: {1},
+		ledger.TypeRuntimeEligibilityChanged: {1}, ledger.TypeRuntimeEligibilityReceipt: {1},
 	}
 }
 func isPrivateType(t string) bool {

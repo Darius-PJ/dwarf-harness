@@ -149,7 +149,7 @@ func (s *Service) paidCurrent(ctx context.Context, reads *historyReadSet, a paid
 	return chain, task, nil
 }
 
-func (s *Service) planPaidAttempt(ctx context.Context, reads *historyReadSet, g *paidGroup, first uint64) (paidPlan, error) {
+func (s *Service) planPaidAttempt(ctx context.Context, reads *historyReadSet, g *paidGroup, first uint64, mode eligibilityMode) (paidPlan, error) {
 	plan := paidPlan{}
 	sub, through := g.receipt.Submission, first-1
 	var a paidAttempt
@@ -174,6 +174,9 @@ func (s *Service) planPaidAttempt(ctx context.Context, reads *historyReadSet, g 
 		}
 		_, task, err := s.paidCurrent(ctx, reads, a, p.AdmissionUTCNS, through, p.Quote.MaximumMicros)
 		if err != nil {
+			return plan, err
+		}
+		if err := s.guardEligibility(sub.Origin, eligibilityWork{turn: p.ParentTurnID}, mode, through); err != nil {
 			return plan, err
 		}
 		if task != nil {
@@ -208,6 +211,9 @@ func (s *Service) planPaidAttempt(ctx context.Context, reads *historyReadSet, g 
 			}
 			_, task, err := s.paidCurrent(ctx, reads, a, v.ObservedUTCNS, through, 0)
 			if err != nil {
+				return plan, err
+			}
+			if err := s.guardEligibility(sub.Origin, eligibilityWork{turn: a.admission.ParentTurnID}, mode, through); err != nil {
 				return plan, err
 			}
 			if task != nil {

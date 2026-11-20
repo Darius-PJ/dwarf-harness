@@ -12,6 +12,7 @@ var (
 	ErrReattachRequired = errors.New("session: reattach required")
 	ErrFinished         = errors.New("session: finished")
 	ErrClosed           = errors.New("session: closed")
+	ErrEligibilityHeld  = errors.New("session: eligibility held")
 )
 
 // Session is a trusted-host owner view bound to one existing agent/session.
@@ -61,6 +62,27 @@ type CommandResult struct {
 	Data            any       `json:"data,omitempty"`
 }
 
+// EligibilityView is the generic gate, separate from a turn's saved owner phase.
+// FirstAction is omitted when the viewer cannot inspect its declared context.
+type EligibilityView struct {
+	State           string                  `json:"state"`
+	Reason          string                  `json:"reason"`
+	Version         int64                   `json:"version"`
+	OperationID     uuid.UUID               `json:"operation_id,omitzero"`
+	ThroughSequence uint64                  `json:"through_sequence"`
+	FirstAction     *EligibilityFirstAction `json:"first_action,omitempty"`
+}
+
+type EligibilityFirstAction struct {
+	Declaration           ledger.EligibilityFirstAction `json:"declaration"`
+	Disposition           string                        `json:"disposition"`
+	FirstAdmittedTurn     *ledger.EligibilityTurn       `json:"first_admitted_turn,omitempty"`
+	FirstAdmittedSequence uint64                        `json:"first_admitted_sequence,omitempty"`
+	NativeSequence        uint64                        `json:"native_sequence,omitempty"`
+	BoundSequence         uint64                        `json:"bound_sequence,omitempty"`
+	NativeEndingSequence  uint64                        `json:"native_ending_sequence,omitempty"`
+}
+
 type TurnView struct {
 	TurnID         uuid.UUID                    `json:"turn_id"`
 	State          string                       `json:"state"`
@@ -77,13 +99,15 @@ type TurnView struct {
 	WaitReason     string                       `json:"wait_reason,omitempty"`
 	Pending        []ledger.ContinuationPending `json:"pending,omitempty"`
 	DeadlineUTCNS  int64                        `json:"deadline_utc_ns"`
+	Eligibility    *EligibilityView             `json:"eligibility,omitempty"`
 }
 
 type ContextView struct {
-	ContextID       uuid.UUID  `json:"context_id"`
-	Revision        uint64     `json:"revision"`
-	Turns           []TurnView `json:"turns"`
-	ThroughSequence uint64     `json:"through_sequence"`
+	ContextID       uuid.UUID        `json:"context_id"`
+	Revision        uint64           `json:"revision"`
+	Turns           []TurnView       `json:"turns"`
+	ThroughSequence uint64           `json:"through_sequence"`
+	Eligibility     *EligibilityView `json:"eligibility,omitempty"`
 }
 
 type Event struct {

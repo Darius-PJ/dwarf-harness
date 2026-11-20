@@ -19,7 +19,7 @@ func paidReceiptEffect(g *paidGroup, version int64, attempt uuid.UUID, outcome s
 
 // planPaid is shared by replay and subsequent paid producers. Nothing is
 // installed until all identities, authority, arithmetic and receipt agree.
-func (s *Service) planPaid(ctx context.Context, reads *historyReadSet, g *paidGroup, first uint64) (paidPlan, error) {
+func (s *Service) planPaid(ctx context.Context, reads *historyReadSet, g *paidGroup, first uint64, mode eligibilityMode) (paidPlan, error) {
 	if !s.p.registeredOrigin(originOf(g.ids)) {
 		return paidPlan{}, ErrNotBound
 	}
@@ -47,7 +47,7 @@ func (s *Service) planPaid(ctx context.Context, reads *historyReadSet, g *paidGr
 	case g.spend != nil:
 		return s.planPaidSpend(ctx, reads, g, first-1)
 	default:
-		return s.planPaidAttempt(ctx, reads, g, first)
+		return s.planPaidAttempt(ctx, reads, g, first, mode)
 	}
 }
 

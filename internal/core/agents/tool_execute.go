@@ -12,6 +12,7 @@ import (
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/workspace"
 )
 
@@ -102,6 +103,9 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 		denied = true
 	}
 	if inv.started == nil {
+		if err := r.eligibilityBoundary(t); err != nil {
+			return err
+		}
 		if inv.correction == nil {
 			if err := r.toolAuthority(t, inv); err != nil {
 				if loopBusy(err) {
@@ -138,6 +142,9 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 			} else {
 				grant = inv.grant
 			}
+		}
+		if err := r.eligibilityBoundary(t); err != nil {
+			return err
 		}
 		owner, err := r.recordPending(t, ledger.ContinuationPending{Kind: "tool", ID: inv.id, CommandID: effect, ExpectedVersion: 1})
 		if err != nil {
@@ -184,12 +191,15 @@ func (r *loopRuntime) tool(t *loopTurn) error {
 			if reason := r.service.loopBoundary(t); reason != "" {
 				return r.noteStop(t, reason)
 			}
+			if err := r.eligibilityBoundary(t); err != nil {
+				return err
+			}
 			if strings.HasPrefix(inv.normalized.Operation, "file.") {
 				data, receipt, err = r.file(t, inv)
 			} else {
 				data, receipt, err = r.coreTool(t, inv)
 			}
-			if loopBusy(err) {
+			if loopBusy(err) || errors.Is(err, session.ErrEligibilityHeld) {
 				return err
 			}
 			executed := loopToolExecution{data: data, receipt: receipt, outcome: "ok"}
