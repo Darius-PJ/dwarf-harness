@@ -56,3 +56,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-20 — Ticket [16](16-prove-concurrent-private-runtime-restart-and-child-shutdown.md) is resolved, so all listed blockers are clear. The criteria are unchanged. No runtime, production-delivery or other start-gate approval is inferred.

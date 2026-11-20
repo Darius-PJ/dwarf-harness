@@ -57,3 +57,5 @@ Canonical sections: Core roadmap C4; its cited controlling Core design and lates
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-20 — Ticket [16](16-prove-concurrent-private-runtime-restart-and-child-shutdown.md) is resolved, and ticket [04](04-load-and-identify-a-strict-law-independently-of-field-execution.md) already was, so all listed blockers are clear. The criteria are unchanged. No runtime, production-delivery or other start-gate approval is inferred.

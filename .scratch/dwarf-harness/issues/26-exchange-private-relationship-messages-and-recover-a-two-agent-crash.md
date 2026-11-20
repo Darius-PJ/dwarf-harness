@@ -51,3 +51,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — D88 rework: the owner chose to include the deferred D88 rework in this consolidation and approved the plan. Criteria now cover social waits under the single continuation owner and compulsory typed transitions. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.
+
+2026-11-20 — Ticket [16](16-prove-concurrent-private-runtime-restart-and-child-shutdown.md) is resolved, so all listed blockers are clear. It supplies the single continuation owner through which this ticket's social wait checkpoints, and a restart that reconstructs a turn's waits without repeating interrupted model or tool effects. The criteria are unchanged. No runtime, production-delivery or other start-gate approval is inferred.
