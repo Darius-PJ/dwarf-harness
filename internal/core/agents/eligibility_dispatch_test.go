@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +23,22 @@ func eligibilityCount(t testing.TB, s *Service, after uint64, typ string) int {
 	if err := s.scan(context.Background(), after, s.store.Durable(), func(c ledger.Commit) error {
 		for _, r := range c.Records {
 			if r.Type == typ {
+				count++
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func eligibilityPaidCount(t testing.TB, s *Service, after uint64) int {
+	t.Helper()
+	count := 0
+	if err := s.scan(context.Background(), after, s.store.Durable(), func(c ledger.Commit) error {
+		for _, record := range c.Records {
+			if strings.HasPrefix(record.Type, "runtime.paid_") {
 				count++
 			}
 		}
@@ -275,8 +293,130 @@ func TestEligibilityDispatchBoundaries(t *testing.T) {
 				t.Fatalf("held failed shutdown did not join %s", name)
 			}
 		}
-		if refused.Load() != 1 || posts.Load() != 0 || f.store.Durable() != before || turn.state != "recovery_pending" || !errors.Is(turn.terminalError, ErrInvalid) {
-			t.Fatal("held failed shutdown dispatched, appended, or lost its recovery error")
+		// shutdown() and prepareQuantum() under r.stopping can each attempt
+		// one refused stop; ownerFailure then sends the turn to discard.
+		if refusals := refused.Load(); refusals < 1 || refusals > 2 || posts.Load() != 0 || f.store.Durable() != before || turn.state != "recovery_pending" || !errors.Is(turn.terminalError, ErrInvalid) {
+			t.Fatalf("held failed shutdown: refused=%d posts=%d frontier=%d before=%d state=%q terminal=%v", refusals, posts.Load(), f.store.Durable(), before, turn.state, turn.terminalError)
 		}
 	})
+	t.Run("held_shutdown_while_binding", func(t *testing.T) {
+		t.Parallel()
+		bound, proceed := make(chan struct{}), make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(proceed) })
+		var posts atomic.Int32
+		f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+			posts.Add(1)
+			http.Error(w, "unexpected dispatch", http.StatusInternalServerError)
+		}, func(deps *serviceDeps) {
+			deps.afterLoopCommit = func(receipt ledger.RuntimeLoopReceipt) {
+				if receipt.Submission.Operation == "loop.bind" {
+					close(bound)
+					<-proceed
+				}
+			}
+		})
+		t.Cleanup(unblock)
+		f.enable(t)
+		through := f.store.Durable()
+		command := turnMessage(f.origin.ContextID, "held during binding")
+		sent := make(chan error, 1)
+		go func() {
+			_, err := f.view.Do(context.Background(), command)
+			sent <- err
+		}()
+		<-bound
+		held := holdEligibility(t, f.service, f.origin.AgentID)
+		closed := make(chan error, 1)
+		go func() { closed <- f.service.Close() }()
+		runtime := f.service.loop
+		runtime.mu.Lock()
+		for !runtime.stopping {
+			changed := runtime.changed
+			runtime.mu.Unlock()
+			<-changed
+			runtime.mu.Lock()
+		}
+		runtime.mu.Unlock()
+		unblock()
+		if err := <-sent; err != nil {
+			t.Fatal(err)
+		}
+		timer := time.NewTimer(10 * time.Second)
+		defer timer.Stop()
+		var closeErr error
+		select {
+		case closeErr = <-closed:
+		case <-timer.C:
+			t.Error("held binding shutdown did not return within the fixed bound")
+			releaseEligibility(t, f.service, f.origin.AgentID, held)
+			closeErr = <-closed
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		reopened, report, err := Open(context.Background(), f.store, f.root, DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reopened.Close()
+		var result ledger.RuntimeTurnResult
+		turn := command.Arguments.(session.MessageSend).TurnID
+		err = reopened.scan(context.Background(), through, f.store.Durable(), func(c ledger.Commit) error {
+			for _, record := range c.Records {
+				if record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == turn {
+					var err error
+					result, err = ledger.DecodeRuntimeTurnResult(record.Payload)
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil || result.Outcome != "interrupted" || result.Reason != "shutdown" || len(report.PendingLoops) != 0 || posts.Load() != 0 || eligibilityPaidCount(t, reopened, through) != 0 {
+			t.Fatalf("held binding shutdown: result=%+v pending=%d posts=%d err=%v", result, len(report.PendingLoops), posts.Load(), err)
+		}
+	})
+	for _, stop := range []string{"cancel", "deadline"} {
+		t.Run("idle_held_"+stop, func(t *testing.T) {
+			t.Parallel()
+			var service *Service
+			var posts atomic.Int32
+			f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+				posts.Add(1)
+				http.Error(w, "unexpected dispatch", http.StatusInternalServerError)
+			}, func(deps *serviceDeps) {
+				deps.afterLoopCommit = func(receipt ledger.RuntimeLoopReceipt) {
+					if receipt.Submission.Operation == "loop.bind" {
+						holdEligibility(t, service, receipt.Submission.Origin.AgentID)
+					}
+				}
+			})
+			service = f.service
+			if stop == "deadline" {
+				f.setting.TimeoutMS = 1000
+			}
+			f.enable(t)
+			through := f.store.Durable()
+			_, sent := f.send(t)
+			if stop == "cancel" {
+				eligibilityIdle(t, f, sent.TurnID)
+				if _, err := f.view.Do(context.Background(), session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: sent.TurnID}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, _ := f.finished(t, sent.TurnID)
+			service.mu.Lock()
+			tokens := len(service.loop.paidTokens)
+			service.mu.Unlock()
+			wantReason := "deadline"
+			if stop == "cancel" {
+				wantReason = "cancelled"
+				if result.Outcome != "cancelled" {
+					t.Errorf("held cancel outcome=%q", result.Outcome)
+				}
+			}
+			if result.Reason != wantReason || posts.Load() != 0 || eligibilityPaidCount(t, service, through) != 0 || tokens != 0 {
+				t.Fatalf("held %s: result=%+v posts=%d paid tokens=%d", stop, result, posts.Load(), tokens)
+			}
+		})
+	}
 }

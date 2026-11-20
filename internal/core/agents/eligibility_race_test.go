@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"uuid"
@@ -195,4 +196,81 @@ func TestEligibilityRace(t *testing.T) {
 			t.Fatal("release did not resume one saved next quantum")
 		}
 	})
+	for _, stop := range []bool{false, true} {
+		name := "hold_after_selection_release"
+		if stop {
+			name = "hold_after_selection_cancel"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			prepared, proceed := make(chan uuid.UUID, 1), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(proceed) })
+			var once sync.Once
+			var posts atomic.Int32
+			f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+				posts.Add(1)
+				model, _ := turnRequest(t, r)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, turnAnthropic(model, nil, "finished after release"))
+			}, func(deps *serviceDeps) {
+				deps.afterLoopPrepare = func(turn uuid.UUID) {
+					once.Do(func() {
+						prepared <- turn
+						<-proceed
+					})
+				}
+			})
+			t.Cleanup(unblock)
+			f.service.paid.limits.MaxActivePaid = 1
+			f.enable(t)
+			through := f.store.Durable()
+			_, sent := f.send(t)
+			if turn := <-prepared; turn != sent.TurnID {
+				t.Fatal("prepared a different turn")
+			}
+			f.service.mu.Lock()
+			claimed := len(f.service.loop.paidTokens)
+			f.service.mu.Unlock()
+			if claimed != 1 {
+				t.Fatalf("preparation seam missed the paid claim: tokens=%d", claimed)
+			}
+			held := holdEligibility(t, f.service, f.origin.AgentID)
+			runtime := f.service.loop
+			runtime.mu.Lock()
+			changed := runtime.changed
+			runtime.mu.Unlock()
+			unblock()
+			<-changed
+			view := eligibilityIdle(t, f, sent.TurnID)
+			f.service.mu.Lock()
+			tokens := len(runtime.paidTokens)
+			f.service.mu.Unlock()
+			if tokens != 0 {
+				t.Errorf("held selected turn retained %d paid exchange token(s)", tokens)
+			}
+			if posts.Load() != 0 || eligibilityPaidCount(t, f.service, through) != 0 || view.WaitReason != "none" {
+				t.Fatalf("held selected turn dispatched or parked: posts=%d view=%+v", posts.Load(), view)
+			}
+			// A red token-leak run cancels instead of waiting forever for a
+			// release to reacquire its own sole slot. No test clears the token.
+			if stop || tokens != 0 {
+				if _, err := f.view.Do(context.Background(), session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: sent.TurnID}}); err != nil {
+					t.Fatal(err)
+				}
+				result, _ := f.finished(t, sent.TurnID)
+				f.service.mu.Lock()
+				remaining := len(runtime.paidTokens)
+				f.service.mu.Unlock()
+				if result.Outcome != "cancelled" || posts.Load() != 0 || eligibilityPaidCount(t, f.service, through) != 0 || remaining != 0 {
+					t.Errorf("held selected cancel: outcome=%q posts=%d paid tokens=%d", result.Outcome, posts.Load(), remaining)
+				}
+				return
+			}
+			releaseEligibility(t, f.service, f.origin.AgentID, held)
+			result, _ := f.finished(t, sent.TurnID)
+			if result.Outcome != "finished" || posts.Load() != 1 || eligibilityCount(t, f.service, through, ledger.TypeRuntimePaidDispatchIntent) != 1 || eligibilityCount(t, f.service, through, ledger.TypeRuntimePaidResult) != 1 {
+				t.Fatalf("released selection did not execute once: outcome=%q posts=%d", result.Outcome, posts.Load())
+			}
+		})
+	}
 }

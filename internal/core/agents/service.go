@@ -35,6 +35,7 @@ type serviceDeps struct {
 	afterScopedCommit       func(ScopedReceipt) error
 	afterScopedClaim        func(ledger.ScopedSubmission)
 	afterLoopCommit         func(ledger.RuntimeLoopReceipt)
+	afterLoopPrepare        func(uuid.UUID)
 	afterReviewCommit       func(ReviewReceipt) error
 	afterRegistrationCommit func(RegistrationReceipt) error
 	reviewClock             func() (int64, error)

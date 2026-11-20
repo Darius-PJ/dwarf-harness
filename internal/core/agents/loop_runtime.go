@@ -222,10 +222,7 @@ func (r *loopRuntime) next() *loopTurn {
 		}
 		delete(r.queued, id)
 		t := r.turns[id]
-		if r.stopping && t.state == "recovery_pending" {
-			return t
-		}
-		if t.eligibilityHeld && eligibilityDispatch(t) {
+		if !r.stopping && t.eligibilityHeld && eligibilityDispatch(t) {
 			r.enqueue(t)
 			continue
 		}
@@ -354,17 +351,15 @@ func (r *loopRuntime) run() {
 			if parked {
 				continue
 			}
+			if r.service.deps.afterLoopPrepare != nil {
+				r.service.deps.afterLoopPrepare(t.id)
+			}
 			r.mu.Lock()
 			// shutdown may have refused a stop while prepareQuantum was
 			// outside runtime.mu. Do not launch a failed turn's next quantum.
 			if r.stopping && t.state == "recovery_pending" {
 				r.mu.Unlock()
 				r.discardFailed(t)
-				continue
-			}
-			if t.eligibilityHeld && eligibilityDispatch(t) {
-				r.enqueue(t)
-				r.mu.Unlock()
 				continue
 			}
 			t.running = true
