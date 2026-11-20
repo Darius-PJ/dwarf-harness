@@ -223,26 +223,58 @@ func TestEligibilityTransitions(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
 		f := newTurnFixture(t, "anthropic", func(http.ResponseWriter, *http.Request) { t.Error("task start posted") }, nil)
-		binding := scopedWorkContext(t, f.service, bindingOf(f.origin), 53000, 53001)
-		setting := f.contextSetting(t, binding)
-		task, assignment := uuid.NewV7(), uuid.NewV7()
-		if _, err := f.service.CreateTask(ctx, bindingOf(f.origin), TaskCreation{CommandID: uuid.NewV7(), TaskID: task, Description: []byte("first task"), AcceptanceSHA256: sha256.Sum256([]byte("done")), Dependencies: []uuid.UUID{}, Audience: []uuid.UUID{binding.AgentID}, Assignment: &ledger.AssignmentInput{AssignmentID: assignment, Assignee: ledger.Binding(binding)}}); err != nil {
-			t.Fatal(err)
+		bindings := []Binding{
+			scopedWorkContext(t, f.service, bindingOf(f.origin), 53000, 53001),
+			scopedWorkContext(t, f.service, bindingOf(f.origin), 53002, 53003),
 		}
-		setting.TaskBinding = &ledger.TaskBinding{TaskID: task, AssignmentID: assignment, Generation: 1}
-		if _, err := f.service.IssueGrant(ctx, bindingOf(f.origin), GrantIssue{CommandID: uuid.NewV7(), ExpectedAuthorityVersion: uint64(f.service.p.authority), Spec: GrantSpec{GrantID: uuid.NewV7(), Grantee: binding, Operations: []string{"task.start"}, Resources: []ledger.Resource{{Kind: "task", TaskID: task}}, DataClass: "task", Recipients: []Binding{binding}, Limits: paidPhysicalCapacity(), Lifetime: "until_revoked", TaskBinding: setting.TaskBinding}}); err != nil {
-			t.Fatal(err)
+		tasks := []ledger.TaskBinding{
+			{TaskID: uuid.NewV7(), AssignmentID: uuid.NewV7(), Generation: 1},
+			{TaskID: uuid.NewV7(), AssignmentID: uuid.NewV7(), Generation: 1},
+		}
+		for i := range tasks {
+			binding := bindings[i]
+			f.contextSetting(t, binding)
+			task := &tasks[i]
+			if _, err := f.service.CreateTask(ctx, bindingOf(f.origin), TaskCreation{CommandID: uuid.NewV7(), TaskID: task.TaskID, Description: []byte("assigned task"), AcceptanceSHA256: sha256.Sum256([]byte("done")), Dependencies: []uuid.UUID{}, Audience: []uuid.UUID{binding.AgentID}, Assignment: &ledger.AssignmentInput{AssignmentID: task.AssignmentID, Assignee: ledger.Binding(binding)}}); err != nil {
+				t.Fatal(err)
+			}
+			for _, spec := range []GrantSpec{
+				{GrantID: uuid.NewV7(), Grantee: binding, Operations: []string{"task.start"}, Resources: []ledger.Resource{{Kind: "task", TaskID: task.TaskID}}, DataClass: "task", Recipients: []Binding{binding}, Limits: paidPhysicalCapacity(), Lifetime: "until_revoked", TaskBinding: task},
+				{GrantID: uuid.NewV7(), Grantee: binding, Operations: []string{"turn.start"}, Resources: []ledger.Resource{{Kind: "context", Binding: ledger.Binding(binding), Scope: "context", Slots: []string{}}}, DataClass: "private", Recipients: []Binding{binding}, Limits: paidPhysicalCapacity(), Lifetime: "until_revoked", TaskBinding: task},
+			} {
+				if _, err := f.service.IssueGrant(ctx, bindingOf(f.origin), GrantIssue{CommandID: uuid.NewV7(), ExpectedAuthorityVersion: uint64(f.service.p.authority), Spec: spec}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ready, err := f.service.TaskStatus(ctx, TaskLookup{TaskID: task.TaskID})
+			if err != nil || ready.Readiness != "ready" {
+				t.Fatal("assigned task lacked ordinary start authority before declaration", i, ready, err)
+			}
 		}
 		origin := f.origin
-		origin.ContextID = binding.ContextID
-		request := firstActionRequest(origin, turnMessage(binding.ContextID, "first task input"), setting.TaskBinding)
+		origin.ContextID = bindings[0].ContextID
+		request := firstActionRequest(origin, turnMessage(origin.ContextID, "first task input"), &tasks[0])
 		requireFirstAction(t, f.service, request)
-		ready, err := f.service.TaskStatus(ctx, TaskLookup{TaskID: task})
+		before := f.store.Durable()
+		other, err := f.service.TaskStatus(ctx, TaskLookup{TaskID: tasks[1].TaskID})
+		if err != nil || other.Readiness != "waiting_blocked" || other.Reason != "eligibility_held" || other.Task.State != "waiting" {
+			t.Fatal("non-declared task received first-action readiness exception", other, err)
+		}
+		_, err = f.service.TransitionTask(ctx, bindingOf(f.origin), TaskMutation{CommandID: uuid.NewV7(), TaskID: tasks[1].TaskID, ExpectedVersion: 1, ExpectedAssignmentID: tasks[1].AssignmentID, ExpectedGeneration: 1, Action: "start"})
+		requireEligibilityHeld(t, err)
+		if f.store.Durable() != before {
+			t.Fatal("non-declared task start appended while first action required")
+		}
+		ready, err := f.service.TaskStatus(ctx, TaskLookup{TaskID: tasks[0].TaskID})
 		if err != nil || ready.Readiness != "ready" {
 			t.Fatal("declared first task remained held", ready, err)
 		}
-		if _, err := f.service.TransitionTask(ctx, bindingOf(f.origin), TaskMutation{CommandID: uuid.NewV7(), TaskID: task, ExpectedVersion: 1, ExpectedAssignmentID: assignment, ExpectedGeneration: 1, Action: "start"}); err != nil {
+		if _, err := f.service.TransitionTask(ctx, bindingOf(f.origin), TaskMutation{CommandID: uuid.NewV7(), TaskID: tasks[0].TaskID, ExpectedVersion: 1, ExpectedAssignmentID: tasks[0].AssignmentID, ExpectedGeneration: 1, Action: "start"}); err != nil {
 			t.Fatal("declared first task could not start", err)
+		}
+		active, err := f.service.TaskStatus(ctx, TaskLookup{TaskID: tasks[0].TaskID})
+		if err != nil || active.Task.State != "active" {
+			t.Fatal("declared first task did not become active", active, err)
 		}
 	})
 	t.Run("oversized_owner_request_is_bounded", func(t *testing.T) {

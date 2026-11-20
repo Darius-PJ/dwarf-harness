@@ -46,6 +46,31 @@ func revokeFirstGrant(t testing.TB, f *turnFixture, id uuid.UUID) {
 
 func TestEligibilityFirstAction(t *testing.T) {
 	t.Parallel()
+	t.Run("hold_withdraws_first_exception", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		var posts atomic.Int32
+		f := newTurnFixture(t, "anthropic", func(http.ResponseWriter, *http.Request) { posts.Add(1) }, nil)
+		f.enable(t)
+		command := turnMessage(f.origin.ContextID, "withdrawn first action")
+		request := firstActionRequest(f.origin, command, nil)
+		declared := requireFirstAction(t, f.service, request)
+		if _, err := f.service.HoldOrdinaryWork(ctx, EligibilityHold{CommandID: uuid.NewV7(), AgentID: f.origin.AgentID, ExpectedVersion: declared.Version, ExpectedOperationID: declared.OperationID, Reason: "owner_hold"}); err != nil {
+			t.Fatal(err)
+		}
+		before := f.store.Durable()
+		_, err := f.view.Do(ctx, command)
+		requireEligibilityHeld(t, err)
+		if f.store.Durable() != before || posts.Load() != 0 {
+			t.Fatal("held declared Session send appended or posted", posts.Load())
+		}
+		agent := scopedBound(t, f.service, bindingOf(f.origin))
+		_, err = agent.StartTurn(ctx, TurnAdmission{CommandID: request.FirstActionTurn.AdmissionCommandID, TurnID: request.FirstActionTurn.TurnID, GrantID: f.privateGrant})
+		requireEligibilityHeld(t, err)
+		if f.store.Durable() != before || posts.Load() != 0 {
+			t.Fatal("held declared native turn appended or posted", posts.Load())
+		}
+	})
 	t.Run("paid_budget_stays_ordinary", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
