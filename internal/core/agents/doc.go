@@ -108,8 +108,10 @@
 //
 // F3-90 records an agent-wide gate independently of grants, capacity, task facts
 // and F3-16 continuation owners. Registered agents start eligible at version zero.
-// Trusted HoldOrdinaryWork and ReleaseEligibility use the target's registered
-// session/general origin and compare both version and held-operation identity.
+// Only the trusted owner's Service seam exposes HoldOrdinaryWork,
+// RequireFirstAction, DeclareNextFirstAction and ReleaseEligibility; no Agent,
+// model tool or terminal command sets this gate. The transitions use the target's
+// registered session/general origin and compare version and operation identity.
 // Same-command retries return their original receipt before transition guards.
 // A release authorizes no grant, reserves no work and replays no refused request.
 //
@@ -119,7 +121,8 @@
 // operations remain available, and preserve exact financial exposure.
 // Runtime eligibility is a derived scheduling flag, never a capacity wait,
 // stop reason, cancellation or replacement owner phase. Held session sends
-// return outcome held and ErrEligibilityHeld without consuming a command/turn.
+// return outcome held and session.ErrEligibilityHeld with a copied,
+// disclosure-filtered session.EligibilityView, without consuming a command/turn.
 // Starts refused before release must be explicitly submitted again.
 //
 // RequireFirstAction and DeclareNextFirstAction derive the initial/next input
@@ -131,16 +134,23 @@
 // nested references retain ledger field order; nil artifacts alone becomes [].
 // Text is unchanged, JSON controls and U+2028/U+2029 are escaped, and HTML is not.
 // It is not owner_input or a rendered prompt. Live Session start and bound
-// retries use the same helper; Open verifies only ledger identity and never
-// reads private objects. Raw native admission permits the declared tuple but
-// cannot dispatch paid/local work before its matching loop.bind.
+// retries use the same helper; replay checks the binding's ledger identity
+// without recomputing this digest from private objects. Raw native admission
+// permits the declared tuple but cannot dispatch paid/local work before its
+// matching loop.bind. ReconcileAdmissions ends an unbound native admission as
+// interrupted; the owner continues the action with DeclareNextFirstAction,
+// not by re-admitting the consumed identity.
 // Scoped execution distinguishes a new native commit from its receipt retry:
 // two callers may classify before either commits. A receipt follower is
-// unavailable until bound, then compares and returns the original binding,
-// without rendering, initializing or ending the other caller's native turn.
+// unavailable until bound, then compares and returns the original binding
+// under current turn.inspect authority, without rendering, initializing or
+// ending the other caller's native turn. A later eligibility hold does not
+// replace that receipt, but still governs the live turn's next dispatch.
 //
 // Definite pre-native admission refusals are observations, not release or work;
 // a stale observation loses to release, next declaration or native admission.
+// A failure to commit the refusal is returned ahead of the original admission
+// error; a stale or duplicate observation leaves that original error intact.
 // Cold directory selectors are used only for administrative first_next freshness
 // against recorded declarations (like receipt lookup), never admission/dispatch.
 // Their coverage/generation validation and authoritative fallback are identical
@@ -148,6 +158,12 @@
 // Owner status returns the full declaration. Agent/session inspection discloses
 // it only in its declared context with current context.inspect authority;
 // eligibility remains separate from saved continuation phase and wait reason.
+// Session context.status exposes state, reason, version and operation without
+// requiring context.inspect, but omits FirstAction without current inspection
+// of its declared context. Each included turn still needs turn.inspect.
+// FirstAction's Disposition is authoritative for display: not_admitted,
+// admission_refused, admitted_unbound, bound, terminal or unsupported. A retained
+// historical Refusal does not override a later native admission or binding.
 // A live idle held turn can retain model_pending/tool_pending and its pending
 // entry, not only ready. Inert recovered turns remain recovery_pending, never
 // the live eligibility_held overlay; no status or release enqueues them.

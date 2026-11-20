@@ -28,6 +28,18 @@
 // carriage returns, format characters and invalid UTF-8 while keeping
 // printable Unicode; each line of multiline text is labelled.
 //
+// Held sends show session.ErrEligibilityHeld's fixed class and the copied gate's
+// state, reason, version, operation and through-sequence. The same gate appears
+// at attachment, on /status <turn>, on context.status sent through /send, and on
+// eligibility events. A redacted view shows only the fields Core supplied;
+// terminal never reconstructs a missing declaration. An available first action
+// shows its initial/permitted input and admission identities, first-admitted
+// identity and source sequences. Its Disposition, not retained Refusal metadata,
+// determines whether the current display reports an admission refusal.
+// Eligibility is separate from the saved phase/wait and recovery availability.
+// Only the trusted owner's Core Service transitions set or release the gate;
+// there is no terminal eligibility command or automatic resend on release.
+//
 // Run takes one live subscription per active turn of every agent, not only the
 // selection. Provisional text prints as "live (provisional):" and is never the
 // answer; after the recorded ending and the end of provisional text, a

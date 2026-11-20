@@ -207,6 +207,7 @@ func (r *runner) start(a *Agent) {
 		if i == 0 {
 			cursor = view.ThroughSequence
 		}
+		r.eligibilityView(ids, view.Eligibility)
 		for _, turn := range view.Turns {
 			r.turnView(lineIDs{agent: a.AgentID, context: c.ContextID, turn: turn.TurnID}, turn)
 			if turn.State != "recovery_pending" {
@@ -248,6 +249,8 @@ func (r *runner) describe(err error) string {
 		return "unavailable"
 	case errors.As(err, &refusal):
 		return refusal.Error()
+	case errors.Is(err, session.ErrEligibilityHeld):
+		return "eligibility held"
 	case errors.Is(err, session.ErrReattachRequired), errors.Is(err, session.ErrFinished), errors.Is(err, session.ErrClosed):
 		return err.Error()
 	case errors.Is(err, context.Canceled):
@@ -441,6 +444,9 @@ func (r *runner) result(j job, result session.CommandResult, err error) {
 	operation := j.command.Operation
 	if err != nil {
 		r.say(j.ids, "refused:", operation+" "+r.describe(err))
+		if view, ok := result.Data.(session.EligibilityView); ok {
+			r.eligibilityView(j.ids, &view)
+		}
 		return
 	}
 	switch v := result.Data.(type) {
@@ -448,6 +454,7 @@ func (r *runner) result(j job, result session.CommandResult, err error) {
 		r.turnView(j.ids, v)
 	case session.ContextView:
 		r.say(j.ids, "context", fmt.Sprintf("revision=%d turns=%d", v.Revision, len(v.Turns)))
+		r.eligibilityView(j.ids, v.Eligibility)
 		for _, turn := range v.Turns {
 			r.turnView(lineIDs{agent: j.ids.agent, context: j.ids.context, turn: turn.TurnID}, turn)
 		}
@@ -472,6 +479,7 @@ func (r *runner) result(j job, result session.CommandResult, err error) {
 }
 
 func (r *runner) turnView(ids lineIDs, v session.TurnView) {
+	r.eligibilityView(ids, v.Eligibility)
 	if v.State == "recovery_pending" {
 		r.say(ids, "unresumable", fmt.Sprintf("recovery pending; saved_phase=%s wait_reason=%s owner_version=%d generation=%d; no resume is offered", v.SavedPhase, v.WaitReason, v.OwnerVersion, v.Generation))
 		return
@@ -480,6 +488,34 @@ func (r *runner) turnView(ids lineIDs, v session.TurnView) {
 	if v.OwnerVersion != 0 {
 		r.say(ids, "owner", fmt.Sprintf("phase=%s wait_reason=%s version=%d generation=%d", v.SavedPhase, v.WaitReason, v.OwnerVersion, v.Generation))
 	}
+}
+
+func (r *runner) eligibilityView(ids lineIDs, v *session.EligibilityView) {
+	if v == nil {
+		return
+	}
+	r.say(ids, "eligibility", fmt.Sprintf("state=%s reason=%s version=%d operation=%s through=%d", v.State, v.Reason, v.Version, v.OperationID, v.ThroughSequence))
+	first := v.FirstAction
+	if first == nil {
+		return
+	}
+	r.say(ids, "first-action", fmt.Sprintf("action=%s disposition=%s first_admitted_sequence=%d native_sequence=%d bound_sequence=%d native_ending_sequence=%d", first.Declaration.ActionID, first.Disposition, first.FirstAdmittedSequence, first.NativeSequence, first.BoundSequence, first.NativeEndingSequence))
+	r.eligibilityTurn(ids, "initial", first.Declaration.InitialTurn)
+	r.eligibilityTurn(ids, "permitted", first.Declaration.PermittedTurn)
+	if first.FirstAdmittedTurn != nil {
+		r.eligibilityTurn(ids, "first-admitted", *first.FirstAdmittedTurn)
+	}
+	if refusal := first.Declaration.Refusal; first.Disposition == "admission_refused" && refusal != nil {
+		r.say(ids, "first-action-refusal", fmt.Sprintf("stage=%s code=%s", refusal.Stage, refusal.Code))
+	}
+}
+
+func (r *runner) eligibilityTurn(ids lineIDs, kind string, turn ledger.EligibilityTurn) {
+	text := fmt.Sprintf("context=%s turn=%s start=%s admission=%s input_sha256=%s", turn.ContextID, turn.TurnID, turn.StartCommandID, turn.AdmissionCommandID, turn.InputSHA256)
+	if task := turn.TaskBinding; task != nil {
+		text += fmt.Sprintf(" task=%s assignment=%s generation=%d", task.TaskID, task.AssignmentID, task.Generation)
+	}
+	r.say(ids, "first-action-"+kind, text)
 }
 
 func (r *runner) activeSelected() *turnState {
@@ -533,6 +569,9 @@ func (r *runner) pump(a *Agent, cursor uint64) {
 func (r *runner) event(e session.Event) {
 	ids := lineIDs{agent: e.AgentID, context: e.ContextID, turn: e.TurnID}
 	switch v := e.Data.(type) {
+	case session.EligibilityView:
+		r.say(ids, "event", e.Type)
+		r.eligibilityView(ids, &v)
 	case ledger.RuntimeTurnBound:
 		r.track(ids)
 		r.say(ids, "event", e.Type+" "+e.TurnID.String())
