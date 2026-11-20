@@ -67,7 +67,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypePrivateTurnRevision, TypeRuntimeTurnBound, TypeRuntimeToolStarted,
 // TypeRuntimeToolResult, TypeRuntimeTurnResult and TypeRuntimeLoopReceipt;
 // and F3-16, frozen (D169): TypeRuntimeContinuationChanged
-// and TypeRuntimeContinuationReceipt; and F3-90, proposed for freeze (D125):
+// and TypeRuntimeContinuationReceipt; and F3-90, frozen (D174):
 // TypeRuntimeEligibilityChanged and TypeRuntimeEligibilityReceipt.
 // F3-90 adds two entries to the earlier families, each at version 1.
 // It never contains a type in the reserved fixture namespace.

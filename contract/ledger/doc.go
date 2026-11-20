@@ -211,6 +211,9 @@
 // F3-16 is ticket 16's part of F3, frozen (D169),
 // also by addition to format version 1; record availability does not imply
 // an operational continuation owner, recovery or child shutdown.
+// F3-90 is ticket 90's part of F3, frozen (D174),
+// also by addition to format version 1; record availability does not imply
+// an operational hold, fence, first-action entrance or held runtime behavior.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -3276,7 +3279,7 @@
 // # F3-90: generic agent eligibility
 //
 // Ticket 90's runtime.eligibility_changed and runtime.eligibility_receipt,
-// both version 1, and canonical schema 8 are proposed for freeze (D125).
+// both version 1, and canonical schema 8 are frozen (D174).
 // Defined adds two entries to the preceding families. Earlier codecs, schemas,
 // groups and goldens stay byte-identical. C3 owns this metadata-only family;
 // internal/core/agents is its designated producer through SubmitAt after freeze.
@@ -3409,8 +3412,10 @@
 // order and text are preserved. This is not the stored owner_input object,
 // actual rendered prompt or a permission. The live start verifies this digest
 // before admission and on same-ID retry. The loop.bind planner in preflight
-// and replay checks ledger identity only: the declared TurnID, AdmissionCommandID
-// and origin/context. No planner or Open reads a private object for this digest.
+// and replay checks ledger identity only: while the agent's projection at that
+// prefix is first_action_required, a bind of the declared TurnID must carry the
+// declaration's AdmissionCommandID and origin/context, and a bind of any other
+// turn is held. No planner or Open reads a private object for this digest.
 //
 // first_refused is Core's observation, not permission: stage is CLOSED to
 // turn_admission, before any native admission or loop binding, for the current

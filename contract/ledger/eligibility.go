@@ -8,7 +8,7 @@ import (
 	"uuid"
 )
 
-// F3-90's two version-1 types are proposed for freeze (D125).
+// F3-90's two version-1 types are frozen (D174).
 const (
 	TypeRuntimeEligibilityChanged = "runtime.eligibility_changed"
 	TypeRuntimeEligibilityReceipt = "runtime.eligibility_receipt"

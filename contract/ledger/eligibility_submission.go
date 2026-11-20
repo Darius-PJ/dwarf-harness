@@ -8,8 +8,8 @@ import (
 	"uuid"
 )
 
-// EligibilitySubmission is the canonical schema-8 preimage, proposed for freeze
-// (D125). Arguments is the matching concrete value below, never arbitrary JSON.
+// EligibilitySubmission is the canonical schema-8 preimage, frozen (D174).
+// Arguments is the matching concrete value below, never arbitrary JSON.
 // ExpectedOperationID is absent for a new hold and required for an existing one.
 type EligibilitySubmission struct {
 	Schema              int64     `json:"schema"`
