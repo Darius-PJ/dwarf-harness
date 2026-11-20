@@ -33,9 +33,11 @@
 // at attachment, on /status <turn>, on context.status sent through /send, and on
 // eligibility events. A redacted view shows only the fields Core supplied;
 // terminal never reconstructs a missing declaration. An available first action
-// shows its initial/permitted input and admission identities, first-admitted
-// identity and source sequences. Its Disposition, not retained Refusal metadata,
-// determines whether the current display reports an admission refusal.
+// shows its initial/permitted input and admission identities. When Disposition
+// is supplied, it also shows available first-admitted identity and source sequences;
+// Disposition, not retained Refusal metadata, controls admission-refusal display.
+// Events have no derived disposition or sequences and print neither; status
+// remains the source of those facts.
 // Eligibility is separate from the saved phase/wait and recovery availability.
 // Only the trusted owner's Core Service transitions set or release the gate;
 // there is no terminal eligibility command or automatic resend on release.

@@ -499,7 +499,11 @@ func (r *runner) eligibilityView(ids lineIDs, v *session.EligibilityView) {
 	if first == nil {
 		return
 	}
-	r.say(ids, "first-action", fmt.Sprintf("action=%s disposition=%s first_admitted_sequence=%d native_sequence=%d bound_sequence=%d native_ending_sequence=%d", first.Declaration.ActionID, first.Disposition, first.FirstAdmittedSequence, first.NativeSequence, first.BoundSequence, first.NativeEndingSequence))
+	text := "action=" + first.Declaration.ActionID.String()
+	if first.Disposition != "" {
+		text += fmt.Sprintf(" disposition=%s first_admitted_sequence=%d native_sequence=%d bound_sequence=%d native_ending_sequence=%d", first.Disposition, first.FirstAdmittedSequence, first.NativeSequence, first.BoundSequence, first.NativeEndingSequence)
+	}
+	r.say(ids, "first-action", text)
 	r.eligibilityTurn(ids, "initial", first.Declaration.InitialTurn)
 	r.eligibilityTurn(ids, "permitted", first.Declaration.PermittedTurn)
 	if first.FirstAdmittedTurn != nil {

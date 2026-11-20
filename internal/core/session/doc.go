@@ -33,9 +33,10 @@
 // included turns still require turn.inspect. FirstAction is omitted unless
 // its declared context is the queried context and context.inspect is current.
 //
-// FirstAction retains the initial/permitted bindings and first-admitted identity
-// with their source sequences. Disposition is not_admitted, admission_refused,
-// admitted_unbound, bound, terminal or unsupported. Only admission_refused uses
+// In status and command results, FirstAction retains the initial/permitted
+// bindings and first-admitted identity with their source sequences.
+// Disposition is not_admitted, admission_refused, admitted_unbound, bound,
+// terminal or unsupported. Only admission_refused uses
 // the recorded turn_admission refusal as the current disposition; historical
 // refusal metadata can survive a later admission. Post-bind waits and endings
 // remain the turn's own state. The exact declared input may run under ordinary
@@ -50,8 +51,11 @@
 // the recorded effect, never from the view. Event types are turn.started,
 // tool.started, tool.finished, tool.output (a result-object reference, never
 // result bytes), usage, and turn.finished, turn.cancelled or turn.failed;
-// runtime.eligibility_changed carries a copied gate under the same current
-// disclosure rules as status. Sequence is the source record's own sequence.
+// eligibility.changed carries the recorded gate and declaration under the same
+// current disclosure rules as status. It has no derived first-action facts:
+// Disposition is empty, the four source sequences are zero and FirstAdmittedTurn
+// is nil. Query status for those facts. Sequence is the source record's own
+// sequence.
 //
 // LiveText returns a provisional snapshot and a subscription attached at the
 // same delta high-water. Deltas are decoded answer text only, never reasoning,

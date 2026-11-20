@@ -161,9 +161,13 @@
 // Session context.status exposes state, reason, version and operation without
 // requiring context.inspect, but omits FirstAction without current inspection
 // of its declared context. Each included turn still needs turn.inspect.
-// FirstAction's Disposition is authoritative for display: not_admitted,
-// admission_refused, admitted_unbound, bound, terminal or unsupported. A retained
-// historical Refusal does not override a later native admission or binding.
+// On status views, FirstAction's Disposition is authoritative for display:
+// not_admitted, admission_refused, admitted_unbound, bound, terminal or
+// unsupported. A retained historical Refusal does not override a later native
+// admission or binding. Since eligibility events carry the recorded gate and
+// declaration under the same current disclosure rules, but no derived
+// first-action facts: Disposition is empty, the four source sequences are zero
+// and FirstAdmittedTurn is nil. Status remains the source of those facts.
 // A live idle held turn can retain model_pending/tool_pending and its pending
 // entry, not only ready. Inert recovered turns remain recovery_pending, never
 // the live eligibility_held overlay; no status or release enqueues them.

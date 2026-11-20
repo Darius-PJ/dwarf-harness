@@ -159,3 +159,22 @@ func TestEligibilityFirstActionRendering(t *testing.T) {
 		})
 	}
 }
+
+func TestEligibilityEventRendering(t *testing.T) {
+	t.Parallel()
+	ids, view := eligibilityDisplay()
+	view.State, view.Reason, view.FirstAction.Disposition = "eligible", "none", ""
+	var output bytes.Buffer
+	r := runner{cfg: Config{Output: &output}}
+	r.event(session.Event{Sequence: view.ThroughSequence, Type: "eligibility.changed", AgentID: ids.agent, ContextID: ids.context, Data: view})
+	got := output.String()
+	requireDisplay(t, got, "event eligibility.changed", "state=eligible", "reason=none", "version=3", "operation="+view.OperationID.String(), "through=42", "first-action action="+view.FirstAction.Declaration.ActionID.String(), "first-action-initial", "first-action-permitted")
+	for _, turn := range []ledger.EligibilityTurn{view.FirstAction.Declaration.InitialTurn, view.FirstAction.Declaration.PermittedTurn} {
+		requireDisplay(t, got, turn.ContextID.String(), turn.TurnID.String(), turn.StartCommandID.String(), turn.AdmissionCommandID.String(), turn.InputSHA256.String())
+	}
+	for _, derived := range []string{"disposition=", "_sequence=", "first-action-first-admitted"} {
+		if strings.Contains(got, derived) {
+			t.Fatalf("event display invented %q: %s", derived, got)
+		}
+	}
+}

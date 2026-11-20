@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,9 +177,60 @@ func TestEligibilityTerminalSmoke(t *testing.T) {
 	}
 	counts("completed-inspection", f.service, 1, 1)
 
+	releaseCursor := f.store.Durable()
 	if _, err := f.service.ReleaseEligibility(ctx, EligibilityRelease{CommandID: uuid.NewV7(), AgentID: f.origin.AgentID, ExpectedVersion: gate.Version, ExpectedOperationID: gate.OperationID}); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("release_event_has_no_disposition", func(t *testing.T) {
+		page, err := f.view.Since(ctx, releaseCursor, 128)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var releases int
+		for _, event := range page.Events {
+			if event.Type != "eligibility.changed" {
+				continue
+			}
+			releases++
+			view, ok := event.Data.(session.EligibilityView)
+			if !ok || view.State != "eligible" || view.Reason != "none" || view.Version != gate.Version+1 || view.OperationID != gate.OperationID || view.ThroughSequence != event.Sequence {
+				t.Fatalf("release event lost its recorded gate: %+v", event)
+			}
+			first := view.FirstAction
+			if first == nil || first.Declaration.ActionID != request.ActionID || first.Declaration.PermittedTurn.TurnID != firstTurn || first.Declaration.PermittedTurn.AdmissionCommandID != request.FirstActionTurn.AdmissionCommandID {
+				t.Fatalf("release event lost its declaration: %+v", first)
+			}
+			if first.Disposition != "" || first.FirstAdmittedTurn != nil || first.FirstAdmittedSequence != 0 || first.NativeSequence != 0 || first.BoundSequence != 0 || first.NativeEndingSequence != 0 {
+				t.Fatalf("release event fabricated derived first-action facts: %+v", first)
+			}
+		}
+		if releases != 1 {
+			t.Fatalf("release events=%d, want one", releases)
+		}
+		status := firstActionStatus(t, f.service, f.origin.AgentID)
+		if status.State != "eligible" || status.FirstAction.Disposition != "terminal" || status.FirstAction.FirstAdmittedSequence == 0 || status.FirstAction.FirstAdmittedSequence != gate.FirstAction.FirstAdmittedSequence || status.FirstAction.FirstAdmittedTurn == nil || status.FirstAction.FirstAdmittedTurn.TurnID != firstTurn {
+			t.Fatalf("status lost the completed first-action facts: %+v", status.FirstAction)
+		}
+		t.Logf("EVENT-VIEW disposition=empty derived_sequences=0 first_admitted_turn=nil; STATUS disposition=%s first_admitted_sequence=%d", status.FirstAction.Disposition, status.FirstAction.FirstAdmittedSequence)
+	})
+	eventTranscript := func(name string, h *terminalHarness, from int) int {
+		t.Helper()
+		start := h.wait(t, from, "event eligibility.changed")
+		gateLine := h.wait(t, start+1, "eligibility state=eligible", "reason=none")
+		end := identity(h, gateLine+1)
+		for n := start; n <= end; n++ {
+			line := h.line(n)
+			t.Logf("EVENT-TRANSCRIPT view=%s line=%d %s", name, n+1, line)
+			for _, derived := range []string{"disposition=", "_sequence=", "first-action-first-admitted"} {
+				if strings.Contains(line, derived) {
+					t.Fatalf("%s event display invented %q: %s", name, derived, line)
+				}
+			}
+		}
+		return end
+	}
+	i = eventTranscript("first", h, i+1)
+	eventTranscript("second", second, j+1)
 	contextStatus(h)
 	i = h.wait(t, i+1, "context revision=")
 	i = h.wait(t, i+1, "eligibility state=eligible", "reason=none")

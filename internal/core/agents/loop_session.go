@@ -350,7 +350,10 @@ func (v *loopSession) Since(ctx context.Context, cursor uint64, limit int) (sess
 				if err != nil {
 					return err
 				}
-				view := eligibilityView(eligibilityState{snapshot: g.change, outcome: g.receipt.Outcome, sequence: record.Seq}, record.Seq)
+				view := session.EligibilityView{State: g.change.State, Reason: g.change.Reason, Version: g.change.Version, OperationID: g.change.OperationID, ThroughSequence: record.Seq}
+				if first := g.change.FirstAction; first != nil {
+					view.FirstAction = &session.EligibilityFirstAction{Declaration: *first}
+				}
 				next = append(next, session.Event{Sequence: record.Seq, Type: "eligibility.changed", AgentID: record.AgentID, ExecutionSessionID: record.ExecutionSessionID, ContextID: record.ContextID, OperationID: record.OperationID, Data: view})
 				continue
 			}
