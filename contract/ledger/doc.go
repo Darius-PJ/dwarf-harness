@@ -3467,4 +3467,288 @@
 // reconstruction. Wrong-operation refusal leaves the prefix unchanged.
 // These codec/group fixtures are not runtime dispatch, recovery or money proof.
 // No Core/Session API, scheduler policy or private object schema is frozen here.
+//
+// # F3-91 service loss and restoration (proposed freeze, D125)
+//
+// F3-91 adds five version-1 types to Defined, without changing any earlier
+// family: runtime.service_observed (E), runtime.service_cause_changed (K),
+// runtime.service_agent_changed (M), runtime.service_outage_notice (N), and
+// runtime.service_receipt (R). ServiceSubmission uses schema 9, following
+// F3-16's schema 7 and F3-90's schema 8. The PM freezes this family after S1
+// review and before any Core producer imports it.
+//
+// A source group is exactly [ledger.command, E, R]. A state group is
+// [ledger.command, K?, M?, N?, R], in that order, with at least one effect,
+// at most one of each, and N only with M. No other family's effect shares
+// either group. Every envelope has actor core, operation_id = command_id,
+// and no agent, execution-session, context, turn, body_refs or measurement
+// path. E and M carry agent_id in their payloads; K, N and R are colony-scoped.
+// This is not an exception to an earlier family's origin rule. The authoritative
+// consumer stages these groups separately from private traversals and routes
+// views by their payloads.
+//
+// Each payload and submission independently caps both complete input and
+// compact canonical output at 65,536 bytes, including the embedded submission
+// in R. UUIDs are canonical lowercase UUIDv7, digests are nonzero lowercase
+// SHA-256, and naturals are plain JSON integers through MaxInt64, not exponent,
+// fraction, negative zero or overflow. All known nulls and recursive duplicate
+// keys (including escaped aliases and unknown extensions) are rejected.
+// Unknown optional keys are ignored and excluded from canonical preimages.
+// Inapplicable members are omitted, never null, empty or zero placeholders.
+// Route region is the sole permitted empty string.
+//
+// Open tokens match [a-z][a-z0-9_]*, at most 64 ASCII bytes. Unknown cause,
+// scope, source, reason, provenance, condition, phase, permit, terminal,
+// coverage, edge or outcome tokens are retained as unsupported. They never
+// mean healthy, lost, restored, authority, permission, or release of money.
+// Schema, actor, operations and the reused PaidScope/period/mode grammar
+// remain closed. Historical decoding has no runtime producer-count cap.
+//
+// Canonical CauseSpec key order:
+//
+//	family, code, scope_kind, provider?, credential_scope_id?,
+//	credential_version?, model?, region?, authority_sha256?, agent_id?,
+//	context_id?, private_scope?, revision?
+//
+// CauseKey is SHA-256 of this compact known-field encoding. Families are
+// provider, money and execution. Known code/scope/field combinations are:
+//
+//	credential_denied: provider / credential; provider, credential_scope_id,
+//	  credential_version.
+//	scoped_denied: provider / account_route; provider, credential_scope_id,
+//	  credential_version, model, region, authority_sha256.
+//	quota_exhausted: provider / account; provider, credential_scope_id,
+//	  authority_sha256, with no model, region or credential_version.
+//	rate_limited: provider / account_route; provider, credential_scope_id,
+//	  model, region, authority_sha256, without credential_version.
+//	overloaded: provider / provider_route; provider, model, region,
+//	  authority_sha256.
+//	unreachable: provider / endpoint; provider, authority_sha256 only.
+//	owner_money_exhausted: money / colony (no scope IDs), agent (agent_id),
+//	  or credential (provider, credential_scope_id, without version).
+//	private_integrity: execution / private; agent_id, private_scope,
+//	  revision, and context_id exactly when private_scope is context.
+//	process_unconfirmed: execution / colony, the workspace Git Owner.
+//
+// Unlisted fields are absent for those known combinations. Model and region
+// use the exact sealed nonsecret F3-13 grammar; region is present even when
+// empty for route scopes. authority_sha256 hashes the sealed authority, never
+// a credential value, locator, account name, header, path or raw error.
+// E reserves the immutable CauseKey-to-CauseID association before K exists.
+// The same key cannot acquire a second ID; an ID cannot acquire a new spec.
+//
+// The provider writer diagnosis table is exhaustive and evidence-bounded:
+// 401 denied is immediate credential_denied; 403 denied is immediate
+// scoped_denied. Anthropic 402/enforced_spend_limit_reached/usage-limit
+// exhaustion and OpenAI insufficient_quota or the supported spend/usage
+// exhaustion codes yield quota_exhausted, immediate unless one validated
+// stated reset exists. Rate-limited and overloaded classifier results use
+// grace. Unreachable uses grace only for transport.Do or read net.Error with
+// an uncancelled exchange context; transport timeout and unreachable map to
+// code unreachable. HTTP-504 timeout, provider_error, invalid_request,
+// unavailable, conflict, protocol_error, refused, tariff_ambiguous, caller
+// cancellation, local deadline and capture refusal establish nothing and
+// write no E. Vendor fields cannot widen the scope. A reset is one unambiguous
+// retry-after delta or HTTP date, future at observation; merely passing it
+// never clears a cause.
+//
+// Source key order:
+//
+//	kind, observation_id, observed_through, source_sequence?, command_id?,
+//	submission_sha256?, origin?, turn_id?, attempt_id?, object?,
+//	observed_utc_ns, clock_held, reason, provenance?, reset_utc_ns?, money?,
+//	completion?, workset_sha256?, failed_work_count?, execution_run_id?,
+//	execution_proof?
+//
+// Known kinds are paid_call, money_refusal, integrity_refusal, process_refusal,
+// cause_clear, successful_call, grace_expiry and demand_withdrawn. Reason writer
+// values are rate_limited, overloaded, unreachable, credential_denied,
+// scoped_denied, quota_exhausted, money_exhausted, private_integrity,
+// process_unconfirmed, provider_completed, budget_available, integrity_verified,
+// process_closed, all_work_moved and grace_due. owner_cancelled is not a writer
+// value. Withdrawal is only a pre-due clearance of a pending generation.
+//
+// observed_utc_ns is positive and clock_held is a required Boolean. The live
+// host uses the existing review-clock floor, holding a backwards sample at the
+// maximum of review floor, review sample and last accepted ledger event time,
+// setting clock_held without raising reviewSample. Paid dispatch's clock rule
+// is unchanged. observed_through is a complete validated prior prefix.
+// source_sequence selects an actual prior effect, never a predicted cursor.
+// Paid sources require full Origin, turn_id, attempt_id, source_sequence
+// selecting the dispatch intent, and the original context-owned ObjectRef.
+// Origin, turn, request and attempt must agree with the native records.
+// Their provenance is host-fixed provider_response or transport. Refusals
+// without a native effect instead require command_id, submission_sha256,
+// Origin and turn_id. A supplied command/digest is always a pair.
+// reset_utc_ns is future and only on rate/quota evidence or UTC-period money
+// refusal. Workset digest/count are paired moved-work evidence; the count is
+// zero for restoration. execution_run_id is copied only when the actual report
+// supplies a RunID, never fabricated. execution_proof is present exactly for
+// process_closed and is live, retained_job or name_absent.
+//
+// Money occurs exactly on money_refusal or reason budget_available, in order:
+//
+//	scope, period, spend_sequence, mode, occupied_micros, ceiling_micros?,
+//	coverage, workset_sha256?, eligible_work_count?, failed_work_count?
+//
+// Scope/period/mode reuse F3-13. Only colony, agent and credential scopes
+// qualify. Amounts are canonical nonnegative decimal strings: occupied may
+// exceed MaxInt64 up to the payload cap; ceiling may not. Finite requires a
+// ceiling and unlimited forbids it. Colony/agent use mandatory_scope without
+// workset fields; credential uses complete_workset with digest and both counts.
+// Refusal requires finite occupied >= ceiling, including unknown holds and
+// zero ceilings, and complete_workset requires eligible = failed > 0.
+// Quote-too-large alone, task/grant exposure, authority denial and paid_violation
+// do not establish money loss. Lifetime has no reset; UTC day/month uses the
+// next boundary. Credential coverage needs the enabled exhaustive loop registry.
+// budget_available binds a real book/configuration/native proof; it neither
+// charges nor releases money.
+//
+// Completion occurs exactly on successful_call, in order:
+//
+//	provider, terminal, native_result_sequence?, financial_kind?, permit?
+//
+// The financial members occur together only if the native result already
+// exists, never predict one, and authorize no financial change. Usage and
+// financially unknown may both qualify. The successful terminal predicate
+// is the existing paid derivation gate: complete HTTP 200, valid provider
+// message ID, the requested model, and no content/capture error or substituted
+// capture. Anthropic accepts end_turn, max_tokens, stop_sequence, tool_use and
+// model_context_window_exceeded; OpenAI accepts completed. Refusal, failed,
+// incomplete, partial/cancelled execution, bare usage and correction do not
+// qualify. Tool-use completion is not authority for the later tool.
+//
+// Before E, publish a separate immutable service_completion object under the
+// original owning-context private object layout, bounded by the existing 1 MiB
+// object cap. Its exact order is schema, kind, observation_id, through_sequence,
+// workset_sha256?, permits; schema is 1 and kind is service_completion.
+// Permits are sorted/distinct by CauseID, with entry order cause_id,
+// cause_version, member_generation, kind, proof_sequence?, failed_work_count?.
+// Kinds are same_scope, cleared, credential_replaced, all_work_moved,
+// execution_clear and blocked. Same_scope/blocked omit proof/count;
+// cleared/credential_replaced/execution_clear require an actual prior proof
+// sequence. All_work_moved requires failed_work_count=0 and the recorded
+// exhaustive workset digest. Neither a caller Boolean nor one switched turn
+// proves that all configured and durable nonterminal work left a failed scope.
+//
+// Canonical record key orders:
+//
+//	E: observation_id, agent_id, cause_id?, cause_key?, cause?, source,
+//	   completion_permits_object?
+//	K: cause_id, cause_key, expected_version, version, cause, condition, source
+//	M: agent_id, cause_id, expected_version, version, generation, phase,
+//	   first_source, due_utc_ns?, outage_id?, source
+//	N: outage_id, cause_id, edge, notice_id, member_source_sequence
+//	R: command_id, submission_sha256, submission, outcome, effects,
+//	   source_through
+//	effects entry: type, sequence
+//
+// Per-record presence is fixed. Failure E requires cause_id/key/spec and
+// forbids completion_permits_object. Successful-call E forbids all cause
+// fields, requires completion_permits_object and omits completion.permit:
+// one E may satisfy several causes. Deterministic clear/withdraw E names its
+// existing cause by cause_id alone, forbidding cause_key, cause and permits
+// object. E accepts the seven non-timer known source kinds; grace_expiry
+// occurs only in service.expire and its state records, never E/service.record.
+// In every successful-call state source (service.complete or service.clear,
+// including K/M), completion.permit is required and selects that cause's
+// captured entry. Codec presence checks do not replace the consumer's check
+// that the selected entry exactly matches E's object.
+//
+// K condition is active or cleared. Creation is expected_version=0,
+// version=1, active; real later changes increment exactly once. M phase is
+// pending, lost, restored or withdrawn. Generation begins at 1 and advances
+// only for a new demand after restoration/withdrawal. first_source is the
+// immutable first refusal within that generation. Grace due is checked
+// first_source.observed_utc_ns + 120,000,000,000; no refreshed onset on reopen.
+// Due is present exactly for grace-bearing generations, including history.
+// outage_id is absent while pending/withdrawn and retained on lost/restored.
+// A fresh live timer sample must reach due even when clock_held; pure replay
+// validates recorded arithmetic, never samples time, arms a timer or appends.
+//
+// N edge is began or ended. member_source_sequence selects the actual M
+// envelope in that same commit, not a payload self-sequence. There is one open
+// incident per cause: the first lost member atomically emits began; later
+// demanded members join its cumulative affected set without another begin;
+// the last restoration emits ended and fixes the final set. Neither a
+// membership list nor a delivery-ack store is serialized in N.
+// R outcome is recorded for new transitions only. Effects exactly name the
+// present envelopes in planned-tail order; no exact-no-op group is written.
+//
+// Canonical schema-9 submission order:
+//
+//	schema, actor, operation, cause_id?, agent_id?, expected_cause_version?,
+//	expected_member_version?, expected_generation?, arguments
+//	record arguments: observation_id, cause_key?, cause?, source,
+//	  completion_permits_object?
+//	state arguments: cause_key, cause, source, first_source?, due_utc_ns?,
+//	  outage_id?, notice_id?
+//
+// Actor is host-fixed core. The six operations are closed. service.record
+// requires agent_id, applies E's cause/source presence, and omits all three
+// expected_* fields. service.clear requires cause_id and expected_cause_version,
+// forbids agent_id, and omits expected_member_version and expected_generation.
+// observe/expire/complete/withdraw require cause_id, agent_id and all three
+// expectations. An applicable zero means absence; an inapplicable expectation
+// is omitted, not zero. State cause_key/spec are required and must match.
+// Observe supplies a failure source and first_source, due exactly for grace,
+// and an outage for immediate loss; only the first lost member adds notice_id.
+// Expire/complete/withdraw omit first_source/due and reuse the stored witness.
+// Expire uses grace_expiry; complete uses successful_call; clear uses
+// cause_clear or successful_call; withdraw uses demand_withdrawn. Clear and
+// withdraw cannot carry an incident edge. Expire/complete name the outage and
+// carry notice_id only for the computed first/last member edge. The planner,
+// not caller-supplied state, determines K/M/N and checks prefix CAS.
+// submission_sha256 hashes compact known-field schema 9. Receipt matching
+// precedes fresh clock/CAS checks; changed content under a command identity
+// remains a cross-schema command mismatch.
+//
+// Clear never means restored. Provider clearance is an exact-scope qualifying
+// completion (K with the member restoration) or positive credential replacement:
+// owner rebind at the same scope retires/revokes the refused version and a
+// successful call uses the recorded replacement. Money clearance is a real
+// budget_available book recheck at expiry or succeeding-call admission.
+// Integrity clearance is revision-bound integrity_verified from the agents
+// Open report at openedThrough, written by explicit ReconcileServiceEvidence,
+// or a live entrance pass. Process clearance is process_closed from positive
+// workspace ProcessClosures or a successful workspace operation. Open writes
+// none of these. Reset/rebind/raise/top-up/repair/process closure only permit a
+// call; restoration still needs an actual normal agent-originated successful
+// call observed after this membership's onset and a current scope-clear or
+// ceased-applying witness. Unknown held financial exposure remains unchanged.
+//
+// Paid ordering is E -> unchanged F3-13 financial result -> source drain
+// K/M/N -> acknowledgement. Publish service_completion outside Service.mu
+// under the context gate before E. E and the financial group are submitted
+// under the existing service hold; the drain uses its own cycles and loads
+// selected service metadata outside that hold. source_through covers only
+// complete E commits whose applicable actions all committed, not financial
+// traffic. A multi-cause completion keeps coverage before E until the final
+// per-cause action; partial recovery matches prior receipts rather than
+// repeating effects. A definite service failure after financial commit is a
+// retained service-recovery condition visible in status and retried by the
+// next drain, never a financial error or rewrite. Uncertain appends poison as
+// before. Recovery consumes recorded E, never resends a paid request, reopens
+// a paid object to reinterpret it, or infers success from later configuration.
+//
+// Service.changed belongs only to the session bound to M.agent_id. Every
+// bound session surfaces N as outage.began/outage.ended and lost-entering M
+// on an open incident as outage.joined. The terminal deduplicates NoticeID
+// and (OutageID, AgentID, generation), listing the complete affected set at one
+// through-sequence, including late joiners. Passive queries append nothing;
+// the trusted host snapshot is not an Agent-handle capability.
+// F3-91 changes only its projection/directory and wakes views: it gates no
+// admission, cancels/retries nothing, transfers no authority and releases no
+// reservation. Eligibility, grants, tasks, holders, continuations and the
+// original financial groups remain unchanged.
+//
+// testdata/f3/91 is generated only by TestGoldenF3_91 -update. Its earlier
+// native families remain service-admissible, including calls after service
+// records; an isolated real Core Open proof removes only F3-91 groups.
+// It covers grace/immediate causes, three demanded incident members, a late
+// join's cumulative listing, clear without restoration, per-member completion
+// and exactly one begin/end per incident. Negative group rows cover duplicate
+// identity, source, actor, origin, order and planned-tail notice binding.
+// Codec fixtures and FuzzDecodeF3_91 are contract proof, not runtime timer,
+// dispatch, recovery, permission, financial or terminal proof.
 package ledger

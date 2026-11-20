@@ -1,0 +1,1 @@
+{"schema":1,"kind":"service_completion","observation_id":"019a9100-0000-7000-8000-000000006036","through_sequence":178,"permits":[{"cause_id":"019a9100-0000-7000-8000-000000007001","cause_version":1,"member_generation":1,"kind":"same_scope"},{"cause_id":"019a9100-0000-7000-8000-000000007002","cause_version":2,"member_generation":1,"kind":"execution_clear","proof_sequence":167}]}
