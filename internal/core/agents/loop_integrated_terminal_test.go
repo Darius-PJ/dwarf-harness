@@ -46,6 +46,7 @@ func testTerminalIntegratedMergeCancel(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, turnAnthropic(model, nil, "Synthetic terminal answer."))
 	}
+	f.raiseDispatchBound(t)
 	f.enable(t, parent)
 	parentView, err := f.service.OpenSession(context.Background(), parent.Binding)
 	if err != nil {

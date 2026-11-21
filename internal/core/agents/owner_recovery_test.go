@@ -255,6 +255,7 @@ func (f *continuationRestart) assertEnded(t testing.TB, outcome string, expected
 }
 
 func TestTurnLoopCrashRecovery(t *testing.T) {
+	t.Parallel()
 	for _, row := range []struct {
 		name, boundary, operation, outcome string
 		legacyEnd                          bool
@@ -266,6 +267,7 @@ func TestTurnLoopCrashRecovery(t *testing.T) {
 		{"reconcile_paid_unknown_completes", "paid_sent", "owner.reconcile", "interrupted", false},
 	} {
 		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
 			f := continuationKilled(t, row.boundary)
 			ctx := context.Background()
 			owner := f.owner(t)

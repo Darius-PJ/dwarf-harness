@@ -87,6 +87,7 @@ func testLiveTurnExclusion(t *testing.T, provider string) {
 		}
 		baseline[scope] = view.Held
 	}
+	f.raiseDispatchBound(t)
 	f.enable(t, settings...)
 	views := make([]session.Session, 4)
 	turns := make([]uuid.UUID, 4)

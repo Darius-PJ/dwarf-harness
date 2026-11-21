@@ -229,6 +229,7 @@ func testIndependentContinuations(t *testing.T, provider string) {
 			t.Fatal(err)
 		}
 	}
+	f.raiseDispatchBound(t, &f.setting, &first, &second)
 	f.enable(t, first, second)
 	views := make([]session.Session, 3)
 	turns := make([]uuid.UUID, 3)

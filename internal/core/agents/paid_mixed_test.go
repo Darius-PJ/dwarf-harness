@@ -166,6 +166,7 @@ func TestPaidMixedProviderScopes(t *testing.T) {
 			}
 		})
 		a, o := newMixedPaidFixture(t, paidServerDeps(server, nil), "utc_day")
+		(&turnFixture{paidFixture: a}).raiseDispatchBound(t)
 		owners := []*paidFixture{o, o, a, a}
 		requests := make([]PaidAdmission, 4)
 		dispatches := make([]PaidDispatch, 4)

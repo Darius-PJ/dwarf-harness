@@ -48,6 +48,7 @@ func testContinuationLocalRestart(t *testing.T) {
 		{"restart_tool_effect_without_result", "local_effect", true},
 	} {
 		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
 			f := continuationKilled(t, row.boundary)
 			owner := f.owner(t)
 			if !row.executed && (owner.Snapshot.State != "waiting_resource" || owner.Snapshot.ResumeState != "tool_pending" || owner.Snapshot.WaitReason != "local_slot") || row.executed && owner.Snapshot.State != "tool_pending" {

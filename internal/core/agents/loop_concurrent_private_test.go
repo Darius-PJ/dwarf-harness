@@ -208,6 +208,7 @@ func testConcurrentMemoryCAS(t *testing.T, provider string) {
 	initial = uint64(seeded.Version)
 	readArgs = fmt.Sprintf(`{"schema":1,"action":"read","scope":"agent","slot":"memory","revision":%d,"max_bytes":1024}`, initial)
 	before := f.store.Durable()
+	f.raiseDispatchBound(t, &f.setting, &first, &second)
 	f.enable(t, first, second)
 	bindings := []Binding{bindingOf(f.origin), first.Binding, second.Binding}
 	views := []session.Session{}
@@ -257,7 +258,7 @@ func testConcurrentMemoryCAS(t *testing.T, provider string) {
 	freeThird()
 	third, _ := f.finishedFor(t, views[2], turns[0])
 	if third.Outcome != "finished" || third.ModelCalls != 1 || conflicts.Load() != 1 || winner.Load() < 0 || posts[0].Load()+posts[1].Load() != 8 {
-		t.Fatal("wrong applied/stale/POST counts")
+		t.Fatalf("third turn outcome=%s reason=%s model_calls=%d; conflicts=%d winner=%d POSTs=%d,%d", third.Outcome, third.Reason, third.ModelCalls, conflicts.Load(), winner.Load(), posts[0].Load(), posts[1].Load())
 	}
 	want := initialText + fmt.Sprintf("contribution-%d\ncontribution-%d\n", winner.Load(), 1-winner.Load())
 	if revision, text := integratedMemory(t, f.service, bindings[0], "agent"); revision != initial+2 || text != want {
@@ -340,6 +341,7 @@ func testConcurrentMemoryCAS(t *testing.T, provider string) {
 }
 
 func TestTurnLoopConcurrentPrivateRuntime(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"anthropic", "openai"} {
 		t.Run(provider, func(t *testing.T) {
 			t.Parallel()

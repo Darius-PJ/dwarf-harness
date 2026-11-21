@@ -14,6 +14,7 @@ import (
 )
 
 func TestTurnLoopWaitingHolds(t *testing.T) {
+	t.Parallel()
 	t.Run("physical_release_without_commit", func(t *testing.T) { testLoopPhysicalRelease(t, false) })
 	t.Run("released_unsent", func(t *testing.T) { testLoopPhysicalRelease(t, true) })
 }

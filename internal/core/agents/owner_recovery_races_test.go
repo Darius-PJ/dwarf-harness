@@ -20,6 +20,7 @@ type continuationRecoveryResult struct {
 
 func testContinuationRecoveryBindings(t *testing.T) {
 	t.Run("reconcile_stale_and_mismatch", func(t *testing.T) {
+		t.Parallel()
 		f := continuationKilled(t, "ready")
 		ctx := context.Background()
 		owner := f.owner(t)
@@ -53,6 +54,7 @@ func testContinuationRecoveryBindings(t *testing.T) {
 		}
 	})
 	t.Run("reconcile_concurrent_distinct", func(t *testing.T) {
+		t.Parallel()
 		f := continuationKilled(t, "ready")
 		owner := f.owner(t)
 		start := make(chan struct{})
@@ -83,6 +85,7 @@ func testContinuationRecoveryBindings(t *testing.T) {
 		f.assertEnded(t, "interrupted", 0)
 	})
 	t.Run("already_reconciling_close_is_callers_command", func(t *testing.T) {
+		t.Parallel()
 		f := continuationKilled(t, "ready")
 		f.service.deps.beforeSubmit = func(d []ledger.Draft) []ledger.Draft {
 			if len(d) != 0 && d[len(d)-1].Type == ledger.TypeRuntimeContinuationReceipt {
@@ -116,6 +119,7 @@ func testContinuationRecoveryBindings(t *testing.T) {
 		}
 	})
 	t.Run("reconcile_same_id_retry", func(t *testing.T) {
+		t.Parallel()
 		f := continuationKilled(t, "paid_sent")
 		var observations int
 		f.service.deps.beforeSubmit = func(d []ledger.Draft) []ledger.Draft {
@@ -148,6 +152,7 @@ func testContinuationRecoveryBindings(t *testing.T) {
 
 func testContinuationCancelDuringRecovery(t *testing.T) {
 	t.Run("cancel_during_reconcile_release", func(t *testing.T) {
+		t.Parallel()
 		f := continuationKilled(t, "paid_sent")
 		view := f.openSession(t)
 		entered, release := make(chan struct{}), make(chan struct{})
@@ -205,6 +210,7 @@ func testContinuationCancelDuringRecovery(t *testing.T) {
 		}
 	})
 	t.Run("cancel_fences_deferred_reconcile_close", func(t *testing.T) {
+		t.Parallel()
 		f := continuationKilled(t, "paid_sent")
 		view := f.openSession(t)
 		f.service.deps.beforeSubmit = func(d []ledger.Draft) []ledger.Draft {

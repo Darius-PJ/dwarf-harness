@@ -177,6 +177,7 @@ func testIntegratedMergeOutcome(t *testing.T, outcome string, passive bool) {
 		}
 		_, _ = io.WriteString(w, turnAnthropic(model, nil, "Sibling merge complete."))
 	}
+	f.raiseDispatchBound(t)
 	f.enable(t, f.parentSetting, sibling)
 	views := []session.Session{f.view}
 	for _, binding := range []Binding{sibling.Binding, f.parentSetting.Binding} {

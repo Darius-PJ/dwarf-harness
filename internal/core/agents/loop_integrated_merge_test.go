@@ -32,6 +32,7 @@ func integratedParentSetting(t *testing.T, f *continuationCaptureFixture) LoopCo
 }
 
 func TestTurnLoopTemporaryMergeBack(t *testing.T) {
+	t.Parallel()
 	t.Run("crash_after_prepared", testIntegratedMergeCrash)
 	t.Run("workspace_close_capture_refusal", func(t *testing.T) {
 		t.Parallel()
@@ -106,6 +107,7 @@ func TestTurnLoopTemporaryMergeBack(t *testing.T) {
 		}
 		freeCapture := f.holdCapture(t)
 		defer freeCapture()
+		f.raiseDispatchBound(t)
 		f.enable(t, parent)
 		// With B's model held, only A can release workspace capacity after
 		// its merge park. The source capture releases its bytes before the

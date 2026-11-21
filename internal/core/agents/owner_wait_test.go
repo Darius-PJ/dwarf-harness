@@ -263,6 +263,7 @@ func continuationCaptureRecords(t testing.TB, f *continuationCaptureFixture, tur
 }
 
 func TestTurnLoopPersistedWaits(t *testing.T) {
+	t.Parallel()
 	testContinuationLocalWaits(t)
 	testContinuationCaptureTail(t)
 	testContinuationMergeWaits(t)
