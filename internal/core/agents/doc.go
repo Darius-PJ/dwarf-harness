@@ -172,6 +172,114 @@
 // entry, not only ready. Inert recovered turns remain recovery_pending, never
 // the live eligibility_held overlay; no status or release enqueues them.
 //
+// # Service availability
+//
+// F3-91 is an observation projection, not another execution or eligibility gate.
+// ServiceStatus aggregates an agent's known lost, pending and unsupported causes;
+// ServiceOutages pages incident memberships and stable notice identities at one
+// caller/filter/frontier, and ServiceStatusSnapshot takes the same-head aggregate.
+// These queries are passive. Service records change no grants, authority, native
+// work, task facts, continuation owner, scheduler slots, capacity or money.
+// They notify Since readers without rescheduling or cancelling native work.
+//
+// The service family is decoded beside the eight-family decoder, before private
+// envelope checks. Its empty envelope belongs to Core, and its command participates
+// in the shared schema-1-through-9 directory. Every decode/group error fails Open.
+// Live submission and replay use the same pure transition planner. An accepted
+// observation E reserves CauseKey -> CauseID before any cause-state K is written,
+// so concurrent first observations cannot create competing identities.
+//
+// A member generation keeps its creating first_source and its checked 120-second
+// due time. Repeated refusal of an already pending or lost generation returns its
+// original receipt and appends nothing. Semantic retries also append nothing after
+// restoration or incident end. An owner cancel is not a withdrawal: a parked turn
+// is still live demand. A cleared pending member withdraws through its own
+// demand_withdrawn E, naming the clearing K's sequence and repeating that clear's
+// reason, timestamp, clock-held flag, money witness and execution proof.
+//
+// Withdrawal means clearance before expiry is applied, with a timing distinction.
+// For provider, integrity and process causes, a clearing sample before due
+// withdraws pending members; a sample at or after due expires them first, then
+// clears K. Recording a late clear before the timer runs cannot erase that loss.
+// A clear never restores a lost member. A success captured before the member's
+// onset may clear its cause but cannot restore it.
+//
+// Money has exactly two budget_available clear sources: the expiry book recheck
+// and a succeeding call's admission. Either withdraws a still-pending money
+// member even after due; neither restores one whose exhausted-book expiry has
+// already committed. Availability means occupied < ceiling for a finite scope,
+// or an enabled unlimited scope. An exhausted finite scope has occupied >=
+// ceiling. Unknown exposure remains held across UTC period changes.
+//
+// The admission witness is the cause scope's book immediately before the named
+// RuntimePaidReserved group, not the book after that reservation. source_sequence
+// names the admission, observed_through includes it, and spend_sequence identifies
+// the spend configuration it used. Thus an admission using the last remaining
+// amount can clear, whereas a zero quote admitted at the ceiling proves no clear.
+// Replay checks the book, period, predicate and sequences from native ledger
+// metadata, never from a paid object.
+//
+// The timer's money recheck instead uses the book at the expiry frontier and that
+// expiry's own sample. Its clear source has kind cause_clear, reason
+// budget_available, source_sequence = money.spend_sequence, and no origin or turn.
+// It carries the sampled observed_utc_ns and clock_held. For a shared money cause,
+// the smallest pending agent UUID attributes this E deterministically; attribution
+// is not a claim that the cause belongs only to that agent.
+//
+// The service clock calls reviewClock and respects the accepted event/sample
+// floor. A backward sample holds at that floor with clock_held=true without raising
+// reviewSample; the paid dispatch clock's refusal rule is unchanged. Pure planning
+// and Open never sample. The worker resamples and revalidates condition, membership,
+// evidence and the book after each cold read or moved-tail retry. A grace_expiry
+// source gets a fresh UUIDv7 distinct from its command and names no E.
+//
+// Completion requires the member's own successful call, both a frontier including
+// its onset and a sample strictly after onset. The selected permit must exactly
+// match its immutable service_completion object and the current cause version and
+// member generation. Stale permits are covered without retargeting another member
+// or generation; blocked permits do nothing. Credential replacement requires the
+// owner's native bind to retire the refused version and the successful call to
+// use the replacement at the required scope. A parallel binding is insufficient.
+// all_work_moved requires the complete captured workset witness and zero remaining
+// failed work; it restores the member without clearing the old provider scope.
+// Cleared/execution_clear permits name the current clearing K. Permit validation
+// is centralized in checkServicePermit.
+//
+// E is independent of financial recording. ReconcileServiceEvidence drains these
+// sources in order, loading service_completion metadata outside Service.mu and
+// never reopening a paid object. source_through names the receipt of the newest
+// fully applied source group in the covered E prefix, not an arbitrary ledger
+// frontier. A multi-cause completion is not covered after just its first member.
+// Ignored observations advance the process-local cursor without a no-op append;
+// the next real receipt persists that coverage.
+//
+// Open may read immutable completion metadata to validate recorded selected
+// permits, but starts no clock, append or worker. A missing or corrupt object is
+// an integrity issue, not a new Open failure. Recorded transitions are retained;
+// the affected cause/member is unverifiable and reported unsupported, not healthy,
+// lost or restored. Reconcile reloads metadata outside Service.mu and validates
+// every recorded selected permit and coverage claim before removing the issue.
+// An uncovered E with unavailable metadata remains a recovery condition. Later
+// independent sources still drain, while coverage stays before the hole.
+//
+// Valid unfamiliar tokens likewise remain readable but unsupported, as with
+// F3-16 owners. They grant no healthy/lost/restored interpretation, timer, K/M/N
+// transition or money release. A later submission targeting such a cause/member
+// returns ErrUnavailable without appending, including a successful-call E whose
+// captured permit set names an unsupported member.
+//
+// EnableTurnLoop validates its existing options and context-integrity gates,
+// catches up through the unlocked-history protocol, then revalidates before
+// installing the loop and its single heap/timer worker. Service-only integrity
+// issues and definite service append failures are retained in ServiceStatus and
+// reconciliation, retried at the next drain, and do not prevent an otherwise
+// valid loop from enabling. Uncertain/poisoning writes still make Service unusable.
+// Captured positive evidence holds affected overdue timers until it resolves;
+// unaffected causes remain armable. Native context-integrity, invalid-option and
+// command-mismatch refusals are unchanged. The worker uses monotonic waits and
+// never holds its control channel while entering Service. Close cancels and joins
+// it before the existing runtime teardown.
+//
 // # Scoped authority, tasks and accounting
 //
 // A scoped mutation uses one selected owner-rooted grant and its complete
@@ -1188,6 +1296,10 @@
 // Native dispatch preflight/replay enforce the same owner fence while old
 // ownerless families retain their rules. Unknown owner tokens/outcomes stay
 // inert, and terminal owner metadata is read through the history directory.
+// F3-91 follows the same open-token rule: retained unsupported causes/members
+// are inert, and later operations on them return ErrUnavailable without a write.
+// Missing selected completion metadata has the same conservative interpretation
+// until explicit reconciliation verifies it; see Service availability above.
 //
 // Open is inert. ReconcileLoop is explicit bookkeeping, before credential
 // binding/EnableTurnLoop at executable startup, never model/tool/workspace

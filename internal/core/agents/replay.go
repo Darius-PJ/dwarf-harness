@@ -466,7 +466,11 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 	if err != nil {
 		return commandMatch{}, nil, err
 	}
-	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation, eligibility: eligibility}
+	service, err := decodeServiceFamily(d, c.First)
+	if err != nil {
+		return commandMatch{}, nil, err
+	}
+	match := commandMatch{group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation, eligibility: eligibility, service: service}
 	switch {
 	case g != nil:
 		match.command, match.found = g.command, true
@@ -484,6 +488,8 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		match.command, match.found = continuation.command, true
 	case eligibility != nil:
 		match.command, match.found = eligibility.command, true
+	case service != nil:
+		match.command, match.found = service.command, true
 	}
 	if expected != nil {
 		if !match.found || match.command.CommandID != expected.id || match.scoped == nil {
@@ -584,6 +590,16 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 			return commandMatch{}, nil, inconsistent(c.First, "invalid eligibility transition: "+err.Error())
 		}
 	}
+	var serviceNext serviceProjection
+	if service != nil {
+		serviceNext, err = s.planService(ctx, reads, service)
+		if err != nil {
+			if isHistoryNeed(err) || ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return commandMatch{}, nil, err
+			}
+			return commandMatch{}, nil, inconsistent(c.First, "invalid service transition: "+err.Error())
+		}
+	}
 	// Stage the shared envelope effects too: a later invalid closure in an
 	// otherwise unconsumed group must not publish an earlier scratch or maximum.
 	maxCommand := s.p.maxCommand
@@ -636,6 +652,17 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 	}
 	return match, func() {
+		if service != nil {
+			s.p.service = serviceNext
+			if service.observed != nil {
+				s.p.reviewFloor = max(s.p.reviewFloor, service.observed.Source.ObservedUTCNS)
+			} else if service.member != nil {
+				s.p.reviewFloor = max(s.p.reviewFloor, service.member.Source.ObservedUTCNS)
+			} else if service.cause != nil {
+				s.p.reviewFloor = max(s.p.reviewFloor, service.cause.Source.ObservedUTCNS)
+			}
+			s.notifyServiceTimerLocked()
+		}
 		if g != nil {
 			s.p.install(g, privateNext)
 		}
@@ -684,7 +711,13 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 		}
 		s.publishCommitLocked(c, g, scoped)
 		s.p.through = c.Last
-		s.loop.notify()
+		if service == nil {
+			s.loop.notify()
+		} else if s.loop != nil {
+			s.loop.mu.Lock()
+			s.loop.changedLocked()
+			s.loop.mu.Unlock()
+		}
 	}, nil
 }
 
@@ -699,6 +732,7 @@ type commandMatch struct {
 	loop         *loopGroup
 	continuation *continuationGroup
 	eligibility  *eligibilityGroup
+	service      *serviceGroup
 }
 
 func (s *Service) findCommand(ctx context.Context, reads *historyReadSet, id uuid.UUID, after, through uint64) (commandMatch, error) {
@@ -791,7 +825,11 @@ func (s *Service) commandFromCommit(ctx context.Context, reads *historyReadSet, 
 		if err != nil {
 			return commandMatch{}, err
 		}
-		match := commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation, eligibility: eligibility}
+		service, err := decodeServiceFamily(draftsOf(c), c.First)
+		if err != nil {
+			return commandMatch{}, err
+		}
+		match := commandMatch{found: true, command: cmd, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation, eligibility: eligibility, service: service}
 		if s.deps.beforeHistoryFill != nil {
 			s.deps.beforeHistoryFill(historyKey{kind: historyCommand, id: id})
 		}

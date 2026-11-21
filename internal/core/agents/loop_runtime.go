@@ -121,46 +121,74 @@ func (s *Service) EnableTurnLoop(ctx context.Context, ws *workspace.Service, opt
 	if err := s.refreshLocked(ctx, &historyReadSet{}, s.store.Durable()); err != nil {
 		return err
 	}
-	if s.paid == nil || len(options.Contexts) == 0 || len(options.Contexts) > s.limits.MaxRegistrations {
-		return ErrInvalid
-	}
-	if s.loopClosing {
-		return ErrClosed
-	}
 	copy := LoopOptions{Contexts: slices.Clone(options.Contexts)}
-	settings := make(map[Binding]LoopContextSettings, len(copy.Contexts))
-	for i, setting := range copy.Contexts {
-		if setting.TaskBinding != nil {
-			setting.TaskBinding = new(*setting.TaskBinding)
-			copy.Contexts[i] = setting
-		}
-		if settings[setting.Binding].RouteID != (uuid.UUID{}) || !validID(setting.RouteID) || !validID(setting.CredentialScopeID) || setting.ExpectedRouteVersion <= 0 || setting.MaxOutputTokens <= 0 || setting.TimeoutMS <= 0 || setting.TimeoutMS > math.MaxInt64/int64(time.Millisecond) || !setting.Policy.validTemplate() {
+	var settings map[Binding]LoopContextSettings
+	validate := func() error {
+		if s.paid == nil || len(copy.Contexts) == 0 || len(copy.Contexts) > s.limits.MaxRegistrations {
 			return ErrInvalid
 		}
-		ids, err := s.bindingLocked(setting.Binding, false)
-		if err != nil {
-			return err
+		if s.loopClosing {
+			return ErrClosed
 		}
-		if !s.p.registeredOrigin(originOf(ids)) {
-			return ErrNotBound
+		settings = make(map[Binding]LoopContextSettings, len(copy.Contexts))
+		for i, setting := range copy.Contexts {
+			if setting.TaskBinding != nil {
+				setting.TaskBinding = new(*setting.TaskBinding)
+				copy.Contexts[i] = setting
+			}
+			if settings[setting.Binding].RouteID != (uuid.UUID{}) || !validID(setting.RouteID) || !validID(setting.CredentialScopeID) || setting.ExpectedRouteVersion <= 0 || setting.MaxOutputTokens <= 0 || setting.TimeoutMS <= 0 || setting.TimeoutMS > math.MaxInt64/int64(time.Millisecond) || !setting.Policy.validTemplate() {
+				return ErrInvalid
+			}
+			ids, err := s.bindingLocked(setting.Binding, false)
+			if err != nil {
+				return err
+			}
+			if !s.p.registeredOrigin(originOf(ids)) {
+				return ErrNotBound
+			}
+			state := s.p.scopes[keyFor(ids, "context")]
+			if state == nil || len(state.issues) != 0 {
+				return ErrIntegrity
+			}
+			if !loopDisplayTitle(setting.DisplayTitle) {
+				return ErrInvalid
+			}
+			settings[setting.Binding] = setting
 		}
-		state := s.p.scopes[keyFor(ids, "context")]
-		if state == nil || len(state.issues) != 0 {
-			return ErrIntegrity
-		}
-		if !loopDisplayTitle(setting.DisplayTitle) {
-			return ErrInvalid
-		}
-		settings[setting.Binding] = setting
-	}
-	if s.loop != nil {
-		if s.loop.workspace != ws || !reflect.DeepEqual(s.loop.options, copy) {
+		if s.loop != nil && (s.loop.workspace != ws || !reflect.DeepEqual(s.loop.options, copy)) {
 			return ErrCommandMismatch
 		}
 		return nil
 	}
+	if err := validate(); err != nil {
+		return err
+	}
+	if s.loop != nil {
+		return nil
+	}
+	// Metadata-only recovery failures are status, never an admission gate.
+	// The planners may yield for cold reads, so revalidate before installing.
+	if err := s.drainServiceEvidenceLocked(ctx); err != nil {
+		s.retainServiceErrorLocked(err)
+	}
+	if err := s.usableLocked(ctx); err != nil {
+		return err
+	}
+	if err := s.expireDueServiceLocked(ctx); err != nil {
+		s.retainServiceErrorLocked(err)
+	}
+	if err := s.usableLocked(ctx); err != nil {
+		return err
+	}
+	if err := validate(); err != nil {
+		return err
+	}
+	if s.loop != nil {
+		return nil
+	}
 	r := &loopRuntime{service: s, workspace: ws, options: copy, settings: settings, turns: map[uuid.UUID]*loopTurn{}, contexts: map[uuid.UUID][]uuid.UUID{}, queued: map[uuid.UUID]bool{}, paidTokens: map[uuid.UUID]struct{}{}, wake: make(chan struct{}, 1), changed: make(chan struct{}), completed: make(chan loopCompletion, len(settings)), done: make(chan struct{})}
 	s.loop = r
+	s.startServiceTimerLocked()
 	ws.SetReleaseNotifier(r.released)
 	go r.run()
 	return nil
