@@ -162,13 +162,24 @@ func currentSession() (uint32, error) {
 	err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &session)
 	return session, err
 }
-func waitRootGone(ctx context.Context, f fence, grace time.Duration) error {
+
+// waitRootGone proves the recorded root gone as the package doc defines it.
+// Any open failure but no-such-process takes one process list: a listed
+// identity refuses at once with the open error, an unaccepted list with both.
+func (o *Owner) waitRootGone(ctx context.Context, f fence) error {
 	h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, f.RootPID)
 	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
 		return nil
 	}
 	if err != nil {
-		return err
+		listed, listErr := o.rootListed(f)
+		if listErr != nil {
+			return errors.Join(err, listErr)
+		}
+		if listed {
+			return err
+		}
+		return nil
 	}
 	defer windows.CloseHandle(h)
 	created, err := processCreated(h)
@@ -178,7 +189,7 @@ func waitRootGone(ctx context.Context, f fence, grace time.Duration) error {
 	if created != f.RootCreated {
 		return nil
 	}
-	return pollUntil(ctx, grace, func() (bool, error) {
+	return pollUntil(ctx, o.options.StopGrace, func() (bool, error) {
 		state, err := windows.WaitForSingleObject(h, 0)
 		return state == windows.WAIT_OBJECT_0, err
 	})
@@ -204,6 +215,98 @@ func pollUntil(ctx context.Context, grace time.Duration, check func() (bool, err
 		case <-tick.C:
 		}
 	}
+}
+
+// processIdentity is a PID with its creation FILETIME, the package's root identity.
+type processIdentity struct {
+	pid     uint32
+	created uint64
+}
+
+const (
+	// processEntrySize is the fixed part of every SystemProcessInformation entry.
+	processEntrySize = unsafe.Sizeof(windows.SYSTEM_PROCESS_INFORMATION{})
+	// The list can grow between calls, so each retry adds this margin to the
+	// length the previous call reported; the attempts are bounded.
+	processListMargin   = 64 << 10
+	processListAttempts = 4
+)
+
+var (
+	errProcessListBound = errors.New("process list walk out of bounds")
+	errProcessListSelf  = errors.New("process list lacks this process's identity")
+)
+
+// rootListed reports whether one accepted process list holds f's root identity.
+func (o *Owner) rootListed(f fence) (bool, error) {
+	selfCreated, err := processCreated(windows.CurrentProcess())
+	if err != nil {
+		return false, err
+	}
+	buf, n, err := systemProcesses(o.queryFault)
+	if err != nil {
+		return false, err
+	}
+	return scanProcesses(buf, n, processIdentity{f.RootPID, f.RootCreated}, processIdentity{windows.GetCurrentProcessId(), selfCreated})
+}
+
+// systemProcesses takes one SystemProcessInformation list into an 8-byte
+// aligned buffer and returns it with the length the successful call reported.
+func systemProcesses(fault func() error) ([]uint64, uint32, error) {
+	if fault != nil {
+		if err := fault(); err != nil {
+			return nil, 0, err
+		}
+	}
+	var size uint32
+	var err error
+	for range processListAttempts {
+		buf := make([]uint64, (int(size)+processListMargin+7)/8)
+		err = windows.NtQuerySystemInformation(windows.SystemProcessInformation, unsafe.Pointer(&buf[0]), uint32(len(buf)*8), &size)
+		if err == nil {
+			return buf, size, nil
+		}
+		if !errors.Is(err, windows.STATUS_INFO_LENGTH_MISMATCH) {
+			return nil, 0, err
+		}
+	}
+	return nil, 0, err
+}
+
+// scanProcesses walks from offset 0 to the entry whose NextEntryOffset is
+// zero. An entry's fixed part past the returned length, or a link shorter than
+// that part, refuses the list; it never ends the walk. An accepted list holds
+// this process's own identity, and then any entry with exactly the target
+// identity means listed. The self entry guards the reserved CreateTime
+// member's layout, not the list's completeness.
+func scanProcesses(buf []uint64, n uint32, target, self processIdentity) (bool, error) {
+	if uintptr(n) > uintptr(len(buf))*8 {
+		return false, errProcessListBound
+	}
+	listed, selfListed := false, false
+	for offset := uintptr(0); ; {
+		if offset+processEntrySize > uintptr(n) {
+			return false, errProcessListBound
+		}
+		entry := (*windows.SYSTEM_PROCESS_INFORMATION)(unsafe.Add(unsafe.Pointer(&buf[0]), offset))
+		if entry.UniqueProcessID == uintptr(target.pid) && uint64(entry.CreateTime) == target.created {
+			listed = true
+		}
+		if entry.UniqueProcessID == uintptr(self.pid) && uint64(entry.CreateTime) == self.created {
+			selfListed = true
+		}
+		if entry.NextEntryOffset == 0 {
+			break
+		}
+		if uintptr(entry.NextEntryOffset) < processEntrySize {
+			return false, errProcessListBound
+		}
+		offset += uintptr(entry.NextEntryOffset)
+	}
+	if !selfListed {
+		return false, errProcessListSelf
+	}
+	return listed, nil
 }
 
 // Port messages are advisory, not a source of tree-closure proof. Windows does
@@ -303,7 +406,7 @@ func (o *Owner) reconcileCandidate(ctx context.Context, f fence, reservedZero bo
 				return r, nil
 			}
 			if f.State == "running" {
-				if err := waitRootGone(ctx, f, o.options.StopGrace); err != nil {
+				if err := o.waitRootGone(ctx, f); err != nil {
 					return fail("root_unconfirmed", err)
 				}
 			}

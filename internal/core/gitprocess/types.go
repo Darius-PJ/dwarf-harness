@@ -25,7 +25,12 @@ type UnconfirmedError struct {
 	Err    error
 }
 
-func (e *UnconfirmedError) Error() string   { return fmt.Sprintf("%s: %s", ErrUnconfirmed, e.Reason) }
+func (e *UnconfirmedError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("%s: %s", ErrUnconfirmed, e.Reason)
+	}
+	return fmt.Sprintf("%s: %s: %v", ErrUnconfirmed, e.Reason, e.Err)
+}
 func (e *UnconfirmedError) Unwrap() []error { return []error{ErrUnconfirmed, e.Err} }
 
 // Options bounds simultaneous roots, Job membership and shutdown proof time.

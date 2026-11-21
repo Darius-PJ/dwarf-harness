@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/internal/core/durable"
@@ -2002,5 +2003,245 @@ func slotErrorHelper(t *testing.T, operation string) {
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(processNotice{Kind: "done", RunID: r.RunID, Batch: path}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A suspended holder that denies the caller keeps one PID. A frame recording
+// that PID with a creation time 100 ns before the holder's, the nearest
+// distinct identity, is the state PID reuse leaves behind.
+func TestGitProcessRootReuse(t *testing.T) {
+	for _, row := range []string{"foreign-denied-retired", "foreign-denied-live", "own-denied", "snapshot-fault", "list-guards"} {
+		t.Run(row, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			seed := nativeOwner(t, root)
+			if err := seed.Close(); err != nil {
+				t.Fatal(err)
+			}
+			job, err := createJob(jobName(seed.rootID, uuid.NewV7()), seed.options.MaxDescendants)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pi windows.ProcessInformation
+			defer func() {
+				_ = windows.TerminateJobObject(job, 1)
+				_ = windows.CloseHandle(job)
+				if pi.Process != 0 {
+					assertExited(t, pi.Process)
+					_ = windows.CloseHandle(pi.Process)
+					_ = windows.CloseHandle(pi.Thread)
+				}
+			}()
+			pipes, err := newPipes(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pi, err = createSuspended(Spec{Program: gitProgram(t), Args: []string{"version"}, Env: os.Environ()}, job, pipes)
+			_ = pipes.closeChildren()
+			pipes.closeParents()
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := processCreated(pi.Process)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := windows.GetSecurityInfo(pi.Process, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setDACL := func(sd *windows.SECURITY_DESCRIPTOR) {
+				dacl, _, err := sd.DACL()
+				if err == nil {
+					err = windows.SetSecurityInfo(pi.Process, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			// debugPrivilege reports SeDebugPrivilege's state in this process's
+			// token, the one token state that bypasses a process DACL.
+			debugPrivilege := func() string {
+				name, err := windows.UTF16PtrFromString("SeDebugPrivilege")
+				if err != nil {
+					return err.Error()
+				}
+				var luid windows.LUID
+				if err := windows.LookupPrivilegeValue(nil, name, &luid); err != nil {
+					return err.Error()
+				}
+				var token windows.Token
+				if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
+					return err.Error()
+				}
+				defer token.Close()
+				privileges := make([]byte, 4096)
+				var n uint32
+				if err := windows.GetTokenInformation(token, windows.TokenPrivileges, &privileges[0], uint32(len(privileges)), &n); err != nil {
+					return err.Error()
+				}
+				// TOKEN_PRIVILEGES: a DWORD count, then 12-byte LUID_AND_ATTRIBUTES.
+				word := func(at int) uint32 {
+					return uint32(privileges[at]) | uint32(privileges[at+1])<<8 | uint32(privileges[at+2])<<16 | uint32(privileges[at+3])<<24
+				}
+				for i := range min(int(word(0)), (int(n)-4)/12) {
+					if at := 4 + 12*i; word(at) == luid.LowPart && int32(word(at+4)) == luid.HighPart {
+						return strconv.FormatBool(word(at+8)&windows.SE_PRIVILEGE_ENABLED != 0)
+					}
+				}
+				return "not held"
+			}
+			deny, err := windows.SecurityDescriptorFromString("D:P(D;;GA;;;WD)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			setDACL(deny)
+			probe, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pi.ProcessId)
+			if probe != 0 {
+				_ = windows.CloseHandle(probe)
+			}
+			if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+				t.Fatalf("deny DACL control failed: %v; SeDebugPrivilege enabled: %s", err, debugPrivilege())
+			}
+			if row == "list-guards" {
+				selfCreated, err := processCreated(windows.CurrentProcess())
+				if err != nil {
+					t.Fatal(err)
+				}
+				self, holder := processIdentity{windows.GetCurrentProcessId(), selfCreated}, processIdentity{pi.ProcessId, created}
+				list, n, err := systemProcesses(nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Self, a stale identity of the holder's PID and the holder, one
+				// stride apart, written through the x/sys struct the scan reads.
+				stride := uint32(processEntrySize) + 64
+				synthesized := func(links [3]uint32) []uint64 {
+					buf := make([]uint64, 3*stride/8)
+					for i, id := range []processIdentity{self, {holder.pid, holder.created - 1}, holder} {
+						entry := (*windows.SYSTEM_PROCESS_INFORMATION)(unsafe.Add(unsafe.Pointer(&buf[0]), i*int(stride)))
+						entry.NextEntryOffset, entry.UniqueProcessID, entry.CreateTime = links[i], uintptr(id.pid), int64(id.created)
+					}
+					return buf
+				}
+				synth := synthesized([3]uint32{stride, stride, 0})
+				// Each refusal changes one input of the listed control above it.
+				for _, c := range []struct {
+					name string
+					buf  []uint64
+					n    uint32
+					self processIdentity
+					want error // nil: listed
+				}{
+					{"real-control", list, n, self, nil},
+					{"self-absent", list, n, processIdentity{1, self.created}, errProcessListSelf},
+					{"self-time-mismatched", list, n, processIdentity{self.pid, self.created + 1}, errProcessListSelf},
+					{"synthesized-control", synth, 3 * stride, self, nil},
+					{"cut", synth, stride + uint32(processEntrySize)/2, self, errProcessListBound},
+					{"short-link", synthesized([3]uint32{stride, uint32(processEntrySize) - 8, 0}), 3 * stride, self, errProcessListBound},
+					{"past-buffer", synth, 3*stride + 8, self, errProcessListBound},
+				} {
+					t.Run(c.name, func(t *testing.T) {
+						listed, err := scanProcesses(c.buf, c.n, holder, c.self)
+						if c.want == nil && (!listed || err != nil) || c.want != nil && (listed || !errors.Is(err, c.want)) {
+							t.Fatalf("scan verdict listed=%t err=%v, want listed=%t err=%v", listed, err, c.want == nil, c.want)
+						}
+					})
+				}
+				return
+			}
+			c := fixtureSlots(t, seed)
+			f := c.Header.candidate(0)
+			f.State, f.RootPID, f.RootCreated = "running", pi.ProcessId, created-1
+			if row == "own-denied" {
+				f.RootCreated = created
+			}
+			c.Frames[0] = f
+			if row == "foreign-denied-retired" || row == "snapshot-fault" {
+				c.Retired[0] = 1
+			}
+			raw, err := encodeSlots(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := seed.slotsPath(c.Header.BatchID)
+			if err := writeMarkerBytes(path, raw, nil); err != nil {
+				t.Fatal(err)
+			}
+			o := nativeOwner(t, root)
+			grace := o.options.StopGrace
+			o.options.StopGrace = 20 * time.Millisecond // Recovery's verdicts need no wait.
+			if row == "snapshot-fault" {
+				o.queryFault = func() error { return windows.ERROR_INVALID_HANDLE }
+			}
+			holderLive := func() {
+				if state, err := windows.WaitForSingleObject(pi.Process, 0); err != nil || state != uint32(windows.WAIT_TIMEOUT) {
+					t.Fatal("recovery disturbed the PID's current holder", state, err)
+				}
+			}
+			refused := func() {
+				after, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(raw, after) {
+					t.Fatal("unconfirmed reservation bytes changed", err)
+				}
+				if _, err := o.Run(context.Background(), Spec{Program: gitProgram(t)}); !errors.Is(err, ErrUnconfirmed) {
+					t.Fatal("unproved reservation admitted Git", err)
+				}
+			}
+			report, err := o.Reconcile(context.Background())
+			reason, cause := "", error(nil)
+			var refusal *UnconfirmedError
+			if errors.As(err, &refusal) {
+				reason, cause = refusal.Reason, refusal.Err
+			}
+			switch row {
+			case "foreign-denied-retired", "foreign-denied-live":
+				closed := 0 // A retired hint is processed but not reported.
+				if row == "foreign-denied-live" {
+					closed = 1
+				}
+				if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != closed || closed == 1 && (report.Closed[0].RunID != f.RunID || report.Closed[0].Proof != "name_absent") {
+					t.Fatalf("reused root PID refused: reason=%q cause=%v access_denied=%t report=%+v err=%v", reason, cause, errors.Is(err, windows.ERROR_ACCESS_DENIED), report, err)
+				}
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("reconciled container survived", err)
+				}
+				holderLive()
+				// A fresh Run's own closure proof keeps the calibrated grace.
+				o.options.StopGrace = grace
+				assertFreshSlotRun(t, o, c.Header.RunIDs)
+			case "own-denied":
+				// A hint-zero frame stays pending until its proof succeeds.
+				if reason != "root_unconfirmed" || !errors.Is(err, windows.ERROR_ACCESS_DENIED) || report.Reservations != 1 || len(report.Pending) != 1 || report.Pending[0].RunID != f.RunID || len(report.Closed) != 0 {
+					t.Fatalf("live unopenable root accepted: reason=%q cause=%v report=%+v err=%v", reason, cause, report, err)
+				}
+				if want := "root_unconfirmed: " + windows.ERROR_ACCESS_DENIED.Error(); !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal message lacks its cause: %q", err)
+				}
+				refused()
+				// Remove the cause: an opened, signaled root is gone.
+				setDACL(original)
+				if err := windows.TerminateJobObject(job, 1); err != nil {
+					t.Fatal(err)
+				}
+				assertExited(t, pi.Process)
+				report, err := o.Reconcile(context.Background())
+				if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != 1 || report.Closed[0].RunID != f.RunID || report.Closed[0].Proof != "name_absent" {
+					t.Fatalf("ended root refused: %+v %v", report, err)
+				}
+			case "snapshot-fault":
+				if reason != "root_unconfirmed" || !errors.Is(err, windows.ERROR_INVALID_HANDLE) || !errors.Is(err, windows.ERROR_ACCESS_DENIED) || report.Reservations != 1 || len(report.Pending) != 0 || len(report.Closed) != 0 {
+					t.Fatalf("failed process list taken as absence: reason=%q cause=%v report=%+v err=%v", reason, cause, report, err)
+				}
+				refused()
+				holderLive()
+				o.queryFault = nil
+				report, err := o.Reconcile(context.Background())
+				if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != 0 {
+					t.Fatalf("unobstructed process list refused: %+v %v", report, err)
+				}
+				holderLive()
+			}
+		})
 	}
 }

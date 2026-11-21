@@ -85,3 +85,15 @@ func TestGitProcessUnsupported(t *testing.T) {
 		t.Fatal("unsupported mode changed filesystem", err)
 	}
 }
+func TestGitProcessUnconfirmedMessage(t *testing.T) {
+	t.Parallel()
+	bare := &UnconfirmedError{Reason: "cleanup_failed"}
+	if got, want := bare.Error(), ErrUnconfirmed.Error()+": cleanup_failed"; got != want {
+		t.Fatalf("message without a cause = %q, want %q", got, want)
+	}
+	cause := errors.New("cause")
+	caused := &UnconfirmedError{Reason: "cleanup_failed", Err: cause}
+	if got := caused.Error(); !strings.Contains(got, "cleanup_failed: "+cause.Error()) {
+		t.Fatalf("message dropped its cause: %q", got)
+	}
+}

@@ -34,7 +34,12 @@
 // must have the exact limits before termination and positive zero proof. Only
 // ERROR_FILE_NOT_FOUND in the recorded Windows session permits name_absent;
 // a running fence additionally requires the recorded root PID/creation identity
-// to be gone or signaled. All other ambiguity retains the fence and refuses
+// to be gone or signaled. Gone means opening the recorded PID reports no such
+// process (ERROR_INVALID_PARAMETER), the opened process has another creation
+// time or is signaled within StopGrace, or, after any other open failure, one
+// accepted system process list has no entry with both the recorded PID and
+// creation time; a listed identity that cannot be opened refuses without
+// waiting. All other ambiguity retains the fence and refuses
 // admission. Missing-name recovery has no exit code or process totals and
 // infers neither success, effect absence nor refund. The kernel initiated every
 // member's termination before releasing the name; the root is waited, but
@@ -68,9 +73,12 @@
 // launch_pending proof; a valid running frame takes the running/root-identity
 // proof even when its retirement hint is one. Hints suppress duplicate reports,
 // not native proof. A nonzero invalid or torn frame refuses pending manual
-// investigation, rather than being guessed unused. Completed root PIDs linger
-// until container retirement, widening the ACCESS_DENIED unconfirmed exposure
-// to at most 32 roots per live container. A container resurrected by a lost
+// investigation, rather than being guessed unused. An unopenable live root of
+// the package's own, a failed or inconsistent process list, or a failed
+// self-check refuses; the list's creation-time member is reserved in
+// Microsoft's layout and is checked against the current process's own entry;
+// that check guards the layout, not the list's completeness.
+// A container resurrected by a lost
 // unflushed deletion is re-proved beside any newer container, never reused.
 //
 // Reconcile publishes a full canonical closed <run>.json before removing it for
