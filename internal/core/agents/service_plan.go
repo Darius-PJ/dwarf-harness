@@ -226,6 +226,14 @@ func (s *Service) deriveService(ctx context.Context, reads *historyReadSet, sub 
 		if c.snapshot.Version == math.MaxInt64 {
 			return ErrInvalid
 		}
+		// Every non-money clear, including a restoration's K, follows due losses.
+		if condition == "cleared" {
+			for key, member := range p.members {
+				if key.cause == c.id && member.snapshot.Phase == "pending" && member.snapshot.DueUTCNS != nil && a.Source.ObservedUTCNS >= *member.snapshot.DueUTCNS && a.Source.Reason != "budget_available" {
+					return ErrInvalid
+				}
+			}
+		}
 		k := ledger.RuntimeServiceCauseChanged{CauseID: c.id, CauseKey: c.key, ExpectedVersion: c.snapshot.Version, Version: c.snapshot.Version + 1, Cause: c.spec, Condition: condition, Source: a.Source}
 		plan.cause = &k
 		c.snapshot = k
@@ -309,12 +317,6 @@ func (s *Service) deriveService(ctx context.Context, reads *historyReadSet, sub 
 			}
 			if err := s.checkServicePermit(ctx, reads, c, member, a.Source, first-1, false); err != nil {
 				return servicePlan{}, err
-			}
-		}
-		// A non-money late clearance cannot erase a due pending loss.
-		for key, member := range p.members {
-			if key.cause == c.id && member.snapshot.Phase == "pending" && member.snapshot.DueUTCNS != nil && a.Source.ObservedUTCNS >= *member.snapshot.DueUTCNS && a.Source.Reason != "budget_available" {
-				return servicePlan{}, ErrInvalid
 			}
 		}
 		if err := changeCause("cleared"); err != nil {

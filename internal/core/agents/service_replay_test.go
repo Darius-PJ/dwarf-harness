@@ -14,6 +14,87 @@ func TestServiceReplay(t *testing.T) {
 	t.Parallel()
 	testServiceReplayEdges(t)
 	testServiceCompletionPermits(t)
+	t.Run("coverage_rejects_known_incomplete_observation", func(t *testing.T) {
+		t.Parallel()
+		f, commits := serviceGolden(t, 184, serviceDeps{})
+		drafts := draftsOf(serviceCommitAt(t, commits, 185))
+		last := len(drafts) - 1
+		receipt, err := ledger.DecodeRuntimeServiceReceipt(drafts[last].Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// This group completes only one of E180's two applicable members.
+		receipt.SourceThrough = 181
+		drafts[last].Payload, err = receipt.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		baseline := serviceNativeBaseline(t, f.service)
+		if _, err := f.service.acceptCommitLocked(context.Background(), replayDraftCommit(drafts, 185), nil); err == nil {
+			t.Fatal("coverage passed a verifiable incomplete observation")
+		}
+		if !sameProjectionState(f.service.p, baseline.p) || f.store.Durable() != 184 {
+			t.Fatal("rejected coverage changed state or ledger")
+		}
+		if err := f.service.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.store.Submit(context.Background(), drafts[0], drafts[1:]); err != nil {
+			t.Fatal(err)
+		}
+		opened, _, err := Open(context.Background(), f.store, f.root, DefaultLimits())
+		if opened != nil {
+			_ = opened.Close()
+		}
+		if err == nil {
+			t.Fatal("Open accepted coverage across a known incomplete observation")
+		}
+	})
+	for _, row := range []struct {
+		name  string
+		claim int64
+	}{{"zero", 0}, {"earlier_E_boundary", 181}, {"not_an_E_boundary", 180}} {
+		t.Run("conservative_coverage_"+row.name, func(t *testing.T) {
+			t.Parallel()
+			f, commits := serviceGolden(t, 219, serviceDeps{})
+			drafts := draftsOf(serviceCommitAt(t, commits, 220))
+			last := len(drafts) - 1
+			receipt, err := ledger.DecodeRuntimeServiceReceipt(drafts[last].Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt.SourceThrough = row.claim
+			drafts[last].Payload, err = receipt.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.service.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.store.Submit(context.Background(), drafts[0], drafts[1:]); err != nil {
+				t.Fatal(err)
+			}
+			opened, _, err := Open(context.Background(), f.store, f.root, DefaultLimits())
+			if opened != nil {
+				defer opened.Close()
+			}
+			if row.claim == 180 {
+				if err == nil {
+					t.Fatal("conservative coverage accepted a non-receipt boundary")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := serviceSnapshot(t, opened)
+			for _, agent := range snapshot.Agents {
+				if agent.State != "available" || agent.SourceThrough != 216 || agent.Recovery.UncoveredObservations != 0 {
+					t.Fatalf("conservative receipt lost reconstructed coverage or state: %+v", agent)
+				}
+			}
+		})
+	}
 	t.Run("foreign_source", func(t *testing.T) {
 		t.Parallel()
 		for _, row := range []string{"native_attempt", "non_core_actor"} {

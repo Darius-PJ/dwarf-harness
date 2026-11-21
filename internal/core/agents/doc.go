@@ -200,9 +200,10 @@
 // Withdrawal means clearance before expiry is applied, with a timing distinction.
 // For provider, integrity and process causes, a clearing sample before due
 // withdraws pending members; a sample at or after due expires them first, then
-// clears K. Recording a late clear before the timer runs cannot erase that loss.
-// A clear never restores a lost member. A success captured before the member's
-// onset may clear its cause but cannot restore it.
+// clears K. This includes a clear carried by another member's restoration.
+// Recording a late clear before the timer runs cannot erase that loss. A clear
+// never restores a lost member. A success captured before the member's onset may
+// clear its cause but cannot restore it.
 //
 // Money has exactly two budget_available clear sources: the expiry book recheck
 // and a succeeding call's admission. Either withdraws a still-pending money
@@ -252,6 +253,11 @@
 // frontier. A multi-cause completion is not covered after just its first member.
 // Ignored observations advance the process-local cursor without a no-op append;
 // the next real receipt persists that coverage.
+// Replay accepts conservative coverage below its computed cursor only at zero or
+// an earlier E group's last sequence: metadata repair may have advanced that
+// cursor since the writer ran. Above the local cursor, recorded coverage may pass
+// only observations that are unverifiable (unreadable metadata or unsupported);
+// it cannot pass any verifiable observation with an incomplete applicable action.
 //
 // Open may read immutable completion metadata to validate recorded selected
 // permits, but starts no clock, append or worker. A missing or corrupt object is
@@ -264,9 +270,12 @@
 //
 // Valid unfamiliar tokens likewise remain readable but unsupported, as with
 // F3-16 owners. They grant no healthy/lost/restored interpretation, timer, K/M/N
-// transition or money release. A later submission targeting such a cause/member
+// transition or money release. A new submission targeting such a cause/member
 // returns ErrUnavailable without appending, including a successful-call E whose
-// captured permit set names an unsupported member.
+// captured permit set names an unsupported member. Known commands are matched
+// before either drain or dynamic checks: an exact retry returns its original
+// receipt without a write or a retained integrity error, while changed content
+// returns ErrCommandMismatch.
 //
 // EnableTurnLoop validates its existing options and context-integrity gates,
 // catches up through the unlocked-history protocol, then revalidates before

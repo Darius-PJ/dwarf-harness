@@ -342,16 +342,16 @@ func (s *Service) retainUnsupportedService(ctx context.Context, reads *historyRe
 	return p, nil
 }
 
-// Unavailable selected metadata may prevent reconstructing a recorded coverage
-// claim. Keep our local cursor before that hole, and validate every other E.
+// Conservative coverage remains valid after metadata repair advances the local
+// cursor. Above it, only unverifiable observations may explain a coverage gap.
 func (p serviceProjection) validServiceCoverage(claim int64, first uint64) bool {
 	if claim == p.through {
 		return true
 	}
-	if claim < p.through || claim >= int64(first) {
+	if claim < 0 || claim >= int64(first) {
 		return false
 	}
-	boundary := false
+	boundary := claim == 0
 	for _, id := range p.order {
 		e := p.observations[id]
 		if int64(e.last) > claim {
