@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"slices"
@@ -19,8 +20,13 @@ const paidTestEnvironment = "DWARF_PAID_INTEGRATION_SYNTHETIC"
 // Set one immutable process fixture before parallel tests start. Rotation tests
 // use a different variable with t.Setenv and therefore stay sequential.
 func TestMain(m *testing.M) {
+	flag.Parse()
 	prior, present := os.LookupEnv(paidTestEnvironment)
 	if err := os.Setenv(paidTestEnvironment, "synthetic-paid-integration-value"); err != nil {
+		os.Exit(1)
+	}
+	if err := prepareFixtureSeeds(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	code := m.Run()

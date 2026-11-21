@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -16,14 +17,18 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
+const fixtureSeedFuzzRoot = "DWARF_AGENTS_FUZZ_SEED_CONTAINER"
+
 // Only closed trees and encoded values survive a build. No fixture owns a seed,
 // and the seed root never enters the environment inherited by crash children.
 var fixtureSeeds = struct {
-	rootOnce sync.Once
-	root     string
-	rootErr  error
-	mu       sync.Mutex
-	entries  map[string]*fixtureSeed
+	rootOnce   sync.Once
+	root       string
+	rootErr    error
+	fuzzRoot   string
+	fuzzWorker bool
+	mu         sync.Mutex
+	entries    map[string]*fixtureSeed
 }{entries: make(map[string]*fixtureSeed)}
 
 type fixtureSeed struct {
@@ -39,6 +44,35 @@ type paidFixtureSeed struct {
 	route, credential, template json.RawMessage
 	grant, inspect, turn        uuid.UUID
 	next                        int
+}
+
+// The coordinator owns workers' seed trees because Go may kill a worker before
+// its TestMain cleanup. Ordinary runs and crash children ignore this container.
+func prepareFixtureSeeds() error {
+	fixtureSeeds.fuzzWorker = flag.Lookup("test.fuzzworker").Value.String() == "true"
+	if fixtureSeeds.fuzzWorker {
+		fixtureSeeds.fuzzRoot = os.Getenv(fixtureSeedFuzzRoot)
+		if fixtureSeeds.fuzzRoot == "" {
+			return errors.New("fuzz worker missing fixture seed container")
+		}
+		return nil
+	}
+	if flag.Lookup("test.fuzz").Value.String() == "" {
+		return nil
+	}
+	root, err := os.MkdirTemp(os.TempDir(), "dwarf-agents-fuzz-")
+	if err != nil {
+		return err
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err == nil {
+		err = os.Setenv(fixtureSeedFuzzRoot, resolved)
+	}
+	if err != nil {
+		return errors.Join(err, os.RemoveAll(root))
+	}
+	fixtureSeeds.fuzzRoot = resolved
+	return nil
 }
 
 // Fatal calls must retain their first cause: sync.Once also finishes on Goexit.
@@ -78,7 +112,11 @@ func copyFixtureSeed(t testing.TB, destination, key string, build func(testing.T
 		seed.failure = "fixture seed build abandoned"
 		builder := &fixtureSeedTB{TB: t, seed: seed}
 		fixtureSeeds.rootOnce.Do(func() {
-			fixtureSeeds.root, fixtureSeeds.rootErr = os.MkdirTemp(os.TempDir(), "dwarf-agents-seeds-")
+			parent := os.TempDir()
+			if fixtureSeeds.fuzzWorker {
+				parent = fixtureSeeds.fuzzRoot
+			}
+			fixtureSeeds.root, fixtureSeeds.rootErr = os.MkdirTemp(parent, "dwarf-agents-seeds-")
 			if fixtureSeeds.rootErr == nil {
 				var resolved string
 				resolved, fixtureSeeds.rootErr = filepath.EvalSymlinks(fixtureSeeds.root)
@@ -154,6 +192,10 @@ func finishFixtureSeeds() error {
 	}
 	if fixtureSeeds.root != "" {
 		result = errors.Join(result, os.RemoveAll(fixtureSeeds.root))
+	}
+	// CoordinateFuzzing joins every worker before the coordinator's m.Run returns.
+	if fixtureSeeds.fuzzRoot != "" && !fixtureSeeds.fuzzWorker {
+		result = errors.Join(result, os.RemoveAll(fixtureSeeds.fuzzRoot))
 	}
 	return result
 }
