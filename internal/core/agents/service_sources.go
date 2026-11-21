@@ -334,6 +334,17 @@ func (s *Service) recordServiceEvidence(ctx context.Context, command uuid.UUID, 
 	defer s.active.Done()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var known bool
+	if err := s.prepareHistoryLocked(ctx, &historyReadSet{}, nil, true, func(reads *historyReadSet) error {
+		match, err := s.findCommand(ctx, reads, command, 0, s.p.through)
+		known = match.found
+		return err
+	}); err != nil {
+		return ledger.RuntimeServiceReceipt{}, err
+	}
+	if known {
+		return s.recordServiceEvidenceLocked(ctx, command, e)
+	}
 	if err := s.drainServiceEvidenceLocked(ctx); err != nil && !errors.Is(err, ErrIntegrity) {
 		return ledger.RuntimeServiceReceipt{}, err
 	}
@@ -366,12 +377,6 @@ func (s *Service) recordServiceEvidenceLocked(ctx context.Context, command uuid.
 				e.CauseID = uuid.NewV7()
 			}
 		}
-		if c, ok := s.p.service.causes[e.CauseID]; ok && c.unsupported || s.p.service.unverifiable(serviceMemberKey{e.AgentID, e.CauseID}) {
-			return ledger.ServiceSubmission{}, ErrUnavailable
-		}
-		if !serviceSourceSupported(e.Source) || e.Cause != nil && !serviceCauseSupported(*e.Cause) {
-			return ledger.ServiceSubmission{}, ErrUnavailable
-		}
 		raw, err := e.Encode()
 		if err != nil {
 			return ledger.ServiceSubmission{}, err
@@ -381,6 +386,16 @@ func (s *Service) recordServiceEvidenceLocked(ctx context.Context, command uuid.
 			return ledger.ServiceSubmission{}, err
 		}
 		sub := serviceRecordSubmission(e)
+		match, err := s.findCommand(ctx, reads, command, 0, s.p.through)
+		if err != nil || match.found {
+			return sub, err
+		}
+		if c, ok := s.p.service.causes[e.CauseID]; ok && c.unsupported || s.p.service.unverifiable(serviceMemberKey{e.AgentID, e.CauseID}) {
+			return ledger.ServiceSubmission{}, ErrUnavailable
+		}
+		if !serviceSourceSupported(e.Source) || e.Cause != nil && !serviceCauseSupported(*e.Cause) {
+			return ledger.ServiceSubmission{}, ErrUnavailable
+		}
 		if e.CompletionPermitsObject != nil {
 			object, _, err := s.loadServiceCompletion(ctx, reads, e, s.p.through)
 			if err != nil {
@@ -397,10 +412,6 @@ func (s *Service) recordServiceEvidenceLocked(ctx context.Context, command uuid.
 					}
 				}
 			}
-		}
-		match, err := s.findCommand(ctx, reads, command, 0, s.p.through)
-		if err != nil || match.found {
-			return sub, err
 		}
 		if id, ok := s.p.service.semantic[serviceSemantic(e)]; ok {
 			original = new(s.p.service.observations[id].receipt)
@@ -633,6 +644,11 @@ func (s *Service) drainServiceObservationLocked(ctx context.Context, e serviceOb
 				}
 				return true, s.applyServiceSourceLocked(ctx, "service.clear", agent, c.id, selected)
 			}
+			if c.snapshot.Condition == "active" && permit.Kind != "all_work_moved" {
+				if err := s.expireBeforeServiceClearLocked(ctx, c.id, selected); err != nil {
+					return false, err
+				}
+			}
 			return true, s.applyServiceSourceLocked(ctx, "service.complete", agent, c.id, selected)
 		}
 	}
@@ -676,8 +692,11 @@ func (s *Service) withdrawClearedServiceLocked(ctx context.Context) error {
 		if m.snapshot.Phase != "pending" || c.snapshot.Condition != "cleared" {
 			continue
 		}
-		id := uuid.NewV7()
 		clear := c.snapshot.Source
+		if m.snapshot.DueUTCNS == nil || clear.ObservedUTCNS >= *m.snapshot.DueUTCNS && clear.Reason != "budget_available" {
+			continue
+		}
+		id := uuid.NewV7()
 		src := ledger.ServiceSource{Kind: "demand_withdrawn", ObservationID: id, ObservedThrough: int64(s.p.through), SourceSequence: new(int64(c.sequence)), ObservedUTCNS: clear.ObservedUTCNS, ClockHeld: clear.ClockHeld, Reason: clear.Reason, Money: clear.Money, ExecutionRunID: clear.ExecutionRunID, ExecutionProof: clear.ExecutionProof}
 		e := ledger.RuntimeServiceObserved{ObservationID: id, AgentID: key.agent, CauseID: key.cause, Source: src}
 		if _, err := s.recordServiceEvidenceLocked(ctx, id, e); err != nil {
