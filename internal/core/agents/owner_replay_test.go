@@ -17,7 +17,7 @@ import (
 
 func TestContinuationFrozenReplay(t *testing.T) {
 	t.Parallel()
-	for _, chapter := range []string{"10", "11", "12", "13", "14", "139", "15", "16", "90"} {
+	for _, chapter := range []string{"10", "11", "12", "13", "14", "139", "15", "16", "90", "91"} {
 		t.Run("frozen_"+chapter, func(t *testing.T) {
 			t.Parallel()
 			f, commits := scopedGoldenFixture(t, chapter, -1)
@@ -33,6 +33,12 @@ func TestContinuationFrozenReplay(t *testing.T) {
 			original := readTestFile(t, filepath.Join("../../../contract/ledger/testdata/f3", chapter, "log", ledger.SegmentName(1)))
 			if !bytes.Equal(original, readTestFile(t, filepath.Join(f.root, "log", ledger.SegmentName(1)))) {
 				t.Fatal("Open rewrote frozen bytes")
+			}
+			if chapter == "91" {
+				snapshot, err := s.ServiceStatusSnapshot(context.Background())
+				if err != nil || len(commits) != 68 || through != 223 || snapshot.SourceThrough != 216 || len(snapshot.Outages) != 4 {
+					t.Fatalf("full F3-91 history was not consumed by the service reducer: %v", err)
+				}
 			}
 			if chapter == "16" {
 				if len(commits) != 33 || through != 106 {

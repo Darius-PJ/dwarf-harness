@@ -54,6 +54,9 @@ type serviceDeps struct {
 	beforeReplayWait        func()
 	afterCloseFence         func()
 	beforeFinishCommit      func(turn uuid.UUID) error // Test seam: its error stands in for CommitObserved's.
+	afterServiceCommit      func(*serviceGroup)
+	beforeServiceSubmit     func() error // Test seam: its error stands in for SubmitAt's.
+	afterServiceTimerArm    func()
 }
 type scopeKey struct{ agent, context uuid.UUID }
 type scopeGate struct {
@@ -117,6 +120,7 @@ type projection struct {
 	maxCommand           uuid.UUID
 	identities           identityMaxima
 	through              uint64
+	service              serviceProjection
 }
 
 func newProjection() projection {
@@ -137,6 +141,7 @@ func newProjection() projection {
 		noticeCursors:    map[scopeKey][]ledger.ContinuationNoticeCursor{},
 		paidHotLimit:     128,
 		paidCapabilities: map[string]ledger.Digest{}, paidTariffs: map[string]ledger.Digest{}, retiredProfiles: map[ledger.Digest]bool{},
+		service: newServiceProjection(),
 	}
 }
 
@@ -164,6 +169,8 @@ type Service struct {
 	paid          *paidRuntime
 	loop          *loopRuntime
 	loopClosing   bool
+	serviceTimer  *serviceTimer
+	serviceError  string
 }
 
 func Open(ctx context.Context, store privateStore, colonyDir string, limits Limits) (*Service, Reconciliation, error) {
@@ -209,6 +216,7 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 	if err != nil {
 		return nil, report, err
 	}
+	report.Issues = append(report.Issues, s.serviceIntegrityIssues()...)
 	report.PendingWork, err = s.pendingWorkViews()
 	if err != nil {
 		return nil, report, err
@@ -219,6 +227,7 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 	}
 	report.UnboundCredentials = s.unboundCredentialViews()
 	report.PendingLoops = s.p.pendingLoopViews()
+	report.ServiceRecovery = s.serviceRecoveryLocked()
 	s.history.putCheckpoint(s.openedThrough, checkpoint)
 	return s, report, nil
 }
@@ -226,7 +235,14 @@ func (s *Service) Close() error {
 	s.mu.Lock()
 	s.loopClosing = true
 	runtime := s.loop
+	timer := s.serviceTimer
+	if timer != nil {
+		timer.cancel()
+	}
 	s.mu.Unlock()
+	if timer != nil {
+		<-timer.done
+	}
 	var shutdownErr error
 	if runtime != nil {
 		shutdownErr = runtime.shutdown()
@@ -367,6 +383,9 @@ func privateConsumption() ledger.Consumption {
 		ledger.TypeRuntimeTurnResult: {1}, ledger.TypeRuntimeLoopReceipt: {1},
 		ledger.TypeRuntimeContinuationChanged: {1}, ledger.TypeRuntimeContinuationReceipt: {1},
 		ledger.TypeRuntimeEligibilityChanged: {1}, ledger.TypeRuntimeEligibilityReceipt: {1},
+		ledger.TypeRuntimeServiceObserved: {1}, ledger.TypeRuntimeServiceCauseChanged: {1},
+		ledger.TypeRuntimeServiceAgentChanged: {1}, ledger.TypeRuntimeServiceOutageNotice: {1},
+		ledger.TypeRuntimeServiceReceipt: {1},
 	}
 }
 func isPrivateType(t string) bool {

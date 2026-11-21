@@ -167,6 +167,7 @@ type Reconciliation struct {
 	PendingPaid        []PaidAttemptView
 	PendingLoops       []LoopRecovery
 	UnboundCredentials []UnboundCredential
+	ServiceRecovery    ServiceRecovery
 }
 type RevisionError struct{ Expected, Current uint64 }
 

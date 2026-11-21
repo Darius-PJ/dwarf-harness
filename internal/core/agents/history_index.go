@@ -817,6 +817,10 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 			drafts, valid := v.drafts()
 			if valid && uint64(len(drafts)) == e.last-e.first+1 {
 				g, scoped, review, paid, registration, loop, continuation, eligibility, err := decodeFamily(drafts, e.first)
+				service, serviceErr := decodeServiceFamily(drafts, e.first)
+				if serviceErr != nil {
+					err = serviceErr
+				}
 				occurrences := 0
 				for _, draft := range drafts {
 					if draft.Type == ledger.TypeCommand {
@@ -828,8 +832,8 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 						}
 					}
 				}
-				if err == nil && occurrences == 1 && (g != nil || scoped != nil || review != nil || paid != nil || registration != nil || loop != nil || continuation != nil || eligibility != nil) {
-					return commandMatch{found: true, command: command, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation, eligibility: eligibility}, true
+				if err == nil && occurrences == 1 && (g != nil || scoped != nil || review != nil || paid != nil || registration != nil || loop != nil || continuation != nil || eligibility != nil || service != nil) {
+					return commandMatch{found: true, command: command, group: g, scoped: scoped, review: review, paid: paid, registration: registration, loop: loop, continuation: continuation, eligibility: eligibility, service: service}, true
 				}
 			}
 		}
@@ -848,7 +852,7 @@ func (h *historyIndex) putCommand(id uuid.UUID, after, through uint64, match com
 		v := historyCommandValue{Command: command}
 		// Unconsumed families need only the F0 identity, not arbitrary
 		// payloads that this service neither interprets nor retains.
-		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil || match.registration != nil || match.loop != nil || match.continuation != nil || match.eligibility != nil {
+		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil || match.registration != nil || match.loop != nil || match.continuation != nil || match.eligibility != nil || match.service != nil {
 			v.Drafts = historyDrafts(draftsOf(commit))
 		}
 		e.first, e.last = commit.First, commit.Last

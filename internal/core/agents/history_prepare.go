@@ -31,6 +31,8 @@ const (
 	needRegistration
 	needScope
 	needDirectoryScan
+	needServiceCompletion
+	needServiceMoney
 )
 
 // Only these selectors can construct a need. Each kind has one key shape.
@@ -178,7 +180,7 @@ func readHistory[T any](ctx context.Context, reads *historyReadSet, after, throu
 			delete(reads.answers, key)
 		}
 	}
-	if reads.rounds >= 2 {
+	if reads.rounds >= 2 && kind != needServiceCompletion {
 		return resolve(ctx)
 	}
 	if err := reads.failures[key]; err != nil {
@@ -201,7 +203,8 @@ func readHistory[T any](ctx context.Context, reads *historyReadSet, after, throu
 
 // prepareHistoryLocked reruns the whole pure phase. Only its caller performs
 // effects, after this function returns with mu held. Existing reservations stay
-// owned across the unlock. The third and subsequent needs resolve under mu.
+// owned across the unlock. Except for immutable service_completion object reads,
+// the third and subsequent needs resolve under mu.
 // Acceptance passes catchUp=false because it is itself the refresh performer;
 // every operation entrant catches up before capturing its prefix and binding.
 func (s *Service) prepareHistoryLocked(ctx context.Context, reads *historyReadSet, bound *submissionIDs, catchUp bool, phase func(*historyReadSet) error) error {
