@@ -24,6 +24,10 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	code := m.Run()
+	if err := finishFixtureSeeds(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code = 1
+	}
 	if present {
 		_ = os.Setenv(paidTestEnvironment, prior)
 	} else {
@@ -42,11 +46,8 @@ func newLivePaidFixture(t testing.TB, overrides ...serviceDeps) *paidFixture {
 
 func newLivePaidFixturePeriod(t testing.TB, period string, overrides ...serviceDeps) *paidFixture {
 	t.Helper()
-	f := newPaidFixturePeriod(t, period)
+	f := copyPaidFixture(t, period)
 	ctx := context.Background()
-	if err := f.service.Close(); err != nil {
-		t.Fatal(err)
-	}
 	deps := serviceDeps{paidTestAuthority: f.route.Profile.Authority}
 	if len(overrides) != 0 {
 		deps = overrides[0]

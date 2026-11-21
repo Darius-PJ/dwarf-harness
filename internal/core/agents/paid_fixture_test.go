@@ -10,6 +10,7 @@ import (
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 )
 
@@ -46,7 +47,28 @@ func newPaidFixture(t testing.TB) *paidFixture {
 
 func newPaidFixturePeriod(t testing.TB, period string) *paidFixture {
 	t.Helper()
-	base, commits := openPaidFixture(t, 2)
+	f := copyPaidFixture(t, period)
+	var err error
+	f.service, _, err = Open(context.Background(), f.store, f.root, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func buildPaidSeed(t testing.TB, root, period string) *paidFixtureSeed {
+	t.Helper()
+	base, commits := scopedGoldenFixtureAt(t, root, "13", 2)
+	defer func() {
+		if err := closeSeedFixture(base); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	var err error
+	base.service, _, err = Open(context.Background(), base.store, base.root, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := commits[0].Records[0]
 	f := &paidFixture{serviceFixture: base, origin: ledger.Origin{AgentID: r.AgentID, SessionID: r.ExecutionSessionID, ContextID: r.ContextID}, grant: paidGoldenID(0x900), inspect: paidGoldenID(0x901), turn: paidGoldenID(0x902), next: 0xa00}
 	var inputContext uuid.UUID
@@ -115,7 +137,23 @@ func newPaidFixturePeriod(t testing.TB, period string) *paidFixture {
 	for _, scope := range []ledger.PaidScope{{Kind: "colony"}, {Kind: "agent", ID: f.origin.AgentID}, {Kind: "credential", ID: f.credential.ScopeID}, {Kind: "grant", ID: f.grant}} {
 		f.spend(t, scope, ledger.SpendTerms{Enabled: true, PeriodKind: period, Mode: "finite", CeilingMicros: new(int64(100000)), WarningPPM: new(int64(800000))})
 	}
-	return f
+	seed := &paidFixtureSeed{origin: f.origin, route: paidEncode(t, f.route), credential: paidEncode(t, f.credential), template: paidEncode(t, f.template), grant: f.grant, inspect: f.inspect, turn: f.turn, next: f.next}
+	state := f.service.p
+	if err := closeSeedFixture(base); err != nil {
+		t.Fatal(err)
+	}
+	base.store, _, err = ledgerstore.Open(root, ledger.Defined())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.service, _, err = Open(context.Background(), base.store, root, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameProjectionState(state, base.service.p) {
+		t.Fatal("paid seed projection changed after reopen")
+	}
+	return seed
 }
 func (f *paidFixture) id() uuid.UUID { f.next++; return paidGoldenID(f.next) }
 func (f *paidFixture) spend(t testing.TB, scope ledger.PaidScope, terms ledger.SpendTerms) {

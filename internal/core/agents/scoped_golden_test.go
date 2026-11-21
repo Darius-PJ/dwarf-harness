@@ -22,6 +22,37 @@ import (
 // under test. Body publication and private object publication use real stores.
 func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixture, []ledger.Commit) {
 	t.Helper()
+	f, commits := scopedGoldenFixtureAt(t, testRoot(t), chapter, prefix)
+	t.Cleanup(func() { _ = closeSeedFixture(f) })
+	return f, commits
+}
+
+func scopedGoldenFixtureAt(t testing.TB, root, chapter string, prefix int) (*serviceFixture, []ledger.Commit) {
+	t.Helper()
+	copyFixtureSeed(t, root, "golden-"+chapter, func(t testing.TB, root string) *paidFixtureSeed {
+		buildGoldenSeed(t, root, chapter)
+		return nil
+	})
+	_, commits := scopedGoldenCommits(t, chapter)
+	if prefix < 0 {
+		prefix = len(commits)
+	}
+	if prefix != 0 {
+		dir := filepath.Join("../../../contract/ledger/testdata/f3", chapter)
+		log := readTestFile(t, filepath.Join(dir, "log", ledger.SegmentName(1)))
+		lines := bytes.SplitAfter(log, []byte{'\n'})
+		last := commits[prefix-1].Last
+		writeTestFile(t, filepath.Join(root, "log", ledger.SegmentName(1)), bytes.Join(lines[:last], nil))
+	}
+	store, _, err := ledgerstore.Open(root, ledger.Defined())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &serviceFixture{root: root, store: store}, commits
+}
+
+func scopedGoldenCommits(t testing.TB, chapter string) (uuid.UUID, []ledger.Commit) {
+	t.Helper()
 	dir := filepath.Join("../../../contract/ledger/testdata/f3", chapter)
 	colony := uuid.MustParse("0199c000-0000-7000-8000-000000000007")
 	if chapter == "11" {
@@ -64,10 +95,13 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if prefix < 0 {
-		prefix = len(commits)
-	}
-	root := testRoot(t)
+	return colony, commits
+}
+
+func buildGoldenSeed(t testing.TB, root, chapter string) {
+	t.Helper()
+	colony, commits := scopedGoldenCommits(t, chapter)
+	dir := filepath.Join("../../../contract/ledger/testdata/f3", chapter)
 	for _, name := range []string{"log", "bodies"} {
 		if err := os.MkdirAll(filepath.Join(root, name), 0o700); err != nil {
 			t.Fatal(err)
@@ -78,15 +112,11 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &serviceFixture{root: root, store: store}
-	t.Cleanup(func() {
-		if f.service != nil {
-			_ = f.service.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
 		}
-		if f.store != nil {
-			_ = f.store.Close()
-		}
-	})
+	}()
 	objects := map[ledger.Digest][]byte{}
 	for _, text := range []string{"# Ada\n", "", "general lesson\n", "opaque chunk\n", "opaque continuation", "retained lesson\n", "next step\n", "local lesson\n", "another chunk\n", "# Ada\nRevised instructions\n"} {
 		objects[ledger.Digest(sha256.Sum256([]byte(text)))] = []byte(text)
@@ -130,6 +160,7 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 		}
 	}
 	directories := map[uuid.UUID]string{}
+	var durability directoryDurability
 	// Publish the complete immutable fixture set, including objects needed by
 	// the next committed group. Unreferenced objects confer no authority.
 	for _, commit := range commits {
@@ -159,7 +190,7 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 			if revision.Scope == "context" {
 				contextID = record.ContextID.String()
 			}
-			path, err := newPrivateScope(root, directories[record.AgentID], contextID, &directoryDurability{})
+			path, err := newPrivateScope(root, directories[record.AgentID], contextID, &durability)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -177,20 +208,6 @@ func scopedGoldenFixture(t testing.TB, chapter string, prefix int) (*serviceFixt
 			}
 		}
 	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if prefix != 0 {
-		log := readTestFile(t, filepath.Join(dir, "log", ledger.SegmentName(1)))
-		lines := bytes.SplitAfter(log, []byte{'\n'})
-		last := commits[prefix-1].Last
-		writeTestFile(t, filepath.Join(root, "log", ledger.SegmentName(1)), bytes.Join(lines[:last], nil))
-	}
-	f.store, _, err = ledgerstore.Open(root, ledger.Defined())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return f, commits
 }
 
 func scopedGoldenID(n int) uuid.UUID {
