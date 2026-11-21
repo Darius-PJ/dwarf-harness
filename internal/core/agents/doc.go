@@ -514,6 +514,15 @@
 // Acceptance likewise stages a complete plan before installing it. Its staging
 // never waits on its own refresh flight and skips a commit another caller has
 // already installed while the stage was suspended.
+// An accepted release fills the bounded history index with the installed work's
+// final state after invalidation, live and during replay. This copies the
+// reducer's result rather than reducing the records again. A missing, damaged,
+// evicted or disabled hint still falls back to the authoritative ledger fold.
+// Cached hints and read-set answers survive encoding/json in both directions:
+// a contract payload crosses as its encoded bytes and returns through its
+// frozen Decode function, and cache-private shapes carry digests as hex text
+// under ParseDigest's rule. A hint that fails to decode or check is discarded
+// as a miss; an answer that fails to decode is read again.
 //
 // Known locked cold paths are the third-round fallback in readHistory; Open's
 // unpublished replay; acknowledgeLocked and its acceptCommitLocked reducer;

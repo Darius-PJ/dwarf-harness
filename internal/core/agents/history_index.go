@@ -533,18 +533,61 @@ type historyWorkValue struct {
 	Receipt                     historyScopedReceipt
 }
 
-// Resource has a wire marshaler but no matching json.Unmarshal method. Keep
-// the in-memory target shape in cache answers instead of losing keyed fields.
-type historyResource ledger.Resource
+// Cached and read-set answers must survive encoding/json in both directions.
+// Contract types that do not are kept out of them: Digest encodes as text and
+// cannot decode it, and Resource, SubjectRef, DeclarationConsumer and
+// PrivateWriteArguments have wire marshalers without matching unmarshalers.
+// A contract payload crosses as its encoded bytes and returns through its
+// frozen Decode function. Cache-private shapes keep the in-memory member names
+// and carry each digest as historyDigest text in an outer field that shadows
+// the embedded one, so the stored bytes stay the hex text Digest writes.
+type historyDigest ledger.Digest
+
+func (d historyDigest) MarshalText() ([]byte, error) { return ledger.Digest(d).MarshalText() }
+
+// UnmarshalText applies ParseDigest's rule; only 64 zeros give the zero digest,
+// which each getter refuses except in a non-artifact receipt target.
+func (d *historyDigest) UnmarshalText(text []byte) error {
+	v, err := ledger.ParseDigest(string(text))
+	if err != nil && string(text) == (ledger.Digest{}).String() {
+		v, err = ledger.Digest{}, nil
+	}
+	*d = historyDigest(v)
+	return err
+}
+
+type historyResourceFields ledger.Resource
+type historyArtifact struct {
+	ledger.ArtifactRef
+	SHA256 historyDigest `json:"sha256"`
+}
+type historyResource struct {
+	historyResourceFields
+	Artifact historyArtifact
+}
 type historyScopedReceipt struct {
 	ScopedReceipt
-	Target historyResource
+	SubmissionSHA256 historyDigest
+	Target           historyResource
+}
+
+func historyReceipt(r ScopedReceipt) historyScopedReceipt {
+	t := r.Target
+	return historyScopedReceipt{r, historyDigest(r.SubmissionSHA256), historyResource{historyResourceFields(t), historyArtifact{t.Artifact, historyDigest(t.Artifact.SHA256)}}}
 }
 
 func (v historyScopedReceipt) receipt() ScopedReceipt {
 	r := v.ScopedReceipt
-	r.Target = ledger.Resource(v.Target)
+	r.SubmissionSHA256 = ledger.Digest(v.SubmissionSHA256)
+	r.Target = ledger.Resource(v.Target.historyResourceFields)
+	r.Target.Artifact = v.Target.Artifact.ArtifactRef
+	r.Target.Artifact.SHA256 = ledger.Digest(v.Target.Artifact.SHA256)
 	return r
+}
+
+// cachedReceiptDigests is the zero side of the digest rule for a cached receipt.
+func cachedReceiptDigests(r ScopedReceipt) bool {
+	return r.SubmissionSHA256 != (ledger.Digest{}) && (r.Target.Kind != "artifact" || r.Target.Artifact.SHA256 != (ledger.Digest{}))
 }
 
 type historyReviewValue struct {
@@ -637,8 +680,9 @@ func (h *historyIndex) work(id uuid.UUID, through uint64) (scopedWorkState, bool
 	var v historyWorkValue
 	if json.Unmarshal(e.data, &v) == nil && v.Sequence > 0 && v.Sequence <= e.from && v.Version > 0 && v.Receipt.Sequence > 0 && v.Receipt.Sequence <= e.from && v.Receipt.WorkID == id {
 		p, err := ledger.DecodeRuntimeWorkAdmitted(v.Admission)
-		if err == nil && p.WorkID == id && v.Version >= p.Version && validID(v.Origin.AgentID) && validID(v.Origin.SessionID) && validID(v.Origin.ContextID) {
-			return scopedWorkState{admission: p, origin: v.Origin, turn: v.Turn, version: v.Version, dispatched: v.Dispatched, ended: v.Ended, released: v.Released, outcome: v.Outcome, sequence: v.Sequence, receipt: v.Receipt.receipt()}, true, true
+		receipt := v.Receipt.receipt()
+		if err == nil && p.WorkID == id && v.Version >= p.Version && validID(v.Origin.AgentID) && validID(v.Origin.SessionID) && validID(v.Origin.ContextID) && cachedReceiptDigests(receipt) {
+			return scopedWorkState{admission: p, origin: v.Origin, turn: v.Turn, version: v.Version, dispatched: v.Dispatched, ended: v.Ended, released: v.Released, outcome: v.Outcome, sequence: v.Sequence, receipt: receipt}, true, true
 		}
 	}
 	h.discard(key)
@@ -652,7 +696,7 @@ func (h *historyIndex) putWork(id uuid.UUID, through uint64, state scopedWorkSta
 		if err != nil {
 			return
 		}
-		e.data, err = json.Marshal(historyWorkValue{payload, state.origin, state.turn, state.version, state.dispatched, state.ended, state.released, state.outcome, state.sequence, historyScopedReceipt{state.receipt, historyResource(state.receipt.Target)}})
+		e.data, err = json.Marshal(historyWorkValue{payload, state.origin, state.turn, state.version, state.dispatched, state.ended, state.released, state.outcome, state.sequence, historyReceipt(state.receipt)})
 		if err != nil {
 			return
 		}
@@ -712,9 +756,46 @@ func (h *historyIndex) putReview(id uuid.UUID, through uint64, slot reviewSlot, 
 	h.put(e)
 }
 
+// Drafts keep their in-memory member names; body_refs are historyDigest text.
+type historyDraft struct {
+	ledger.Draft
+	BodyRefs []historyDigest
+}
 type historyCommandValue struct {
 	Command json.RawMessage
-	Drafts  []ledger.Draft
+	Drafts  []historyDraft
+}
+
+func historyDrafts(d []ledger.Draft) []historyDraft {
+	out := make([]historyDraft, len(d))
+	for i, draft := range d {
+		out[i].Draft = draft
+		if draft.BodyRefs != nil {
+			out[i].BodyRefs = make([]historyDigest, len(draft.BodyRefs))
+			for j, ref := range draft.BodyRefs {
+				out[i].BodyRefs[j] = historyDigest(ref)
+			}
+		}
+	}
+	return out
+}
+
+// drafts reports false for a zero body ref, which no record may carry.
+func (v historyCommandValue) drafts() ([]ledger.Draft, bool) {
+	out := make([]ledger.Draft, len(v.Drafts))
+	for i, draft := range v.Drafts {
+		out[i] = draft.Draft
+		if draft.BodyRefs != nil {
+			out[i].BodyRefs = make([]ledger.Digest, len(draft.BodyRefs))
+			for j, ref := range draft.BodyRefs {
+				if ref == (historyDigest{}) {
+					return nil, false
+				}
+				out[i].BodyRefs[j] = ledger.Digest(ref)
+			}
+		}
+	}
+	return out, true
 }
 
 func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatch, bool) {
@@ -733,10 +814,11 @@ func (h *historyIndex) command(id uuid.UUID, after, through uint64) (commandMatc
 			if len(v.Drafts) == 0 {
 				return commandMatch{found: true, command: command}, true
 			}
-			if uint64(len(v.Drafts)) == e.last-e.first+1 {
-				g, scoped, review, paid, registration, loop, continuation, eligibility, err := decodeFamily(v.Drafts, e.first)
+			drafts, valid := v.drafts()
+			if valid && uint64(len(drafts)) == e.last-e.first+1 {
+				g, scoped, review, paid, registration, loop, continuation, eligibility, err := decodeFamily(drafts, e.first)
 				occurrences := 0
-				for _, draft := range v.Drafts {
+				for _, draft := range drafts {
 					if draft.Type == ledger.TypeCommand {
 						c, decodeErr := ledger.DecodeCommand(draft.Payload)
 						if decodeErr != nil {
@@ -767,7 +849,7 @@ func (h *historyIndex) putCommand(id uuid.UUID, after, through uint64, match com
 		// Unconsumed families need only the F0 identity, not arbitrary
 		// payloads that this service neither interprets nor retains.
 		if match.group != nil || match.scoped != nil || match.review != nil || match.paid != nil || match.registration != nil || match.loop != nil || match.continuation != nil || match.eligibility != nil {
-			v.Drafts = draftsOf(commit)
+			v.Drafts = historyDrafts(draftsOf(commit))
 		}
 		e.first, e.last = commit.First, commit.Last
 		e.data, err = json.Marshal(v)

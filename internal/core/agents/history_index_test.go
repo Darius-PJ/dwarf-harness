@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -12,6 +14,8 @@ import (
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 )
 
 // Faults affect acceleration only; every assertion below observes the service,
@@ -1858,6 +1862,635 @@ func testColdPaidReadError(t *testing.T) {
 	f.service.mu.Unlock()
 	if err != lockedErr || !errors.Is(err, ledger.ErrCorrupt) || poisoned != lockedPoison || !reflect.DeepEqual(view, PaidAttemptView{}) || f.store.Durable() != before {
 		t.Fatalf("unlocked failure changed original error or poison state: %v poison=%v locked=%v", err, poisoned, lockedPoison)
+	}
+}
+
+// rangeReads counts the reads of one exact (after, through] range.
+type rangeReads struct {
+	after, through uint64
+	n              atomic.Int64
+}
+
+func (r *rangeReads) observe(after, through uint64) {
+	if r != nil && after == r.after && through == r.through {
+		r.n.Add(1)
+	}
+}
+
+// watchReads counts one range on a service without a loop runtime. The caller
+// clears s.deps.beforeRangeRead afterwards.
+func watchReads(s *Service, after, through uint64) *rangeReads {
+	r := &rangeReads{after: after, through: through}
+	s.deps.beforeRangeRead = r.observe
+	return r
+}
+
+// preparedRounds runs lookup through the prepare protocol with a fresh read set
+// and no catch-up. Call with s.mu held.
+func preparedRounds(s *Service, lookup func(*historyReadSet) error) (int, error) {
+	reads := &historyReadSet{}
+	err := s.prepareHistoryLocked(context.Background(), reads, nil, false, lookup)
+	return reads.rounds, err
+}
+
+// historyCacheFaults are TestHistoryIndexPrefixAndDiscard's cache modes with
+// disabled, which cannot be undone, last.
+var historyCacheFaults = []string{"empty", "evicted", "damaged", "key", "range", "decoder", "provenance", "coverage", "disabled"}
+
+// releasedWorkFixture releases a local work with a workspace target and then
+// its turn, whose target is a context.
+func releasedWorkFixture(t *testing.T) (f *serviceFixture, local, turn uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	f, agent, start, admit := scopedLocalFixture(t, DefaultLimits())
+	if _, err := agent.StartTurn(ctx, start); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.AdmitLocal(ctx, admit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.BeginLocal(ctx, LocalDispatch{CommandID: privateID(9010), WorkID: admit.WorkID, ExpectedVersion: 1, ArgumentsSHA256: admit.ArgumentsSHA256}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.EndLocal(ctx, LocalEnding{CommandID: privateID(9012), WorkID: admit.WorkID, ExpectedVersion: 2, Outcome: "failed"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.EndTurn(ctx, TurnEnding{CommandID: privateID(9013), TurnID: start.TurnID, ExpectedVersion: 1, Outcome: "released"}); err != nil {
+		t.Fatal(err)
+	}
+	return f, admit.WorkID, start.TurnID
+}
+
+type scopedCommandCommit struct {
+	command ledger.Command
+	commit  ledger.Commit
+}
+
+// scopedCommands picks the first scoped command whose commit carries body_refs
+// and the first whose commit carries none.
+func scopedCommands(t *testing.T, s *Service) (withRefs, withoutRefs scopedCommandCommit) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := s.scan(context.Background(), 0, s.p.through, func(c ledger.Commit) error {
+		_, scoped, _, _, _, _, _, _, err := decodeFamily(draftsOf(c), c.First)
+		if err != nil || scoped == nil {
+			return err
+		}
+		pick := &withoutRefs
+		for _, record := range c.Records {
+			if len(record.BodyRefs) != 0 {
+				pick = &withRefs
+			}
+		}
+		if pick.commit.First == 0 {
+			*pick = scopedCommandCommit{scoped.command, c}
+		}
+		return nil
+	})
+	if err != nil || withRefs.commit.First == 0 || withoutRefs.commit.First == 0 {
+		t.Fatalf("scoped commands: with body_refs at %d, without at %d: %v", withRefs.commit.First, withoutRefs.commit.First, err)
+	}
+	return withRefs, withoutRefs
+}
+
+// Every history kind's entry, stored through its real put, decodes back as a
+// hit equal to the cold answer at the same boundary, and its loader's second
+// lookup takes no read where the miss path would. Released work and body_refs
+// commands are the hits the codec added: under every cache fault their public
+// answers stay the cold answer and nothing is appended.
+func TestHistoryIndexCodecHits(t *testing.T) {
+	t.Parallel()
+	t.Run("work", testCodecWorkHits)
+	t.Run("review_history", testCodecReviewHits)
+}
+
+func testCodecWorkHits(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, local, turn := releasedWorkFixture(t)
+	s := f.service
+	for _, work := range []struct {
+		id     uuid.UUID
+		target string
+	}{{local, "workspace"}, {turn, "context"}} {
+		// Released work is pruned, so loadWork's cold fold is the production
+		// fill at the current boundary.
+		damageHistoryCache(s, "empty")
+		s.mu.Lock()
+		through := s.p.through
+		cold, found, err := s.loadWork(ctx, nil, work.id, through)
+		hint, hintFound, hit := s.history.work(work.id, through)
+		reads := watchReads(s, 0, through)
+		again, againFound, againErr := s.loadWork(ctx, nil, work.id, through)
+		s.deps.beforeRangeRead = nil
+		s.mu.Unlock()
+		if err != nil || !found || !cold.released || cold.receipt.Target.Kind != work.target {
+			t.Fatalf("released %s work: %+v %v", work.target, cold, err)
+		}
+		if !hit || !hintFound || !reflect.DeepEqual(hint, cold) {
+			t.Fatalf("released %s work entry is not the cold fold: hit=%v found=%v hint=%+v cold=%+v", work.target, hit, hintFound, hint, cold)
+		}
+		if againErr != nil || !againFound || !reflect.DeepEqual(again, cold) || reads.n.Load() != 0 {
+			t.Fatalf("released %s work's second lookup took the cold read: reads=%d %+v %v", work.target, reads.n.Load(), again, againErr)
+		}
+	}
+	damageHistoryCache(s, "empty")
+	want, err := s.TurnStatus(ctx, WorkLookup{WorkID: local})
+	if err != nil || !want.Ended || want.Outcome != "failed" {
+		t.Fatalf("cold released work: %+v %v", want, err)
+	}
+	before := f.store.Durable()
+	for _, mode := range historyCacheFaults {
+		damageHistoryCache(s, mode)
+		for range 2 {
+			if view, err := s.TurnStatus(ctx, WorkLookup{WorkID: local}); err != nil || !reflect.DeepEqual(view, want) || f.store.Durable() != before {
+				t.Fatalf("%s: released work answer changed: %+v %v", mode, view, err)
+			}
+		}
+	}
+}
+
+func testCodecReviewHits(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, q := liveReviewFixture(t)
+	_, reviewer, result := requestLiveReview(t, f, q)
+	s := f.service
+	taskID := q.Binding.TaskID
+	// A pending review is answered from the projection, so no production fill
+	// exists at the current boundary: this entry is a direct put of its slot.
+	s.mu.Lock()
+	s.history.putReview(q.RequestID, s.p.through, s.p.reviews[taskID], true)
+	pending, pendingFound, pendingHit := s.history.review(q.RequestID, s.p.through)
+	s.mu.Unlock()
+	damageHistoryCache(s, "empty")
+	s.mu.Lock()
+	slot, slotFound, err := s.loadReview(ctx, nil, q.RequestID, s.p.through)
+	s.mu.Unlock()
+	if !pendingHit || !pendingFound || err != nil || !slotFound || slot.state != "pending" || !reflect.DeepEqual(pending, slot) {
+		t.Fatalf("pending review entry is not the boundary's answer: hit=%v found=%v hint=%+v answer=%+v %v", pendingHit, pendingFound, pending, slot, err)
+	}
+
+	withRefs, withoutRefs := scopedCommands(t, s)
+	commands := []scopedCommandCommit{withRefs, withoutRefs}
+	for _, c := range commands {
+		id := c.command.CommandID
+		// findCommandLegacy's commandFromCommit is a production fill that,
+		// unlike the directory path, warms no source: a miss on the second
+		// lookup would read the containing commit.
+		damageHistoryCache(s, "empty")
+		s.mu.Lock()
+		through := s.p.through
+		cold, err := s.findCommandLegacy(ctx, nil, id, 0, through)
+		hint, hit := s.history.command(id, 0, through)
+		reads := watchReads(s, c.commit.First-1, c.commit.Last)
+		again, againErr := s.findCommand(ctx, nil, id, 0, through)
+		s.deps.beforeRangeRead = nil
+		s.mu.Unlock()
+		if err != nil || !cold.found || cold.scoped == nil {
+			t.Fatalf("command %s at %d: %+v %v", id, c.commit.First, cold, err)
+		}
+		if !hit || !hint.found || !reflect.DeepEqual(hint, cold) {
+			t.Fatalf("command %s entry is not the cold answer: hit=%v hint=%+v cold=%+v", id, hit, hint, cold)
+		}
+		if againErr != nil || !reflect.DeepEqual(again, cold) || reads.n.Load() != 0 {
+			t.Fatalf("command %s's second lookup read its commit: reads=%d %+v %v", id, reads.n.Load(), again, againErr)
+		}
+	}
+	// Consumers: with both entries filled, a status call, an unrelated commit
+	// and the same call again give one receipt, append nothing and are served
+	// by the entries.
+	damageHistoryCache(s, "empty")
+	s.mu.Lock()
+	var fillErr error
+	for _, c := range commands {
+		if _, err := s.findCommandLegacy(ctx, nil, c.command.CommandID, 0, s.p.through); err != nil {
+			fillErr = err
+		}
+	}
+	s.mu.Unlock()
+	if fillErr != nil {
+		t.Fatal(fillErr)
+	}
+	lookup := func(c scopedCommandCommit) ScopedCommandLookup {
+		return ScopedCommandLookup{CommandID: c.command.CommandID, SubmissionSHA256: c.command.SubmissionSHA256}
+	}
+	var fills, commitReads atomic.Int64
+	s.deps.beforeHistoryFill = func(key historyKey) {
+		if key.kind == historyCommand && (key.id == withRefs.command.CommandID || key.id == withoutRefs.command.CommandID) {
+			fills.Add(1)
+		}
+	}
+	s.deps.beforeRangeRead = func(after, through uint64) {
+		for _, c := range commands {
+			if after == c.commit.First-1 && through == c.commit.Last {
+				commitReads.Add(1)
+			}
+		}
+	}
+	receipts := map[uuid.UUID]ScopedReceipt{}
+	before := f.store.Durable()
+	for _, c := range commands {
+		receipt, err := s.ScopedCommandStatus(ctx, lookup(c))
+		if err != nil {
+			t.Fatalf("command %s status: %v", c.command.CommandID, err)
+		}
+		receipts[c.command.CommandID] = receipt
+	}
+	if f.store.Durable() != before {
+		t.Fatal("command status appended")
+	}
+	if _, err := resolveLiveReview(f, reviewer, result); err != nil {
+		t.Fatal(err)
+	}
+	after := f.store.Durable()
+	for _, c := range commands {
+		receipt, err := s.ScopedCommandStatus(ctx, lookup(c))
+		if err != nil || !reflect.DeepEqual(receipt, receipts[c.command.CommandID]) {
+			t.Fatalf("command %s receipt changed across an unrelated commit: %+v %v", c.command.CommandID, receipt, err)
+		}
+	}
+	s.deps.beforeHistoryFill, s.deps.beforeRangeRead = nil, nil
+	if f.store.Durable() != after || fills.Load() != 0 || commitReads.Load() != 0 {
+		t.Fatalf("command status was not served by its entry: appended=%v fills=%d commit reads=%d", f.store.Durable() != after, fills.Load(), commitReads.Load())
+	}
+
+	// Approval pruned the task and its review, and revocation prunes the
+	// grant: each loader's cold fold is the production fill at the boundary.
+	if _, err := s.RevokeGrant(ctx, reviewOwner(), GrantRevocation{CommandID: privateID(2400), RevokeGrantID: result.GrantID, ExpectedVersion: 1, ExpectedAuthorityVersion: uint64(s.p.authority)}); err != nil {
+		t.Fatal(err)
+	}
+	var source ledger.Record
+	for _, record := range withRefs.commit.Records {
+		if len(record.BodyRefs) != 0 {
+			source = record
+			break
+		}
+	}
+	for _, row := range []struct {
+		kind string
+		live func() bool
+		load func(through uint64) (any, bool, error)
+		hint func(through uint64) (any, bool, bool)
+	}{
+		{"revoked grant", func() bool { _, live := s.p.grants[result.GrantID]; return live }, func(through uint64) (any, bool, error) {
+			v, found, err := s.loadGrant(ctx, nil, result.GrantID, through)
+			return v, found, err
+		}, func(through uint64) (any, bool, bool) {
+			v, found, hit := s.history.grant(result.GrantID, through)
+			return v, found, hit
+		}},
+		{"completed task", func() bool { _, live := s.p.tasks[taskID]; return live }, func(through uint64) (any, bool, error) {
+			v, found, err := s.loadTask(ctx, nil, taskID, through)
+			return v, found, err
+		}, func(through uint64) (any, bool, bool) {
+			v, found, hit := s.history.task(taskID, through)
+			return v, found, hit
+		}},
+		{"approved review", func() bool { _, live := s.p.reviews[taskID]; return live }, func(through uint64) (any, bool, error) {
+			v, found, err := s.loadReview(ctx, nil, q.RequestID, through)
+			return v, found, err
+		}, func(through uint64) (any, bool, bool) {
+			v, found, hit := s.history.review(q.RequestID, through)
+			return v, found, hit
+		}},
+		{"body_refs source", func() bool { return false }, func(through uint64) (any, bool, error) {
+			v, found, err := s.sourceRecord(ctx, nil, int64(source.Seq), through)
+			return v, found, err
+		}, func(through uint64) (any, bool, bool) {
+			v, hit := s.history.source(int64(source.Seq), through, s.store.Colony())
+			return v, hit, hit
+		}},
+	} {
+		damageHistoryCache(s, "empty")
+		s.mu.Lock()
+		through, live := s.p.through, row.live()
+		cold, found, err := row.load(through)
+		hint, hintFound, hit := row.hint(through)
+		reads := watchReads(s, 0, through)
+		again, againFound, againErr := row.load(through)
+		s.deps.beforeRangeRead = nil
+		s.mu.Unlock()
+		if live || err != nil || !found {
+			t.Fatalf("%s: live=%v found=%v %v", row.kind, live, found, err)
+		}
+		if !hit || !hintFound || !reflect.DeepEqual(hint, cold) {
+			t.Fatalf("%s entry is not the cold answer: hit=%v found=%v hint=%+v cold=%+v", row.kind, hit, hintFound, hint, cold)
+		}
+		if againErr != nil || !againFound || !reflect.DeepEqual(again, cold) || reads.n.Load() != 0 {
+			t.Fatalf("%s's second lookup took the cold read: reads=%d %+v %v", row.kind, reads.n.Load(), again, againErr)
+		}
+	}
+
+	damageHistoryCache(s, "empty")
+	want, err := s.ScopedCommandStatus(ctx, lookup(withRefs))
+	if err != nil || !reflect.DeepEqual(want, receipts[withRefs.command.CommandID]) {
+		t.Fatalf("cold body_refs command: %+v %v", want, err)
+	}
+	before = f.store.Durable()
+	for _, mode := range historyCacheFaults {
+		damageHistoryCache(s, mode)
+		for range 2 {
+			if receipt, err := s.ScopedCommandStatus(ctx, lookup(withRefs)); err != nil || !reflect.DeepEqual(receipt, want) || f.store.Durable() != before {
+				t.Fatalf("%s: body_refs command receipt changed: %+v %v", mode, receipt, err)
+			}
+		}
+	}
+}
+
+// A prepared lookup reads once in one unlocked round: its answer decodes on
+// the rerun and equals the locked answer.
+func TestHistoryPreparedAnswers(t *testing.T) {
+	t.Parallel()
+	t.Run("released_work", testPreparedReleasedWork)
+	t.Run("body_refs_commit", testPreparedBodyRefsCommit)
+	t.Run("turn_result", testPreparedTurnResult)
+}
+
+func testPreparedReleasedWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, local, turn := releasedWorkFixture(t)
+	s := f.service
+	for _, id := range []uuid.UUID{local, turn} {
+		damageHistoryCache(s, "empty")
+		s.mu.Lock()
+		through := s.p.through
+		locked, lockedFound, lockedErr := s.loadWork(ctx, nil, id, through)
+		s.mu.Unlock()
+		damageHistoryCache(s, "empty")
+		reads := watchReads(s, 0, through)
+		var prepared scopedWorkState
+		var found bool
+		s.mu.Lock()
+		rounds, err := preparedRounds(s, func(r *historyReadSet) error {
+			var err error
+			prepared, found, err = s.loadWork(ctx, r, id, through)
+			return err
+		})
+		s.mu.Unlock()
+		s.deps.beforeRangeRead = nil
+		if lockedErr != nil || !lockedFound || err != nil || !found || !reflect.DeepEqual(prepared, locked) {
+			t.Fatalf("work %s prepared answer differs: prepared=%+v locked=%+v %v %v", id, prepared, locked, err, lockedErr)
+		}
+		if reads.n.Load() != 1 || rounds != 1 {
+			t.Fatalf("work %s prepared lookup: reads=%d rounds=%d", id, reads.n.Load(), rounds)
+		}
+	}
+}
+
+func testPreparedBodyRefsCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f, _ := liveReviewFixture(t)
+	s := f.service
+	c, _ := scopedCommands(t, s)
+	id := c.command.CommandID
+	damageHistoryCache(s, "empty")
+	s.mu.Lock()
+	through := s.p.through
+	locked, lockedErr := s.findCommand(ctx, nil, id, 0, through)
+	s.mu.Unlock()
+	// The directory stays intact; with the payload cache empty the lookup's
+	// only read is its containing commit.
+	damageHistoryCache(s, "empty")
+	reads := watchReads(s, c.commit.First-1, c.commit.Last)
+	var prepared commandMatch
+	s.mu.Lock()
+	rounds, err := preparedRounds(s, func(r *historyReadSet) error {
+		var err error
+		prepared, err = s.findCommand(ctx, r, id, 0, through)
+		return err
+	})
+	s.mu.Unlock()
+	s.deps.beforeRangeRead = nil
+	if lockedErr != nil || !locked.found || err != nil || !reflect.DeepEqual(prepared, locked) {
+		t.Fatalf("command %s prepared answer differs: prepared=%+v locked=%+v %v %v", id, prepared, locked, err, lockedErr)
+	}
+	if reads.n.Load() != 1 || rounds != 1 {
+		t.Fatalf("command %s prepared lookup: commit reads=%d rounds=%d", id, reads.n.Load(), rounds)
+	}
+}
+
+func testPreparedTurnResult(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var watch atomic.Pointer[rangeReads]
+	f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+		model, _ := turnRequest(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, turnAnthropic(model, nil, "Done."))
+	}, func(deps *serviceDeps) {
+		// The loop runtime runs beside the test, so the hook exists from Open.
+		deps.beforeRangeRead = func(after, through uint64) { watch.Load().observe(after, through) }
+	})
+	f.enable(t)
+	command, _ := f.send(t)
+	turn := command.Arguments.(session.MessageSend).TurnID
+	want, _ := f.finished(t, turn)
+	if want.FinalMessageObject == nil {
+		t.Fatalf("finished turn carries no final message object: %+v", want)
+	}
+	s := f.service
+	ids := submissionIDs{f.origin.AgentID, f.origin.SessionID, f.origin.ContextID}
+	for _, fold := range []struct {
+		name      string
+		key       directoryKey
+		selection directoryReadSelection
+		keep      func(ledger.Record) bool
+	}{
+		{"status", directoryKey{kind: directoryTurnStatus, id: turn}, directoryReadSelection{Purpose: "loop_status", Origin: originOf(ids)}, func(r ledger.Record) bool {
+			return r.AgentID == ids.agent && r.ExecutionSessionID == ids.session && r.ContextID == ids.context && r.TurnID == turn
+		}},
+		{"late_text", directoryKey{kind: directoryTurnResult, id: turn}, directoryReadSelection{Purpose: "loop_late_text", Origin: originOf(ids)}, func(r ledger.Record) bool {
+			return r.Type == ledger.TypeRuntimeTurnResult && r.TurnID == turn && r.AgentID == ids.agent && r.ExecutionSessionID == ids.session
+		}},
+	} {
+		damageCommandDirectory(s, "missing")
+		s.mu.Lock()
+		// With the directory missing the fold is a history read. No rebuild
+		// may restore the directory while the read is counted.
+		wasRebuilding := s.rebuilding
+		s.rebuilding = true
+		reads := &rangeReads{through: s.p.through}
+		lockedBound, locked, lockedErr := s.foldTurnResult(ctx, nil, fold.key, fold.selection, fold.keep)
+		watch.Store(reads)
+		var bound uint64
+		var result *ledger.RuntimeTurnResult
+		rounds, err := preparedRounds(s, func(r *historyReadSet) error {
+			var err error
+			bound, result, err = s.foldTurnResult(ctx, r, fold.key, fold.selection, fold.keep)
+			return err
+		})
+		watch.Store(nil)
+		s.rebuilding = false
+		s.mu.Unlock()
+		if wasRebuilding || lockedErr != nil || err != nil || result == nil || !reflect.DeepEqual(result, locked) || !reflect.DeepEqual(*result, want) || bound != lockedBound || fold.name == "status" && bound == 0 {
+			t.Fatalf("%s prepared turn result differs: rebuilding=%v bound=%d/%d result=%+v locked=%+v %v %v", fold.name, wasRebuilding, bound, lockedBound, result, locked, err, lockedErr)
+		}
+		if reads.n.Load() != 1 || rounds != 1 {
+			t.Fatalf("%s prepared turn result: reads=%d rounds=%d", fold.name, reads.n.Load(), rounds)
+		}
+	}
+}
+
+func TestHistoryIndexReleasedWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	check := func(t *testing.T, f *serviceFixture, id uuid.UUID) {
+		t.Helper()
+		for _, phase := range []string{"live", "reopened"} {
+			if phase == "reopened" {
+				reopenScoped(t, f, DefaultLimits())
+			}
+			s := f.service
+			through := f.store.Durable()
+			s.mu.Lock()
+			filled, found, hit := s.history.work(id, through)
+			s.mu.Unlock()
+			var coldReads atomic.Int64
+			s.deps.beforeRangeRead = func(after, _ uint64) {
+				if after == 0 {
+					coldReads.Add(1)
+				}
+			}
+			s.mu.Lock()
+			warm, warmFound, err := s.loadWork(ctx, nil, id, through)
+			s.mu.Unlock()
+			s.deps.beforeRangeRead = nil
+			if err != nil || !warmFound || coldReads.Load() != 0 {
+				t.Fatalf("%s work %s required a cold read after release: reads=%d found=%v err=%v", phase, id, coldReads.Load(), warmFound, err)
+			}
+			if !hit || !found || !filled.released || !reflect.DeepEqual(warm, filled) {
+				t.Fatalf("%s work %s has no final accepted entry: hit=%v found=%v filled=%+v warm=%+v", phase, id, hit, found, filled, warm)
+			}
+			damageHistoryCache(s, "empty")
+			s.mu.Lock()
+			cold, coldFound, err := s.loadWork(ctx, nil, id, through)
+			s.mu.Unlock()
+			if err != nil || !coldFound || !reflect.DeepEqual(filled, cold) {
+				t.Fatalf("%s work %s filled entry differs from cold fold at %d: filled=%+v cold=%+v found=%v err=%v", phase, id, through, filled, cold, coldFound, err)
+			}
+		}
+		// The next accepted record must use replay's fill, not the fold above.
+		reopenScoped(t, f, DefaultLimits())
+	}
+	t.Run("live", func(t *testing.T) {
+		t.Parallel()
+		f, agent, start, admit := scopedLocalFixture(t, DefaultLimits())
+		if _, err := agent.StartTurn(ctx, start); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := agent.AdmitLocal(ctx, admit); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.service.BeginLocal(ctx, LocalDispatch{CommandID: privateID(9010), WorkID: admit.WorkID, ExpectedVersion: 1, ArgumentsSHA256: admit.ArgumentsSHA256}); err != nil {
+			t.Fatal(err)
+		}
+		// Live unresolved work is retained in the projection, so loadWork
+		// cannot fold it at the current frontier. Seed its valid earlier
+		// state to exercise invalidation on a non-releasing ending.
+		f.service.mu.Lock()
+		previous := f.service.p.work[admit.WorkID]
+		f.service.history.putWork(admit.WorkID, f.service.p.through, previous, true)
+		seeded, seededFound, seededHit := f.service.history.work(admit.WorkID, f.service.p.through)
+		f.service.mu.Unlock()
+		if !seededHit || !seededFound || !reflect.DeepEqual(seeded, previous) {
+			t.Fatalf("seeded pre-ending hint is not a hit: hit=%v found=%v hint=%+v", seededHit, seededFound, seeded)
+		}
+		if _, err := f.service.EndLocal(ctx, LocalEnding{CommandID: privateID(9011), WorkID: admit.WorkID, ExpectedVersion: 2, Outcome: "unknown"}); err != nil {
+			t.Fatal(err)
+		}
+		f.service.mu.Lock()
+		_, _, hit := f.service.history.work(admit.WorkID, f.service.p.through)
+		f.service.mu.Unlock()
+		if hit {
+			t.Fatal("non-releasing ending retained the pre-ending history hint")
+		}
+		view, err := f.service.TurnStatus(ctx, WorkLookup{WorkID: admit.WorkID})
+		if err != nil || !view.Ended || view.Outcome != "unknown" || view.Version != 3 {
+			t.Fatalf("non-releasing ending returned pre-ending state: %+v %v", view, err)
+		}
+		if _, err := f.service.EndLocal(ctx, LocalEnding{CommandID: privateID(9012), WorkID: admit.WorkID, ExpectedVersion: 3, Outcome: "failed"}); err != nil {
+			t.Fatal(err)
+		}
+		check(t, f, admit.WorkID)
+		if _, err := f.service.EndTurn(ctx, TurnEnding{CommandID: privateID(9013), TurnID: start.TurnID, ExpectedVersion: 1, Outcome: "released"}); err != nil {
+			t.Fatal(err)
+		}
+		check(t, f, start.TurnID)
+	})
+	for _, chapter := range []string{"11", "16"} {
+		t.Run("frozen_"+chapter, func(t *testing.T) {
+			t.Parallel()
+			f, commits := scopedGoldenFixture(t, chapter, 0)
+			var err error
+			f.service, _, err = Open(ctx, f.store, f.root, DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			segment := filepath.Join(f.root, "log", ledger.SegmentName(1))
+			lines := bytes.SplitAfter(readTestFile(t, filepath.Join("../../../contract/ledger/testdata/f3", chapter, "log", ledger.SegmentName(1))), []byte{'\n'})
+			kinds := map[uuid.UUID]string{}
+			nextTurnRecord := map[uuid.UUID]bool{}
+			released, nextChecked := 0, 0
+			for _, commit := range commits {
+				checkNext := false
+				for _, record := range commit.Records {
+					if nextTurnRecord[record.TurnID] {
+						checkNext = true
+						delete(nextTurnRecord, record.TurnID)
+					}
+				}
+				// The store holds the frozen bytes that a reopen replays.
+				// Resubmitted drafts would get fresh event times, which
+				// F3-16's paid records refuse on replay.
+				if err := f.store.Close(); err != nil {
+					t.Fatal(err)
+				}
+				writeTestFile(t, segment, bytes.Join(lines[:commit.Last], nil))
+				if f.store, _, err = ledgerstore.Open(f.root, ledger.Defined()); err != nil {
+					t.Fatal(err)
+				}
+				var coldReads atomic.Int64
+				f.service.deps.beforeRangeRead = func(after, _ uint64) {
+					if after == 0 {
+						coldReads.Add(1)
+					}
+				}
+				f.service.mu.Lock()
+				_, err := f.service.acceptCommitLocked(ctx, commit, nil)
+				f.service.mu.Unlock()
+				f.service.deps.beforeRangeRead = nil
+				if err != nil || checkNext && coldReads.Load() != 0 {
+					t.Fatalf("accept next record at %d: released-turn=%v cold reads=%d err=%v", commit.First, checkNext, coldReads.Load(), err)
+				}
+				if checkNext {
+					nextChecked++
+				}
+				for _, record := range commit.Records {
+					switch record.Type {
+					case ledger.TypeRuntimeWorkAdmitted:
+						admission := scopedDecode(t, ledger.DecodeRuntimeWorkAdmitted, record.Payload)
+						kinds[admission.WorkID] = admission.Kind
+					case ledger.TypeRuntimeWorkEnded:
+						ending := scopedDecode(t, ledger.DecodeRuntimeWorkEnded, record.Payload)
+						if releasesWork(kinds[ending.WorkID], ending.Outcome) {
+							check(t, f, ending.WorkID)
+							released++
+							if kinds[ending.WorkID] == "turn" {
+								nextTurnRecord[ending.WorkID] = true
+							}
+						}
+					}
+				}
+			}
+			if released == 0 {
+				t.Fatalf("chapter %s replayed no released work", chapter)
+			}
+			t.Logf("chapter %s: %d released works checked, %d next turn records accepted without a read from 0", chapter, released, nextChecked)
+		})
 	}
 }
 

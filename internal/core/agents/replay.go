@@ -683,6 +683,11 @@ func (s *Service) stageCommitLocked(ctx context.Context, reads *historyReadSet, 
 			s.p.reviewFloor = max(s.p.reviewFloor, record.EventTimeNS)
 		}
 		s.publishCommitLocked(c, g, scoped)
+		if scopedNext.work != nil && scopedNext.work.released {
+			// Copy the installed reducer result after advance invalidates the
+			// old entry; this accepted-effect fill is not a second reduction.
+			s.history.putWork(scopedNext.work.admission.WorkID, c.Last, *scopedNext.work, true)
+		}
 		s.p.through = c.Last
 		s.loop.notify()
 	}, nil

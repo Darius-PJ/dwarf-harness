@@ -148,6 +148,11 @@ func (s *Service) historyBindingLocked(bound *submissionIDs) historyReadBinding 
 // readHistory returns a closed typed suspension on a miss. A nil read set is
 // the explicit already-unlocked or durable-acknowledgement mode. Resolve may
 // capture only immutable inputs and cold-fold locals, not live service state.
+// Its answer must survive encoding/json in both directions, or the rerun reads
+// again. A contract payload crosses as its encoded bytes and returns through
+// its frozen Decode function; Digest (text out, none in), Resource, SubjectRef,
+// DeclarationConsumer and PrivateWriteArguments (wire marshalers without
+// matching unmarshalers) do not cross as typed fields.
 func readHistory[T any](ctx context.Context, reads *historyReadSet, after, through uint64, selection historySelection, resolve func(context.Context) (T, error)) (T, error) {
 	var zero T
 	kind := selection.historyKind()
@@ -269,8 +274,10 @@ func (s *Service) prepareHistoryLocked(ctx context.Context, reads *historyReadSe
 	}
 }
 
-// The encoded source convention preserves payload and body refs which the
-// envelope's JSON methods intentionally omit, and lends no mutable storage.
+// A commit answer must survive encoding/json in both directions. The envelope
+// has no JSON methods, and its typed BodyRefs encode as Digest text that cannot
+// decode, so each record travels without them; its payload and body refs travel
+// as putSource stores them, and the value lends no mutable storage.
 type historyCommitValue struct {
 	ID          uuid.UUID
 	First, Last uint64
@@ -284,6 +291,7 @@ func encodeHistoryCommit(c ledger.Commit) historyCommitValue {
 		for i, ref := range record.BodyRefs {
 			refs[i] = ref.String()
 		}
+		record.BodyRefs = nil
 		value.Records = append(value.Records, historySourceValue{Record: record, Payload: record.Payload, BodyRefs: refs})
 	}
 	return value

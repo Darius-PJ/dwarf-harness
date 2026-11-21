@@ -243,7 +243,7 @@ func (s *Service) loadWork(ctx context.Context, reads *historyReadSet, id uuid.U
 			return nil, err
 		}
 		payload, err := work.admission.Encode()
-		return &historyWorkValue{payload, work.origin, work.turn, work.version, work.dispatched, work.ended, work.released, work.outcome, work.sequence, historyScopedReceipt{work.receipt, historyResource(work.receipt.Target)}}, err
+		return &historyWorkValue{payload, work.origin, work.turn, work.version, work.dispatched, work.ended, work.released, work.outcome, work.sequence, historyReceipt(work.receipt)}, err
 	})
 	if err != nil || value == nil {
 		if err == nil {

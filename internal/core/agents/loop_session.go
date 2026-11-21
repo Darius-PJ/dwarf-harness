@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"unicode/utf8"
 	"uuid"
@@ -220,24 +221,15 @@ func (v *loopSession) status(ctx context.Context, reads *historyReadSet, ids sub
 			liveView = false
 		}
 		err = nil
-		view, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryTurnStatus, id: id}, 0, s.p.through, directoryReadSelection{Purpose: "loop_status", Origin: originOf(ids)}, func(view *session.TurnView, c ledger.Commit) error {
-			for _, record := range c.Records {
-				if record.AgentID != ids.agent || record.ExecutionSessionID != ids.session || record.ContextID != ids.context || record.TurnID != id {
-					continue
-				}
-				switch record.Type {
-				case ledger.TypeRuntimeTurnBound:
-					view.BoundSequence = record.Seq
-				case ledger.TypeRuntimeTurnResult:
-					result, err := ledger.DecodeRuntimeTurnResult(record.Payload)
-					if err != nil {
-						return err
-					}
-					view.State, view.Reason, view.ModelCalls, view.ToolDispatches, view.Result = result.Outcome, result.Reason, result.ModelCalls, result.ToolDispatches, &result
-				}
-			}
-			return nil
+		var bound uint64
+		var result *ledger.RuntimeTurnResult
+		bound, result, err = s.foldTurnResult(ctx, reads, directoryKey{kind: directoryTurnStatus, id: id}, directoryReadSelection{Purpose: "loop_status", Origin: originOf(ids)}, func(record ledger.Record) bool {
+			return record.AgentID == ids.agent && record.ExecutionSessionID == ids.session && record.ContextID == ids.context && record.TurnID == id
 		})
+		view = session.TurnView{BoundSequence: bound}
+		if result != nil {
+			view.State, view.Reason, view.ModelCalls, view.ToolDispatches, view.Result = result.Outcome, result.Reason, result.ModelCalls, result.ToolDispatches, result
+		}
 		if err != nil {
 			return err
 		}
@@ -493,17 +485,8 @@ func (v *loopSession) lateText(ctx context.Context, id uuid.UUID) (session.TextS
 	var result *ledger.RuntimeTurnResult
 	err := s.prepareHistoryLocked(ctx, &historyReadSet{}, &ids, true, func(reads *historyReadSet) error {
 		var err error
-		result, err = foldDirectory(ctx, s, reads, directoryKey{kind: directoryTurnResult, id: id}, 0, s.p.through, directoryReadSelection{Purpose: "loop_late_text", Origin: originOf(ids)}, func(result **ledger.RuntimeTurnResult, c ledger.Commit) error {
-			for _, record := range c.Records {
-				if record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == id && record.AgentID == ids.agent && record.ExecutionSessionID == ids.session {
-					value, err := ledger.DecodeRuntimeTurnResult(record.Payload)
-					if err != nil {
-						return err
-					}
-					*result = &value
-				}
-			}
-			return nil
+		_, result, err = s.foldTurnResult(ctx, reads, directoryKey{kind: directoryTurnResult, id: id}, directoryReadSelection{Purpose: "loop_late_text", Origin: originOf(ids)}, func(record ledger.Record) bool {
+			return record.Type == ledger.TypeRuntimeTurnResult && record.TurnID == id && record.AgentID == ids.agent && record.ExecutionSessionID == ids.session
 		})
 		return err
 	})
@@ -514,6 +497,44 @@ func (v *loopSession) lateText(ctx context.Context, id uuid.UUID) (session.TextS
 		return session.TextSnapshot{}, nil, ErrUnavailable
 	}
 	return session.TextSnapshot{State: result.Outcome, FinalMessageObject: result.FinalMessageObject}, nil, nil
+}
+
+// turnResultAnswer is both loop folds' history answer. The result crosses as
+// its payload bytes, since RuntimeTurnResult carries a Digest that
+// encoding/json cannot decode, and returns through DecodeRuntimeTurnResult.
+type turnResultAnswer struct {
+	BoundSequence uint64
+	Result        []byte
+}
+
+// foldTurnResult reads the bound sequence and turn result of the records keep
+// selects, at the current accepted boundary.
+func (s *Service) foldTurnResult(ctx context.Context, reads *historyReadSet, key directoryKey, selection directoryReadSelection, keep func(ledger.Record) bool) (uint64, *ledger.RuntimeTurnResult, error) {
+	v, err := foldDirectory(ctx, s, reads, key, 0, s.p.through, selection, func(v *turnResultAnswer, c ledger.Commit) error {
+		for _, record := range c.Records {
+			if !keep(record) {
+				continue
+			}
+			switch record.Type {
+			case ledger.TypeRuntimeTurnBound:
+				v.BoundSequence = record.Seq
+			case ledger.TypeRuntimeTurnResult:
+				if _, err := ledger.DecodeRuntimeTurnResult(record.Payload); err != nil {
+					return err
+				}
+				v.Result = slices.Clone(record.Payload)
+			}
+		}
+		return nil
+	})
+	if err != nil || v.Result == nil {
+		return v.BoundSequence, nil, err
+	}
+	result, err := ledger.DecodeRuntimeTurnResult(v.Result)
+	if err != nil {
+		return v.BoundSequence, nil, err
+	}
+	return v.BoundSequence, &result, nil
 }
 
 // FinalText reads a finished turn's durable answer through the loop's own
