@@ -57,3 +57,5 @@ Canonical sections: Core roadmap C3; its cited controlling Core design and lates
 ## Comments
 
 2026-11-21 — Published at the project manager's proposal. After the agents package's race step timed out at the 30-minute limit on the hosted Windows runner, the owner chose to cut the package's test time rather than raise the limit, and approved this ticket (D176). Publication grants no separate implementation, contract-freeze, release or study approval; the start and authority gates above stand.
+
+2026-11-21 — Consolidation cross-link: Ticket [148](148-stop-git-process-recovery-refusing-a-reused-process-id.md) fixes a Git-process recovery behaviour found during this ticket's work: after a restart, recovery refuses a recorded Git root whose process ID now belongs to another process that the current user cannot open. Its fix is in `internal/core/gitprocess`, outside this ticket's packages, so the two may run in parallel. These extensions add no blocker or criterion to this ticket.
