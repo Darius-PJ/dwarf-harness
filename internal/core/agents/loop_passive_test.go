@@ -189,6 +189,7 @@ func assertPassiveCursor(t *testing.T, f *passiveFixture, turn uuid.UUID, cursor
 }
 
 func TestTurnLoopPassiveResults(t *testing.T) {
+	t.Parallel()
 	t.Run("crash_before_cursor", testPassiveCursorCrash)
 	t.Run("conflict_reference", func(t *testing.T) {
 		t.Parallel()

@@ -147,6 +147,7 @@ func testContinuationCaptureRestart(t *testing.T) {
 		{"restart_capture_parked_under_stop", "capture_stop_parked", "cancelled", 0},
 	} {
 		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
 			f := continuationKilled(t, row.boundary)
 			owner := f.owner(t)
 			if owner.Snapshot.State != "waiting_resource" || owner.Snapshot.ResumeState != "finishing" || owner.Snapshot.WaitReason != "workspace_capture" || len(f.report.PendingLoops) != 1 || f.report.PendingLoops[0].SavedPhase != "waiting_resource" || f.report.PendingLoops[0].WaitReason != "workspace_capture" {

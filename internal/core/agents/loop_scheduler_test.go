@@ -142,6 +142,7 @@ func TestTurnLoopAdmissionAndFairness(t *testing.T) {
 	fourth := f.workSetting(t, 51020, "Fourth task")
 	peerBinding := registerPrivate(t, f.service, 61000)
 	peer := f.contextSetting(t, peerBinding)
+	f.raiseDispatchBound(t)
 	f.enable(t, first, second, fourth, peer)
 	peerView, err := f.service.OpenSession(context.Background(), peerBinding)
 	if err != nil {

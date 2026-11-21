@@ -440,6 +440,7 @@ func TestOpenAIPaidBoundResults(t *testing.T) {
 			}
 		}}
 	}))
+	(&turnFixture{paidFixture: f}).raiseDispatchBound(t)
 	r := paidOpenAIPrepare(t, f, 16)
 	_, bound := f.admit(t, r)
 	a, _ := bound.Admission()

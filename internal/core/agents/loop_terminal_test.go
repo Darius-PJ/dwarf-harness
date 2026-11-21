@@ -174,6 +174,7 @@ func TestTerminalAttribution(t *testing.T) {
 	f := newTurnFixture(t, "anthropic", finalScript(t, []string{"alpha", "beta"}, gates, nil), nil)
 	work := f.workSetting(t, 73000, "Alpha task")
 	peerBinding := registerPrivate(t, f.service, 74000)
+	f.raiseDispatchBound(t)
 	f.enable(t, work, f.contextSetting(t, peerBinding))
 	a, general, w, b, g := f.origin.AgentID, f.origin.ContextID, work.Binding.ContextID, peerBinding.AgentID, peerBinding.ContextID
 	h := runTerminal(t, []terminal.Agent{
@@ -235,6 +236,7 @@ func TestTerminalCancel(t *testing.T) {
 		script := finalScript(t, []string{"moved", "held"}, gates, entered)
 		f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) { posts.Add(1); script(w, r) }, nil)
 		work := f.workSetting(t, 75000, "Moved task")
+		f.raiseDispatchBound(t)
 		f.enable(t, work)
 		a, general, w := f.origin.AgentID, f.origin.ContextID, work.Binding.ContextID
 		h := runTerminal(t, []terminal.Agent{{AgentID: a, Session: f.terminalView(t, bindingOf(f.origin)), Contexts: []terminal.Context{{ContextID: general, Title: "General work"}, {ContextID: w, Title: "Moved task"}}}}, false)
@@ -298,6 +300,7 @@ func TestTerminalCancel(t *testing.T) {
 		t.Parallel()
 		gates := map[string]chan struct{}{"kept": make(chan struct{})}
 		f := newTurnFixture(t, "anthropic", finalScript(t, []string{"kept"}, gates, nil), nil)
+		f.raiseDispatchBound(t)
 		f.enable(t)
 		h := runTerminal(t, []terminal.Agent{{AgentID: f.origin.AgentID, Session: f.terminalView(t, bindingOf(f.origin)), Contexts: []terminal.Context{{ContextID: f.origin.ContextID, Title: "General work"}}}}, true)
 		i := h.wait(t, 0, "ready")

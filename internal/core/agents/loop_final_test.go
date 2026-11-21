@@ -91,6 +91,7 @@ func TestTurnLoopFinalMessage(t *testing.T) {
 		gates := map[string]chan struct{}{"general": make(chan struct{}), "work": make(chan struct{})}
 		f := newTurnFixture(t, "anthropic", finalScript(t, []string{"general", "work"}, gates, nil), nil)
 		work := f.workSetting(t, 71000, "Final work")
+		f.raiseDispatchBound(t)
 		f.enable(t, work)
 		ctx := context.Background()
 		turns := map[string]uuid.UUID{}
@@ -158,6 +159,7 @@ func TestTurnLoopFinalMessage(t *testing.T) {
 		close(gates["kept"])
 		entered := make(chan string, 2)
 		f := newTurnFixture(t, "anthropic", finalScript(t, []string{"kept", "held"}, gates, entered), nil)
+		f.raiseDispatchBound(t)
 		f.enable(t)
 		ctx := context.Background()
 		held := turnMessage(f.origin.ContextID, "held request")

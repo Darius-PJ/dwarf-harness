@@ -53,6 +53,7 @@ func TestEligibilityTerminalSmoke(t *testing.T) {
 
 	// Give pre-first /status a real ended turn, without a preparation POST.
 	f.liveSpend(t, ledger.PaidScope{Kind: "colony"}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000001", PeriodKind: "utc_day"})
+	f.raiseDispatchBound(t)
 	f.enable(t)
 	prior, _ := f.send(t)
 	priorTurn := prior.Arguments.(session.MessageSend).TurnID

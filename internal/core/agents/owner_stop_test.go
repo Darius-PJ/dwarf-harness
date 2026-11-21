@@ -13,11 +13,13 @@ import (
 )
 
 func TestTurnLoopCancelResultRace(t *testing.T) {
+	t.Parallel()
 	t.Run("accepted_cancel_to_native_end", func(t *testing.T) {
 		t.Parallel()
 		gates := map[string]chan struct{}{"held": make(chan struct{})}
 		entered := make(chan string, 1)
 		f := newTurnFixture(t, "anthropic", finalScript(t, []string{"held"}, gates, entered), nil)
+		f.raiseDispatchBound(t)
 		f.enable(t)
 		command := turnMessage(f.origin.ContextID, "held request")
 		if _, err := f.view.Do(context.Background(), command); err != nil {

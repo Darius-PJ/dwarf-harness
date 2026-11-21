@@ -121,6 +121,7 @@ func integratedReconcileTwice(t *testing.T, f *continuationRestart) {
 }
 
 func testIntegratedMergeCrash(t *testing.T) {
+	t.Parallel()
 	f := continuationKilled(t, "merge_after_prepared")
 	var prepared ledger.ScratchMergeBack
 	var observed ledger.ScratchChanged
@@ -237,6 +238,7 @@ func assertIntegratedPendingFence(t *testing.T, ws *workspace.Service, signal co
 }
 
 func testPassiveCursorCrash(t *testing.T) {
+	t.Parallel()
 	f := continuationKilled(t, "passive_before_cursor")
 	owner := f.owner(t)
 	if len(owner.Snapshot.NoticeCursors) != 0 {

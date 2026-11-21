@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/workspace"
 )
@@ -93,6 +95,25 @@ func newTurnFixture(t testing.TB, provider string, handler http.HandlerFunc, con
 	})
 	setting := LoopContextSettings{Binding: binding, RouteID: f.route.RouteID, ExpectedRouteVersion: f.route.Version, CredentialScopeID: f.credential.ScopeID, MaxOutputTokens: 4096, DisplayTitle: "General work", TimeoutMS: 600000, Policy: TurnPolicy{Schema: 1, MaxModelCalls: 4, MaxToolCalls: 8, MaxArgumentBytes: 64 << 10, MaxResultBytes: 64 << 10, MaxDiscoveryEntries: 8, MaxSearchEntries: 4096, MaxSearchMatches: 100, MaxLiveBytes: 64 << 10}}
 	return &turnFixture{paidFixture: f, workspace: ws, setting: setting, privateGrant: private}
+}
+func (f *turnFixture) raiseDispatchBound(t testing.TB, settings ...*LoopContextSettings) {
+	t.Helper()
+	f.service.mu.Lock()
+	defer f.service.mu.Unlock()
+	const bound = 30 * time.Minute
+	limits := f.service.paid.limits
+	limits.DispatchTimeout = bound
+	transportLimits := providers.Limits{MaxActivePaid: limits.MaxActivePaid, DispatchTimeout: limits.DispatchTimeout, TLSHandshakeTimeout: limits.TLSHandshakeTimeout, ResponseHeaderTimeout: limits.ResponseHeaderTimeout}
+	transport, err := providers.NewTransportWithRoots(transportLimits, f.service.deps.paidTestRoots, f.service.deps.paidWrapConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service.paid.transport.CloseIdleConnections()
+	f.service.paid.limits = limits
+	f.service.paid.transport = transport
+	for _, setting := range settings {
+		setting.TimeoutMS = bound.Milliseconds()
+	}
 }
 func (f *turnFixture) enable(t testing.TB, settings ...LoopContextSettings) {
 	t.Helper()
