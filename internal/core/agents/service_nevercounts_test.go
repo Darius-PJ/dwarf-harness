@@ -193,6 +193,7 @@ func TestServiceNeverCounts(t *testing.T) {
 			}
 		})
 		work := f.workSetting(t, 51000, "Service invariants")
+		f.raiseDispatchBound(t)
 		f.enable(t, work)
 		started, err := f.view.Do(context.Background(), turnMessage(work.Binding.ContextID, "continue"))
 		if err != nil {

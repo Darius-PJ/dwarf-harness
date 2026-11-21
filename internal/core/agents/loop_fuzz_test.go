@@ -39,36 +39,36 @@ func (root loopPrefixFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	}), nil
 }
 
-func retainLoopFuzzPrefix(f *testing.F, fixture *serviceFixture) loopFuzzPrefix {
-	f.Helper()
+func retainLoopFuzzPrefix(t testing.TB, fixture *serviceFixture) loopFuzzPrefix {
+	t.Helper()
 	if fixture.service != nil {
 		if err := fixture.service.Close(); err != nil {
-			f.Fatal(err)
+			t.Fatal(err)
 		}
 		fixture.service = nil
 	}
 	if err := fixture.store.Close(); err != nil {
-		f.Fatal(err)
+		t.Fatal(err)
 	}
 	fixture.store = nil
-	prepared := testRoot(f)
+	prepared := testRoot(t)
 	if err := os.CopyFS(prepared, loopPrefixFS{os.DirFS(fixture.root)}); err != nil {
-		f.Fatal(err)
+		t.Fatal(err)
 	}
 	var err error
 	fixture.store, _, err = ledgerstore.Open(fixture.root, ledger.Defined())
 	if err != nil {
-		f.Fatal(err)
+		t.Fatal(err)
 	}
 	fixture.service, _, err = Open(context.Background(), fixture.store, fixture.root, DefaultLimits())
 	if err != nil {
-		f.Fatal(err)
+		t.Fatal(err)
 	}
 	baseline, _, err := Open(context.Background(), fixture.store, fixture.root, DefaultLimits())
 	if err != nil {
-		f.Fatal(err)
+		t.Fatal(err)
 	}
-	f.Cleanup(func() { _ = baseline.Close() })
+	t.Cleanup(func() { _ = baseline.Close() })
 	return loopFuzzPrefix{fixture: fixture, baseline: baseline, prepared: prepared, through: fixture.store.Durable()}
 }
 func FuzzLoopGroupReplay(f *testing.F) {

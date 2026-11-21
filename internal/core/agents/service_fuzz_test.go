@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 	"uuid"
@@ -15,14 +17,178 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
-func serviceWithdrawalFuzzPrefix(f *testing.F) loopFuzzPrefix {
+// serviceFuzzPrefixes builds each shape's prefix once, inside the fuzz function,
+// for whichever seed needs it first. Everything a build creates belongs to f:
+// directories under root, closers run in f's cleanup, and the lent context.
+type serviceFuzzPrefixes struct {
+	root    string
+	ctx     context.Context
+	mu      sync.Mutex
+	closers []func()
+	shapes  []serviceFuzzShape
+}
+
+// A build that fails or never finishes leaves its first cause for every later
+// seed: sync.Once also counts a Goexit as done.
+type serviceFuzzShape struct {
+	once    sync.Once
+	build   func(testing.TB) loopFuzzPrefix
+	failure string
+	prefix  loopFuzzPrefix
+}
+
+func newServiceFuzzPrefixes(f *testing.F, builds []func(testing.TB) loopFuzzPrefix) *serviceFuzzPrefixes {
 	f.Helper()
-	fixture := newPaidFixture(f)
+	p := &serviceFuzzPrefixes{root: testRoot(f), shapes: make([]serviceFuzzShape, len(builds))}
+	for i, build := range builds {
+		p.shapes[i].build = build
+	}
+	var cancel context.CancelFunc
+	p.ctx, cancel = context.WithCancel(context.Background())
+	// As testing orders its own: cancel, then close LIFO, then f removes root.
+	f.Cleanup(func() {
+		cancel()
+		p.mu.Lock()
+		closers := p.closers
+		p.closers = nil
+		p.mu.Unlock()
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	})
+	return p
+}
+
+func (p *serviceFuzzPrefixes) get(t *testing.T, shape int) loopFuzzPrefix {
+	t.Helper()
+	shape %= len(p.shapes)
+	s := &p.shapes[shape]
+	s.once.Do(func() {
+		s.failure = "service fuzz prefix build abandoned"
+		b := &serviceFuzzBuild{TB: t, prefixes: p, shape: s}
+		prefix := s.build(b)
+		if !b.failed && !t.Failed() {
+			s.prefix, s.failure = prefix, ""
+		}
+	})
+	if s.failure != "" {
+		t.Fatalf("service fuzz prefix %d: %s", shape, s.failure)
+	}
+	return s.prefix
+}
+
+// serviceFuzzBuild lends the triggering seed's reports to a shared build, while
+// nothing the build creates is bound to that seed's lifetime. Every failure
+// records the first cause before it reaches the seed; process state is refused
+// because other seeds run alongside.
+type serviceFuzzBuild struct {
+	testing.TB
+	prefixes *serviceFuzzPrefixes
+	shape    *serviceFuzzShape
+	failed   bool
+}
+
+func (b *serviceFuzzBuild) cause(text string) {
+	if !b.failed {
+		b.shape.failure, b.failed = text, true
+	}
+}
+
+func (b *serviceFuzzBuild) TempDir() string {
+	b.Helper()
+	dir, err := os.MkdirTemp(b.prefixes.root, "prefix-")
+	if err != nil {
+		b.Fatal(err)
+	}
+	return dir
+}
+
+func (b *serviceFuzzBuild) Cleanup(fn func()) {
+	b.prefixes.mu.Lock()
+	defer b.prefixes.mu.Unlock()
+	b.prefixes.closers = append(b.prefixes.closers, fn)
+}
+
+func (b *serviceFuzzBuild) Context() context.Context { return b.prefixes.ctx }
+
+func (b *serviceFuzzBuild) Setenv(string, string) {
+	b.Helper()
+	b.Fatal("Setenv forbidden in a shared build")
+}
+
+func (b *serviceFuzzBuild) Chdir(string) {
+	b.Helper()
+	b.Fatal("Chdir forbidden in a shared build")
+}
+
+func (b *serviceFuzzBuild) ArtifactDir() string {
+	b.Helper()
+	b.Fatal("ArtifactDir forbidden in a shared build")
+	return ""
+}
+
+func (b *serviceFuzzBuild) Error(args ...any) {
+	b.Helper()
+	b.cause(fmt.Sprint(args...))
+	b.TB.Error(args...)
+}
+
+func (b *serviceFuzzBuild) Errorf(format string, args ...any) {
+	b.Helper()
+	b.cause(fmt.Sprintf(format, args...))
+	b.TB.Errorf(format, args...)
+}
+
+func (b *serviceFuzzBuild) Fail() {
+	b.Helper()
+	b.cause("Fail called")
+	b.TB.Fail()
+}
+
+func (b *serviceFuzzBuild) FailNow() {
+	b.Helper()
+	b.cause("FailNow called")
+	b.TB.FailNow()
+}
+
+func (b *serviceFuzzBuild) Fatal(args ...any) {
+	b.Helper()
+	b.cause(fmt.Sprint(args...))
+	b.TB.Fatal(args...)
+}
+
+func (b *serviceFuzzBuild) Fatalf(format string, args ...any) {
+	b.Helper()
+	b.cause(fmt.Sprintf(format, args...))
+	b.TB.Fatalf(format, args...)
+}
+
+func (b *serviceFuzzBuild) Skip(args ...any) {
+	b.Helper()
+	b.cause("skipped: " + fmt.Sprint(args...))
+	b.TB.Skip(args...)
+}
+
+func (b *serviceFuzzBuild) Skipf(format string, args ...any) {
+	b.Helper()
+	b.cause("skipped: " + fmt.Sprintf(format, args...))
+	b.TB.Skipf(format, args...)
+}
+
+func (b *serviceFuzzBuild) SkipNow() {
+	b.Helper()
+	b.cause("skipped")
+	b.TB.SkipNow()
+}
+
+func serviceWithdrawalFuzzPrefix(t testing.TB) loopFuzzPrefix {
+	t.Helper()
+	fixture := newPaidFixture(t)
 	s := fixture.service
 	now := s.p.reviewFloor + int64(time.Hour)
-	e := servicePaidFailure(f, fixture, "overloaded", now)
-	serviceRecord(f, s, e)
-	completion := serviceSuccessfulCall(f, fixture, e.CauseID, now+1)
+	e := servicePaidFailure(t, fixture, "overloaded", now)
+	serviceRecord(t, s, e)
+	completion := serviceSuccessfulCall(t, fixture, e.CauseID, now+1)
 	stop := errors.New("retained withdrawal prefix")
 	var withdrawal ledger.RuntimeServiceObserved
 	s.deps.afterServiceCommit = func(g *serviceGroup) {
@@ -32,7 +198,7 @@ func serviceWithdrawalFuzzPrefix(f *testing.F) loopFuzzPrefix {
 		}
 	}
 	if _, err := s.recordServiceEvidence(context.Background(), completion.ObservationID, completion); !errors.Is(err, stop) {
-		f.Fatalf("withdrawal prefix boundary: %v", err)
+		t.Fatalf("withdrawal prefix boundary: %v", err)
 	}
 	s.mu.Lock()
 	sub, err := s.serviceStateSubmission("service.withdraw", withdrawal.AgentID, withdrawal.CauseID, withdrawal.Source)
@@ -46,40 +212,44 @@ func serviceWithdrawalFuzzPrefix(f *testing.F) loopFuzzPrefix {
 	}
 	s.mu.Unlock()
 	if err != nil {
-		f.Fatal(err)
+		t.Fatal(err)
 	}
-	prefix := retainLoopFuzzPrefix(f, fixture.serviceFixture)
+	prefix := retainLoopFuzzPrefix(t, fixture.serviceFixture)
 	prefix.draft = drafts
 	return prefix
 }
 
 func FuzzServiceGroupReplay(f *testing.F) {
-	_, commits := serviceGolden(f, 0, serviceDeps{})
-	var prefixes []loopFuzzPrefix
+	_, commits := scopedGoldenCommits(f, "91")
+	var builds []func(testing.TB) loopFuzzPrefix
 	operations := map[string]bool{}
 	for index, commit := range commits {
 		if commit.Records[len(commit.Records)-1].Type != ledger.TypeRuntimeServiceReceipt {
 			continue
 		}
-		fixture, _ := scopedGoldenFixture(f, "91", index)
-		prefix := retainLoopFuzzPrefix(f, fixture)
-		prefix.draft = draftsOf(commit)
-		g, err := decodeServiceFamily(prefix.draft, prefix.through+1)
+		g, err := decodeServiceFamily(draftsOf(commit), commit.First)
 		if err != nil || g == nil {
 			f.Fatal("invalid frozen service seed", err)
 		}
 		operations[g.receipt.Submission.Operation] = true
-		prefixes = append(prefixes, prefix)
+		builds = append(builds, func(t testing.TB) loopFuzzPrefix {
+			fixture, _ := scopedGoldenFixture(t, "91", index)
+			prefix := retainLoopFuzzPrefix(t, fixture)
+			prefix.draft = draftsOf(commit)
+			return prefix
+		})
 	}
-	prefixes = append(prefixes, serviceWithdrawalFuzzPrefix(f))
+	builds = append(builds, serviceWithdrawalFuzzPrefix)
 	operations["service.withdraw"] = true
 	for _, operation := range []string{"service.record", "service.observe", "service.expire", "service.clear", "service.withdraw", "service.complete"} {
 		if !operations[operation] {
 			f.Fatal("missing reachable service operation", operation)
 		}
 	}
-	for shape := range prefixes {
-		for mode := byte(0); mode < 12; mode++ {
+	prefixes := newServiceFuzzPrefixes(f, builds)
+	// Mode-major, so parallel seeds spread across the prefix Services.
+	for mode := byte(0); mode < 12; mode++ {
+		for shape := range builds {
 			f.Add(byte(shape), mode, uint64(1), []byte(`{}`))
 		}
 	}
@@ -88,7 +258,7 @@ func FuzzServiceGroupReplay(f *testing.F) {
 		if len(input) > ledger.MaxServicePayloadBytes {
 			return
 		}
-		prefix := prefixes[int(shape)%len(prefixes)]
+		prefix := prefixes.get(t, int(shape))
 		drafts := make([]ledger.Draft, len(prefix.draft))
 		for i, d := range prefix.draft {
 			drafts[i] = d
