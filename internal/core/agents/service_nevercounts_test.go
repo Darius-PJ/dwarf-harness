@@ -169,6 +169,7 @@ func serviceAssertOnlyProjection(t *testing.T, s, baseline *Service, before map[
 
 func TestServiceNeverCounts(t *testing.T) {
 	t.Parallel()
+	testServiceLiveNeverCounts(t)
 	t.Run("live_owner_slots_task_and_paid_hold", func(t *testing.T) {
 		t.Parallel()
 		entered, release := make(chan struct{}, 1), make(chan struct{})
@@ -239,7 +240,7 @@ func TestServiceNeverCounts(t *testing.T) {
 		}
 		serviceRecord(t, s, e)
 		clock.Store(e.Source.ObservedUTCNS + ledger.ServiceGraceNS)
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		v, err := s.ServiceStatus(context.Background(), e.AgentID)
@@ -265,7 +266,7 @@ func TestServiceNeverCounts(t *testing.T) {
 		s := f.service
 		baseline := serviceNativeBaseline(t, s)
 		before := serviceNativeViews(t, s)
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		v, err := s.ServiceStatus(context.Background(), serviceObservedAt(t, commits, 180).AgentID)

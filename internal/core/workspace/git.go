@@ -12,6 +12,7 @@ import (
 	"runtime"
 
 	"strings"
+	"sync"
 
 	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 )
@@ -24,6 +25,16 @@ type gitRunner struct {
 	owner              *gitprocess.Owner
 	afterStart         func(args []string, pid int)
 	afterRun           func(gitprocess.Result)
+	// Concurrent runs write these; Open reads them once for its closure report.
+	proofMu     sync.Mutex
+	firstProof  gitprocess.Result
+	unconfirmed bool
+}
+
+func (g *gitRunner) proofRecord() (gitprocess.Result, bool) {
+	g.proofMu.Lock()
+	defer g.proofMu.Unlock()
+	return g.firstProof, g.unconfirmed
 }
 
 func newGitRunner(owner *gitprocess.Owner, environ func() []string) *gitRunner {
@@ -120,6 +131,12 @@ func (g *gitRunner) runOutput(ctx context.Context, dir string, env []string, in 
 		spec.Started = func(pid int) { g.afterStart(append([]string{g.path}, args...), pid) }
 	}
 	result, err := g.owner.Run(ctx, spec)
+	g.proofMu.Lock()
+	if g.firstProof.Proof == "" && result.Proof != "" {
+		g.firstProof = result
+	}
+	g.unconfirmed = g.unconfirmed || errors.Is(err, gitprocess.ErrUnconfirmed)
+	g.proofMu.Unlock()
 	if g.afterRun != nil {
 		g.afterRun(result)
 	}

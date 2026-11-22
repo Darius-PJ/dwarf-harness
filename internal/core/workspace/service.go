@@ -51,10 +51,12 @@ type serviceDeps struct {
 // Reconciliation reports best-effort filesystem repair. Pending entries explain
 // unavailable workspace inputs, unverified repositories and unfinished cleanup.
 // Missing lists open scratches whose directories are absent or anchors unavailable.
+// ProcessClosures lists positive Git process closure proofs from this Open.
 type Reconciliation struct {
 	OrphansRemoved, RemovalsCompleted int
 	Pending                           []string
 	Missing                           []uuid.UUID
+	ProcessClosures                   []ProcessClosure
 }
 
 // Service owns one colony's workspace lifecycle. Its store remains host-owned.
@@ -66,6 +68,7 @@ type Service struct {
 	closeDone                       chan struct{}
 	closeErr                        error
 	processes                       *gitprocess.Owner
+	treeProof                       bool
 	store                           workspaceStore
 	colony                          string
 	deps                            serviceDeps
@@ -184,7 +187,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	s.activationFloor = math.MinInt64
 	s.activationWake = make(chan struct{}, 1)
 	s.activationContext, s.stopActivation = context.WithCancel(context.Background())
-	processes, _, err := gitprocess.Open(ctx, filepath.Join(colony, "workspaces", "processes"), gitprocess.Options{RequireTree: runtime.GOOS == "windows"})
+	processes, opening, err := gitprocess.Open(ctx, filepath.Join(colony, "workspaces", "processes"), gitprocess.Options{RequireTree: runtime.GOOS == "windows"})
 	if err != nil {
 		s.stopActivation()
 		return nil, report, err
@@ -196,10 +199,11 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 			_ = processes.Close()
 		}
 	}()
-	if _, err := processes.Reconcile(ctx); err != nil {
+	reconciled, err := processes.Reconcile(ctx)
+	if err != nil {
 		return nil, report, err
 	}
-	s.processes = processes
+	s.processes, s.treeProof = processes, opening.TreeProofSupported
 	s.git = newGitRunner(processes, deps.environ)
 	s.engine = newCaptureEngine(s.git, colony)
 	reader, err := ledger.OpenReader(store.LogDir(), ledger.ReadOptions{Colony: store.Colony(), Through: store.Durable(), Consume: workspaceConsumption(), AllTypes: true})
@@ -253,6 +257,7 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 		return nil, report, err
 	}
 	report = s.reconcile(ctx)
+	report.ProcessClosures = s.processClosures(reconciled)
 	opened = true
 	return s, report, nil
 }

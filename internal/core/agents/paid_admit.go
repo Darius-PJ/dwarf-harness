@@ -96,6 +96,7 @@ func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidRecei
 		return r, bound, e
 	}
 	if err != nil {
+		s.serviceMoneyRefusalLocked(ctx, err, p.origin, request.ParentTurnID, p.admission, request.CommandID, sub)
 		s.mu.Unlock()
 		return PaidReceipt{}, nil, err
 	}
@@ -206,9 +207,11 @@ func (a *Agent) AdmitPaid(ctx context.Context, request PaidAdmission) (PaidRecei
 			continue
 		}
 		if err != nil {
+			s.serviceMoneyRefusalLocked(ctx, err, p.origin, request.ParentTurnID, p.admission, request.CommandID, sub)
 			return PaidReceipt{}, nil, err
 		}
 		s.completePaidAdmissionLocked(p, request.AttemptID)
+		s.serviceAdmissionClearLocked(ctx, p.origin, p.admission, receipt.EffectSequence)
 		return receipt, &BoundCall{service: s, admission: p.admission}, nil
 	}
 }

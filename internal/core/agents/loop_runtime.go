@@ -615,8 +615,11 @@ func (s *Service) loopBoundary(t *loopTurn) string {
 	defer s.mu.Unlock()
 	bound := submissionIDs{t.origin.AgentID, t.origin.SessionID, t.origin.ContextID}
 	var stop string
+	// The context scope's first recorded issue, copied in the pure phase. The
+	// stop token alone is never integrity demand (clarification answer 3).
+	var issue *IntegrityIssue
 	err := s.prepareHistoryLocked(context.Background(), &historyReadSet{}, &bound, true, func(reads *historyReadSet) error {
-		stop = ""
+		stop, issue = "", nil
 		// Established order: Service.mu before runtime.mu. Only copy runtime
 		// fields here; no service call or wait occurs while runtime.mu is held.
 		r.mu.Lock()
@@ -647,6 +650,9 @@ func (s *Service) loopBoundary(t *loopTurn) string {
 		}
 		if st := s.p.scopes[scopeKey{t.origin.AgentID, t.origin.ContextID}]; st == nil || len(st.issues) != 0 {
 			stop = "integrity"
+			if st != nil {
+				issue = new(st.issues[0])
+			}
 			return nil
 		}
 		route := s.p.paidRoutes[t.settings.RouteID]
@@ -687,6 +693,9 @@ func (s *Service) loopBoundary(t *loopTurn) string {
 	})
 	if err != nil {
 		return "integrity"
+	}
+	if issue != nil && t.binding != nil {
+		s.serviceIntegrityRefusalLocked(context.Background(), *issue, ledger.ServiceSource{SourceSequence: new(int64(t.binding.first + 1)), Origin: new(t.origin), TurnID: t.id})
 	}
 	return stop
 }

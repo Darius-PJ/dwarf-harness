@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"math"
 	"slices"
@@ -9,6 +10,11 @@ import (
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
+
+// errServiceDueHeld refuses a clear while a due pending member of its cause has
+// not expired. Replay treats it as ErrInvalid; a live drain skips the clear
+// until the member can expire, so it never wedges independent evidence.
+var errServiceDueHeld = fmt.Errorf("%w: due service member held", ErrInvalid)
 
 func serviceDue(src ledger.ServiceSource) (*int64, error) {
 	grace := slices.Contains([]string{"rate_limited", "overloaded", "unreachable"}, src.Reason) || slices.Contains([]string{"quota_exhausted", "money_exhausted"}, src.Reason) && src.ResetUTCNS != nil
@@ -87,7 +93,7 @@ func (p serviceProjection) observationDone(e serviceObservation) bool {
 	if e.unsupported || e.issue != nil {
 		return false
 	}
-	if first, ok := p.semantic[serviceSemantic(e.observed)]; ok && first != e.observed.ObservationID {
+	if first, ok := p.semantic[e.semantic]; ok && first != e.observed.ObservationID {
 		return true
 	}
 	if e.observed.Source.Kind == "successful_call" {
@@ -121,11 +127,22 @@ func (p serviceProjection) observationDone(e serviceObservation) bool {
 	if c.unsupported || m.unsupported {
 		return false
 	}
+	// Ignoring is permanent. A refusal recorded before its member's latest
+	// generation ended was absorbed by that generation; a clear recorded
+	// before its cause last activated (or for a cause never activated) was
+	// overtaken. Neither becomes new evidence when the generation or cause
+	// changes again, so coverage below the cursor stays stable.
 	switch e.observed.Source.Kind {
 	case "paid_call", "money_refusal", "integrity_refusal", "process_refusal":
-		return (m.snapshot.Phase == "pending" || m.snapshot.Phase == "lost") && m.snapshot.FirstSource.ObservationID != e.observed.ObservationID
+		switch m.snapshot.Phase {
+		case "pending", "lost":
+			return m.snapshot.FirstSource.ObservationID != e.observed.ObservationID
+		case "restored", "withdrawn":
+			return e.sequence < m.sequence
+		}
+		return false
 	case "cause_clear":
-		return c.snapshot.Condition == "cleared"
+		return c.snapshot.Condition != "active" || e.sequence < c.sequence
 	case "demand_withdrawn":
 		return m.snapshot.Phase != "pending" || !serviceWithdrawalMatches(c, e.observed.Source)
 	}
@@ -171,7 +188,7 @@ func (s *Service) deriveService(ctx context.Context, reads *historyReadSet, sub 
 				return servicePlan{}, err
 			}
 		}
-		entry := serviceObservation{observed: e, sequence: first + 1, last: first + 2, unsupported: !serviceSourceSupported(a.Source)}
+		entry := serviceObservation{observed: e, sequence: first + 1, last: first + 2, unsupported: !serviceSourceSupported(a.Source), semantic: serviceSemantic(e)}
 		if a.CompletionPermitsObject != nil {
 			object, issue, err := s.loadServiceCompletion(ctx, reads, e, first-1)
 			if err != nil {
@@ -188,9 +205,8 @@ func (s *Service) deriveService(ctx context.Context, reads *historyReadSet, sub 
 		}
 		p.observations[e.ObservationID] = entry
 		p.order = append(p.order, e.ObservationID)
-		key := serviceSemantic(e)
-		if _, exists := p.semantic[key]; !exists {
-			p.semantic[key] = e.ObservationID
+		if _, exists := p.semantic[entry.semantic]; !exists {
+			p.semantic[entry.semantic] = e.ObservationID
 		}
 		plan.observed = &e
 		return plan, nil
@@ -230,7 +246,7 @@ func (s *Service) deriveService(ctx context.Context, reads *historyReadSet, sub 
 		if condition == "cleared" {
 			for key, member := range p.members {
 				if key.cause == c.id && member.snapshot.Phase == "pending" && member.snapshot.DueUTCNS != nil && a.Source.ObservedUTCNS >= *member.snapshot.DueUTCNS && a.Source.Reason != "budget_available" {
-					return ErrInvalid
+					return errServiceDueHeld
 				}
 			}
 		}

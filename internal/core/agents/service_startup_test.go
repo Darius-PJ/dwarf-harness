@@ -180,7 +180,7 @@ func testServiceStartup(t *testing.T) {
 		}
 		serviceProveLoopRuns(t, f)
 		failing.Store(false)
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		view, err = s.ServiceStatus(context.Background(), f.origin.AgentID)

@@ -55,7 +55,7 @@ func testServiceMetadataRecovery(t *testing.T) {
 			t.Fatalf("unverifiable cause accepted submission: %v", err)
 		}
 		writeTestFile(t, name, raw)
-		recovery, err := f.service.ReconcileServiceEvidence(context.Background())
+		recovery, err := f.service.ReconcileServiceEvidence(context.Background(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func testServiceMetadataRecovery(t *testing.T) {
 				t.Fatalf("later independent source stalled or coverage jumped: %+v", v)
 			}
 			writeTestFile(t, name, raw)
-			if _, err = f.service.ReconcileServiceEvidence(context.Background()); err != nil {
+			if _, err = f.service.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 				t.Fatal(err)
 			}
 			snapshot := serviceSnapshot(t, f.service)

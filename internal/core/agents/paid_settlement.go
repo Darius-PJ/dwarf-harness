@@ -66,8 +66,35 @@ func paidRuleToken(s string) bool {
 	return true
 }
 
+// paidErrorClasses are the provider classifier labels settlement understands;
+// any other label makes a capture incomplete. paidAcceptedStops are Anthropic's
+// accepted non-refusal terminals. Settlement and the service predicate share both.
+var (
+	paidErrorClasses  = []string{"denied", "exhausted", "rate_limited", "overloaded", "invalid_request", "unavailable", "conflict", "provider_error", "timeout", "unreachable", "protocol_error", "refused", "tariff_ambiguous"}
+	paidAcceptedStops = []string{"end_turn", "max_tokens", "stop_sequence", "tool_use", "model_context_window_exceeded"}
+)
+
+// paidServiceTerminal is the frozen successful-terminal predicate for service
+// restoration, on the captured observation and sealed profile only: the
+// derivation gate below, no content or capture error, and an accepted stop
+// (Anthropic) or completed status (OpenAI). It never reads derivePaidResult's
+// output: a tariff-ambiguous completion succeeds while its money stays unknown.
+func paidServiceTerminal(a paidAttempt, o paidObservationObject) (string, bool) {
+	complete := o.Complete && (o.ErrorClass == "" || slices.Contains(paidErrorClasses, o.ErrorClass))
+	if !complete || o.HTTPStatus != 200 || !paidProviderID(o.ProviderMessageID) || o.Model != a.profile.ModelID || o.ContentError {
+		return "", false
+	}
+	switch a.profile.Provider {
+	case "anthropic":
+		return o.StopReason, slices.Contains(paidAcceptedStops, o.StopReason)
+	case "openai":
+		return o.StopReason, o.StopReason == "completed"
+	}
+	return "", false
+}
+
 func derivePaidResult(a paidAttempt, o paidObservationObject) ledger.RuntimePaidResult {
-	if o.ErrorClass != "" && !slices.Contains([]string{"denied", "exhausted", "rate_limited", "overloaded", "invalid_request", "unavailable", "conflict", "provider_error", "timeout", "unreachable", "protocol_error", "refused", "tariff_ambiguous"}, o.ErrorClass) {
+	if o.ErrorClass != "" && !slices.Contains(paidErrorClasses, o.ErrorClass) {
 		o.ErrorClass, o.Complete = "protocol_error", false
 	}
 	started := o.OutputStarted
@@ -120,7 +147,7 @@ func derivePaidResult(a paidAttempt, o paidObservationObject) ledger.RuntimePaid
 		if !slices.Contains(a.profile.NoChargeRules, "anthropic_refusal_before_output_2026_09_24") || !ok || started && output == 0 || !started && (output != 0 || !billedCategory) {
 			return v
 		}
-	} else if !slices.Contains([]string{"end_turn", "max_tokens", "stop_sequence", "tool_use", "model_context_window_exceeded"}, o.StopReason) {
+	} else if !slices.Contains(paidAcceptedStops, o.StopReason) {
 		return v
 	}
 	var final providers.Usage
@@ -287,6 +314,9 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 		return PaidReceipt{}, err
 	}
 	var ref ledger.ObjectRef
+	// Only the live branch without a correction carries a service token;
+	// TrustedEvidence and corrections never produce a service observation.
+	provenance := ""
 	if request.Observed != nil {
 		o := request.Observed
 		if o.service != s || o.attempt != request.AttemptID || o.origin != a.origin {
@@ -294,6 +324,9 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 			return PaidReceipt{}, ErrDenied
 		}
 		ref = o.evidence
+		if correction == nil {
+			provenance = o.provenance
+		}
 	} else {
 		ref = *request.TrustedEvidence
 	}
@@ -372,13 +405,50 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 		}
 		previousBlock, previousChunk = output.BlockIndex, output.ChunkIndex
 	}
-	match, err = s.lookupPaid(ctx, reads, nil, request.CommandID, load)
+	// The service evidence is decided once from the validated object. A
+	// success's permit snapshot is taken and published before E, outside mu.
+	live := servicePaidEvidence(a, object, ref, provenance)
+	if live != nil && live.terminal != "" {
+		if err := s.prepareServiceCompletion(ctx, live); err != nil {
+			s.mu.Lock()
+			if !s.poisoned {
+				s.retainServicePaidLocked(live, err)
+			}
+			s.mu.Unlock()
+			live = nil
+		} else if live.completion == nil {
+			live = nil
+		}
+	}
+	receipt, err := s.recordPaidEvidenceLocked(ctx, request, correction, reads, load, &a, object, ref, live)
+	if provenance != "" {
+		// The drain runs in its own cycles after the financial phase released
+		// mu; its failures are retained status, never this call's error.
+		s.drainServiceAfterPaid(ctx)
+	}
+	return receipt, err
+}
+
+// recordPaidEvidenceLocked is the second locked phase: E (live only) under the
+// locked producer, then the unchanged financial group. A definite E failure is
+// retained and never alters the financial result; an uncertain one poisons.
+func (s *Service) recordPaidEvidenceLocked(ctx context.Context, request PaidObservation, correction *PaidCorrection, reads *historyReadSet, load func(*historyReadSet) error, attempt *paidAttempt, object paidObservationObject, ref ledger.ObjectRef, live *servicePaidLive) (PaidReceipt, error) {
+	match, err := s.lookupPaid(ctx, reads, nil, request.CommandID, load)
 	defer s.mu.Unlock()
+	a := *attempt
 	if err != nil {
 		return PaidReceipt{}, err
 	}
 	if match.found {
 		return s.matchPaidObservation(match, a, request, ref, correction)
+	}
+	if live != nil && request.ExpectedVersion == 2 && a.version == 2 && a.intent != nil && a.result == nil {
+		if err := s.recordServicePaidLocked(ctx, live); err != nil {
+			if s.poisoned {
+				return PaidReceipt{}, err
+			}
+			s.retainServicePaidLocked(live, err)
+		}
 	}
 	var drafts []ledger.Draft
 	var group *paidGroup
@@ -390,6 +460,7 @@ func (s *Service) recordPaidEvidence(ctx context.Context, request PaidObservatio
 		if err := load(reads); err != nil {
 			return err
 		}
+		a = *attempt
 		var err error
 		match, err = s.findCommand(ctx, reads, request.CommandID, 0, s.p.through)
 		if err != nil {

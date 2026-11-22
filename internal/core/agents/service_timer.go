@@ -43,6 +43,9 @@ type serviceTimer struct {
 	wake   chan struct{}
 	done   chan struct{}
 	cancel context.CancelFunc
+	// stalled holds members whose expiry failed at a firing, by generation.
+	// They are not rearmed until the next wake. Guarded by Service.mu.
+	stalled map[serviceMemberKey]int64
 }
 
 func (s *Service) notifyServiceTimerLocked() {
@@ -65,8 +68,13 @@ func (s *Service) startServiceTimerLocked() {
 func (s *Service) serviceDeadlinesLocked() serviceDeadlines {
 	h := serviceDeadlines{}
 	for key, m := range s.p.service.members {
+		// Cheap phase and condition tests first: only a pending member with a
+		// due time can arm, and only then are the observation scans needed.
+		if m.snapshot.Phase != "pending" || m.snapshot.DueUTCNS == nil || m.unsupported {
+			continue
+		}
 		c := s.p.service.causes[key.cause]
-		if c.unsupported || m.unsupported || s.p.service.unverifiable(key) || s.p.service.pendingPositiveSource(key, uuid.UUID{}) || m.snapshot.Phase != "pending" || m.snapshot.DueUTCNS == nil || c.snapshot.Condition != "active" {
+		if c.unsupported || c.snapshot.Condition != "active" || s.p.service.unverifiable(key) || s.p.service.pendingPositiveSource(key, uuid.UUID{}) {
 			continue
 		}
 		h = append(h, serviceDeadline{key, m.snapshot.Generation, *m.snapshot.DueUTCNS})
@@ -107,12 +115,20 @@ func (s *Service) runServiceTimer(ctx context.Context, worker *serviceTimer) {
 		}
 		h := s.serviceDeadlinesLocked()
 		var timerC <-chan time.Time
+		for len(h) > 0 {
+			if generation, stalled := worker.stalled[h[0].key]; !stalled || generation != h[0].generation {
+				break
+			}
+			heap.Pop(&h)
+		}
 		if len(h) > 0 {
-			now, _, err := s.sampleServiceLocked()
-			if err != nil {
-				s.retainServiceErrorLocked(err)
+			// Wait by the clock's own reading, not a held floor: a floor ahead
+			// of the clock would otherwise refire before the clock reaches due.
+			sample, err := s.deps.reviewClock()
+			if err != nil || sample <= 0 {
+				s.retainServiceErrorLocked(ErrPaidClock)
 			} else {
-				delay := max(int64(0), h[0].due-now)
+				delay := max(int64(0), h[0].due-sample)
 				timer.Reset(time.Duration(delay))
 				timerC = timer.C
 			}
@@ -132,41 +148,60 @@ func (s *Service) runServiceTimer(ctx context.Context, worker *serviceTimer) {
 				default:
 				}
 			}
+			s.mu.Lock()
+			worker.stalled = nil
+			s.mu.Unlock()
 		case <-timerC:
-			_, err := s.ReconcileServiceEvidence(ctx)
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					return
-				case <-worker.wake:
-				}
-			}
+			// A failed firing is retained status; failing members are stalled
+			// and every other deadline rearms at once.
+			_, _ = s.ReconcileServiceEvidence(ctx, nil)
 		}
 	}
 }
 
+// expireDueServiceLocked expires every due member it can at one live sample
+// each. A member whose expiry fails or has no effect is skipped for the rest of
+// this pass, so it cannot starve later deadlines; the next wake retries it.
 func (s *Service) expireDueServiceLocked(ctx context.Context) error {
+	skipped := map[serviceMemberKey]int64{}
+	var first error
 	for {
 		h := s.serviceDeadlinesLocked()
+		for len(h) > 0 {
+			if generation, skip := skipped[h[0].key]; !skip || generation != h[0].generation {
+				break
+			}
+			heap.Pop(&h)
+		}
 		if len(h) == 0 {
-			return nil
+			break
 		}
 		now, _, err := s.sampleServiceLocked()
 		if err != nil {
 			return err
 		}
-		next := heap.Pop(&h).(serviceDeadline)
+		next := h[0]
 		if now < next.due {
-			return nil
+			break
 		}
-		m := s.p.service.members[next.key]
-		if m.snapshot.Generation != next.generation {
-			continue
+		err = s.expireServiceMemberLocked(ctx, next.key, uuid.UUID{})
+		if usable := s.usableLocked(ctx); usable != nil {
+			return usable
 		}
-		if err := s.expireServiceMemberLocked(ctx, next.key, uuid.UUID{}); err != nil {
-			return err
+		if m := s.p.service.members[next.key]; err != nil || m.snapshot.Phase == "pending" && m.snapshot.Generation == next.generation {
+			skipped[next.key] = next.generation
+			if err != nil && first == nil {
+				first = err
+			}
+			if err != nil && s.serviceTimer != nil {
+				if s.serviceTimer.stalled == nil {
+					s.serviceTimer.stalled = map[serviceMemberKey]int64{}
+				}
+				s.serviceTimer.stalled[next.key] = next.generation
+			}
 		}
 	}
+	return first
 }
 
 type serviceMoneyHistoryKey struct{ Scope ledger.PaidScope }
@@ -328,6 +363,12 @@ func (s *Service) expireServiceMemberLocked(ctx context.Context, key serviceMemb
 		}
 		if m.snapshot.FirstSource.Money != nil {
 			money, available, err := s.serviceMoneyWitness(ctx, reads, *m.snapshot.FirstSource.Money, now)
+			// A disabled or unconfigured scope has no now-available book:
+			// nothing proves availability, so the barrier survives and the
+			// member expires (PM answer 1).
+			if errors.Is(err, ErrUnavailable) {
+				available, err = false, nil
+			}
 			if err != nil {
 				return ledger.ServiceSubmission{}, err
 			}

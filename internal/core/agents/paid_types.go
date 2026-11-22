@@ -136,11 +136,14 @@ type PaidDispatchOutcome struct {
 }
 
 // ObservedPaidCall binds published evidence, never authority or caller dollars.
+// provenance is the dispatch's final service token: empty, provider_response
+// or transport. It never leaves this package and is cleared on substitution.
 type ObservedPaidCall struct {
-	service  *Service
-	attempt  uuid.UUID
-	origin   ledger.Origin
-	evidence ledger.ObjectRef
+	service    *Service
+	attempt    uuid.UUID
+	origin     ledger.Origin
+	evidence   ledger.ObjectRef
+	provenance string
 }
 
 func (*ObservedPaidCall) String() string               { return "<observed paid call>" }

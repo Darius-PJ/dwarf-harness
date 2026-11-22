@@ -117,6 +117,7 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 		return out, e
 	}
 	if err != nil {
+		s.serviceMoneyRefusalLocked(ctx, err, a.origin, a.admission.ParentTurnID, a.admission, request.CommandID, sub)
 		s.mu.Unlock()
 		return out, err
 	}
@@ -220,6 +221,9 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 				break
 			}
 		}
+		if e != nil {
+			s.serviceMoneyRefusalLocked(exchangeCtx, e, a.origin, a.admission.ParentTurnID, a.admission, request.CommandID, sub)
+		}
 		s.mu.Unlock()
 		if e != nil || !sent {
 			return e
@@ -265,7 +269,22 @@ func (s *Service) dispatchPaid(ctx context.Context, request PaidDispatch, observ
 		if !retainReplay {
 			evidence.Stream.Replay = nil
 		}
-		out.ObservedPaidCall, e = s.publishPaidObservation(context.Background(), current, evidence, key)
+		// The service provenance token is decided once, from dispatch facts:
+		// capture refusal, then transport failure with a live exchange, then a
+		// reader failure after the exchange ended, then a response that was read.
+		provenance := ""
+		var network net.Error
+		switch {
+		case gate.failed:
+		case networkErr != nil || e != nil && errors.As(e, &network):
+			if exchangeCtx.Err() == nil {
+				provenance = "transport"
+			}
+		case e != nil && exchangeCtx.Err() != nil:
+		case response != nil:
+			provenance = "provider_response"
+		}
+		out.ObservedPaidCall, e = s.publishDispatchObservation(context.Background(), current, evidence, key, provenance)
 		return e
 	})
 	return out, err

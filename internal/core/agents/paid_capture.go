@@ -294,7 +294,15 @@ func paidCaptureAllowed(o paidObservationObject, blocks []providers.OutputBlock,
 	return true
 }
 
+// publishPaidObservation captures recovery evidence, which has no dispatch
+// provenance and so never yields a service observation.
 func (s *Service) publishPaidObservation(ctx context.Context, a paidAttempt, evidence providers.ResponseEvidence, key []byte) (*ObservedPaidCall, error) {
+	return s.publishDispatchObservation(ctx, a, evidence, key, "")
+}
+
+// provenance is the dispatch's service token. Every substituted observation
+// clears it: a capture failure is never provider or transport evidence.
+func (s *Service) publishDispatchObservation(ctx context.Context, a paidAttempt, evidence providers.ResponseEvidence, key []byte, provenance string) (*ObservedPaidCall, error) {
 	ids := submissionIDs{a.origin.AgentID, a.origin.SessionID, a.origin.ContextID}
 	release, err := s.acquireScope(ctx, keyFor(ids, "context"))
 	if err != nil {
@@ -307,19 +315,19 @@ func (s *Service) publishPaidObservation(ctx context.Context, a paidAttempt, evi
 	}
 	o := paidObservation(a, evidence)
 	if !paidCaptureAllowed(o, evidence.Stream.Blocks, key) || len(evidence.Stream.Replay) > maxObjectBytes || evidence.Stream.Replay != nil && len(key) > 0 && (bytes.Contains(evidence.Stream.Replay, key) || paidContainsSecret(evidence.Stream.Replay, key)) {
-		o = paidCaptureFailure(a, o.OutputStarted, "capture_refused")
+		o, provenance = paidCaptureFailure(a, o.OutputStarted, "capture_refused"), ""
 	} else {
 		result := derivePaidResult(a, o)
 		if result.Kind == "usage" && !evidence.Stream.ContentError {
 			objects, e := s.publishPaidOutputs(scope, a, evidence.Stream.Blocks)
 			if e != nil {
-				o = paidCaptureFailure(a, o.OutputStarted, "output_capture_failed")
+				o, provenance = paidCaptureFailure(a, o.OutputStarted, "output_capture_failed"), ""
 			} else {
 				o.MessageObjects = objects
 				if evidence.Stream.Replay != nil {
 					digest, err := scope.publishObject(evidence.Stream.Replay)
 					if err != nil {
-						o = paidCaptureFailure(a, o.OutputStarted, "output_capture_failed")
+						o, provenance = paidCaptureFailure(a, o.OutputStarted, "output_capture_failed"), ""
 					} else {
 						o.ReplayObject = &ledger.ObjectRef{SHA256: digest, Bytes: int64(len(evidence.Stream.Replay))}
 					}
@@ -329,7 +337,7 @@ func (s *Service) publishPaidObservation(ctx context.Context, a paidAttempt, evi
 	}
 	raw, err := json.Marshal(o)
 	if err != nil || len(raw) > maxObjectBytes {
-		o = paidCaptureFailure(a, o.OutputStarted, "observation_capture_failed")
+		o, provenance = paidCaptureFailure(a, o.OutputStarted, "observation_capture_failed"), ""
 		raw, err = json.Marshal(o)
 	}
 	if err != nil {
@@ -347,7 +355,7 @@ func (s *Service) publishPaidObservation(ctx context.Context, a paidAttempt, evi
 	if s.deps.afterPublish != nil {
 		s.deps.afterPublish(bindingOf(a.origin), "paid_observation")
 	}
-	return &ObservedPaidCall{service: s, attempt: a.admission.AttemptID, origin: a.origin, evidence: ledger.ObjectRef{SHA256: digest, Bytes: int64(len(raw))}}, nil
+	return &ObservedPaidCall{service: s, attempt: a.admission.AttemptID, origin: a.origin, evidence: ledger.ObjectRef{SHA256: digest, Bytes: int64(len(raw))}, provenance: provenance}, nil
 }
 
 func (s *Service) publishPaidOutputs(scope privateScope, a paidAttempt, blocks []providers.OutputBlock) ([]ledger.ObjectRef, error) {

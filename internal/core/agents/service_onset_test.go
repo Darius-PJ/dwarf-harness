@@ -76,7 +76,7 @@ func TestServiceOnset(t *testing.T) {
 			t.Fatal("semantic duplicate appended or changed its receipt")
 		}
 		clock.Store(due - 1)
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		v, err := s.ServiceStatus(context.Background(), e.AgentID)
@@ -87,7 +87,7 @@ func TestServiceOnset(t *testing.T) {
 			t.Fatalf("before due: %+v", v)
 		}
 		clock.Store(due)
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		v, err = s.ServiceStatus(context.Background(), e.AgentID)
@@ -99,7 +99,7 @@ func TestServiceOnset(t *testing.T) {
 		}
 		before = f.store.Durable()
 		clock.Store(first - 1)
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		if f.store.Durable() != before {
@@ -207,7 +207,7 @@ func TestServiceOnset(t *testing.T) {
 		clock.Store(first + ledger.ServiceGraceNS)
 		s.deps.reviewClock = func() (int64, error) { once.Do(func() { close(sampled); <-release }); return clock.Load(), nil }
 		done := make(chan error, 1)
-		go func() { _, err := s.ReconcileServiceEvidence(context.Background()); done <- err }()
+		go func() { _, err := s.ReconcileServiceEvidence(context.Background(), nil); done <- err }()
 		select {
 		case <-sampled:
 		case err := <-done:

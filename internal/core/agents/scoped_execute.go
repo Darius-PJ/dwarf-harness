@@ -187,6 +187,7 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 		return scopedResult{}, err
 	}
 	if err := s.scopedPrivateStateLocked(input); err != nil {
+		s.serviceScopedIntegrityLocked(ctx, input, err)
 		s.mu.Unlock()
 		return scopedResult{}, err
 	}
@@ -311,6 +312,7 @@ func (s *Service) executeScopedResult(ctx context.Context, caller scopedCaller, 
 		return s.replayScopedLocked(ctx, reads, input, match, scopeHeld)
 	}
 	if ioErr != nil {
+		s.serviceScopedIntegrityLocked(ctx, input, ioErr)
 		s.mu.Unlock()
 		return scopedResult{}, ioErr
 	}
@@ -561,5 +563,9 @@ func (s *Service) prepareScopedLocked(ctx context.Context, reads *historyReadSet
 		}
 		return s.usableLocked(ctx)
 	})
+	if err != nil {
+		// The issue scopedPrivateStateLocked returned, before agentError.
+		s.serviceScopedIntegrityLocked(ctx, input, err)
+	}
 	return drafts, group, match, err
 }

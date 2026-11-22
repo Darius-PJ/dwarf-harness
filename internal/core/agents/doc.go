@@ -289,6 +289,59 @@
 // never holds its control channel while entering Service. Close cancels and joins
 // it before the existing runtime teardown.
 //
+// Live evidence. DispatchPaid gives its handle a process-local service token
+// only after the capture gate passes: provider_response for a classified
+// provider failure or a qualifying completion, transport for a request that
+// reached no response headers. Caller cancellation, Service close, the local
+// DispatchTimeout, a gate or observer refusal and a substituted capture clear
+// it, as does the tokenless recovery publish path. RecordPaidObservation with
+// a token records E before the financial group: a failure E diagnosed by
+// providers.DiagnoseServiceFailure, or a successful_call E whose completion
+// object is published under the context gate from a permit snapshot taken
+// under Service.mu. At E time the snapshot is revalidated after the drain; a
+// stale snapshot is not submitted. TrustedEvidence never carries a token and
+// never writes E. E changes no native result, hold or charge.
+//
+// A definite E append failure keeps the live source in serviceRetained for
+// this incarnation only; ReconcileServiceEvidence retries it before anything
+// else and drops a source the ledger can no longer accept. A new incarnation
+// has no retained source and never derives one from the financial record.
+//
+// Money demand is a budget_exposure refusal at admission or dispatch whose
+// mandatory colony or agent scope is exhausted, or whose credential scope is
+// exhausted under an enabled exhaustive registry. occupied+quote > ceiling
+// alone, task and grant ceilings are no cause. A refusal with no exhausted
+// candidate in the current book, or whose member is already pending or lost,
+// reads no history and samples no clock. A successful admission records
+// budget_available. A credential-scope clear restates its activating refusal's
+// workset (the agent's enabled loop bindings and admitted, undispatched
+// attempts), digested as SHA-256 over the sorted compact JSON items. At due a
+// disabled or unconfigured money scope is unavailable: its member expires.
+//
+// Integrity demand is an IntegrityIssue refusing the agent's own live work: a
+// refused turn admission, a private effect whose command ID is a running loop
+// turn's tool effect ID, or a loop boundary stop naming the issue (its
+// source_sequence is the bound sequence). Owner and handle-only writes,
+// inspection, clock or history failures and issue-free stops are not demand.
+// Only a reports reconcile writes integrity_verified, for a named scope this
+// incarnation's Open found without issue; a same-incarnation repair does not.
+//
+// Process demand is a bound turn's live workspace call (finish commit,
+// merge-back, the file tool's three workspace calls) whose error
+// workspace.ClassifyExecutionFailure reports blocked, recorded only where
+// ProcessProofSupported. The refusal sets serviceProcessBlocked, which blocks
+// execution permits for the rest of the incarnation. process_closed comes only
+// from the first ServiceHostReports.ProcessClosures entry, with its RunID and
+// Proof. Neither clear restores.
+//
+// A refusal or cause_clear E that can no longer change membership (a repeat,
+// or one older than the generation or cause version it meets) is done
+// without an append. The timer arms from a raw reviewClock sample, skips due
+// members whose evidence is held, and continues past members whose expiry
+// fails at the same wake; those stall until the next wake. While the service
+// clock holds at its floor, a completion's sample may not be strictly after
+// onset, and such a call restores nothing.
+//
 // # Scoped authority, tasks and accounting
 //
 // A scoped mutation uses one selected owner-rooted grant and its complete

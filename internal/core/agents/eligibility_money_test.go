@@ -79,9 +79,15 @@ func TestEligibilityMoney(t *testing.T) {
 	agent := scopedBound(t, f.service, bindingOf(f.origin))
 	through := f.store.Durable()
 	var busy *BusyError
-	if _, _, err := agent.AdmitPaid(ctx, follow); !errors.As(err, &busy) || busy.Reason != "budget_exposure" || f.store.Durable() != through {
+	if _, _, err := agent.AdmitPaid(ctx, follow); !errors.As(err, &busy) || busy.Reason != "budget_exposure" {
 		t.Fatal("release created spend permission beyond retained exposure", err)
 	}
+	// The exhausted colony ceiling is service evidence (F3-91); the refusal
+	// itself still writes no native record.
+	if !serviceOnlyAfter(t, f.service, through) {
+		t.Fatal("refusal wrote a native record")
+	}
+	through = f.store.Durable()
 	for range 2 {
 		if err := f.service.Close(); err != nil {
 			t.Fatal(err)

@@ -318,6 +318,7 @@ func (r *loopRuntime) file(t *loopTurn, inv *loopInvocation) (data any, receipt 
 	write := inv.normalized.Operation == "file.write" || inv.normalized.Operation == "file.edit"
 	if writer == nil && write {
 		writer, err = r.workspace.BeginWrite(t.ctx, workspace.WriteBinding{WriterID: uuid.NewV7(), ContextID: t.origin.ContextID, AgentID: t.origin.AgentID, TaskAgentID: inv.normalized.Target.Binding.AgentID, TaskScratchID: scratchID})
+		r.serviceProcessRefusal(t, err)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -326,6 +327,7 @@ func (r *loopRuntime) file(t *loopTurn, inv *loopInvocation) (data any, receipt 
 	var scratch workspace.Scratch
 	if writer != nil {
 		release, e := writer.Lease(t.ctx)
+		r.serviceProcessRefusal(t, e)
 		if e != nil {
 			return nil, 0, e
 		}
@@ -336,6 +338,7 @@ func (r *loopRuntime) file(t *loopTurn, inv *loopInvocation) (data any, receipt 
 		}
 	} else {
 		scratch, err = r.workspace.Scratch(t.ctx, args.TaskContextID, args.WorkspaceID)
+		r.serviceProcessRefusal(t, err)
 		if err != nil {
 			return nil, 0, err
 		}

@@ -116,6 +116,9 @@ type serviceObservation struct {
 	selected       []ledger.ServiceCompletionPermit
 	issue          *IntegrityIssue
 	unsupported    bool
+	// semantic is serviceSemantic(observed), set once by the reducer on the
+	// live and replay paths. This in-memory entry never crosses JSON.
+	semantic ledger.Digest
 }
 type serviceProjection struct {
 	causes          map[uuid.UUID]serviceCause

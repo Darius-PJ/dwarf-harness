@@ -37,6 +37,14 @@
 // output. Object IDs are lowercase hex: 40 digits for sha1, 64 for sha256.
 // Core never fetches missing objects.
 //
+// ClassifyExecutionFailure is the service-loss bridge: an error is blocked only
+// when it carries gitprocess.ErrUnconfirmed, and it names a run only from the
+// first UnconfirmedError whose RunID is a UUIDv7. ProcessProofSupported reports
+// whether this Owner proves descendant tree closure (Windows). On Open's success
+// path Reconciliation.ProcessClosures lists Reconcile's closed runs in RunID
+// byte order, then the first proven run Open itself completed; it is empty where
+// no tree proof exists and when any run during Open came back unconfirmed.
+//
 // Four explicit environments separate observation from execution:
 //
 //   - Inspection preserves the owner's live configuration, including Git config

@@ -192,7 +192,11 @@ func (s *Service) validateServiceSource(ctx context.Context, reads *historyReadS
 		if err != nil {
 			return err
 		}
-		if !found || work.origin != *src.Origin || work.admission.Kind != "turn" || work.turn != src.TurnID {
+		// A turn refused at admission has no native record: its integrity
+		// refusal names the refused turn's own identity with the refused
+		// command pair. An existing turn of that ID must still match.
+		refusedAdmission := !found && src.Kind == "integrity_refusal" && src.SourceSequence == nil && src.CommandID != (uuid.UUID{})
+		if !refusedAdmission && (!found || work.origin != *src.Origin || work.admission.Kind != "turn" || work.turn != src.TurnID) {
 			return ErrNotBound
 		}
 	}

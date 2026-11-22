@@ -296,7 +296,9 @@ func testPaidIntentBeforeBytes(t *testing.T, provider string) {
 			}
 			before := f.store.Durable()
 			_, err := f.service.DispatchPaid(context.Background(), PaidDispatch{CommandID: f.id(), AttemptID: r.AttemptID, ExpectedVersion: 1})
-			if err == nil || f.store.Durable() != before || posts.Load() != 0 || f.view(t, r.AttemptID).HeldMicros == "0" {
+			// A lowered cap that exhausts the colony is F3-91 service
+			// evidence; no refusal writes a native record.
+			if err == nil || !serviceOnlyAfter(t, f.service, before) || name != "lowered-cap" && f.store.Durable() != before || posts.Load() != 0 || f.view(t, r.AttemptID).HeldMicros == "0" {
 				t.Fatal("invalid or recovered admission dispatched or released money")
 			}
 		})

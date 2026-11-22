@@ -50,7 +50,7 @@ func TestServiceRaces(t *testing.T) {
 			}
 		})
 		done := make(chan error, 1)
-		go func() { _, err := s.ReconcileServiceEvidence(context.Background()); done <- err }()
+		go func() { _, err := s.ReconcileServiceEvidence(context.Background(), nil); done <- err }()
 		select {
 		case <-entered:
 		case err := <-done:
@@ -66,7 +66,7 @@ func TestServiceRaces(t *testing.T) {
 				peer.deps.beforeServiceSubmit = func() error { return stop }
 			}
 		}
-		if _, err := peer.ReconcileServiceEvidence(context.Background()); !errors.Is(err, stop) {
+		if _, err := peer.ReconcileServiceEvidence(context.Background(), nil); !errors.Is(err, stop) {
 			t.Fatalf("peer did not stop after clearing K: %v", err)
 		}
 		cleared := f.store.Durable()
@@ -77,7 +77,7 @@ func TestServiceRaces(t *testing.T) {
 		if f.store.Durable() != cleared || serviceCountRecords(t, s, ledger.TypeRuntimeServiceOutageNotice) != 0 {
 			t.Fatal("stale timer wrote after a concurrent clear")
 		}
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		v, err := s.ServiceStatus(context.Background(), e.AgentID)
@@ -118,7 +118,7 @@ func TestServiceRaces(t *testing.T) {
 			}
 		})
 		done := make(chan error, 1)
-		go func() { _, err := s.ReconcileServiceEvidence(context.Background()); done <- err }()
+		go func() { _, err := s.ReconcileServiceEvidence(context.Background(), nil); done <- err }()
 		select {
 		case <-entered:
 		case err := <-done:
@@ -206,6 +206,8 @@ func TestServiceRaces(t *testing.T) {
 			t.Fatal("duplicate first-loss notice")
 		}
 	})
+	t.Run("live_same_handle_shared_command", func(t *testing.T) { t.Parallel(); testServiceLiveSameHandleRace(t, true) })
+	t.Run("live_same_handle_distinct_commands", func(t *testing.T) { t.Parallel(); testServiceLiveSameHandleRace(t, false) })
 	t.Run("stale_second_restoration_permit_never_rebases", func(t *testing.T) {
 		t.Parallel()
 		f, commits := serviceGolden(t, 198, serviceDeps{})
@@ -246,7 +248,7 @@ func TestServiceRaces(t *testing.T) {
 			t.Fatal(err)
 		}
 		clock.Store(now + 3)
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		va, _ := s.ServiceStatus(context.Background(), a.origin.AgentID)
@@ -289,7 +291,7 @@ func testServiceSharedGraceRestoration(t *testing.T) {
 			s.deps.reviewClock = func() (int64, error) { return clock.Load(), nil }
 			cause := serviceRecord(t, s, servicePaidFailure(t, a, "overloaded", now)).Submission.CauseID
 			clock.Store(now + ledger.ServiceGraceNS)
-			if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+			if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 				t.Fatal(err)
 			}
 			second := now + ledger.ServiceGraceNS + 1
@@ -361,7 +363,7 @@ func testServiceSharedGraceRestoration(t *testing.T) {
 				}
 			}
 			notices := serviceCountRecords(t, s, ledger.TypeRuntimeServiceOutageNotice)
-			recovery, err := s.ReconcileServiceEvidence(context.Background())
+			recovery, err := s.ReconcileServiceEvidence(context.Background(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

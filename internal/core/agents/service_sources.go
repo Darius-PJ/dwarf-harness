@@ -153,6 +153,9 @@ func (s *Service) publishServiceCompletion(ctx context.Context, origin ledger.Or
 	if err != nil {
 		return ledger.ObjectRef{}, err
 	}
+	if s.deps.afterPublish != nil {
+		s.deps.afterPublish(bindingOf(origin), "service_completion")
+	}
 	return ledger.ObjectRef{SHA256: digest, Bytes: int64(len(raw))}, nil
 }
 
@@ -303,6 +306,9 @@ func (s *Service) commitServiceLocked(ctx context.Context, command uuid.UUID, bu
 			s.poisoned = true
 			return zero, err
 		}
+		// The group is durable: an uncached need here resolves under mu like a
+		// third round, rather than poisoning a correct commit.
+		reads.rounds = max(reads.rounds, 2)
 		match, install, err := s.stageCommitLocked(context.Background(), reads, c, nil)
 		if err != nil || match.service == nil {
 			s.poisoned = true
@@ -411,6 +417,24 @@ func (s *Service) recordServiceEvidenceLocked(ctx context.Context, command uuid.
 						return ledger.ServiceSubmission{}, ErrUnavailable
 					}
 				}
+				// A current permit the reducer would refuse could never be
+				// applied or covered; refuse it here, before it enters the
+				// journal, rather than wedge every later drain.
+				for _, permit := range object.Permits {
+					c := s.p.service.causes[permit.CauseID]
+					m := s.p.service.members[serviceMemberKey{e.AgentID, permit.CauseID}]
+					if permit.Kind == "blocked" || c.snapshot.Version != permit.CauseVersion || m.snapshot.Generation != permit.MemberGeneration || m.snapshot.Phase != "pending" && m.snapshot.Phase != "lost" {
+						continue
+					}
+					selected := cloneServiceSource(e.Source)
+					selected.Completion.Permit = new(permit)
+					if err := s.checkServicePermit(ctx, reads, c, m, selected, s.p.through, m.snapshot.Phase == "lost"); err != nil {
+						if isHistoryNeed(err) {
+							return ledger.ServiceSubmission{}, err
+						}
+						return ledger.ServiceSubmission{}, ErrInvalid
+					}
+				}
 			}
 		}
 		if id, ok := s.p.service.semantic[serviceSemantic(e)]; ok {
@@ -485,8 +509,19 @@ func (s *Service) serviceStateSubmission(operation string, agent, cause uuid.UUI
 func (s *Service) applyServiceSourceLocked(ctx context.Context, operation string, agent, cause uuid.UUID, src ledger.ServiceSource) error {
 	command := uuid.NewV7()
 	_, err := s.commitServiceLocked(ctx, command, func(*historyReadSet) (ledger.ServiceSubmission, error) {
+		if operation == "service.withdraw" {
+			c, m := s.p.service.causes[cause], s.p.service.members[serviceMemberKey{agent, cause}]
+			if m.snapshot.Phase != "pending" || !serviceWithdrawalMatches(c, src) {
+				return ledger.ServiceSubmission{}, ErrNoEffect
+			}
+		}
 		return s.serviceStateSubmission(operation, agent, cause, src)
 	})
+	// Another drain of this Service applied the same transition while this one
+	// waited for a cold read: the rebuilt plan has no effect, which is no error.
+	if errors.Is(err, ErrNoEffect) {
+		return nil
+	}
 	return err
 }
 func (s *Service) retainServiceErrorLocked(err error) {
@@ -567,12 +602,20 @@ func (s *Service) drainServiceEvidenceLocked(ctx context.Context) error {
 			if c, ok := s.p.service.causes[e.observed.CauseID]; ok && c.unsupported {
 				continue
 			}
+			before := s.p.through
 			changed, err := s.drainServiceObservationLocked(ctx, e)
+			if errors.Is(err, errServiceDueHeld) {
+				// A due member that cannot expire yet holds this clear back;
+				// coverage stays before it while independent evidence drains.
+				continue
+			}
 			if err != nil {
 				s.retainServiceErrorLocked(err)
 				return err
 			}
-			if changed {
+			// A lost race's no-effect transition writes nothing; only an actual
+			// ledger change rescans, so an ignored source cannot spin.
+			if changed && s.p.through != before {
 				progress = true
 				break
 			}
@@ -590,7 +633,9 @@ func (s *Service) drainServiceEvidenceLocked(ctx context.Context) error {
 					return *e.issue
 				}
 			}
-			s.serviceError = ""
+			if len(s.serviceRetained) == 0 {
+				s.serviceError = ""
+			}
 			return nil
 		}
 	}
@@ -676,7 +721,9 @@ func (s *Service) withdrawClearedServiceLocked(ctx context.Context) error {
 	var keys []serviceMemberKey
 	for key, m := range s.p.service.members {
 		c := s.p.service.causes[key.cause]
-		if !c.unsupported && !m.unsupported && m.snapshot.Phase == "pending" && c.snapshot.Condition == "cleared" {
+		// An unverifiable member stays held until its metadata is repaired;
+		// a withdrawal for it would be refused on every pass.
+		if !c.unsupported && !m.unsupported && !s.p.service.unverifiable(key) && m.snapshot.Phase == "pending" && c.snapshot.Condition == "cleared" {
 			keys = append(keys, key)
 		}
 	}
@@ -711,7 +758,10 @@ func (s *Service) withdrawClearedServiceLocked(ctx context.Context) error {
 
 // ReconcileServiceEvidence catches up existing service metadata and real due
 // timers only. It never probes a provider, executes work or repairs money.
-func (s *Service) ReconcileServiceEvidence(ctx context.Context) (ServiceRecovery, error) {
+// reports is the host's existing startup reports, given once after an
+// unrefused start: it also writes integrity_verified and process_closed clears.
+// nil drains only, as in both startup refusals and EnableTurnLoop's catch-up.
+func (s *Service) ReconcileServiceEvidence(ctx context.Context, reports *ServiceHostReports) (ServiceRecovery, error) {
 	if s == nil {
 		return ServiceRecovery{}, ErrInvalid
 	}
@@ -719,14 +769,21 @@ func (s *Service) ReconcileServiceEvidence(ctx context.Context) (ServiceRecovery
 		return ServiceRecovery{}, err
 	}
 	defer s.active.Done()
+	s.retryServicePaid(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	err := s.drainServiceEvidenceLocked(ctx)
 	if usable := s.usableLocked(ctx); usable != nil {
 		err = usable
 	} else {
-		timerErr := s.expireDueServiceLocked(ctx)
-		if timerErr != nil {
+		if reports != nil {
+			if clearErr := s.serviceHostClearsLocked(ctx, *reports); clearErr != nil {
+				err = clearErr
+			}
+		}
+		if usable := s.usableLocked(ctx); usable != nil {
+			err = usable
+		} else if timerErr := s.expireDueServiceLocked(ctx); timerErr != nil {
 			err = timerErr
 		}
 	}

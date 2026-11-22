@@ -93,7 +93,9 @@ func paidCrashRows() []paidCrashRow {
 		{"acknowledgement_lost_ack", 12, 4, "settled", "125", 1},
 		{"revoke_before_intent", 6, 1, "reserved", "0", 0},
 		{"intent_before_revoke", 9, 2, "sent", "0", 1},
-		{"cap_before_intent", 6, 1, "reserved", "0", 0},
+		// Six native records, then the exhausted cap's F3-91 evidence
+		// groups (seven records).
+		{"cap_before_intent", 13, 1, "reserved", "0", 0},
 		{"intent_before_cap", 9, 2, "sent", "0", 1},
 		{"rollover_before_intent", 6, 2, "sent", "0", 1},
 		{"intent_before_rollover", 9, 2, "sent", "0", 1},
@@ -509,6 +511,16 @@ func TestPaidCrashChild(t *testing.T) {
 	var operation string
 	var releaseAppend func()
 	f.service.deps.beforeSubmit = func(d []ledger.Draft) []ledger.Draft {
+		// A complete F3-91 group (its command, service records and service
+		// receipt) is the exhausted cap's evidence, not a paid transition;
+		// every other non-paid group still fails the run.
+		service := d[len(d)-1].Type == ledger.TypeRuntimeServiceReceipt
+		for _, r := range d {
+			service = service && (r.Type == ledger.TypeCommand || isServiceType(r.Type))
+		}
+		if service {
+			return d
+		}
 		if d[len(d)-1].Type != ledger.TypeRuntimePaidReceipt {
 			t.Fatal("unexpected non-paid transition")
 		}

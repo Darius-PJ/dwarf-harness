@@ -31,7 +31,12 @@ func TestServiceCrashConvergence(t *testing.T) {
 		serviceCrashChild(t, boundary)
 		return
 	}
+	if boundary := os.Getenv("DWARF_SERVICE_LIVE_CRASH"); boundary != "" {
+		serviceLiveCrashChild(t, boundary)
+		return
+	}
 	t.Parallel()
+	testServiceLiveCrash(t)
 	testServiceMetadataRecovery(t)
 	testServiceStartup(t)
 	testServiceDuplicateRecovery(t)
@@ -122,7 +127,7 @@ func TestServiceCrashConvergence(t *testing.T) {
 					t.Fatalf("captured E was covered before all transitions: %d/%d", v.SourceThrough, signal.CoverageBefore)
 				}
 			}
-			if _, err = s.ReconcileServiceEvidence(context.Background()); err != nil {
+			if _, err = s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 				t.Fatal(err)
 			}
 			v, err := s.ServiceStatus(context.Background(), signal.Agent)
@@ -133,7 +138,7 @@ func TestServiceCrashConvergence(t *testing.T) {
 				t.Fatalf("crash did not converge: state=%s active=%d pending=%d recovery=%+v", v.State, len(v.Active), len(v.Pending), v.Recovery)
 			}
 			after := store.Durable()
-			if _, err = s.ReconcileServiceEvidence(context.Background()); err != nil {
+			if _, err = s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 				t.Fatal(err)
 			}
 			if store.Durable() != after || !bytes.HasPrefix(readTestFile(t, segment), before) {
@@ -166,7 +171,7 @@ func serviceCrashChild(t *testing.T, boundary string) {
 				barrier()
 			}
 		}
-		if _, err := f.service.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := f.service.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		t.Fatal("partial restoration boundary not reached")
@@ -216,7 +221,7 @@ func serviceCrashChild(t *testing.T, boundary string) {
 			}
 			return d
 		}
-		if _, err := s.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		t.Fatal("expiry boundary not reached")

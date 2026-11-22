@@ -53,7 +53,7 @@ func testServiceReplayEdges(t *testing.T) {
 				t.Fatalf("unknown state was interpreted: %+v", v)
 			}
 			through := f.store.Durable()
-			if _, err := f.service.ReconcileServiceEvidence(context.Background()); err != nil {
+			if _, err := f.service.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 				t.Fatal(err)
 			}
 			e.ObservationID = uuid.NewV7()
@@ -138,7 +138,7 @@ func testServiceReplayEdges(t *testing.T) {
 		if v.State != "unsupported" || len(v.Unsupported) != 1 || len(v.Active) != 0 || len(v.Pending) != 0 {
 			t.Fatalf("unknown source was classified: %+v", v)
 		}
-		if _, err = f.service.ReconcileServiceEvidence(context.Background()); err != nil {
+		if _, err = f.service.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 		if sampled.Load() != 0 || f.service.serviceTimer != nil || len(f.service.serviceDeadlinesLocked()) != 0 || f.store.Durable() != before {

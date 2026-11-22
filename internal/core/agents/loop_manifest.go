@@ -322,6 +322,9 @@ func (r *loopRuntime) finish(t *loopTurn) (err error) {
 		if err == nil {
 			_, err = writer.CommitObserved(context.Background())
 		}
+		// Classify the writer commit's own error (or the seam's stand-in)
+		// before anything transforms it; the native outcome is unchanged.
+		r.serviceProcessRefusal(t, err)
 		if err != nil {
 			return err
 		}
@@ -459,6 +462,7 @@ func (r *loopRuntime) finishMerge(t *loopTurn) error {
 		return err
 	}
 	_, mergeErr := r.workspace.MergeBack(context.Background(), t.mergeScratch)
+	r.serviceProcessRefusal(t, mergeErr)
 	t.mergeScratch, t.finishWait.owed = uuid.UUID{}, true
 	if mergeErr != nil {
 		if err := r.noteStop(t, "scratch_pending"); err != nil {

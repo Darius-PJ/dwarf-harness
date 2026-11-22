@@ -171,6 +171,12 @@ type Service struct {
 	loopClosing   bool
 	serviceTimer  *serviceTimer
 	serviceError  string
+	// serviceRetained holds live paid service sources whose E append definitely
+	// failed. Per-incarnation, in memory only, guarded by Service.mu.
+	serviceRetained []servicePaidLive
+	// serviceProcessBlocked records that a live workspace call was classified
+	// unconfirmed. Per-incarnation, in memory only, guarded by Service.mu.
+	serviceProcessBlocked bool
 }
 
 func Open(ctx context.Context, store privateStore, colonyDir string, limits Limits) (*Service, Reconciliation, error) {

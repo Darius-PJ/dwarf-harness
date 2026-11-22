@@ -20,7 +20,7 @@ func serviceExpiryBarrier(t *testing.T, s *Service, sample int64) {
 	var once sync.Once
 	s.deps.reviewClock = func() (int64, error) { once.Do(func() { close(entered); <-release }); return sample, nil }
 	done := make(chan error, 1)
-	go func() { _, err := s.ReconcileServiceEvidence(context.Background()); done <- err }()
+	go func() { _, err := s.ReconcileServiceEvidence(context.Background(), nil); done <- err }()
 	select {
 	case <-entered:
 	case err := <-done:
