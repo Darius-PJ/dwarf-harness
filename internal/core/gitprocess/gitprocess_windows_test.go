@@ -2059,22 +2059,16 @@ func TestGitProcessRootReuse(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// debugPrivilege reports SeDebugPrivilege's state in this process's
-			// token, the one token state that bypasses a process DACL.
-			debugPrivilege := func() string {
-				name, err := windows.UTF16PtrFromString("SeDebugPrivilege")
-				if err != nil {
-					return err.Error()
-				}
-				var luid windows.LUID
-				if err := windows.LookupPrivilegeValue(nil, name, &luid); err != nil {
-					return err.Error()
-				}
-				var token windows.Token
-				if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token); err != nil {
-					return err.Error()
-				}
-				defer token.Close()
+			debugName, err := windows.UTF16PtrFromString("SeDebugPrivilege")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var debugLUID windows.LUID
+			if err := windows.LookupPrivilegeValue(nil, debugName, &debugLUID); err != nil {
+				t.Fatal(err)
+			}
+			// debugPrivilege reports SeDebugPrivilege's state in token.
+			debugPrivilege := func(token windows.Token) string {
 				privileges := make([]byte, 4096)
 				var n uint32
 				if err := windows.GetTokenInformation(token, windows.TokenPrivileges, &privileges[0], uint32(len(privileges)), &n); err != nil {
@@ -2085,23 +2079,72 @@ func TestGitProcessRootReuse(t *testing.T) {
 					return uint32(privileges[at]) | uint32(privileges[at+1])<<8 | uint32(privileges[at+2])<<16 | uint32(privileges[at+3])<<24
 				}
 				for i := range min(int(word(0)), (int(n)-4)/12) {
-					if at := 4 + 12*i; word(at) == luid.LowPart && int32(word(at+4)) == luid.HighPart {
+					if at := 4 + 12*i; word(at) == debugLUID.LowPart && int32(word(at+4)) == debugLUID.HighPart {
 						return strconv.FormatBool(word(at+8)&windows.SE_PRIVILEGE_ENABLED != 0)
 					}
 				}
 				return "not held"
+			}
+			// SeDebugPrivilege bypasses a process DACL, and hosted runners enable
+			// it. Every call that must meet the holder's denial runs in fn, on a
+			// locked OS thread impersonating a duplicate of the process token with
+			// that privilege removed. The thread reverts before it unlocks; a
+			// failed revert leaves it locked, so the runtime discards it. fn must
+			// not stop its goroutine; it reports through captured variables.
+			undebugged := func(fn func(windows.Token)) error {
+				done := make(chan error, 1)
+				go func() {
+					runtime.LockOSThread()
+					var err error
+					defer func() {
+						if revertErr := windows.RevertToSelf(); revertErr != nil {
+							err = errors.Join(err, revertErr)
+						} else {
+							runtime.UnlockOSThread()
+						}
+						done <- err
+					}()
+					err = func() error {
+						var process, token windows.Token
+						if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_DUPLICATE, &process); err != nil {
+							return err
+						}
+						defer process.Close()
+						if err := windows.DuplicateTokenEx(process, windows.TOKEN_IMPERSONATE|windows.TOKEN_QUERY|windows.TOKEN_ADJUST_PRIVILEGES, nil, windows.SecurityImpersonation, windows.TokenImpersonation, &token); err != nil {
+							return err
+						}
+						defer token.Close()
+						removed := windows.Tokenprivileges{PrivilegeCount: 1, Privileges: [1]windows.LUIDAndAttributes{{Luid: debugLUID, Attributes: windows.SE_PRIVILEGE_REMOVED}}}
+						if err := windows.AdjustTokenPrivileges(token, false, &removed, 0, nil, nil); err != nil {
+							return err
+						}
+						if err := windows.SetThreadToken(nil, token); err != nil {
+							return err
+						}
+						fn(token)
+						return nil
+					}()
+				}()
+				return <-done
 			}
 			deny, err := windows.SecurityDescriptorFromString("D:P(D;;GA;;;WD)")
 			if err != nil {
 				t.Fatal(err)
 			}
 			setDACL(deny)
-			probe, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pi.ProcessId)
-			if probe != 0 {
-				_ = windows.CloseHandle(probe)
+			var controlErr error
+			impersonated := ""
+			if err := undebugged(func(token windows.Token) {
+				probe, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pi.ProcessId)
+				if probe != 0 {
+					_ = windows.CloseHandle(probe)
+				}
+				controlErr, impersonated = err, debugPrivilege(token)
+			}); err != nil {
+				t.Fatal("impersonation without SeDebugPrivilege failed", err)
 			}
-			if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-				t.Fatalf("deny DACL control failed: %v; SeDebugPrivilege enabled: %s", err, debugPrivilege())
+			if !errors.Is(controlErr, windows.ERROR_ACCESS_DENIED) {
+				t.Fatalf("deny DACL control failed: %v; SeDebugPrivilege enabled: process token %s, impersonation token %s", controlErr, debugPrivilege(windows.GetCurrentProcessToken()), impersonated)
 			}
 			if row == "list-guards" {
 				selfCreated, err := processCreated(windows.CurrentProcess())
@@ -2188,7 +2231,15 @@ func TestGitProcessRootReuse(t *testing.T) {
 					t.Fatal("unproved reservation admitted Git", err)
 				}
 			}
-			report, err := o.Reconcile(context.Background())
+			reconcile := func() (Report, error) {
+				var report Report
+				var err error
+				if impersonationErr := undebugged(func(windows.Token) { report, err = o.Reconcile(context.Background()) }); impersonationErr != nil {
+					t.Fatal("impersonation without SeDebugPrivilege failed", impersonationErr)
+				}
+				return report, err
+			}
+			report, err := reconcile()
 			reason, cause := "", error(nil)
 			var refusal *UnconfirmedError
 			if errors.As(err, &refusal) {
@@ -2225,7 +2276,7 @@ func TestGitProcessRootReuse(t *testing.T) {
 					t.Fatal(err)
 				}
 				assertExited(t, pi.Process)
-				report, err := o.Reconcile(context.Background())
+				report, err := reconcile()
 				if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != 1 || report.Closed[0].RunID != f.RunID || report.Closed[0].Proof != "name_absent" {
 					t.Fatalf("ended root refused: %+v %v", report, err)
 				}
@@ -2236,7 +2287,7 @@ func TestGitProcessRootReuse(t *testing.T) {
 				refused()
 				holderLive()
 				o.queryFault = nil
-				report, err := o.Reconcile(context.Background())
+				report, err := reconcile()
 				if err != nil || report.Reservations != 0 || len(report.Pending) != 0 || len(report.Closed) != 0 {
 					t.Fatalf("unobstructed process list refused: %+v %v", report, err)
 				}
