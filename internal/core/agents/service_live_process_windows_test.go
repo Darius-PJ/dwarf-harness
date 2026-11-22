@@ -214,20 +214,18 @@ func serviceProcessChild(t *testing.T) {
 	if !f.workspace.ProcessProofSupported() {
 		t.Fatal("Windows Owner did not report tree proof")
 	}
-	entered := make(chan uuid.UUID, 1)
+	entered := make(chan *loopTurn, 1)
 	f.service.deps.beforeFinishCommit = func(turn uuid.UUID) error {
 		_ = serviceCollideOwnerJobs(t, f.root, 2)
-		entered <- turn
+		entered <- serviceRunningTurn(f.turnFixture, turn)
 		return nil
 	}
 	f.enable(t)
 	_, started := f.send(t)
-	if <-entered != started.TurnID {
+	turn := <-entered
+	if turn == nil || turn.id != started.TurnID {
 		t.Fatal("wrong turn reached the finish commit")
 	}
-	f.service.loop.mu.Lock()
-	turn := f.service.loop.turns[started.TurnID]
-	f.service.loop.mu.Unlock()
 	<-turn.done
 	f.service.loop.mu.Lock()
 	state, terminal := turn.state, turn.terminalError

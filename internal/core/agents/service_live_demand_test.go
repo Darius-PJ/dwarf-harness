@@ -126,6 +126,18 @@ func TestServiceIntegrityDemand(t *testing.T) {
 	}
 }
 
+// serviceRunningTurn returns the loop's entry for a turn from inside one of
+// that turn's own quantum seams, where it is still registered: the loop
+// removes a turn from loop.turns only after its quantum returns
+// (loop_runtime.go:453-456). Read after any later signal, the entry may
+// already be gone. The finish seams run with neither Service.mu nor the loop
+// mutex held.
+func serviceRunningTurn(f *turnFixture, id uuid.UUID) *loopTurn {
+	f.service.loop.mu.Lock()
+	defer f.service.loop.mu.Unlock()
+	return f.service.loop.turns[id]
+}
+
 // TestServiceProcessSeam: an unconfirmed-class error at the finish commit is
 // process demand only where the Owner proves tree closure; elsewhere it writes
 // no F3-91 record and sets no barrier. The turn's native outcome is the same
@@ -133,19 +145,17 @@ func TestServiceIntegrityDemand(t *testing.T) {
 func TestServiceProcessSeam(t *testing.T) {
 	t.Parallel()
 	f := newContinuationCapture(t, true, nil)
-	entered := make(chan uuid.UUID, 1)
+	entered := make(chan *loopTurn, 1)
 	f.service.deps.beforeFinishCommit = func(turn uuid.UUID) error {
-		entered <- turn
+		entered <- serviceRunningTurn(f.turnFixture, turn)
 		return fmt.Errorf("synthetic finish commit: %w", gitprocess.ErrUnconfirmed)
 	}
 	f.enable(t)
 	_, started := f.send(t)
-	if <-entered != started.TurnID {
+	turn := <-entered
+	if turn == nil || turn.id != started.TurnID {
 		t.Fatal("wrong turn reached the finish commit")
 	}
-	f.service.loop.mu.Lock()
-	turn := f.service.loop.turns[started.TurnID]
-	f.service.loop.mu.Unlock()
 	<-turn.done
 	f.service.loop.mu.Lock()
 	state, terminal := turn.state, turn.terminalError
@@ -241,20 +251,21 @@ func testServiceLiveNeverCounts(t *testing.T) {
 			t.Parallel()
 			f := newContinuationCapture(t, true, nil)
 			var refused atomic.Bool
-			f.service.deps.beforeFinishCommit = func(uuid.UUID) error {
+			entered := make(chan *loopTurn, 1)
+			f.service.deps.beforeFinishCommit = func(id uuid.UUID) error {
 				if refused.CompareAndSwap(false, true) {
+					entered <- serviceRunningTurn(f.turnFixture, id)
 					return row.err
 				}
 				return nil
 			}
 			f.enable(t)
 			_, started := f.send(t)
-			f.service.loop.mu.Lock()
-			turn := f.service.loop.turns[started.TurnID]
-			f.service.loop.mu.Unlock()
-			if turn != nil {
-				<-turn.done
+			turn := <-entered
+			if turn == nil || turn.id != started.TurnID {
+				t.Fatal("wrong turn reached the finish commit")
 			}
+			<-turn.done
 			if !refused.Load() || serviceCountRecords(t, f.service, ledger.TypeRuntimeServiceObserved) != 0 {
 				t.Fatalf("%s at the finish commit counted as service evidence", row.name)
 			}
