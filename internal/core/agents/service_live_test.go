@@ -278,7 +278,7 @@ func TestServiceNoAuthorityTransfer(t *testing.T) {
 	t.Run("cross_agent_success", func(t *testing.T) {
 		t.Parallel()
 		l := newServiceLive(t, "anthropic")
-		second := serviceSecondAgent(t, l)
+		second := serviceSecondAgent(t, l.paidFixture, 1)
 		l.respond(serviceProviderError("anthropic", 401, "authentication_error", nil))
 		l.callFor(t, l.paidFixture)
 		l.callFor(t, second)
@@ -337,39 +337,62 @@ func TestServiceNoAuthorityTransfer(t *testing.T) {
 
 // serviceSecondAgent registers another agent that can make paid calls on the
 // same route and credential, and returns a fixture view bound to it.
-func serviceSecondAgent(t *testing.T, l *serviceLive) *paidFixture {
+func serviceSecondAgent(t *testing.T, f *paidFixture, slot int) *paidFixture {
 	t.Helper()
-	ctx, owner := context.Background(), bindingOf(l.origin)
+	ctx, owner := context.Background(), bindingOf(f.origin)
 	origin := ledger.Origin{AgentID: uuid.NewV7(), SessionID: uuid.NewV7(), ContextID: uuid.NewV7()}
-	b := bindingOf(origin)
-	if _, err := l.service.RegisterAgent(ctx, AgentRegistration{CommandID: uuid.NewV7(), AgentID: origin.AgentID, SessionID: origin.SessionID, ContextID: origin.ContextID, Directory: "Scout-second", AgentMarkdown: []byte("# Instructions\r\n")}); err != nil {
+	if _, err := f.service.RegisterAgent(ctx, AgentRegistration{CommandID: uuid.NewV7(), AgentID: origin.AgentID, SessionID: origin.SessionID, ContextID: origin.ContextID, Directory: "Scout-second", AgentMarkdown: []byte("# Instructions\r\n")}); err != nil {
 		t.Fatal(err)
 	}
 	scope := ledger.ScopeKey{Kind: "agent", ID: origin.AgentID}
-	if _, err := l.service.ConfigureCapacity(ctx, owner, CapacitySpec{CommandID: uuid.NewV7(), ExpectedVersion: uint64(l.service.p.book.accounts[scope].version), Scope: scope, Limits: paidPhysicalCapacity()}); err != nil {
+	if _, err := f.service.ConfigureCapacity(ctx, owner, CapacitySpec{CommandID: uuid.NewV7(), ExpectedVersion: uint64(f.service.p.book.accounts[scope].version), Scope: scope, Limits: paidPhysicalCapacity()}); err != nil {
 		t.Fatal(err)
 	}
-	second := *l.paidFixture
-	second.origin, second.grant, second.turn = origin, uuid.NewV7(), uuid.NewV7()
-	// Golden IDs come from a per-fixture counter; keep the views' sequences
-	// apart so neither reuses the other's command IDs.
-	second.next += 1 << 20
+	f.liveSpend(t, ledger.PaidScope{Kind: "agent", ID: origin.AgentID}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "100.000000", PeriodKind: "utc_day"})
+	return serviceWorkView(t, f, origin, slot)
+}
+
+// serviceWorkView grants origin's binding paid calls on the fixture's route
+// and a turn of its own, starts that turn and returns a fixture view bound to
+// it. slot keeps each view's golden command IDs apart from the fixture's.
+func serviceWorkView(t *testing.T, f *paidFixture, origin ledger.Origin, slot int) *paidFixture {
+	t.Helper()
+	ctx, owner, b := context.Background(), bindingOf(f.origin), bindingOf(origin)
+	view := *f
+	view.origin, view.grant, view.turn = origin, uuid.NewV7(), uuid.NewV7()
+	view.next += slot << 20
 	turns := uuid.NewV7()
 	for _, spec := range []GrantSpec{
-		{GrantID: second.grant, Grantee: b, Operations: []string{"model.call"}, Resources: []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + l.route.RouteID.String()}}, DataClass: "external", Recipients: []Binding{b}, Limits: paidPhysicalCapacity(), Lifetime: "until_revoked"},
+		{GrantID: view.grant, Grantee: b, Operations: []string{"model.call"}, Resources: []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + f.route.RouteID.String()}}, DataClass: "external", Recipients: []Binding{b}, Limits: paidPhysicalCapacity(), Lifetime: "until_revoked"},
 		{GrantID: turns, Grantee: b, Operations: []string{"turn.start"}, Resources: []ledger.Resource{{Kind: "context", Binding: ledger.Binding(b), Scope: "context", Slots: []string{}}}, DataClass: "private", Recipients: []Binding{b}, Limits: scopedCapacity(), Lifetime: "until_revoked"},
 	} {
-		if _, err := l.service.IssueGrant(ctx, owner, GrantIssue{CommandID: uuid.NewV7(), ExpectedAuthorityVersion: uint64(l.service.p.authority), Spec: spec}); err != nil {
+		if _, err := f.service.IssueGrant(ctx, owner, GrantIssue{CommandID: uuid.NewV7(), ExpectedAuthorityVersion: uint64(f.service.p.authority), Spec: spec}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, spend := range []ledger.PaidScope{{Kind: "agent", ID: origin.AgentID}, {Kind: "grant", ID: second.grant}} {
-		l.liveSpend(t, spend, SpendTermsInput{Enabled: true, Mode: "finite", USD: "100.000000", PeriodKind: "utc_day"})
-	}
-	if _, err := scopedBound(t, l.service, b).StartTurn(ctx, TurnAdmission{CommandID: uuid.NewV7(), GrantID: turns, TurnID: second.turn}); err != nil {
+	f.liveSpend(t, ledger.PaidScope{Kind: "grant", ID: view.grant}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "100.000000", PeriodKind: "utc_day"})
+	if _, err := scopedBound(t, f.service, b).StartTurn(ctx, TurnAdmission{CommandID: uuid.NewV7(), GrantID: turns, TurnID: view.turn}); err != nil {
 		t.Fatal(err)
 	}
-	return &second
+	return &view
+}
+
+// serviceOtherContext returns the origin agent's second registered context.
+func serviceOtherContext(t *testing.T, f *paidFixture) ledger.Origin {
+	t.Helper()
+	f.service.mu.Lock()
+	defer f.service.mu.Unlock()
+	for context, agent := range f.service.p.contexts {
+		if agent == f.origin.AgentID && context != f.origin.ContextID {
+			ids, err := f.service.bindingLocked(Binding{AgentID: agent, ContextID: context}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return originOf(ids)
+		}
+	}
+	t.Fatal("fixture has no second context")
+	return ledger.Origin{}
 }
 
 // callFor makes one complete paid call for the given fixture view.

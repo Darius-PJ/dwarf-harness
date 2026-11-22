@@ -80,6 +80,14 @@ func TestServiceMoney(t *testing.T) {
 			}
 		})
 	}
+	t.Run("colony_then_agent_each_recorded_once", func(t *testing.T) {
+		t.Parallel()
+		testServiceColonyThenAgent(t)
+	})
+	for _, incomplete := range []bool{false, true} {
+		name := map[bool]string{false: "credential_complete_workset", true: "credential_incomplete_workset"}[incomplete]
+		t.Run(name, func(t *testing.T) { t.Parallel(); testServiceCredentialWorkset(t, incomplete) })
+	}
 	for _, row := range []string{"parked_turn_repeats", "parked_turn_lost_at_due", "owner_cancel_before_due", "owner_cancel_limit_raised_before_due", "raised_limit_restores"} {
 		t.Run(row, func(t *testing.T) { t.Parallel(); testServiceParkedMoney(t, row) })
 	}
@@ -368,4 +376,94 @@ func testServiceParkedMoney(t *testing.T, row string) {
 			t.Fatalf("colony money: %+v %v", budget, err)
 		}
 	}
+}
+
+// testServiceColonyThenAgent: each refusal records the first qualifying scope
+// in admission order (colony, agent, credential, then grants: paid_budget.go:53
+// orders what paid_prepare.go:115 builds) whose cause has no open member for
+// the agent (PM fix-1 answer 1).
+func testServiceColonyThenAgent(t *testing.T) {
+	l := newServiceLive(t, "anthropic")
+	l.liveSpend(t, ledger.PaidScope{Kind: "colony"}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000000", PeriodKind: "utc_day"})
+	l.liveSpend(t, ledger.PaidScope{Kind: "agent", ID: l.origin.AgentID}, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000000", PeriodKind: "utc_day"})
+	scopes := func() []string {
+		var out []string
+		for _, e := range serviceObservations(t, l.service) {
+			out = append(out, e.Cause.ScopeKind)
+		}
+		return out
+	}
+	serviceRefusedAdmission(t, l, paidPrepare(t, l.paidFixture))
+	if got := scopes(); len(got) != 1 || got[0] != "colony" {
+		t.Fatalf("first refusal: %v, want [colony]", got)
+	}
+	serviceRefusedAdmission(t, l, paidPrepare(t, l.paidFixture))
+	if got := scopes(); len(got) != 2 || got[1] != "agent" {
+		t.Fatalf("second refusal: %v, want [colony agent]", got)
+	}
+	through := l.store.Durable()
+	serviceRefusedAdmission(t, l, paidPrepare(t, l.paidFixture))
+	if l.store.Durable() != through {
+		t.Fatal("a refusal with both members open appended")
+	}
+	// The credential and grant scopes stay below their ceilings throughout.
+	for _, e := range serviceObservations(t, l.service) {
+		if e.Cause.ScopeKind != "colony" && e.Cause.ScopeKind != "agent" {
+			t.Fatalf("a scope below its ceiling was recorded: %+v", e.Cause)
+		}
+	}
+}
+
+// testServiceCredentialWorkset: with the loop registry enabled, an exhausted
+// credential scope is money loss exactly when every configured binding and
+// every admitted, undispatched attempt of the agent is on it. Another agent's
+// binding is never part of the workset.
+func testServiceCredentialWorkset(t *testing.T, incomplete bool) {
+	var posts atomic.Int64
+	f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+		posts.Add(1)
+		model, _ := turnRequest(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, turnAnthropic(model, nil, "answer"))
+	}, nil)
+	// An admitted call in the agent's other context, never dispatched.
+	other := serviceWorkView(t, f.paidFixture, serviceOtherContext(t, f.paidFixture), 1)
+	other.admit(t, paidPrepare(t, other))
+	// Another agent's binding on the same credential scope.
+	stranger := serviceSecondAgent(t, f.paidFixture, 2)
+	strangerSetting := f.setting
+	strangerSetting.Binding = bindingOf(stranger.origin)
+	settings := []LoopContextSettings{strangerSetting}
+	if incomplete {
+		moved := f.setting
+		moved.Binding, moved.CredentialScopeID = bindingOf(other.origin), uuid.NewV7()
+		settings = append(settings, moved)
+	}
+	scope := ledger.PaidScope{Kind: "credential", ID: f.credential.ScopeID}
+	f.liveSpend(t, scope, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000000", PeriodKind: "utc_day"})
+	f.enable(t, settings...)
+	_, start := f.send(t)
+	continuationWait(t, f, start.TurnID, "paid_prepare")
+	es := serviceObservations(t, f.service)
+	if incomplete {
+		if len(es) != 0 {
+			t.Fatalf("an incomplete workset recorded credential money loss: %+v", es)
+		}
+		return
+	}
+	if len(es) != 1 || es[0].Source.Kind != "money_refusal" || es[0].Cause.ScopeKind != "credential" || es[0].Cause.CredentialScopeID != f.credential.ScopeID || es[0].Source.TurnID != start.TurnID {
+		t.Fatalf("want one credential money E, got %+v", es)
+	}
+	m := es[0].Source.Money
+	if m.Coverage != "complete_workset" || m.EligibleWorkCount == nil || m.FailedWorkCount == nil || *m.EligibleWorkCount != 2 || *m.FailedWorkCount != 2 || m.WorksetSHA256 == (ledger.Digest{}) || posts.Load() != 0 {
+		t.Fatalf("workset witness: coverage=%s eligible=%v failed=%v digest=%v", m.Coverage, serviceCount(m.EligibleWorkCount), serviceCount(m.FailedWorkCount), m.WorksetSHA256)
+	}
+}
+
+// serviceCount renders an optional witness count for a failure message.
+func serviceCount(n *int64) any {
+	if n == nil {
+		return "absent"
+	}
+	return *n
 }

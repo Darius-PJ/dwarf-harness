@@ -153,8 +153,19 @@ func (s *Service) runServiceTimer(ctx context.Context, worker *serviceTimer) {
 			s.mu.Unlock()
 		case <-timerC:
 			// A failed firing is retained status; failing members are stalled
-			// and every other deadline rearms at once.
-			_, _ = s.ReconcileServiceEvidence(ctx, nil)
+			// and every other deadline rearms at once. A poisoned or closing
+			// Service expires nothing, so re-arming would spin: wait for Close
+			// or a wake instead, as after any error before S3.
+			if _, err := s.ReconcileServiceEvidence(ctx, nil); errors.Is(err, ErrPoisoned) || errors.Is(err, ErrClosed) {
+				select {
+				case <-ctx.Done():
+					return
+				case <-worker.wake:
+					s.mu.Lock()
+					worker.stalled = nil
+					s.mu.Unlock()
+				}
+			}
 		}
 	}
 }

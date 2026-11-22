@@ -528,16 +528,24 @@ func (s *Service) recordServiceDemandLocked(ctx context.Context, e ledger.Runtim
 // planner refused a paid call with budget_exposure, from the book at this
 // prefix. Only an enabled finite colony, agent or credential scope with
 // occupied >= ceiling counts; a credential scope also needs the enabled
-// registry to show all of the agent's paid work on it. Nothing is reserved,
-// charged or released, and every other refusal writes nothing.
+// registry to show all of the agent's paid work on it. One refusal records the
+// first such scope, in admission order, whose cause has no open member for
+// this agent (PM fix-1 answer 1). Nothing is reserved, charged or released,
+// and every other refusal writes nothing.
 func (s *Service) serviceMoneyRefusalLocked(ctx context.Context, refusal error, origin ledger.Origin, turn uuid.UUID, admission ledger.RuntimePaidReserved, command uuid.UUID, sub ledger.PaidSubmission) {
 	var busy *BusyError
 	if !errors.As(refusal, &busy) || busy.Reason != "budget_exposure" || !validID(turn) {
 		return
 	}
 	// The hook runs on every refusal, including each wake of a parked turn.
-	// Without a candidate it reads no history and samples no clock.
-	if !s.serviceMoneyCandidateLocked(origin.AgentID, admission) {
+	// Without a candidate scope it reads no history and samples no clock.
+	var candidates []serviceMoneyCandidate
+	for _, scope := range admission.Scopes {
+		if c, ok := s.serviceMoneyCandidateLocked(origin.AgentID, admission, scope); ok {
+			candidates = append(candidates, c)
+		}
+	}
+	if len(candidates) == 0 {
 		return
 	}
 	digest, err := paidDigest(sub)
@@ -552,32 +560,8 @@ func (s *Service) serviceMoneyRefusalLocked(ctx context.Context, refusal error, 
 		if err != nil {
 			return err
 		}
-		for _, scope := range admission.Scopes {
-			account := s.p.book.paid[scope]
-			if scope.Kind != "colony" && scope.Kind != "agent" && scope.Kind != "credential" || account.version == 0 || !account.terms.Enabled || account.terms.Mode != "finite" {
-				continue
-			}
-			first := ledger.ServiceMoney{Scope: scope, Coverage: "mandatory_scope"}
-			cause := ledger.ServiceCauseSpec{Family: "money", Code: "owner_money_exhausted", ScopeKind: scope.Kind}
-			switch scope.Kind {
-			case "agent":
-				cause.AgentID = scope.ID
-			case "credential":
-				items, registry := s.serviceWorksetLocked(origin.AgentID)
-				failed := 0
-				for _, item := range items {
-					if item.CredentialScopeID == scope.ID {
-						failed++
-					}
-				}
-				if !registry || len(items) == 0 || failed != len(items) {
-					continue
-				}
-				first.Coverage, first.WorksetSHA256 = "complete_workset", serviceWorksetDigest(items)
-				first.EligibleWorkCount, first.FailedWorkCount = new(int64(len(items))), new(int64(failed))
-				cause.Provider, cause.CredentialScopeID = admission.Request.Provider, scope.ID
-			}
-			witness, available, err := s.serviceMoneyWitness(ctx, reads, first, now)
+		for _, c := range candidates {
+			witness, available, err := s.serviceMoneyWitness(ctx, reads, c.first, now)
 			if isHistoryNeed(err) {
 				return err
 			}
@@ -585,8 +569,8 @@ func (s *Service) serviceMoneyRefusalLocked(ctx context.Context, refusal error, 
 				continue
 			}
 			id := uuid.NewV7()
-			src := ledger.ServiceSource{Kind: "money_refusal", ObservationID: id, ObservedThrough: int64(s.p.through), CommandID: command, SubmissionSHA256: digest, Origin: new(origin), TurnID: turn, ObservedUTCNS: now, ClockHeld: held, Reason: "money_exhausted", ResetUTCNS: serviceMoneyReset(account.terms.PeriodKind, now), Money: &witness}
-			e, found = ledger.RuntimeServiceObserved{ObservationID: id, AgentID: origin.AgentID, Cause: &cause, Source: src}, true
+			src := ledger.ServiceSource{Kind: "money_refusal", ObservationID: id, ObservedThrough: int64(s.p.through), CommandID: command, SubmissionSHA256: digest, Origin: new(origin), TurnID: turn, ObservedUTCNS: now, ClockHeld: held, Reason: "money_exhausted", ResetUTCNS: serviceMoneyReset(c.period, now), Money: &witness}
+			e, found = ledger.RuntimeServiceObserved{ObservationID: id, AgentID: origin.AgentID, Cause: new(c.cause), Source: src}, true
 			return nil
 		}
 		return nil
@@ -600,40 +584,58 @@ func (s *Service) serviceMoneyRefusalLocked(ctx context.Context, refusal error, 
 	}
 }
 
-// serviceMoneyCandidateLocked is the refusal hook's in-memory pre-check: some
-// enabled finite colony, agent or credential scope of the admission is
-// exhausted in its book's current period, and the agent has no pending or
-// lost member for that scope's cause (a repeat appends nothing anyway). A
+// serviceMoneyCandidate is one scope the refusal hook may record: its cause,
+// the witness's coverage fields and the scope's period kind.
+type serviceMoneyCandidate struct {
+	cause  ledger.ServiceCauseSpec
+	first  ledger.ServiceMoney
+	period string
+}
+
+// serviceMoneyCandidateLocked is the in-memory test of one admission scope
+// before any witness: an enabled finite colony, agent or credential scope,
+// exhausted in its book's current period, whose cause has no pending or lost
+// member for the agent (a repeat appends nothing), and, for a credential
+// scope, with the enabled registry showing all of the agent's work on it. A
 // book whose period has since rolled over settled nothing in the new period,
 // so its new occupancy is only the carried hold and cannot exceed this one.
-func (s *Service) serviceMoneyCandidateLocked(agent uuid.UUID, admission ledger.RuntimePaidReserved) bool {
-	for _, scope := range admission.Scopes {
-		a := s.p.book.paid[scope]
-		if scope.Kind != "colony" && scope.Kind != "agent" && scope.Kind != "credential" || a.version == 0 || !a.terms.Enabled || a.terms.Mode != "finite" || a.terms.CeilingMicros == nil {
-			continue
-		}
-		if paidOccupied(a, a.period).Cmp(big.NewInt(*a.terms.CeilingMicros)) < 0 {
-			continue
-		}
-		cause := ledger.ServiceCauseSpec{Family: "money", Code: "owner_money_exhausted", ScopeKind: scope.Kind}
-		switch scope.Kind {
-		case "agent":
-			cause.AgentID = scope.ID
-		case "credential":
-			cause.Provider, cause.CredentialScopeID = admission.Request.Provider, scope.ID
-		}
-		key, err := cause.Key()
-		if err != nil {
-			return true
-		}
+func (s *Service) serviceMoneyCandidateLocked(agent uuid.UUID, admission ledger.RuntimePaidReserved, scope ledger.PaidScope) (serviceMoneyCandidate, bool) {
+	a := s.p.book.paid[scope]
+	if scope.Kind != "colony" && scope.Kind != "agent" && scope.Kind != "credential" || a.version == 0 || !a.terms.Enabled || a.terms.Mode != "finite" || a.terms.CeilingMicros == nil {
+		return serviceMoneyCandidate{}, false
+	}
+	if paidOccupied(a, a.period).Cmp(big.NewInt(*a.terms.CeilingMicros)) < 0 {
+		return serviceMoneyCandidate{}, false
+	}
+	c := serviceMoneyCandidate{cause: ledger.ServiceCauseSpec{Family: "money", Code: "owner_money_exhausted", ScopeKind: scope.Kind}, first: ledger.ServiceMoney{Scope: scope, Coverage: "mandatory_scope"}, period: a.terms.PeriodKind}
+	switch scope.Kind {
+	case "agent":
+		c.cause.AgentID = scope.ID
+	case "credential":
+		c.cause.Provider, c.cause.CredentialScopeID = admission.Request.Provider, scope.ID
+	}
+	if key, err := c.cause.Key(); err == nil {
 		if id, ok := s.p.service.keys[key]; ok {
 			if phase := s.p.service.members[serviceMemberKey{agent, id}].snapshot.Phase; phase == "pending" || phase == "lost" {
-				continue
+				return serviceMoneyCandidate{}, false
 			}
 		}
-		return true
 	}
-	return false
+	if scope.Kind == "credential" {
+		items, registry := s.serviceWorksetLocked(agent)
+		failed := 0
+		for _, item := range items {
+			if item.CredentialScopeID == scope.ID {
+				failed++
+			}
+		}
+		if !registry || len(items) == 0 || failed != len(items) {
+			return serviceMoneyCandidate{}, false
+		}
+		c.first.Coverage, c.first.WorksetSHA256 = "complete_workset", serviceWorksetDigest(items)
+		c.first.EligibleWorkCount, c.first.FailedWorkCount = new(int64(len(items))), new(int64(failed))
+	}
+	return c, true
 }
 
 // serviceMoneyReset is the next UTC period boundary; a lifetime ceiling has none.
@@ -798,10 +800,15 @@ func (r *loopRuntime) serviceProcessRefusal(t *loopTurn, err error) {
 	s := r.service
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Where the Owner proves no tree closure no process cause can exist or
+	// clear, so the native refusal stands alone with no barrier (D138;
+	// clarification answer 1(d)). Otherwise the barrier holds for the rest of
+	// the incarnation, also for an unbound turn or a repeat refusal.
+	if !r.workspace.ProcessProofSupported() {
+		return
+	}
 	s.serviceProcessBlocked = true
-	// Where the Owner proves no tree closure the cause could never clear, so
-	// the native refusal stands alone (D138; clarification answer 1(d)).
-	if !r.workspace.ProcessProofSupported() || t.binding == nil {
+	if t.binding == nil {
 		return
 	}
 	now, held, sampleErr := s.sampleServiceLocked()
@@ -849,7 +856,9 @@ func (s *Service) serviceHostClearsLocked(ctx context.Context, reports ServiceHo
 			}
 			src.Reason = "integrity_verified"
 		case "process_unconfirmed":
-			if len(reports.ProcessClosures) == 0 {
+			// A refusal this incarnation already classified postdates the
+			// Open-time closures, so they no longer prove closure.
+			if len(reports.ProcessClosures) == 0 || s.serviceProcessBlocked {
 				continue
 			}
 			first := reports.ProcessClosures[0]

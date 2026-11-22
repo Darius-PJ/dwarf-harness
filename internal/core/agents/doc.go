@@ -310,13 +310,15 @@
 // Money demand is a budget_exposure refusal at admission or dispatch whose
 // mandatory colony or agent scope is exhausted, or whose credential scope is
 // exhausted under an enabled exhaustive registry. occupied+quote > ceiling
-// alone, task and grant ceilings are no cause. A refusal with no exhausted
-// candidate in the current book, or whose member is already pending or lost,
-// reads no history and samples no clock. A successful admission records
-// budget_available. A credential-scope clear restates its activating refusal's
-// workset (the agent's enabled loop bindings and admitted, undispatched
-// attempts), digested as SHA-256 over the sorted compact JSON items. At due a
-// disabled or unconfigured money scope is unavailable: its member expires.
+// alone, task and grant ceilings are no cause. One refusal records the first
+// qualifying scope in admission order whose cause has no open member for the
+// agent. A scope below its ceiling in the current book, or whose member is
+// already pending or lost, costs no history read and no clock sample. A
+// successful admission records budget_available. A credential-scope clear
+// restates its activating refusal's workset (the agent's enabled loop bindings
+// and admitted, undispatched attempts), digested as SHA-256 over the sorted
+// compact JSON items. At due a disabled or unconfigured money scope is
+// unavailable: its member expires.
 //
 // Integrity demand is an IntegrityIssue refusing the agent's own live work: a
 // refused turn admission, a private effect whose command ID is a running loop
@@ -329,18 +331,21 @@
 // Process demand is a bound turn's live workspace call (finish commit,
 // merge-back, the file tool's three workspace calls) whose error
 // workspace.ClassifyExecutionFailure reports blocked, recorded only where
-// ProcessProofSupported. The refusal sets serviceProcessBlocked, which blocks
-// execution permits for the rest of the incarnation. process_closed comes only
+// ProcessProofSupported. There the refusal sets serviceProcessBlocked, which
+// blocks execution permits for the rest of the incarnation; elsewhere no
+// barrier is set, since no process cause can exist. process_closed comes only
 // from the first ServiceHostReports.ProcessClosures entry, with its RunID and
-// Proof. Neither clear restores.
+// Proof, and never after this incarnation classified a refusal. Neither clear
+// restores.
 //
 // A refusal or cause_clear E that can no longer change membership (a repeat,
 // or one older than the generation or cause version it meets) is done
 // without an append. The timer arms from a raw reviewClock sample, skips due
 // members whose evidence is held, and continues past members whose expiry
-// fails at the same wake; those stall until the next wake. While the service
-// clock holds at its floor, a completion's sample may not be strictly after
-// onset, and such a call restores nothing.
+// fails at the same wake; those stall until the next wake. A poisoned or
+// closing Service expires nothing, so the timer then waits for a wake or
+// Close. While the service clock holds at its floor, a completion's sample may
+// not be strictly after onset, and such a call restores nothing.
 //
 // # Scoped authority, tasks and accounting
 //

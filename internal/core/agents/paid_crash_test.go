@@ -514,11 +514,14 @@ func TestPaidCrashChild(t *testing.T) {
 		// A complete F3-91 group (its command, service records and service
 		// receipt) is the exhausted cap's evidence, not a paid transition;
 		// every other non-paid group still fails the run.
-		service := d[len(d)-1].Type == ledger.TypeRuntimeServiceReceipt
+		service, commands := d[len(d)-1].Type == ledger.TypeRuntimeServiceReceipt, 0
 		for _, r := range d {
+			if r.Type == ledger.TypeCommand {
+				commands++
+			}
 			service = service && (r.Type == ledger.TypeCommand || isServiceType(r.Type))
 		}
-		if service {
+		if service && commands == 1 {
 			return d
 		}
 		if d[len(d)-1].Type != ledger.TypeRuntimePaidReceipt {

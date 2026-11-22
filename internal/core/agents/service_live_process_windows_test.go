@@ -134,13 +134,17 @@ func TestServiceProcessFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	var signal serviceProcessSignal
-	decodeErr := gob.NewDecoder(stdout).Decode(&signal)
+	var seen bytes.Buffer
+	decodeErr := gob.NewDecoder(io.TeeReader(stdout, &seen)).Decode(&signal)
+	if decodeErr != nil {
+		// A failing child prints its own assertion and exits; drain the rest
+		// of its output before Wait closes the pipe.
+		_, _ = io.Copy(&seen, stdout)
+	}
 	_ = cmd.Process.Kill()
 	waitErr := cmd.Wait()
 	if decodeErr != nil {
-		// The child's own assertion is in its output.
-		out, _ := io.ReadAll(stdout)
-		t.Fatalf("refusal child failed: %v %v\n%s%s", decodeErr, waitErr, out, stderr.Bytes())
+		t.Fatalf("refusal child failed: %v %v\n%s%s", decodeErr, waitErr, seen.Bytes(), stderr.Bytes())
 	}
 	if relative, err := filepath.Rel(container, signal.Root); err != nil || strings.HasPrefix(relative, "..") {
 		t.Fatal("child root escaped its container")
@@ -187,8 +191,10 @@ func TestServiceProcessFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	es := serviceObservations(t, s)
-	clear := es[len(es)-1]
-	if len(es) != 2 || clear.Source.Reason != "process_closed" || clear.Source.ExecutionRunID != report.ProcessClosures[0].RunID || clear.Source.ExecutionProof != report.ProcessClosures[0].Proof || serviceCountRecords(t, s, ledger.TypeRuntimeServiceCauseChanged) != 2 {
+	if len(es) != 2 {
+		t.Fatalf("want the refusal and one clear, got %d observations", len(es))
+	}
+	if clear := es[1]; clear.Source.Reason != "process_closed" || clear.Source.ExecutionRunID != report.ProcessClosures[0].RunID || clear.Source.ExecutionProof != report.ProcessClosures[0].Proof || serviceCountRecords(t, s, ledger.TypeRuntimeServiceCauseChanged) != 2 {
 		t.Fatalf("closure clear witness: %+v", es)
 	}
 	if v, _ := s.ServiceStatus(context.Background(), signal.Agent); v.State != "lost" {

@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"sync/atomic"
@@ -100,6 +101,13 @@ func TestServiceRestoration(t *testing.T) {
 				}
 			}
 		})
+	}
+	for _, left := range []string{"", "binding", "admission"} {
+		name := "all_work_moved"
+		if left != "" {
+			name += "_" + left + "_left"
+		}
+		t.Run(name, func(t *testing.T) { t.Parallel(); testServiceAllWorkMoved(t, left) })
 	}
 	t.Run("other_credential_version", func(t *testing.T) {
 		t.Parallel()
@@ -321,5 +329,112 @@ func testServiceSameHandleRetry(t *testing.T) {
 	}
 	if successes != 1 || l.status(t).State != "available" || l.posts.Load() != 2 {
 		t.Fatalf("same-handle retry: successes=%d state=%s posts=%d", successes, l.status(t).State, l.posts.Load())
+	}
+}
+
+// serviceRouteOnNewScope binds a credential at a new scope, configures a route
+// on it with the fixture's profile, grants the origin binding paid calls on it
+// and returns the fixture's loop setting moved onto that route and scope.
+func serviceRouteOnNewScope(t *testing.T, f *turnFixture) LoopContextSettings {
+	t.Helper()
+	ctx, owner := context.Background(), bindingOf(f.origin)
+	scope := uuid.NewV7()
+	if _, err := f.service.BindCredential(ctx, owner, CredentialBinding{CommandID: uuid.NewV7(), ScopeID: scope, ExpectedVersion: 0, Provider: f.route.Profile.Provider, CredentialVersion: uuid.NewV7(), SourceKind: "environment", SourceLocator: paidTestEnvironment}); err != nil {
+		t.Fatal(err)
+	}
+	profile := providerProfile(f.route.Profile)
+	profile.CapabilityVersion += "-moved"
+	raw, err := profile.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeID := uuid.NewV7()
+	if _, err := f.service.ConfigurePaidRoute(ctx, owner, PaidRouteConfiguration{CommandID: uuid.NewV7(), RouteID: routeID, ExpectedVersion: 0, Enabled: true, CredentialScopeID: scope, Profile: raw}); err != nil {
+		t.Fatal(err)
+	}
+	grant := uuid.NewV7()
+	if _, err := f.service.IssueGrant(ctx, owner, GrantIssue{CommandID: uuid.NewV7(), ExpectedAuthorityVersion: uint64(f.service.p.authority), Spec: GrantSpec{GrantID: grant, Grantee: owner, Operations: []string{"model.call"}, Resources: []ledger.Resource{{Kind: "external", ResourceKey: "paid-route/" + routeID.String()}}, DataClass: "external", Recipients: []Binding{owner}, Limits: paidPhysicalCapacity(), Lifetime: "until_revoked"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, spend := range []ledger.PaidScope{{Kind: "credential", ID: scope}, {Kind: "grant", ID: grant}} {
+		f.liveSpend(t, spend, SpendTermsInput{Enabled: true, Mode: "finite", USD: "100.000000", PeriodKind: "utc_day"})
+	}
+	setting := f.setting
+	setting.RouteID, setting.ExpectedRouteVersion, setting.CredentialScopeID = routeID, f.service.p.paidRoutes[routeID].Version, scope
+	return setting
+}
+
+// testServiceAllWorkMoved: a provider cause on credential scope A, then a
+// qualifying success on scope B. The member is restored by all_work_moved
+// only when no configured binding and no admitted, undispatched attempt of
+// the agent is left on A; with one left the permit is blocked.
+func testServiceAllWorkMoved(t *testing.T, left string) {
+	var fail atomic.Bool
+	fail.Store(true)
+	denied := serviceProviderError("anthropic", http.StatusUnauthorized, "authentication_error", nil)
+	f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
+		if fail.Load() {
+			denied(w, r)
+			return
+		}
+		model, _ := turnRequest(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, turnAnthropic(model, nil, "answer on the moved scope"))
+	}, nil)
+	// The failure on scope A: a direct call from the agent's other context.
+	other := serviceWorkView(t, f.paidFixture, serviceOtherContext(t, f.paidFixture), 1)
+	r := paidPrepare(t, other)
+	other.admit(t, r)
+	out, err := f.service.DispatchPaid(context.Background(), PaidDispatch{CommandID: uuid.NewV7(), AttemptID: r.AttemptID, ExpectedVersion: 1})
+	if err == nil {
+		_, err = f.service.RecordPaidObservation(context.Background(), PaidObservation{CommandID: uuid.NewV7(), AttemptID: r.AttemptID, ExpectedVersion: 2, Observed: out.ObservedPaidCall})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := func() string {
+		v, err := f.service.ServiceStatus(context.Background(), f.origin.AgentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.State
+	}
+	if status() != "lost" {
+		t.Fatal("the denial on scope A did not lose the member")
+	}
+	if left == "admission" {
+		other.admit(t, paidPrepare(t, other))
+	}
+	fail.Store(false)
+	onA := f.setting
+	f.setting = serviceRouteOnNewScope(t, f)
+	var extra []LoopContextSettings
+	if left == "binding" {
+		onA.Binding = bindingOf(other.origin)
+		extra = append(extra, onA)
+	}
+	f.enable(t, extra...)
+	_, start := f.send(t)
+	if result, _ := f.finished(t, start.TurnID); result.Outcome != "finished" {
+		t.Fatalf("turn on scope B: %+v", result)
+	}
+	var successes []ledger.RuntimeServiceObserved
+	for _, e := range serviceObservations(t, f.service) {
+		if e.Source.Kind == "successful_call" {
+			successes = append(successes, e)
+		}
+	}
+	if left != "" {
+		if status() != "lost" || len(successes) != 0 {
+			t.Fatalf("all_work_moved selected with a %s still on the failed scope: state=%s successes=%d", left, status(), len(successes))
+		}
+		return
+	}
+	if status() != "available" || len(successes) != 1 {
+		t.Fatalf("moved work did not restore: state=%s successes=%d", status(), len(successes))
+	}
+	src := successes[0].Source
+	if src.Reason != "all_work_moved" || src.FailedWorkCount == nil || *src.FailedWorkCount != 0 || src.WorksetSHA256 == (ledger.Digest{}) {
+		t.Fatalf("all_work_moved witness: reason=%s failed=%v digest=%v", src.Reason, serviceCount(src.FailedWorkCount), src.WorksetSHA256)
 	}
 }

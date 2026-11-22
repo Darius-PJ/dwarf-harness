@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"uuid"
@@ -127,7 +128,8 @@ func TestServiceIntegrityDemand(t *testing.T) {
 
 // TestServiceProcessSeam: an unconfirmed-class error at the finish commit is
 // process demand only where the Owner proves tree closure; elsewhere it writes
-// no F3-91 record. The turn's native outcome is the same either way.
+// no F3-91 record and sets no barrier. The turn's native outcome is the same
+// either way.
 func TestServiceProcessSeam(t *testing.T) {
 	t.Parallel()
 	f := newContinuationCapture(t, true, nil)
@@ -151,23 +153,30 @@ func TestServiceProcessSeam(t *testing.T) {
 	if state != "recovery_pending" || !errors.Is(terminal, gitprocess.ErrUnconfirmed) {
 		t.Fatalf("native finish refusal changed: state=%s err=%v", state, terminal)
 	}
+	// Per system (PM fix-1 decision): only the Windows Owner proves tree
+	// closure (gitprocess/owner.go:93). There the classified refusal records
+	// the demand and sets the barrier; elsewhere it writes no F3-91 record and
+	// sets no barrier, since no process cause can exist there.
+	windows := runtime.GOOS == "windows"
+	if f.workspace.ProcessProofSupported() != windows {
+		t.Fatalf("tree proof on %s = %v", runtime.GOOS, !windows)
+	}
 	es := serviceObservations(t, f.service)
-	if !f.workspace.ProcessProofSupported() {
-		if len(es) != 0 {
-			t.Fatalf("process demand recorded without tree proof: %d", len(es))
-		}
-	} else if len(es) != 1 || es[0].Source.Kind != "process_refusal" || es[0].Source.ExecutionRunID != (uuid.UUID{}) || es[0].Source.TurnID != started.TurnID {
+	if !windows && len(es) != 0 {
+		t.Fatalf("process demand recorded without tree proof: %d", len(es))
+	}
+	if windows && (len(es) != 1 || es[0].Source.Kind != "process_refusal" || es[0].Source.ExecutionRunID != (uuid.UUID{}) || es[0].Source.TurnID != started.TurnID) {
 		t.Fatalf("bare unconfirmed class witness: %+v", es)
 	}
-	// PM answer 7: the classified refusal blocks execution permits for this
-	// incarnation only.
+	// PM answer 7: where it exists, the barrier blocks execution permits for
+	// this incarnation only.
 	blocked := func(s *Service) bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		return s.serviceExecutionBarrierLocked(ledger.ServiceCauseSpec{Family: "execution", Code: "process_unconfirmed", ScopeKind: "colony"})
 	}
-	if blocked(f.service) != f.workspace.ProcessProofSupported() {
-		t.Fatal("process barrier does not follow the classified refusal")
+	if blocked(f.service) != windows {
+		t.Fatalf("process barrier on %s = %v after the classified refusal", runtime.GOOS, !windows)
 	}
 	if err := f.service.Close(); !errors.Is(err, gitprocess.ErrUnconfirmed) {
 		t.Fatalf("shutdown lost the finish refusal: %v", err)
