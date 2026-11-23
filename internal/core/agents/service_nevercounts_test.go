@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
@@ -194,7 +195,7 @@ func TestServiceNeverCounts(t *testing.T) {
 			}
 		})
 		work := f.workSetting(t, 51000, "Service invariants")
-		f.raiseDispatchBound(t)
+		f.raiseDispatchBound(t, &work)
 		f.enable(t, work)
 		started, err := f.view.Do(context.Background(), turnMessage(work.Binding.ContextID, "continue"))
 		if err != nil {
@@ -208,11 +209,11 @@ func TestServiceNeverCounts(t *testing.T) {
 		s := f.service
 		pf := *f.paidFixture
 		pf.origin.ContextID, pf.turn = work.Binding.ContextID, started.TurnID
-		e := serviceMoneyRefusal(t, &pf, s.p.reviewFloor)
-		var clock atomic.Int64
-		clock.Store(s.p.reviewFloor)
+		e := serviceMoneyRefusal(t, &pf, time.Now().UTC().UnixNano())
+		var offset atomic.Int64
 		s.mu.Lock()
-		s.deps.reviewClock = func() (int64, error) { return clock.Load(), nil }
+		// The clock follows real time: a sample below the live sample, the floor or a later commit time refuses, and the loop then stops the held turn.
+		s.deps.reviewClock = func() (int64, error) { return time.Now().UTC().UnixNano() + offset.Load(), nil }
 		s.mu.Unlock()
 		baseline := serviceNativeBaseline(t, s)
 		before := serviceNativeViews(t, s)
@@ -239,7 +240,7 @@ func TestServiceNeverCounts(t *testing.T) {
 			t.Fatalf("fixture did not hold a native owner and paid slot: phase=%s occupancy=%v", turn.SavedPhase, occupied)
 		}
 		serviceRecord(t, s, e)
-		clock.Store(e.Source.ObservedUTCNS + ledger.ServiceGraceNS)
+		offset.Store(ledger.ServiceGraceNS + int64(time.Second))
 		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
