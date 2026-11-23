@@ -96,13 +96,15 @@ func newTurnFixture(t testing.TB, provider string, handler http.HandlerFunc, con
 	setting := LoopContextSettings{Binding: binding, RouteID: f.route.RouteID, ExpectedRouteVersion: f.route.Version, CredentialScopeID: f.credential.ScopeID, MaxOutputTokens: 4096, DisplayTitle: "General work", TimeoutMS: 600000, Policy: TurnPolicy{Schema: 1, MaxModelCalls: 4, MaxToolCalls: 8, MaxArgumentBytes: 64 << 10, MaxResultBytes: 64 << 10, MaxDiscoveryEntries: 8, MaxSearchEntries: 4096, MaxSearchMatches: 100, MaxLiveBytes: 64 << 10}}
 	return &turnFixture{paidFixture: f, workspace: ws, setting: setting, privateGrant: private}
 }
+
+// raiseDispatchBound lifts the dispatch, TLS-handshake and response-header bounds for rows that don't test them.
 func (f *turnFixture) raiseDispatchBound(t testing.TB, settings ...*LoopContextSettings) {
 	t.Helper()
 	f.service.mu.Lock()
 	defer f.service.mu.Unlock()
 	const bound = 30 * time.Minute
 	limits := f.service.paid.limits
-	limits.DispatchTimeout = bound
+	limits.DispatchTimeout, limits.TLSHandshakeTimeout, limits.ResponseHeaderTimeout = bound, bound, bound
 	transportLimits := providers.Limits{MaxActivePaid: limits.MaxActivePaid, DispatchTimeout: limits.DispatchTimeout, TLSHandshakeTimeout: limits.TLSHandshakeTimeout, ResponseHeaderTimeout: limits.ResponseHeaderTimeout}
 	transport, err := providers.NewTransportWithRoots(transportLimits, f.service.deps.paidTestRoots, f.service.deps.paidWrapConn)
 	if err != nil {

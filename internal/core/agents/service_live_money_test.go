@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -253,8 +254,22 @@ func testServiceParkedMoney(t *testing.T, row string) {
 			}
 		}
 	})
-	var offset atomic.Int64
-	f.service.deps.reviewClock = func() (int64, error) { return time.Now().UTC().UnixNano() + offset.Load(), nil }
+	// The row's clock reads a held instant plus the row's own offset, never
+	// real time: "before due" must not end because real time reached the
+	// grace while the parked turn re-parks (run #137). Each reading adds one
+	// nanosecond, so a later sample is still strictly later, as a completion
+	// needs. The instant leads real time by an hour, longer than any test
+	// binary's timeout, so no commit's real event time lifts the service and
+	// paid floor (replay.go:710) above it: the service sample would hold at
+	// that floor (service_timer.go:90) and the paid clock would refuse
+	// (paid_live.go:124).
+	held := time.Now().UTC().Add(time.Hour).UnixNano()
+	var offset, readings atomic.Int64
+	f.service.deps.reviewClock = func() (int64, error) { return held + offset.Load() + readings.Add(1), nil }
+	// The parked turn re-parks continuously; with GOMAXPROCS=1 and the other
+	// parked rows in parallel, the restoring call's real dispatch bound fired
+	// before its intent. Real-time transport bounds are not under test here.
+	f.raiseDispatchBound(t, &f.setting)
 	colony := ledger.PaidScope{Kind: "colony"}
 	f.liveSpend(t, colony, SpendTermsInput{Enabled: true, Mode: "finite", USD: "0.000000", PeriodKind: "utc_day"})
 	f.enable(t)
@@ -273,7 +288,7 @@ func testServiceParkedMoney(t *testing.T, row string) {
 		return v
 	}
 	atDue := func() {
-		offset.Store(due - time.Now().UTC().UnixNano() + int64(time.Second))
+		offset.Store(due - held + int64(time.Second))
 		if _, err := f.service.ReconcileServiceEvidence(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -315,7 +330,7 @@ func testServiceParkedMoney(t *testing.T, row string) {
 			t.Fatalf("cancel outcome: %+v", result)
 		}
 		if v := status(); len(v.Pending) != 1 {
-			t.Fatalf("an owner cancel withdrew the member: %+v", v)
+			t.Fatalf("the member is not pending after an owner cancel: %s; %+v", serviceMemberStates(v), v)
 		}
 		want := "lost"
 		if row == "owner_cancel_limit_raised_before_due" {
@@ -458,6 +473,22 @@ func testServiceCredentialWorkset(t *testing.T, incomplete bool) {
 	if m.Coverage != "complete_workset" || m.EligibleWorkCount == nil || m.FailedWorkCount == nil || *m.EligibleWorkCount != 2 || *m.FailedWorkCount != 2 || m.WorksetSHA256 == (ledger.Digest{}) || posts.Load() != 0 {
 		t.Fatalf("workset witness: coverage=%s eligible=%v failed=%v digest=%v", m.Coverage, serviceCount(m.EligibleWorkCount), serviceCount(m.FailedWorkCount), m.WorksetSHA256)
 	}
+}
+
+// serviceMemberStates names each member's list, phase and cause condition for
+// a failure message, so an expired member (lost, active) is not reported as a
+// withdrawn one.
+func serviceMemberStates(v ServiceView) string {
+	var out []string
+	for _, list := range []struct {
+		name    string
+		members []ServiceCauseView
+	}{{"active", v.Active}, {"pending", v.Pending}, {"unsupported", v.Unsupported}} {
+		for _, m := range list.members {
+			out = append(out, fmt.Sprintf("%s: phase=%s condition=%s", list.name, m.Phase, m.Condition))
+		}
+	}
+	return fmt.Sprintf("state=%s members=%v", v.State, out)
 }
 
 // serviceCount renders an optional witness count for a failure message.
