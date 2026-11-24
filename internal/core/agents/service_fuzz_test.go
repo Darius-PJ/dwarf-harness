@@ -222,7 +222,9 @@ func serviceWithdrawalFuzzPrefix(t testing.TB) loopFuzzPrefix {
 func FuzzServiceGroupReplay(f *testing.F) {
 	_, commits := scopedGoldenCommits(f, "91")
 	var builds []func(testing.TB) loopFuzzPrefix
-	operations := map[string]bool{}
+	// members and causes say which shapes the member and cause mutations change.
+	var members, causes []bool
+	operations, shapes := map[string]bool{}, map[string]bool{}
 	for index, commit := range commits {
 		if commit.Records[len(commit.Records)-1].Type != ledger.TypeRuntimeServiceReceipt {
 			continue
@@ -232,6 +234,16 @@ func FuzzServiceGroupReplay(f *testing.F) {
 			f.Fatal("invalid frozen service seed", err)
 		}
 		operations[g.receipt.Submission.Operation] = true
+		// One prefix per distinct record shape: the operation and its record types.
+		shape := g.receipt.Submission.Operation
+		for _, record := range commit.Records {
+			shape += " " + record.Type
+		}
+		if shapes[shape] {
+			continue
+		}
+		shapes[shape] = true
+		members, causes = append(members, g.member != nil), append(causes, g.cause != nil)
 		builds = append(builds, func(t testing.TB) loopFuzzPrefix {
 			fixture, _ := scopedGoldenFixture(t, "91", index)
 			prefix := retainLoopFuzzPrefix(t, fixture)
@@ -240,6 +252,7 @@ func FuzzServiceGroupReplay(f *testing.F) {
 		})
 	}
 	builds = append(builds, serviceWithdrawalFuzzPrefix)
+	members, causes = append(members, false), append(causes, false)
 	operations["service.withdraw"] = true
 	for _, operation := range []string{"service.record", "service.observe", "service.expire", "service.clear", "service.withdraw", "service.complete"} {
 		if !operations[operation] {
@@ -247,11 +260,22 @@ func FuzzServiceGroupReplay(f *testing.F) {
 		}
 	}
 	prefixes := newServiceFuzzPrefixes(f, builds)
-	// Mode-major, so parallel seeds spread across the prefix Services.
-	for mode := byte(0); mode < 12; mode++ {
+	// Every shape replays once unchanged. Each mutation runs once, on a shape
+	// it changes, rotating so parallel seeds spread across the prefix Services.
+	for shape := range builds {
+		f.Add(byte(shape), byte(0), uint64(1), []byte(`{}`))
+	}
+	for mode := byte(1); mode < 12; mode++ {
+		var carriers []int
 		for shape := range builds {
-			f.Add(byte(shape), mode, uint64(1), []byte(`{}`))
+			if (mode != 4 && mode != 5 || members[shape]) && (mode != 6 || causes[shape]) {
+				carriers = append(carriers, shape)
+			}
 		}
+		if len(carriers) == 0 {
+			f.Fatal("no frozen service shape carries mutation", mode)
+		}
+		f.Add(byte(carriers[int(mode)%len(carriers)]), mode, uint64(1), []byte(`{}`))
 	}
 	f.Fuzz(func(t *testing.T, shape, mode byte, value uint64, input []byte) {
 		t.Parallel()

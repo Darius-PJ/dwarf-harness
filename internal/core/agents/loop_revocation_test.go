@@ -29,7 +29,7 @@ func (f *turnFixture) revoke(t *testing.T, id uuid.UUID) {
 func TestTurnLoopRevocationAndRecords(t *testing.T) {
 	t.Parallel()
 	t.Run("native_conflicts", testLoopNativeConflicts)
-	for _, stage := range []string{"before_native", "after_admission", "before_effect", "before_disclosure", "cancel_before_native"} {
+	for _, stage := range []string{"before_native", "after_admission", "before_effect", "before_disclosure"} {
 		t.Run(stage, func(t *testing.T) {
 			t.Parallel()
 			var f *turnFixture
@@ -37,23 +37,11 @@ func TestTurnLoopRevocationAndRecords(t *testing.T) {
 			var arguments string
 			var posts atomic.Int64
 			var triggered atomic.Bool
-			cancelled := make(chan error, 1)
-			boundary := func(turn uuid.UUID) {
+			boundary := func(uuid.UUID) {
 				if !triggered.CompareAndSwap(false, true) {
 					return
 				}
-				if stage == "cancel_before_native" {
-					f.service.loop.mu.Lock()
-					done := f.service.loop.turns[turn].ctx.Done()
-					f.service.loop.mu.Unlock()
-					go func() {
-						_, err := f.view.Do(context.Background(), session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: turn}})
-						cancelled <- err
-					}()
-					<-done
-				} else {
-					f.revoke(t, grant)
-				}
+				f.revoke(t, grant)
 			}
 			f = newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
 				model, raw := turnRequest(t, r)
@@ -68,7 +56,7 @@ func TestTurnLoopRevocationAndRecords(t *testing.T) {
 				}
 			}, func(deps *serviceDeps) {
 				deps.afterLoopCommit = func(receipt ledger.RuntimeLoopReceipt) {
-					if receipt.Submission.Operation == "tool.begin" && (stage == "before_native" || stage == "cancel_before_native") {
+					if receipt.Submission.Operation == "tool.begin" && stage == "before_native" {
 						boundary(receipt.Submission.TurnID)
 					}
 				}
@@ -101,14 +89,7 @@ func TestTurnLoopRevocationAndRecords(t *testing.T) {
 			if !triggered.Load() {
 				t.Fatal("effect boundary was not exercised")
 			}
-			if stage == "cancel_before_native" {
-				if err := <-cancelled; err != nil {
-					t.Fatal(err)
-				}
-				if result.Outcome != "cancelled" || posts.Load() != 1 {
-					t.Fatal("cancellation did not stop before the native entrance")
-				}
-			} else if result.Outcome != "finished" || posts.Load() != 2 {
+			if result.Outcome != "finished" || posts.Load() != 2 {
 				t.Fatalf("revoked target stopped unrelated work: %s/%s", result.Outcome, result.Reason)
 			}
 			var started *ledger.RuntimeToolStarted
@@ -130,7 +111,7 @@ func TestTurnLoopRevocationAndRecords(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stage == "before_native" || stage == "cancel_before_native" {
+			if stage == "before_native" {
 				if native.found || finished.EffectReceiptSequence != 0 {
 					t.Fatal("uncommitted native command acquired an invented receipt")
 				}

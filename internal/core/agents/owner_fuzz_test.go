@@ -26,10 +26,13 @@ func FuzzContinuationGroupReplay(f *testing.F) {
 	if len(prefixes) != 7 {
 		f.Fatal("frozen continuation transitions missing")
 	}
+	// Every shape replays once unchanged; each mutation runs once, rotating
+	// across the shapes.
 	for shape := range prefixes {
-		for mode := byte(0); mode < 12; mode++ {
-			f.Add(byte(shape), mode, uint64(1), []byte(`{}`))
-		}
+		f.Add(byte(shape), byte(0), uint64(1), []byte(`{}`))
+	}
+	for mode := byte(1); mode < 12; mode++ {
+		f.Add(byte(int(mode)%len(prefixes)), mode, uint64(1), []byte(`{}`))
 	}
 	f.Fuzz(func(t *testing.T, shape, mode byte, value uint64, input []byte) {
 		t.Parallel()

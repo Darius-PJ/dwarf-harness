@@ -340,14 +340,19 @@ func testConcurrentMemoryCAS(t *testing.T, provider string) {
 	}
 }
 
+// Shared-memory CAS runs for both providers (ticket 147, criterion 3); the
+// other private runtime rows do not depend on the provider, and
+// TestTurnLoopBothProviders covers each provider's turn.
 func TestTurnLoopConcurrentPrivateRuntime(t *testing.T) {
 	t.Parallel()
 	for _, provider := range []string{"anthropic", "openai"} {
 		t.Run(provider, func(t *testing.T) {
 			t.Parallel()
 			t.Run("shared_memory_cas", func(t *testing.T) { t.Parallel(); testConcurrentMemoryCAS(t, provider) })
-			t.Run("independent_continuations", func(t *testing.T) { t.Parallel(); testIndependentContinuations(t, provider) })
-			t.Run("live_turn_exclusion", func(t *testing.T) { t.Parallel(); testLiveTurnExclusion(t, provider) })
+			if provider == "anthropic" {
+				t.Run("independent_continuations", func(t *testing.T) { t.Parallel(); testIndependentContinuations(t, provider) })
+				t.Run("live_turn_exclusion", func(t *testing.T) { t.Parallel(); testLiveTurnExclusion(t, provider) })
+			}
 		})
 	}
 }

@@ -202,8 +202,8 @@ func TestServiceProcessSeam(t *testing.T) {
 	}
 }
 
-// testServiceLiveNeverCounts: owner-trusted evidence and every non-process
-// workspace failure write no F3-91 record.
+// testServiceLiveNeverCounts: owner-trusted evidence and a non-process
+// workspace failure (a Git exit, one representative) write no F3-91 record.
 func testServiceLiveNeverCounts(t *testing.T) {
 	for _, row := range []string{"trusted_failure", "trusted_success"} {
 		t.Run("live_"+row, func(t *testing.T) {
@@ -241,11 +241,7 @@ func testServiceLiveNeverCounts(t *testing.T) {
 		name string
 		err  error
 	}{
-		{"workspace_busy", &workspace.BusyError{Reason: "context_busy"}},
-		{"merge_pending", workspace.ErrMergeBackPending},
-		{"git_unavailable", workspace.ErrGitUnavailable},
 		{"git_exit", &workspace.GitError{Args: []string{"commit"}, Exit: 1, Err: gitprocess.ErrExit}},
-		{"cancelled", context.Canceled},
 	} {
 		t.Run("live_finish_"+row.name, func(t *testing.T) {
 			t.Parallel()

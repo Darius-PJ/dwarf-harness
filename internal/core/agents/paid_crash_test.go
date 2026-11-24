@@ -138,9 +138,22 @@ func testPaidInjectedCrashRecovery(t *testing.T, provider string) {
 		t.Fatal(err)
 	}
 	seed.store = nil
+	// Reservation, release, acknowledgement and torn-tail boundaries do not
+	// depend on the provider: anthropic runs them, and OpenAI keeps the
+	// stream, post, evidence and settlement rows.
+	providerIndependent := map[string]bool{
+		"before_publication": true, "before_reservation": true, "torn_reservation": true,
+		"reservation_before_projection": true, "reservation_lost_ack": true, "torn_intent": true, "torn_result": true,
+		"release_before_projection": true, "release_lost_ack": true,
+		"result_lost_ack": true, "unknown_lost_ack": true, "overrun_lost_ack": true, "correction_lost_ack": true,
+		"acknowledgement_before_projection": true, "acknowledgement_lost_ack": true,
+	}
 	for _, row := range paidCrashRows() {
 		if provider == "openai" && strings.HasPrefix(row.name, "no_charge_") {
 			continue // OpenAI has no no-charge rule.
+		}
+		if provider == "openai" && providerIndependent[row.name] {
+			continue
 		}
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()

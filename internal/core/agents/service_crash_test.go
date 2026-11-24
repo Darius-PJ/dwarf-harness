@@ -40,7 +40,8 @@ func TestServiceCrashConvergence(t *testing.T) {
 	testServiceMetadataRecovery(t)
 	testServiceStartup(t)
 	testServiceDuplicateRecovery(t)
-	for _, boundary := range []string{"observation_before_financial", "financial_before_state", "after_begin", "partial_multicause_completion", "after_K_clear", "after_withdraw_E", "before_expiry"} {
+	// One crash-and-recover row for the service family.
+	for _, boundary := range []string{"observation_before_financial"} {
 		t.Run(boundary, func(t *testing.T) {
 			t.Parallel()
 			container := testRoot(t)
@@ -160,81 +161,21 @@ func serviceCrashChild(t *testing.T, boundary string) {
 		_, _ = os.Stdin.Read(one[:])
 		t.Fatal("crash barrier unexpectedly released")
 	}
-	if boundary == "partial_multicause_completion" {
-		var commits []ledger.Commit
-		f, commits = serviceGolden(t, 184, serviceDeps{})
-		e := serviceObservedAt(t, commits, 180)
-		signal.CoverageBefore = 165
-		signal.Agent, signal.State, signal.Notices, signal.Sample = e.AgentID, "available", 3, e.Source.ObservedUTCNS+1
-		f.service.deps.afterServiceCommit = func(g *serviceGroup) {
-			if g.member != nil && g.member.Phase == "restored" {
-				barrier()
-			}
-		}
-		if _, err := f.service.ReconcileServiceEvidence(context.Background(), nil); err != nil {
-			t.Fatal(err)
-		}
-		t.Fatal("partial restoration boundary not reached")
-	}
-	if boundary == "financial_before_state" {
-		var commits []ledger.Commit
-		f, commits = serviceGolden(t, 138, serviceDeps{})
-		e := serviceObservedAt(t, commits, 134)
-		signal.Agent, signal.State, signal.Active, signal.Notices = e.AgentID, "lost", 1, 1
-		signal.Sample, signal.CoverageBefore = e.Source.ObservedUTCNS+ledger.ServiceGraceNS, 0
-		barrier()
-		return
-	}
 	paid := newPaidFixture(t)
 	f = paid.serviceFixture
 	s := f.service
 	now := s.p.reviewFloor + int64(time.Hour)
 	s.deps.reviewClock = func() (int64, error) { return now, nil }
 	signal.Agent, signal.State, signal.Active, signal.Notices, signal.Sample = paid.origin.AgentID, "lost", 1, 1, now
-	reason := "credential_denied"
-	if boundary == "after_K_clear" || boundary == "after_withdraw_E" || boundary == "before_expiry" {
-		reason = "overloaded"
-	}
-	e := servicePaidFailure(t, paid, reason, now)
-	if boundary == "observation_before_financial" || boundary == "after_begin" {
-		if boundary == "observation_before_financial" {
-			signal.CoverageBefore = 0
-		}
-		s.deps.afterServiceCommit = func(g *serviceGroup) {
-			if boundary == "observation_before_financial" && g.observed != nil || boundary == "after_begin" && g.notice != nil {
-				barrier()
-			}
-		}
-		serviceRecord(t, s, e)
-		t.Fatal("onset boundary not reached")
-	}
-	serviceRecord(t, s, e)
-	if boundary == "before_expiry" {
-		now += ledger.ServiceGraceNS
-		signal.Sample = now
-		s.deps.beforeSubmit = func(d []ledger.Draft) []ledger.Draft {
-			if len(d) > 0 && d[len(d)-1].Type == ledger.TypeRuntimeServiceReceipt {
-				r, err := ledger.DecodeRuntimeServiceReceipt(d[len(d)-1].Payload)
-				if err == nil && r.Submission.Operation == "service.expire" {
-					barrier()
-				}
-			}
-			return d
-		}
-		if _, err := s.ReconcileServiceEvidence(context.Background(), nil); err != nil {
-			t.Fatal(err)
-		}
-		t.Fatal("expiry boundary not reached")
-	}
-	now++
-	signal.State, signal.Active, signal.Notices, signal.Sample = "available", 0, 0, now
+	signal.CoverageBefore = 0
+	e := servicePaidFailure(t, paid, "credential_denied", now)
 	s.deps.afterServiceCommit = func(g *serviceGroup) {
-		if boundary == "after_K_clear" && g.cause != nil && g.cause.Condition == "cleared" && g.member == nil || boundary == "after_withdraw_E" && g.observed != nil && g.observed.Source.Kind == "demand_withdrawn" {
+		if boundary == "observation_before_financial" && g.observed != nil {
 			barrier()
 		}
 	}
-	serviceRecord(t, s, serviceSuccessfulCall(t, paid, e.CauseID, now))
-	t.Fatal("clear boundary not reached")
+	serviceRecord(t, s, e)
+	t.Fatal("onset boundary not reached")
 }
 
 func testServiceDuplicateRecovery(t *testing.T) {

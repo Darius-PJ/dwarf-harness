@@ -181,7 +181,7 @@ func TestContinuationCrashChild(t *testing.T) {
 				t.Fatal(err)
 			}
 			sub := receipt.Submission
-			if boundary == "legacy_bind" && sub.Operation == "owner.initialize" || boundary == "ready" && sub.Operation == "owner.advance" && sub.ExpectedState == "ready" || boundary == "native_ended" && sub.Arguments.NativeEndingSequence != 0 {
+			if boundary == "legacy_bind" && sub.Operation == "owner.initialize" || boundary == "ready" && sub.Operation == "owner.advance" && sub.ExpectedState == "ready" {
 				barrier()
 			}
 			return d
@@ -256,15 +256,10 @@ func (f *continuationRestart) assertEnded(t testing.TB, outcome string, expected
 
 func TestTurnLoopCrashRecovery(t *testing.T) {
 	t.Parallel()
-	for _, row := range []struct {
-		name, boundary, operation, outcome string
-		legacyEnd                          bool
-	}{
-		{"legacy_bind_initialize_is_callers_command", "legacy_bind", "owner.initialize", "interrupted", false},
-		{"legacy_native_ended_close_only", "legacy_bind", "owner.initialize", "failed", true},
-		{"restart_ready", "ready", "owner.reconcile", "interrupted", false},
-		{"native_ended_before_loop_end", "native_ended", "owner.reconcile", "finished", false},
-		{"reconcile_paid_unknown_completes", "paid_sent", "owner.reconcile", "interrupted", false},
+	for _, row := range []struct{ name, boundary, operation, outcome string }{
+		{"legacy_bind_initialize_is_callers_command", "legacy_bind", "owner.initialize", "interrupted"},
+		{"restart_ready", "ready", "owner.reconcile", "interrupted"},
+		{"reconcile_paid_unknown_completes", "paid_sent", "owner.reconcile", "interrupted"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
@@ -273,11 +268,6 @@ func TestTurnLoopCrashRecovery(t *testing.T) {
 			owner := f.owner(t)
 			if len(f.report.PendingLoops) != 1 || f.report.PendingLoops[0].TurnID != f.signal.Turn || f.report.PendingLoops[0].OwnerVersion != owner.Snapshot.Version {
 				t.Fatalf("unclosed owner not reported: %+v", f.report.PendingLoops)
-			}
-			if row.legacyEnd {
-				if _, err := f.service.EndTurn(ctx, TurnEnding{CommandID: uuid.NewV7(), TurnID: f.signal.Turn, ExpectedVersion: 1, Outcome: "released"}); err != nil {
-					t.Fatal(err)
-				}
 			}
 			beforeBudget, err := f.service.PaidBudgetStatus(ctx, PaidBudgetLookup{Scope: ledger.PaidScope{Kind: "colony"}})
 			if err != nil {

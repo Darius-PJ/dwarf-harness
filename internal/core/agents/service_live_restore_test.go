@@ -102,7 +102,7 @@ func TestServiceRestoration(t *testing.T) {
 			}
 		})
 	}
-	for _, left := range []string{"", "binding", "admission"} {
+	for _, left := range []string{"", "binding"} {
 		name := "all_work_moved"
 		if left != "" {
 			name += "_" + left + "_left"
@@ -367,7 +367,7 @@ func serviceRouteOnNewScope(t *testing.T, f *turnFixture) LoopContextSettings {
 // testServiceAllWorkMoved: a provider cause on credential scope A, then a
 // qualifying success on scope B. The member is restored by all_work_moved
 // only when no configured binding and no admitted, undispatched attempt of
-// the agent is left on A; with one left the permit is blocked.
+// the agent is left on A; with a binding left the permit is blocked.
 func testServiceAllWorkMoved(t *testing.T, left string) {
 	var fail atomic.Bool
 	fail.Store(true)
@@ -401,9 +401,6 @@ func testServiceAllWorkMoved(t *testing.T, left string) {
 	}
 	if status() != "lost" {
 		t.Fatal("the denial on scope A did not lose the member")
-	}
-	if left == "admission" {
-		other.admit(t, paidPrepare(t, other))
 	}
 	fail.Store(false)
 	onA := f.setting

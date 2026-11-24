@@ -89,11 +89,13 @@ func FuzzLoopGroupReplay(f *testing.F) {
 	if len(prefixes) != 4 {
 		f.Fatal("missing frozen loop shapes")
 	}
+	// Every shape replays once unchanged; each mutation runs once, rotating
+	// across the shapes. With value 1 every mutation mode changes the group.
 	for shape := byte(0); shape < 4; shape++ {
-		for mode := byte(0); mode < 10; mode++ {
-			f.Add(shape, mode, uint64(0), []byte(`{}`))
-			f.Add(shape, mode, uint64(1), []byte(nil))
-		}
+		f.Add(shape, byte(0), uint64(0), []byte(`{}`))
+	}
+	for mode := byte(1); mode < 10; mode++ {
+		f.Add(mode%4, mode, uint64(1), []byte(`{}`))
 	}
 	f.Fuzz(func(t *testing.T, shape, mode byte, value uint64, input []byte) {
 		t.Parallel()

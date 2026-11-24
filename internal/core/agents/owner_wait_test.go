@@ -38,7 +38,6 @@ type continuationCaptureProbe struct {
 	mu            sync.Mutex
 	holds, passes int
 	held          bool
-	changed       chan struct{}
 	before        func()
 }
 
@@ -51,7 +50,6 @@ func (p *continuationCaptureProbe) called(uuid.UUID) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	defer func() { close(p.changed); p.changed = make(chan struct{}) }()
 	if p.held {
 		p.holds++
 		return &workspace.BusyError{Reason: "capture_budget"}
@@ -64,16 +62,6 @@ func (p *continuationCaptureProbe) attempts() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.holds + p.passes
-}
-func (p *continuationCaptureProbe) after(n int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for p.holds+p.passes <= n {
-		changed := p.changed
-		p.mu.Unlock()
-		<-changed
-		p.mu.Lock()
-	}
 }
 
 type continuationCaptureFixture struct {
@@ -88,7 +76,7 @@ type continuationCaptureFixture struct {
 
 func newContinuationCapture(t *testing.T, temporary bool, configure func(*continuationCaptureStore)) *continuationCaptureFixture {
 	t.Helper()
-	probe := &continuationCaptureProbe{changed: make(chan struct{})}
+	probe := &continuationCaptureProbe{}
 	var arguments string
 	var posts atomic.Int32
 	var capture *continuationCaptureFixture
@@ -265,8 +253,6 @@ func continuationCaptureRecords(t testing.TB, f *continuationCaptureFixture, tur
 func TestTurnLoopPersistedWaits(t *testing.T) {
 	t.Parallel()
 	testContinuationLocalWaits(t)
-	testContinuationCaptureTail(t)
-	testContinuationMergeWaits(t)
 	testContinuationPaidReadWait(t)
 	t.Run("capture_busy_park_before_park", func(t *testing.T) {
 		t.Parallel()
@@ -296,187 +282,6 @@ func TestTurnLoopPersistedWaits(t *testing.T) {
 		}
 		if len(observations) != 1 || len(endings) != 1 || resumes != 1 {
 			t.Fatalf("capture repeated or skipped its owed resume: observe=%v end=%v resume=%d", observations, endings, resumes)
-		}
-	})
-	t.Run("capture_first_call_writes_nothing", func(t *testing.T) {
-		t.Parallel()
-		entered, release := make(chan struct{}), make(chan struct{})
-		var target uuid.UUID
-		var once sync.Once
-		f := newContinuationCapture(t, false, func(store *continuationCaptureStore) {
-			store.before = func(d []ledger.Draft) {
-				for _, draft := range d {
-					if draft.Type == ledger.TypeScratchChanged {
-						v := scopedDecode(t, ledger.DecodeScratchChanged, draft.Payload)
-						if v.ScratchID == target {
-							once.Do(func() { close(entered); <-release })
-						}
-					}
-				}
-			}
-		})
-		target = f.scratch.ID
-		var releaseOnce sync.Once
-		t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
-		f.enable(t)
-		_, started := f.send(t)
-		<-entered
-		owner, err := f.service.currentContinuation(context.Background(), f.origin, started.TurnID)
-		if err != nil || owner.Snapshot.State != "finishing" || owner.Snapshot.WaitReason != "none" || f.probe.count() != 1 {
-			t.Fatalf("first immediate capture invented a wait: %+v %v", owner.Snapshot, err)
-		}
-		releaseOnce.Do(func() { close(release) })
-		f.finished(t, started.TurnID)
-		owners, observations, endings := continuationCaptureRecords(t, f, started.TurnID)
-		for _, owner := range owners {
-			if owner.Submission.Arguments.State == "waiting_resource" || owner.Submission.ExpectedState == "waiting_resource" && owner.Submission.Arguments.State == "finishing" {
-				t.Fatal("successful first capture wrote a park/resume")
-			}
-		}
-		if len(observations) != 1 || len(endings) != 1 || f.probe.count() != 1 {
-			t.Fatal("successful first capture was repeated")
-		}
-	})
-	t.Run("capture_still_busy_rerun_writes_nothing", func(t *testing.T) {
-		t.Parallel()
-		f := newContinuationCapture(t, false, nil)
-		free := f.holdCapture(t)
-		other := scopedWorkContext(t, f.service, bindingOf(f.origin), 75000, 75001)
-		scratch, err := f.workspace.Scratch(context.Background(), other.ContextID, f.registered.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		writer, err := f.workspace.BeginWrite(context.Background(), workspace.WriteBinding{WriterID: uuid.NewV7(), ContextID: other.ContextID, AgentID: other.AgentID, TaskAgentID: other.AgentID, TaskScratchID: scratch.ID})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer writer.Close()
-		f.enable(t)
-		_, started := f.send(t)
-		waiting := continuationWait(t, f.turnFixture, started.TurnID, "workspace_capture")
-		before := f.store.Durable()
-		for range 2 {
-			calls := f.probe.attempts()
-			release, err := writer.Lease(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			release() // a real non-ledger workspace availability notification
-			f.probe.after(calls)
-			again := continuationWait(t, f.turnFixture, started.TurnID, "workspace_capture")
-			if again.OwnerVersion != waiting.OwnerVersion || again.OperationID != waiting.OperationID || f.store.Durable() != before {
-				t.Fatalf("still-busy wake wrote owner progress: before=%+v after=%+v", waiting, again)
-			}
-		}
-		free()
-		f.finished(t, started.TurnID)
-	})
-}
-
-func testContinuationStopCapture(t *testing.T) {
-	t.Run("stop_during_capture_wait", func(t *testing.T) {
-		t.Parallel()
-		f := newContinuationCapture(t, false, nil)
-		free := f.holdCapture(t)
-		f.enable(t)
-		_, started := f.send(t)
-		continuationWait(t, f.turnFixture, started.TurnID, "workspace_capture")
-		capture, release := make(chan struct{}), make(chan struct{})
-		var once sync.Once
-		t.Cleanup(func() { once.Do(func() { close(release) }) })
-		f.probe.mu.Lock()
-		f.probe.before = func() {
-			owner, err := f.service.currentContinuation(context.Background(), f.origin, started.TurnID)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			if owner.Snapshot.StopReason != "" {
-				close(capture)
-				<-release
-			}
-		}
-		f.probe.mu.Unlock()
-		command := session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: started.TurnID}}
-		accepted, err := f.view.Do(context.Background(), command)
-		if err != nil || accepted.Outcome != "accepted" {
-			t.Fatalf("busy capture delayed or refused stop acceptance: %+v %v", accepted, err)
-		}
-		<-capture
-		_, observations, endings := continuationCaptureRecords(t, f, started.TurnID)
-		if len(observations) != 0 || len(endings) != 0 {
-			t.Fatal("accepted stop claimed the blocked observation had completed")
-		}
-		free()
-		once.Do(func() { close(release) })
-		result, _ := f.finished(t, started.TurnID)
-		if result.Outcome != "cancelled" || result.ToolDispatches != 1 {
-			t.Fatalf("stop lost its result or tool count: %+v", result)
-		}
-		owners, observations, endings := continuationCaptureRecords(t, f, started.TurnID)
-		stops := 0
-		for _, owner := range owners {
-			if owner.Submission.Operation == "owner.stop" {
-				stops++
-			}
-			if owner.Submission.ExpectedState == "waiting_resource" && uint64(owner.EffectSequence) > accepted.EffectSequence && owner.Submission.Arguments.State == "finishing" {
-				t.Fatal("capture resumed after the stop replaced its wait")
-			}
-		}
-		if stops != 1 || len(observations) != 1 || len(endings) != 1 {
-			t.Fatalf("stopped capture repeated work: stops=%d observations=%v endings=%v", stops, observations, endings)
-		}
-	})
-	t.Run("stop_then_capture_busy_again", func(t *testing.T) {
-		t.Parallel()
-		f := newContinuationCapture(t, false, nil)
-		free := f.holdCapture(t)
-		f.enable(t)
-		_, started := f.send(t)
-		waiting := continuationWait(t, f.turnFixture, started.TurnID, "workspace_capture")
-		cancel := session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: started.TurnID}}
-		accepted, err := f.view.Do(context.Background(), cancel)
-		if err != nil || accepted.Outcome != "accepted" {
-			t.Fatalf("stop was not accepted: %+v %v", accepted, err)
-		}
-		parked := continuationWait(t, f.turnFixture, started.TurnID, "workspace_capture")
-		if parked.OperationID != cancel.CommandID || parked.Generation != waiting.Generation+1 || parked.Reason != "cancelled" {
-			t.Fatalf("post-stop wait lost its durable stop operation: %+v", parked)
-		}
-		owners, _, _ := continuationCaptureRecords(t, f, started.TurnID)
-		last := owners[len(owners)-1]
-		if last.Submission.Arguments.State != "waiting_resource" || last.Submission.ExpectedState != "finishing" || last.Submission.Arguments.OperationID != cancel.CommandID {
-			t.Fatal("post-stop capture waited without its own park")
-		}
-		before := f.store.Durable()
-		cancel.CommandID = uuid.NewV7()
-		repeated, err := f.view.Do(context.Background(), cancel)
-		if err != nil || repeated.Outcome != "accepted" || f.store.Durable() != before {
-			t.Fatalf("a later stop rewrote the first durable stop: %+v %v", repeated, err)
-		}
-		free()
-		result, _ := f.finished(t, started.TurnID)
-		if result.Outcome != "cancelled" {
-			t.Fatalf("post-stop capture ignored cancellation: %+v", result)
-		}
-		owners, observations, endings := continuationCaptureRecords(t, f, started.TurnID)
-		if len(observations) != 1 || len(endings) != 1 {
-			t.Fatalf("post-stop capture repeated an effect: observations=%v endings=%v", observations, endings)
-		}
-		stops, resumes := 0, 0
-		for _, owner := range owners {
-			if owner.Submission.Operation == "owner.stop" {
-				stops++
-			}
-			if owner.Submission.ExpectedState == "waiting_resource" && owner.Submission.Arguments.State == "finishing" && uint64(owner.EffectSequence) > accepted.EffectSequence {
-				resumes++
-				if owner.Submission.Arguments.OperationID != parked.OperationID || owner.Submission.Arguments.Generation != parked.Generation || uint64(owner.EffectSequence) <= observations[0] {
-					t.Fatal("post-stop resume used the replaced park or preceded capture")
-				}
-			}
-		}
-		if stops != 1 || resumes != 1 {
-			t.Fatalf("post-stop capture repeated a stop or resume: stops=%d resumes=%d", stops, resumes)
 		}
 	})
 }

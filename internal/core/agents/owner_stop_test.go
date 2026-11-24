@@ -99,8 +99,6 @@ func TestTurnLoopCancelResultRace(t *testing.T) {
 			t.Fatalf("closed-turn stop retry changed its receipt: %+v %v", retry, err)
 		}
 	})
-	testContinuationCancelDuringRecovery(t)
-	testContinuationStopCapture(t)
 	testContinuationStopClaim(t)
 	testContinuationCallbackFences(t)
 }

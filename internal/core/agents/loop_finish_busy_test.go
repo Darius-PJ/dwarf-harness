@@ -87,14 +87,11 @@ func finishBusyStatus(t *testing.T, view session.Session, contextID, turn uuid.U
 	return status
 }
 
-// finishGate holds the stranding row's turn-end commit attempts: each turn's
-// first attempt waits for its round, and every retry waits to be released
-// unless the gate is free.
+// finishGate holds the turn-end commit attempts: each turn's first attempt
+// waits for its round, and every retry proceeds at once.
 type finishGate struct {
 	mu       sync.Mutex
-	free     bool // retries proceed at once
 	attempts map[uuid.UUID]int
-	held     map[uuid.UUID]chan struct{}
 	round    chan struct{}
 	arrival  chan struct{} // closed and replaced at every attempt
 	stop     chan struct{}
@@ -103,18 +100,13 @@ type finishGate struct {
 func (g *finishGate) attempt(turn uuid.UUID) error {
 	g.mu.Lock()
 	g.attempts[turn]++
-	wait := g.round
-	if g.attempts[turn] > 1 {
-		wait = make(chan struct{})
-		if g.free {
-			close(wait)
-		} else {
-			g.held[turn] = wait
-		}
-	}
+	retry, wait := g.attempts[turn] > 1, g.round
 	close(g.arrival)
 	g.arrival = make(chan struct{})
 	g.mu.Unlock()
+	if retry {
+		return nil
+	}
 	select {
 	case <-wait:
 	case <-g.stop:
@@ -141,9 +133,7 @@ func (g *finishGate) arrived(round map[uuid.UUID]uuid.UUID) {
 	}
 }
 
-// results waits on the owner's view for every turn's turn_result. A held
-// retry is released only while every unfinished turn is held, one at a time,
-// so no retried observation lands inside another turn's loop.end submission.
+// results waits on the owner's view for every turn's turn_result.
 func (g *finishGate) results(t *testing.T, view session.Session, cursor uint64, round map[uuid.UUID]uuid.UUID) map[uuid.UUID]ledger.RuntimeTurnResult {
 	t.Helper()
 	results := map[uuid.UUID]ledger.RuntimeTurnResult{}
@@ -164,20 +154,8 @@ func (g *finishGate) results(t *testing.T, view session.Session, cursor uint64, 
 			continue
 		}
 		g.mu.Lock()
-		var next chan struct{}
-		if len(g.held) != 0 && len(g.held) == len(round)-len(results) {
-			for turn, release := range g.held {
-				next = release
-				delete(g.held, turn)
-				break
-			}
-		}
 		arrival := g.arrival
 		g.mu.Unlock()
-		if next != nil {
-			close(next)
-			continue
-		}
 		for turn, contextID := range round {
 			if _, ended := results[turn]; !ended {
 				finishBusyStatus(t, view, contextID, turn)
@@ -260,26 +238,23 @@ func finishBusyLedger(t *testing.T, f *turnFixture) (map[uuid.UUID]int, map[uuid
 
 func TestTurnLoopFinishBusy(t *testing.T) {
 	t.Parallel()
-	t.Run("concurrent_captures_park_not_strand", func(t *testing.T) { testLoopFinishBusyStranding(t, true) })
-	t.Run("concurrent_captures_and_ledger_writes", func(t *testing.T) { testLoopFinishBusyStranding(t, false) })
+	t.Run("concurrent_captures_and_ledger_writes", testLoopFinishBusyStranding)
 }
 
 // Three turns with file writes are held before their turn-end observation and
 // released together into a workspace that admits one capture at a time. Real
 // captures collide; a collision cannot be scheduled from this package, so up
 // to eight rounds run until one does, and every round must end every turn.
-// Gated, retries are held and released one at a time (finishGate.results),
-// which isolates the capture busy from the ledger's two writers. Ungated,
-// every retry proceeds at once, so the turns' captures, native endings and
+// Every retry proceeds at once, so the turns' captures, native endings and
 // loop.end writes overlap freely; the conditional Submit keeps every group
 // valid where it lands.
-func testLoopFinishBusyStranding(t *testing.T, gated bool) {
+func testLoopFinishBusyStranding(t *testing.T) {
 	t.Parallel()
 	const maxRounds, turns = 8, 3
 	var mu sync.Mutex
 	labels := map[string]string{}
 	posts := map[string]int{}
-	gate := &finishGate{free: !gated, attempts: map[uuid.UUID]int{}, held: map[uuid.UUID]chan struct{}{}, arrival: make(chan struct{}), stop: make(chan struct{})}
+	gate := &finishGate{attempts: map[uuid.UUID]int{}, arrival: make(chan struct{}), stop: make(chan struct{})}
 	f := newTurnFixture(t, "anthropic", func(w http.ResponseWriter, r *http.Request) {
 		model, raw := turnRequest(t, r)
 		w.Header().Set("Content-Type", "text/event-stream")

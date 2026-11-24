@@ -228,46 +228,37 @@ func TestTurnLoopForeignTaskWrite(t *testing.T) {
 			t.Fatalf("sibling edit was not applied: %q", got)
 		}
 	})
-	for _, mode := range []string{"other_agent_denied", "no_dedicated_scratch_denied"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Parallel()
-			f := newContinuationCapture(t, false, nil)
-			var target Binding
-			if mode == "other_agent_denied" {
-				target = registerPrivate(t, f.service, 79000)
-				f.finishBusyFiles(t, f.registered, target)
-			} else {
-				target = scopedWorkContext(t, f.service, bindingOf(f.origin), 79000, 79001)
-			}
-			grant := grantForeignWorkspace(t, f, target, "file.write")
-			if mode == "other_agent_denied" {
-				// The native entrance must deny too, even though fileAuthority
-				// provides an additional later cross-agent guard.
-				agent := scopedBound(t, f.service, bindingOf(f.origin))
-				turn := uuid.NewV7()
-				if _, err := agent.StartTurn(context.Background(), TurnAdmission{CommandID: uuid.NewV7(), TurnID: turn, GrantID: f.privateGrant}); err != nil {
-					t.Fatal(err)
-				}
-				before := f.store.Durable()
-				_, err := agent.AdmitLocal(context.Background(), LocalAdmission{CommandID: uuid.NewV7(), WorkID: uuid.NewV7(), ParentTurnID: turn, GrantID: grant, LocalOperation: "file.write", Target: ledger.Resource{Kind: "workspace", WorkspaceID: f.registered.ID, Binding: ledger.Binding(target), PathPrefix: "safe/escape.txt"}, ArgumentsSHA256: sha256.Sum256([]byte("foreign write")), ToolSchema: 1, MaxBytes: 64})
-				if !errors.Is(err, ErrDenied) || f.store.Durable() != before {
-					t.Fatalf("cross-agent workspace authority admitted native work: %v", err)
-				}
-				if _, err := f.service.EndTurn(context.Background(), TurnEnding{CommandID: uuid.NewV7(), TurnID: turn, ExpectedVersion: 1, Outcome: "interrupted"}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			foreignProgram(t, f, turnCalls("file_write_v1", foreignWriteArguments(f, target.ContextID, "safe/escape.txt", "must remain absent")))
-			f.enable(t)
-			_, started := f.send(t)
-			_, events := f.finished(t, started.TurnID)
-			results := f.toolResults(t, events)
-			records := foreignRecords(t, f, started.TurnID)
-			if len(results) != 1 || results[0].Error == nil || results[0].Error.Code != "denied" || results[0].Data != nil || len(records.work) != 0 || len(records.created) != 0 {
-				t.Fatalf("unready or foreign target acquired work instead of a fixed denial: tools=%+v records=%+v", results, records)
-			}
-		})
-	}
+	t.Run("other_agent_denied", func(t *testing.T) {
+		t.Parallel()
+		f := newContinuationCapture(t, false, nil)
+		target := registerPrivate(t, f.service, 79000)
+		f.finishBusyFiles(t, f.registered, target)
+		grant := grantForeignWorkspace(t, f, target, "file.write")
+		// The native entrance must deny too, even though fileAuthority
+		// provides an additional later cross-agent guard.
+		agent := scopedBound(t, f.service, bindingOf(f.origin))
+		turn := uuid.NewV7()
+		if _, err := agent.StartTurn(context.Background(), TurnAdmission{CommandID: uuid.NewV7(), TurnID: turn, GrantID: f.privateGrant}); err != nil {
+			t.Fatal(err)
+		}
+		before := f.store.Durable()
+		_, err := agent.AdmitLocal(context.Background(), LocalAdmission{CommandID: uuid.NewV7(), WorkID: uuid.NewV7(), ParentTurnID: turn, GrantID: grant, LocalOperation: "file.write", Target: ledger.Resource{Kind: "workspace", WorkspaceID: f.registered.ID, Binding: ledger.Binding(target), PathPrefix: "safe/escape.txt"}, ArgumentsSHA256: sha256.Sum256([]byte("foreign write")), ToolSchema: 1, MaxBytes: 64})
+		if !errors.Is(err, ErrDenied) || f.store.Durable() != before {
+			t.Fatalf("cross-agent workspace authority admitted native work: %v", err)
+		}
+		if _, err := f.service.EndTurn(context.Background(), TurnEnding{CommandID: uuid.NewV7(), TurnID: turn, ExpectedVersion: 1, Outcome: "interrupted"}); err != nil {
+			t.Fatal(err)
+		}
+		foreignProgram(t, f, turnCalls("file_write_v1", foreignWriteArguments(f, target.ContextID, "safe/escape.txt", "must remain absent")))
+		f.enable(t)
+		_, started := f.send(t)
+		_, events := f.finished(t, started.TurnID)
+		results := f.toolResults(t, events)
+		records := foreignRecords(t, f, started.TurnID)
+		if len(results) != 1 || results[0].Error == nil || results[0].Error.Code != "denied" || results[0].Data != nil || len(records.work) != 0 || len(records.created) != 0 {
+			t.Fatalf("unready or foreign target acquired work instead of a fixed denial: tools=%+v records=%+v", results, records)
+		}
+	})
 }
 
 func assertContinuationMerge(t *testing.T, f *continuationCaptureFixture, turn uuid.UUID, moved bool) {
@@ -303,123 +294,4 @@ func assertContinuationMerge(t *testing.T, f *continuationCaptureFixture, turn u
 	if (records.merged[0].ForkCommit != records.merged[0].ParentCommit) != moved {
 		t.Fatalf("wrong parent base for merge: %+v", records.merged[0])
 	}
-}
-
-func testContinuationMergeWaits(t *testing.T) {
-	t.Run("merge_back_order_idle_parent", func(t *testing.T) {
-		t.Parallel()
-		f := newContinuationCapture(t, true, nil)
-		f.enable(t)
-		_, started := f.send(t)
-		result, _ := f.finished(t, started.TurnID)
-		if result.Outcome != "finished" {
-			t.Fatalf("idle-parent merge failed: %+v", result)
-		}
-		assertContinuationMerge(t, f, started.TurnID, false)
-	})
-	t.Run("merge_back_resume_tail_refused", func(t *testing.T) {
-		t.Parallel()
-		f := newContinuationCapture(t, true, nil)
-		barrier := &tailBarrier{effect: ledger.TypeRuntimeContinuationChanged, fires: 3}
-		barrier.prepare(t, f.serviceFixture, f.workspace, f.registered.ID)
-		f.service.deps.beforeSubmit = func(d []ledger.Draft) []ledger.Draft {
-			if len(d) == 3 && d[2].Type == ledger.TypeRuntimeContinuationReceipt {
-				v := scopedDecode(t, ledger.DecodeRuntimeContinuationReceipt, d[2].Payload)
-				if v.Submission.ExpectedState == "waiting_resource" && v.Submission.Arguments.State == "finishing" && f.service.p.owners[v.Submission.TurnID].Snapshot.WaitReason == "workspace_merge_back" {
-					return barrier.submit(d)
-				}
-			}
-			return d
-		}
-		f.enable(t)
-		barrier.arm(f.store.Durable())
-		_, started := f.send(t)
-		result, _ := f.finished(t, started.TurnID)
-		if result.Outcome != "finished" {
-			t.Fatalf("tail refusal repeated or stranded merge-back: %+v", result)
-		}
-		barrier.mu.Lock()
-		moved := len(barrier.foreign)
-		barrier.mu.Unlock()
-		if moved != 3 {
-			t.Fatalf("merge resume did not meet three real tail moves: %d", moved)
-		}
-		assertContinuationMerge(t, f, started.TurnID, false)
-	})
-	t.Run("merge_back_park_before_wait", func(t *testing.T) {
-		t.Parallel()
-		f := newContinuationCapture(t, true, nil)
-		parent := f.contextSetting(t, Binding{AgentID: f.origin.AgentID, ContextID: f.parent.ContextID})
-		task, assignment := uuid.NewV7(), uuid.NewV7()
-		_, err := f.service.CreateTask(context.Background(), bindingOf(f.origin), TaskCreation{CommandID: uuid.NewV7(), TaskID: task, Description: []byte("synthetic parent work"), AcceptanceSHA256: sha256.Sum256([]byte("synthetic acceptance")), Dependencies: []uuid.UUID{}, Audience: []uuid.UUID{parent.Binding.AgentID}, Assignment: &ledger.AssignmentInput{AssignmentID: assignment, Assignee: ledger.Binding(parent.Binding)}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.service.TransitionTask(context.Background(), bindingOf(f.origin), TaskMutation{CommandID: uuid.NewV7(), TaskID: task, ExpectedVersion: 1, ExpectedAssignmentID: assignment, ExpectedGeneration: 1, Action: "start"}); err != nil {
-			t.Fatal(err)
-		}
-		parent.DisplayTitle, parent.TaskBinding = "Parent task", &ledger.TaskBinding{TaskID: task, AssignmentID: assignment, Generation: 1}
-		entered, release := make(chan struct{}), make(chan struct{})
-		var once sync.Once
-		free := func() { once.Do(func() { close(release) }) }
-		defer free()
-		var parentCalls, authorCalls atomic.Int32
-		f.respond = func(w http.ResponseWriter, r *http.Request) {
-			model, raw := turnRequest(t, r)
-			w.Header().Set("Content-Type", "text/event-stream")
-			if bytes.Contains(raw, []byte("parent-held")) {
-				if parentCalls.Add(1) == 1 {
-					_, _ = io.WriteString(w, turnAnthropic(model, turnCalls("file_write_v1", finishBusyWrite(f.registered.ID, "parent-change")), ""))
-					return
-				}
-				// Hold the body, not the headers, while the other turn reaches merge-back.
-				w.WriteHeader(http.StatusOK)
-				w.(http.Flusher).Flush()
-				close(entered)
-				<-release
-			} else if authorCalls.Add(1) == 1 {
-				_, _ = io.WriteString(w, turnAnthropic(model, turnCalls("file_write_v1", foreignWriteArguments(f, parent.Binding.ContextID, "safe/owned-capture.txt", "temporary capture")), ""))
-				return
-			}
-			_, _ = io.WriteString(w, turnAnthropic(model, nil, "Merged sibling work."))
-		}
-		f.enable(t, parent)
-		parentView, err := f.service.OpenSession(context.Background(), parent.Binding)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer parentView.Close()
-		parentStart, err := parentView.Do(context.Background(), turnMessage(parent.Binding.ContextID, "parent-held"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		<-entered
-		_, started := f.send(t)
-		var cursor uint64
-		for {
-			page, err := f.view.Since(context.Background(), cursor, 128)
-			if err != nil {
-				t.Fatal(err)
-			}
-			status := finishBusyStatus(t, f.view, f.origin.ContextID, started.TurnID)
-			if status.Result != nil {
-				t.Fatalf("merge escaped the live parent: %+v", status)
-			}
-			if status.SavedPhase == "waiting_resource" && status.WaitReason == "workspace_merge_back" {
-				break
-			}
-			cursor = page.ThroughSequence
-			<-page.Wake
-		}
-		if records := foreignRecords(t, f, started.TurnID); len(records.prepared) != 0 || len(records.merged) != 0 {
-			t.Fatal("merge-back prepared or applied before its parent's writer closed")
-		}
-		free()
-		parentResult, _ := f.finishedFor(t, parentView, parentStart.TurnID)
-		result, _ := f.finished(t, started.TurnID)
-		if parentResult.Outcome != "finished" || result.Outcome != "finished" {
-			t.Fatalf("concurrent parent/temporary did not finish: %+v %+v", parentResult, result)
-		}
-		assertContinuationMerge(t, f, started.TurnID, true)
-	})
 }

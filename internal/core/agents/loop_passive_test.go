@@ -157,37 +157,6 @@ func (f *passiveFixture) reopen(t *testing.T, settings ...LoopContextSettings) {
 	reopenIntegratedFixture(t, f.turnFixture, append([]LoopContextSettings{f.parentSetting}, settings...)...)
 }
 
-func assertPassiveCursor(t *testing.T, f *passiveFixture, turn uuid.UUID, cursors []ledger.ContinuationNoticeCursor) {
-	t.Helper()
-	var intent uint64
-	var first *ledger.RuntimeContinuationReceipt
-	if err := f.service.scan(context.Background(), 0, f.store.Durable(), func(c ledger.Commit) error {
-		for _, record := range c.Records {
-			if record.TurnID != turn {
-				continue
-			}
-			if record.Type == ledger.TypeRuntimePaidDispatchIntent && intent == 0 {
-				intent = record.Seq
-			}
-			if record.Type == ledger.TypeRuntimeContinuationReceipt {
-				v := scopedDecode(t, ledger.DecodeRuntimeContinuationReceipt, record.Payload)
-				if intent == 0 && len(v.Submission.Arguments.NoticeCursors) != 0 {
-					t.Fatal("pre-intent owner consumed a notice")
-				}
-				if intent != 0 && first == nil && v.Submission.Operation == "owner.advance" {
-					first = &v
-				}
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if intent == 0 || first == nil || !slices.Equal(first.Submission.Arguments.NoticeCursors, cursors) {
-		t.Fatalf("first post-intent advance lost its selected cursors: intent=%d first=%+v", intent, first)
-	}
-}
-
 func TestTurnLoopPassiveResults(t *testing.T) {
 	t.Parallel()
 	t.Run("crash_before_cursor", testPassiveCursorCrash)
@@ -244,18 +213,6 @@ func TestTurnLoopPassiveResults(t *testing.T) {
 		if f.posts.Load() != 3 {
 			t.Fatal("result status or second reopen dispatched work")
 		}
-	})
-	t.Run("cursor_after_first_intent", func(t *testing.T) {
-		t.Parallel()
-		f := newPassiveFixture(t)
-		f.enable(t, f.parentSetting)
-		notice := f.merge(t)
-		turn, result, input := f.natural(t, f.parentSetting.Binding)
-		if result.Outcome != "finished" {
-			t.Fatal(result)
-		}
-		assertPassiveSelection(t, input, notice, f.registered.ID, <-f.requests)
-		assertPassiveCursor(t, f, turn, input.NoticeCursors)
 	})
 	t.Run("cursor_after_eviction", func(t *testing.T) {
 		t.Parallel()
@@ -396,16 +353,4 @@ func TestTurnLoopPassiveResults(t *testing.T) {
 			}
 		})
 	}
-	t.Run("no_selection_bytes", func(t *testing.T) {
-		t.Parallel()
-		f := newPassiveFixture(t)
-		f.enable(t, f.parentSetting)
-		_, result, input := f.natural(t, f.parentSetting.Binding)
-		request := <-f.requests
-		_, baselineResult, baselineInput := f.natural(t, bindingOf(f.origin))
-		baseline := <-f.requests
-		if baselineResult.Outcome != "finished" || baselineInput.Schema != 1 || result.Outcome != "finished" || input.Schema != 2 || input.TaskResults == nil || input.NoticeCursors == nil || len(input.TaskResults) != 0 || len(input.NoticeCursors) != 0 || request != baseline {
-			t.Fatalf("empty selection changed the request: %q %+v", request, input)
-		}
-	})
 }

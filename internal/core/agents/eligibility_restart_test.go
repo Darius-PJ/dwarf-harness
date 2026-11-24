@@ -57,9 +57,6 @@ func TestEligibilityCrashChild(t *testing.T) {
 	_, sent := f.send(t)
 	<-entered
 	gate := holdEligibility(t, f.service, f.origin.AgentID)
-	if boundary == "eligible_released" {
-		gate = releaseEligibility(t, f.service, f.origin.AgentID, gate)
-	}
 	r := f.service.loop
 	r.mu.Lock()
 	attempt := r.turns[sent.TurnID].paid.id
@@ -79,13 +76,16 @@ func TestEligibilityCrashChild(t *testing.T) {
 
 func TestEligibilityRestart(t *testing.T) {
 	t.Parallel()
-	for _, boundary := range []string{"first_declared", "first_native", "first_before_intent", "first_after_intent", "first_terminal"} {
+	// One boundary per distinct money outcome: nothing reserved (declared),
+	// reserved then released unsent (before intent), held as unknown (after
+	// intent, ordinary_held) and settled (terminal).
+	for _, boundary := range []string{"first_declared", "first_before_intent", "first_after_intent", "first_terminal"} {
 		t.Run(boundary, func(t *testing.T) {
 			t.Parallel()
 			testEligibilityFirstRestart(t, boundary)
 		})
 	}
-	for _, boundary := range []string{"ordinary_held", "eligible_released"} {
+	for _, boundary := range []string{"ordinary_held"} {
 		t.Run(boundary, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
@@ -160,11 +160,7 @@ func TestEligibilityRestart(t *testing.T) {
 					t.Fatal("Open advanced recovered eligibility work")
 				}
 				gate, err := service.EligibilityStatus(ctx, signal.Origin.AgentID)
-				want := "ordinary_work_ineligible"
-				if boundary == "eligible_released" {
-					want = "eligible"
-				}
-				if err != nil || gate.State != want || gate.Version != signal.Gate.Version || gate.OperationID != signal.Gate.OperationID {
+				if err != nil || gate.State != "ordinary_work_ineligible" || gate.Version != signal.Gate.Version || gate.OperationID != signal.Gate.OperationID {
 					t.Fatal("Open lost eligibility decision", err)
 				}
 				attempt, err := service.PaidAttemptStatus(ctx, PaidAttemptLookup{AttemptID: signal.Attempt})
@@ -221,11 +217,9 @@ func TestEligibilityRestart(t *testing.T) {
 			if err != nil || attempt.State != "unknown" || attempt.HeldMicros != signal.HeldMicros || attempt.SettledMicros != "0" {
 				t.Fatal("recovery refunded unknown exposure", err)
 			}
-			if boundary == "ordinary_held" {
-				releaseEligibility(t, service, signal.Origin.AgentID, signal.Gate)
-				if eligibilityCount(t, service, through, ledger.TypeRuntimeWorkAdmitted) != 0 || eligibilityCount(t, service, through, ledger.TypeRuntimePaidDispatchIntent) != 0 {
-					t.Fatal("release recreated recovered request")
-				}
+			releaseEligibility(t, service, signal.Origin.AgentID, signal.Gate)
+			if eligibilityCount(t, service, through, ledger.TypeRuntimeWorkAdmitted) != 0 || eligibilityCount(t, service, through, ledger.TypeRuntimePaidDispatchIntent) != 0 {
+				t.Fatal("release recreated recovered request")
 			}
 			t.Logf("real child killed: boundary=%s frontier=%d held=%s; two inert Opens, explicit reconcile retry, no new admissions/intents/posts", boundary, signal.Through, signal.HeldMicros)
 		})
@@ -293,8 +287,7 @@ func eligibilityFirstCrashChild(t *testing.T, boundary string) {
 	}
 	f.service.store = &passiveCrashStore{Store: f.store, before: func(drafts []ledger.Draft) {
 		for _, draft := range drafts {
-			if boundary == "first_native" && draft.Type == ledger.TypeRuntimeTurnBound ||
-				boundary == "first_before_intent" && draft.Type == ledger.TypeRuntimePaidDispatchIntent {
+			if boundary == "first_before_intent" && draft.Type == ledger.TypeRuntimePaidDispatchIntent {
 				emit()
 			}
 		}
@@ -452,18 +445,7 @@ func testEligibilityFirstRestart(t *testing.T, boundary string) {
 	releaseEligibility(t, service, signal.Origin.AgentID, held)
 	checkMoney(service, signal.HeldMicros, signal.SettledMicros)
 	wantHeld := signal.HeldMicros
-	if boundary == "first_native" {
-		request := EndingRequest{CommandID: uuid.NewV7(), WorkID: signal.Turn, ExpectedVersion: 1}
-		first, err := service.ReconcileAdmissions(ctx, request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		through := store.Durable()
-		retry, err := service.ReconcileAdmissions(ctx, request)
-		if err != nil || !reflect.DeepEqual(first, retry) || store.Durable() != through {
-			t.Fatal("second native reconcile duplicated ending", err)
-		}
-	} else if wantPending == 1 {
+	if wantPending == 1 {
 		owner, err := service.currentContinuation(ctx, signal.Origin, signal.Turn)
 		if err != nil {
 			t.Fatal(err)

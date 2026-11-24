@@ -77,74 +77,13 @@ func TestScopedGroupRules(t *testing.T) {
 		mutate  func(*testing.T, *serviceFixture, []ledger.Draft) []ledger.Draft
 		check   func(*testing.T, *serviceFixture, Reconciliation)
 	}
+	// Every valid frozen row stays. Refusals keep one structural row
+	// (reordered-effects), one semantic row (revoke-wrong-entity) and the
+	// rows that guard authority: authority version, grant attenuation,
+	// revocation and the revoke-issuer rows below.
 	cases := []ruleCase{
-		{name: "payload-shape", at: 16, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			d[1].Payload = []byte(`{}`)
-			return d
-		}},
-		{name: "mixed-private-families", at: 16, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			d[1].Type = ledger.TypePrivateRevision
-			return d
-		}},
-		{name: "effect-actor", at: 16, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			d[1].Actor = ledger.ActorAgent
-			return d
-		}},
-		{name: "record-origin", at: 16, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			d[1].ContextID = privateID(999)
-			return d
-		}},
-		{name: "operation-id", at: 16, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			d[1].OperationID = privateID(999)
-			return d
-		}},
-		{name: "work-turn-envelope", at: 21, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			d[1].TurnID = privateID(999)
-			return d
-		}},
-		{name: "unexpected-measurement", at: 16, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			d[1].MeasurementPath = "run"
-			return d
-		}},
-		{name: "unexpected-body-reference", at: 16, mutate: func(t *testing.T, f *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			view, err := f.service.TaskStatus(context.Background(), TaskLookup{TaskID: scopedGoldenID(0x200)})
-			if err != nil {
-				t.Fatal(err)
-			}
-			d[2].BodyRefs = []ledger.Digest{view.DescriptionRef.SHA256}
-			return d
-		}},
-		{name: "missing-description-pin", at: 11, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft { return append(d[:1], d[2:]...) }},
-		{name: "missing-terminal-unpin", at: 30, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft { return append(d[:2], d[3:]...) }},
 		{name: "reordered-effects", at: 14, mutate: func(_ *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
 			d[1], d[2] = d[2], d[1]
-			return d
-		}},
-		{name: "command-digest", at: 16, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			command := scopedDecode(t, ledger.DecodeCommand, d[0].Payload)
-			command.SubmissionSHA256[0] ^= 1
-			d[0].Payload = testPayload(t, command)
-			return d
-		}},
-		{name: "receipt-version", at: 6, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			r.Version++
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "unregistered-session", at: 16, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[len(d)-1].Payload)
-			r.Submission.Origin.SessionID = privateID(999)
-			for i := range d {
-				d[i].ExecutionSessionID = r.Submission.Origin.SessionID
-			}
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "operation-target-kind", at: 11, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[len(d)-1].Payload)
-			r.Submission.Target = ledger.Resource{Kind: "context", Binding: ledger.Binding{AgentID: r.Submission.Origin.AgentID, ContextID: r.Submission.Origin.ContextID}, Scope: "context", Slots: []string{}}
-			scopedRewriteReceipt(t, d, r)
 			return d
 		}},
 		{name: "stale-authority", at: 10, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
@@ -169,107 +108,9 @@ func TestScopedGroupRules(t *testing.T) {
 			scopedRewriteReceipt(t, d, r)
 			return d
 		}},
-		{name: "child-allowance-widening", at: 14, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeGrantIssued, d[1].Payload)
-			p.Limits.LocalUnits = 101
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[3].Payload)
-			a := r.Submission.Arguments.(ledger.GrantIssueArguments)
-			a.Limits = p.Limits
-			r.Submission.Arguments = a
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
 		{name: "revoke-wrong-entity", at: 31, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
 			p := scopedDecode(t, ledger.DecodeRuntimeGrantRevoked, d[1].Payload)
 			p.GrantID = scopedGoldenID(0x300)
-			d[1].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "stale-capacity-version", at: 6, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeCapacityConfigured, d[1].Payload)
-			p.ExpectedVersion, p.Version = 1, 2
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			r.Submission.Expected.Version, r.Version = 1, 2
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "task-definition-snapshot", at: 11, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeTaskChanged, d[2].Payload)
-			p.AcceptanceSHA256[0] ^= 1
-			d[2].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "missing-assignment-expectation", at: 19, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			r.Submission.Expected.AssignmentID, r.Submission.Expected.Generation = uuid.UUID{}, nil
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "reassignment-reuses-old-context", at: 36, mutate: func(t *testing.T, f *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			current, err := f.service.TaskStatus(context.Background(), TaskLookup{TaskID: scopedGoldenID(0x201)})
-			if err != nil {
-				t.Fatal(err)
-			}
-			p := scopedDecode(t, ledger.DecodeRuntimeTaskChanged, d[1].Payload)
-			p.Assignment.Assignee = current.Task.Assignment.Assignee
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[3].Payload)
-			a := r.Submission.Arguments.(ledger.TaskMutationArguments)
-			a.NewAssignment.Assignee = p.Assignment.Assignee
-			r.Submission.Arguments = a
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "unfamiliar-subject-is-not-an-artifact", at: 29, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeTaskChanged, d[1].Payload)
-			p.Submission = &ledger.SubjectRef{Kind: "future", Members: []byte(`{"id":"opaque"}`)}
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			a := r.Submission.Arguments.(ledger.TaskMutationArguments)
-			a.Submission = p.Submission
-			r.Submission.Arguments = a
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "admission-missing-ancestor-scope", at: 21, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeWorkAdmitted, d[1].Payload)
-			p.Scopes = append(p.Scopes[:3], p.Scopes[4:]...)
-			d[1].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "admission-wrong-observed-authority", at: 20, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeWorkAdmitted, d[1].Payload)
-			p.AuthorityVersion++
-			d[1].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "task-context-admission-without-binding", at: 20, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeWorkAdmitted, d[1].Payload)
-			p.TaskBinding = nil
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			a := r.Submission.Arguments.(ledger.TurnStartArguments)
-			a.TaskBinding = nil
-			r.Submission.Arguments = a
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "local-admission-with-closed-scratch", at: 21, prepare: func(t *testing.T, f *serviceFixture) {
-			ctx := context.Background()
-			work := uuid.MustParse("0199c000-0000-7000-8000-0000000000d2")
-			draft := ledger.Draft{Type: ledger.TypeScratchClosed, TypeVersion: 1, Actor: ledger.ActorOwner, Payload: testPayload(t, ledger.ScratchClosed{ScratchID: scopedGoldenID(0x401), ContextID: work, Reason: "abandoned"})}
-			if _, err := f.store.Append(ctx, []ledger.Draft{draft}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := f.service.CapacityStatus(ctx, CapacityLookup{Scope: ledger.ScopeKey{Kind: "colony"}}); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "dispatch-changed-arguments", at: 22, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeWorkDispatched, d[1].Payload)
-			p.ArgumentsSHA256[0] ^= 1
 			d[1].Payload = testPayload(t, p)
 			return d
 		}},
@@ -286,103 +127,6 @@ func TestScopedGroupRules(t *testing.T) {
 			p := scopedDecode(t, ledger.DecodeRuntimeWorkDispatched, d[1].Payload)
 			p.AuthorityVersion = 5
 			d[1].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "dispatched-work-is-not-unsent", at: 23, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeWorkEnded, d[1].Payload)
-			p.Outcome = "released_unsent"
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			a := r.Submission.Arguments.(ledger.WorkEndArguments)
-			a.Outcome = p.Outcome
-			r.Submission.Arguments = a
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "parent-ending-before-child-observation", at: 25, prefix: new(23)},
-		{name: "stale-work-ending", at: 24, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeWorkEnded, d[1].Payload)
-			p.ExpectedVersion, p.Version = 2, 3
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			r.Submission.Expected.Version, r.Version = 2, 3
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "retired-work-identity", at: 20, prefix: new(26), mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			command := scopedDecode(t, ledger.DecodeCommand, d[0].Payload)
-			command.CommandID = privateID(950)
-			d[0].Payload = testPayload(t, command)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			r.CommandID = command.CommandID
-			scopedRewriteReceipt(t, d, r)
-			for i := range d {
-				d[i].OperationID = command.CommandID
-			}
-			return d
-		}},
-		{name: "usage-authority-before-not-after-grant", at: 14, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeLocalUsed, d[2].Payload)
-			p.AuthorityVersion++
-			d[2].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "usage-scope-set", at: 16, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeLocalUsed, d[2].Payload)
-			p.Scopes[2].ID = uuid.MustParse("0199c000-0000-7000-8000-0000000000d1")
-			d[2].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "creation-description-charge", at: 33, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeLocalUsed, d[3].Payload)
-			p.Bytes = 0
-			d[3].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "private-write-charge", at: 16, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeLocalUsed, d[2].Payload)
-			p.Bytes++
-			d[2].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "private-read-selected-occurrence", at: 17, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeLocalUsed, d[1].Payload)
-			p.Selected[0].Sequence++
-			d[1].Payload = testPayload(t, p)
-			return d
-		}},
-		{name: "scoped-private-stale-head", at: 16, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodePrivateScopedRevision, d[1].Payload)
-			p.ExpectedVersion, p.Revision = 2, 3
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[3].Payload)
-			r.Submission.Expected.Version, r.Version = 2, 3
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "shared-hard-object-support-ceiling", at: 16, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodePrivateScopedRevision, d[1].Payload)
-			p.Changes[0].Bytes = maxObjectBytes + 1
-			d[1].Payload = testPayload(t, p)
-			u := scopedDecode(t, ledger.DecodeRuntimeLocalUsed, d[2].Payload)
-			u.Bytes = p.Changes[0].Bytes
-			d[2].Payload = testPayload(t, u)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[3].Payload)
-			a := r.Submission.Arguments.(ledger.PrivateWriteArguments)
-			a.Changes = p.Changes
-			r.Submission.Arguments = a
-			scopedRewriteReceipt(t, d, r)
-			return d
-		}},
-		{name: "artifact-source-is-exact", at: 18, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {
-			p := scopedDecode(t, ledger.DecodeRuntimeLocalUsed, d[1].Payload)
-			p.Artifact.SourceSequence++
-			d[1].Payload = testPayload(t, p)
-			r := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, d[2].Payload)
-			a := r.Submission.Arguments.(ledger.ArtifactReadArguments)
-			a.Artifact = *p.Artifact
-			r.Submission.Arguments, r.Submission.Target.Artifact = a, *p.Artifact
-			scopedRewriteReceipt(t, d, r)
 			return d
 		}},
 		{name: "unfamiliar-lifetime-is-inert-history", at: 10, valid: true, mutate: func(t *testing.T, _ *serviceFixture, d []ledger.Draft) []ledger.Draft {

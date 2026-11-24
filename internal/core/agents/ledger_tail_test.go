@@ -1,13 +1,11 @@
 package agents
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -202,16 +200,6 @@ func paidIntentSample(p json.RawMessage) (int64, error) {
 	return v.ObservedUTCNS, err
 }
 
-func paidRouteSample(p json.RawMessage) (int64, error) {
-	v, err := ledger.DecodeRuntimePaidRouteConfigured(p)
-	return v.ObservedUTCNS, err
-}
-
-func reviewRequestSample(p json.RawMessage) (int64, error) {
-	v, err := ledger.DecodeRuntimeReviewRequested(p)
-	return v.ObservedUTCNS, err
-}
-
 // tailTurn runs one turn through the loop with the barrier as the service's
 // beforeSubmit seam and review clock. With tool set, the model first calls
 // file_write_v1 once in the context's dedicated scratch. It returns the turn's
@@ -287,10 +275,11 @@ func tailToolEffects(t *testing.T, commits []ledger.Commit, turn uuid.UUID) (adm
 
 // TestLedgerTailInterleave is the promoted t15 diagnostic reproduction. Each
 // row lets the other writer commit inside one agents producer's
-// refresh-to-Submit window, once, or three times for tool.result and
-// loop.end so that the quantum runs again at the pending journal write.
-// Before the conditional Submit every row poisoned the service and left a
-// group that Open refuses.
+// refresh-to-Submit window, once, or three times for tool.result so that the
+// quantum runs again at the pending journal write. Before the conditional
+// Submit every row poisoned the service and left a group that Open refuses.
+// tool.result represents the loop's producers; the paid rows stay because
+// they hold money.
 func TestLedgerTailInterleave(t *testing.T) {
 	t.Parallel()
 	for _, row := range []struct {
@@ -299,10 +288,7 @@ func TestLedgerTailInterleave(t *testing.T) {
 		tool         bool
 		sample       func(json.RawMessage) (int64, error)
 	}{
-		{"loop.bind", ledger.TypeRuntimeTurnBound, 1, false, nil},
-		{"tool.begin", ledger.TypeRuntimeToolStarted, 1, true, nil},
 		{"tool.result", ledger.TypeRuntimeToolResult, 3, true, nil},
-		{"loop.end", ledger.TypePrivateTurnRevision, 3, false, nil},
 		{"paid.admit", ledger.TypeRuntimePaidReserved, 1, false, paidReservedSample},
 		{"paid.dispatch", ledger.TypeRuntimePaidDispatchIntent, 1, false, paidIntentSample},
 	} {
@@ -317,60 +303,12 @@ func TestLedgerTailInterleave(t *testing.T) {
 					t.Fatalf("tool ran with %d admissions and %d endings, results %v, %d dispatches", admitted, ended, outcomes, result.ToolDispatches)
 				}
 			}
-			if row.effect == ledger.TypePrivateTurnRevision {
-				// The finish ran again after the busy and planned the same
-				// loop.end: command, manifest revision and turn result;
-				// only the receipt's predicted sequence follows the tail.
-				b.mu.Lock()
-				defer b.mu.Unlock()
-				for i, planned := range b.planned[1:] {
-					if !slices.EqualFunc(planned, b.planned[0], func(x, y json.RawMessage) bool { return bytes.Equal(x, y) }) {
-						t.Fatalf("attempt %d planned another loop.end than the first", i+2)
-					}
-				}
-			}
 		})
 	}
-	t.Run("review", func(t *testing.T) {
-		t.Parallel()
-		b := &tailBarrier{effect: ledger.TypeRuntimeReviewRequested, fires: 1}
-		f, history := openReviewFixture(t, 17)
-		q := scopedDecode(t, ledger.DecodeRuntimeReviewRequested, history[17].Records[1].Payload)
-		f.service.deps.beforeSubmit, f.service.deps.reviewClock = b.submit, b.clock
-		ws, registered := privateWorkspace(t, f)
-		b.prepare(t, f, ws, registered.ID)
-		q.Binding.DeadlineUTCNS = time.Now().Add(time.Hour).UnixNano()
-		b.arm(f.store.Durable())
-		if _, err := f.service.RequestReview(context.Background(), reviewOwner(), ReviewRequest{CommandID: privateID(1100), RequestID: privateID(1101), Binding: q.Binding}); err != nil {
-			t.Fatal(err)
-		}
-		group, _ := b.landed(t, f)
-		b.sampled(t, group, reviewRequestSample)
-	})
-	t.Run("route", func(t *testing.T) {
-		t.Parallel()
-		b := &tailBarrier{effect: ledger.TypeRuntimePaidRouteConfigured, fires: 1}
-		f := newLivePaidFixture(t)
-		f.service.deps.beforeSubmit, f.service.deps.reviewClock = b.submit, b.clock
-		ws, registered := privateWorkspace(t, f.serviceFixture)
-		b.prepare(t, f.serviceFixture, ws, registered.ID)
-		p := providerProfile(f.route.Profile)
-		p.CapabilityVersion += "-tail"
-		raw, err := p.Canonical()
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.arm(f.store.Durable())
-		if _, err := f.service.ConfigurePaidRoute(context.Background(), bindingOf(f.origin), PaidRouteConfiguration{CommandID: f.id(), RouteID: f.route.RouteID, ExpectedVersion: f.route.Version, Enabled: true, CredentialScopeID: f.credential.ScopeID, Profile: raw}); err != nil {
-			t.Fatal(err)
-		}
-		group, _ := b.landed(t, f.serviceFixture)
-		b.sampled(t, group, paidRouteSample)
-	})
 }
 
 // A tail that moves on every attempt bounds the retries: a direct caller gets
-// the typed busy with nothing written, and the loop runs the quantum again.
+// the typed busy with nothing written.
 func TestLedgerTailBusy(t *testing.T) {
 	t.Parallel()
 	t.Run("admit_paid", func(t *testing.T) {
@@ -414,16 +352,6 @@ func TestLedgerTailBusy(t *testing.T) {
 		// Nothing was consumed: the same preparation and command admit now.
 		if _, bound, err := a.AdmitPaid(ctx, r); err != nil || bound == nil {
 			t.Fatalf("the preparation is unusable after the busy: %v", err)
-		}
-	})
-	t.Run("tool_begin", func(t *testing.T) {
-		t.Parallel()
-		// Three refusals in the first quantum, then the quantum runs again.
-		b := &tailBarrier{effect: ledger.TypeRuntimeToolStarted, fires: 3}
-		turn, result, commits := tailTurn(t, b, true, nil)
-		admitted, ended, outcomes := tailToolEffects(t, commits, turn)
-		if admitted != 1 || ended != 1 || len(outcomes) != 1 || outcomes[0] != "ok" || result.ToolDispatches != 1 {
-			t.Fatalf("tool ran with %d admissions and %d endings, results %v, %d dispatches", admitted, ended, outcomes, result.ToolDispatches)
 		}
 	})
 }

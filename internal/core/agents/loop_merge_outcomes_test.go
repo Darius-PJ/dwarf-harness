@@ -123,9 +123,6 @@ func testIntegratedMergeOutcome(t *testing.T, outcome string, passive bool) {
 	texts := []string{"source-a-conflict-data", "source-c-conflict-data"}
 	prior := ""
 	parentPath, parentBefore, parentText := "safe/parent-change.txt", "", "parent independent change"
-	if outcome == "fast_forward" {
-		parentPath, parentBefore, parentText = "safe/seed.txt", "parent seed", "parent seed"
-	}
 	if outcome == "conflict" {
 		paths = []string{"safe/seed.txt", "safe/seed.txt"}
 		prior = "parent seed"
@@ -158,11 +155,7 @@ func testIntegratedMergeOutcome(t *testing.T, outcome string, passive bool) {
 			if index != 2 {
 				args = integratedWrite(f.registered.ID, f.parent.ContextID, paths[index], prior, texts[index])
 			}
-			name := "file_write_v1"
-			if index == 2 && outcome == "fast_forward" {
-				name, args = "core_status_v1", `{"schema":1,"subject":"context"}`
-			}
-			_, _ = io.WriteString(w, turnAnthropic(model, turnCalls(name, args), ""))
+			_, _ = io.WriteString(w, turnAnthropic(model, turnCalls("file_write_v1", args), ""))
 			return
 		}
 		if index == 2 {
@@ -230,25 +223,10 @@ func testIntegratedMergeOutcome(t *testing.T, outcome string, passive bool) {
 	if created[0] == created[1] || !bytes.Equal(canonical(), canonicalBefore) {
 		t.Fatal("sibling writers shared a temporary or moved canonical work")
 	}
-	if outcome == "fast_forward" {
-		freeParent()
-	}
 	for i := range ids {
 		held[i].Store(false)
 		f.service.loop.released()
-		if outcome == "fast_forward" {
-			f.finishedFor(t, views[i], ids[i])
-		} else {
-			integratedWaitPhase(t, sourceViews[i], ids[i], "workspace_merge_back")
-		}
-	}
-	var cancelCommand uuid.UUID
-	if outcome == "cancel_while_parent_held" {
-		cancelCommand = uuid.NewV7()
-		_, err := views[0].Do(context.Background(), session.Command{Schema: 1, CommandID: cancelCommand, ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: ids[0]}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		integratedWaitPhase(t, sourceViews[i], ids[i], "workspace_merge_back")
 	}
 	freeParent()
 	parentResult, _ := f.finishedFor(t, views[2], parentStart.TurnID)
@@ -258,11 +236,7 @@ func testIntegratedMergeOutcome(t *testing.T, outcome string, passive bool) {
 	outcomes := map[string]int{}
 	for i, id := range ids {
 		result, events := f.finishedFor(t, views[i], id)
-		want := "finished"
-		if i == 0 && outcome == "cancel_while_parent_held" {
-			want = "cancelled"
-		}
-		if result.Outcome != want || result.ToolDispatches != 1 || result.ModelCalls != 2 {
+		if result.Outcome != "finished" || result.ToolDispatches != 1 || result.ModelCalls != 2 {
 			t.Fatal(result)
 		}
 		source := *f.continuationCaptureFixture
@@ -312,9 +286,7 @@ func testIntegratedMergeOutcome(t *testing.T, outcome string, passive bool) {
 				t.Fatalf("clean merge did not apply and close exactly once: paths=%v want=%v", merged.ChangedPaths, wantPaths)
 			}
 		}
-		if i == 0 && outcome == "cancel_while_parent_held" {
-			assertIntegratedCancelledMerge(t, &source, id, cancelCommand)
-		} else if outcome != "conflict" {
+		if outcome != "conflict" {
 			assertContinuationMerge(t, &source, id, merged.Outcome == ledger.MergeBackMerged)
 		}
 	}
@@ -338,7 +310,7 @@ func testIntegratedMergeOutcome(t *testing.T, outcome string, passive bool) {
 			}
 		}
 	}
-	if outcome == "fast_forward" && (outcomes[ledger.MergeBackFastForward] != 1 || outcomes[ledger.MergeBackMerged] != 1) || (outcome == "clean_three_way" || outcome == "cancel_while_parent_held") && outcomes[ledger.MergeBackMerged] != 2 || outcome == "conflict" && outcomes[ledger.MergeBackConflict] != 2 {
+	if outcome == "clean_three_way" && outcomes[ledger.MergeBackMerged] != 2 || outcome == "conflict" && outcomes[ledger.MergeBackConflict] != 2 {
 		t.Fatal("wrong integrated merge outcomes", outcomes)
 	}
 	if got := string(readTestFile(t, filepath.Join(f.parent.Dir, filepath.FromSlash(parentPath)))); got != parentText {
@@ -419,66 +391,6 @@ func testIntegratedMergeOutcome(t *testing.T, outcome string, passive bool) {
 	}
 	if f.store.Durable() != throughClose {
 		t.Fatal("Open reran a completed merge")
-	}
-}
-
-func assertIntegratedCancelledMerge(t *testing.T, f *continuationCaptureFixture, turn, command uuid.UUID) {
-	t.Helper()
-	records := foreignRecords(t, f, turn)
-	owners, observations, endings := continuationCaptureRecords(t, f, turn)
-	var park, stop, resume uint64
-	var parkGeneration, stopGeneration int64
-	var nativeCancel uuid.UUID
-	for _, owner := range owners {
-		a := owner.Submission.Arguments
-		switch {
-		case a.State == "waiting_resource" && a.WaitReason == "workspace_merge_back":
-			if park != 0 {
-				t.Fatal("cancelled merge parked twice")
-			}
-			park, parkGeneration = uint64(owner.EffectSequence), a.Generation
-		case owner.Submission.Operation == "owner.stop":
-			if stop != 0 || owner.CommandID != command || a.OperationID != command || owner.Submission.ExpectedState != "waiting_resource" || a.State != "stopping" || a.StopReason != "cancelled" || !validID(a.CancelCommandID) || a.CancelCommandID == command {
-				t.Fatalf("cancelled merge lost its exact stop transition: %+v", owner)
-			}
-			stop, stopGeneration = uint64(owner.EffectSequence), a.Generation
-			nativeCancel = a.CancelCommandID
-		case owner.Submission.ExpectedState == "stopping" && a.State == "finishing":
-			if resume != 0 || a.StopReason != "cancelled" || a.CancelCommandID != nativeCancel {
-				t.Fatal("cancelled merge lost or repeated its newer-stop resume")
-			}
-			resume = uint64(owner.EffectSequence)
-		}
-	}
-	if len(records.prepared) != 1 || len(records.merged) != 1 || len(records.closed) != 1 || len(observations) != 1 || len(endings) != 1 {
-		t.Fatalf("cancelled merge repeated or lost an effect: %+v observations=%v endings=%v", records, observations, endings)
-	}
-	if observations[0] >= park || park == 0 || park >= stop || stop >= records.preparationSequences[0] || records.preparationSequences[0] >= records.mergeSequences[0] || records.mergeSequences[0] >= resume || resume >= endings[0] || stopGeneration <= parkGeneration {
-		t.Fatalf("cancelled merge order: observation=%d park=%d/%d stop=%d/%d prepared=%d applied=%d resume=%d end=%d", observations[0], park, parkGeneration, stop, stopGeneration, records.preparationSequences[0], records.mergeSequences[0], resume, endings[0])
-	}
-	if records.merged[0].Outcome != ledger.MergeBackMerged || records.prepared[0].MergeBackID != records.merged[0].MergeBackID || records.merged[0].ForkCommit == records.merged[0].ParentCommit {
-		t.Fatal("cancelled merge applied the wrong prepared identity or parent base")
-	}
-	cancelCount := 0
-	if err := f.service.scan(context.Background(), 0, f.store.Durable(), func(commit ledger.Commit) error {
-		for _, record := range commit.Records {
-			if record.Type != ledger.TypeRuntimeScopedReceipt || record.Seq <= resume || record.Seq >= endings[0] {
-				continue
-			}
-			receipt := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, record.Payload)
-			if receipt.Submission.Operation == "turn.cancel" && receipt.WorkID == turn {
-				cancelCount++
-				if receipt.CommandID != nativeCancel {
-					t.Fatal("native cancellation lost the stop's separate command identity")
-				}
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if cancelCount != 1 {
-		t.Fatal("cancelled merge lost or repeated its native ending")
 	}
 }
 

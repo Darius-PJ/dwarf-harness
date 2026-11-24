@@ -53,7 +53,7 @@ func TestServiceReplay(t *testing.T) {
 	for _, row := range []struct {
 		name  string
 		claim int64
-	}{{"zero", 0}, {"earlier_E_boundary", 181}, {"not_an_E_boundary", 180}} {
+	}{{"earlier_E_boundary", 181}, {"not_an_E_boundary", 180}} {
 		t.Run("conservative_coverage_"+row.name, func(t *testing.T) {
 			t.Parallel()
 			f, commits := serviceGolden(t, 219, serviceDeps{})

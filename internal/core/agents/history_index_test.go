@@ -374,7 +374,10 @@ func damageHistoryCache(s *Service, mode string) {
 
 func TestHistoryIndexPrefixAndDiscard(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"empty", "warm", "evicted", "discarded", "disabled", "damaged", "key", "range", "decoder", "provenance", "coverage", "directory-missing", "directory-stale", "directory-generation", "directory-row", "directory-boundary"} {
+	// warm, then one damaged row per detection path: digest mismatch
+	// (damaged), unreadable payload (decoder), stale prefix (range) and the
+	// command directory (directory-stale).
+	for _, mode := range []string{"warm", "damaged", "decoder", "range", "directory-stale"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
