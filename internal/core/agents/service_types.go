@@ -1,77 +1,25 @@
 package agents
 
 import (
-	"errors"
 	"maps"
 	"slices"
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 )
 
-var ErrServicePageStale = errors.New("agents: service outage page is stale")
+var ErrServicePageStale = session.ErrServicePageStale
 
-// ServiceCauseView is availability metadata, never an execution permission.
-type ServiceCauseView struct {
-	CauseID, OutageID                       uuid.UUID
-	Cause                                   ledger.ServiceCauseSpec
-	CauseVersion, MemberVersion, Generation int64
-	Phase, Condition                        string
-	FirstSource                             ledger.ServiceSource
-	DueUTCNS                                *int64
-}
-
-type ServiceRecovery struct {
-	UncoveredObservations int
-	LastErrorClass        string
-}
-
-type ServiceView struct {
-	AgentID                      uuid.UUID
-	State                        string // available, lost or unsupported; pending does not imply loss
-	Active, Pending, Unsupported []ServiceCauseView
-	ThroughSequence              uint64
-	SourceThrough                int64
-	Recovery                     ServiceRecovery
-}
-
-type ServiceOutageRow struct {
-	OutageID, CauseID, AgentID uuid.UUID
-	Cause                      ledger.ServiceCauseSpec
-	Generation                 int64
-	Active                     bool
-	Unsupported                bool
-	BeginNoticeID, EndNoticeID uuid.UUID
-	BeginSequence, EndSequence uint64
-	Members, ActiveMembers     []uuid.UUID
-}
-
-// A cursor belongs to one caller/filter and one immutable current-head page.
-type ServiceOutageCursor struct {
-	OutageID, AgentID                      uuid.UUID
-	ThroughSequence                        uint64
-	CallerID, FilterAgentID, FilterCauseID uuid.UUID
-}
-
-type ServiceOutageQuery struct {
-	CallerID, AgentID, CauseID uuid.UUID
-	Limit                      int
-	Next                       *ServiceOutageCursor
-}
-
-type ServiceOutagePage struct {
-	Rows            []ServiceOutageRow
-	ThroughSequence uint64
-	Next            *ServiceOutageCursor
-}
-
-type ServiceSnapshot struct {
-	Agents          []ServiceView
-	Outages         []ServiceOutageRow
-	ThroughSequence uint64
-	SourceThrough   int64
-	Recovery        ServiceRecovery
-}
+// The owner boundary shares these passive values with the trusted host.
+type ServiceCauseView = session.ServiceCauseView
+type ServiceRecovery = session.ServiceRecovery
+type ServiceView = session.ServiceView
+type ServiceOutageRow = session.ServiceOutageRow
+type ServiceOutageCursor = session.ServiceOutageCursor
+type ServiceOutageQuery = session.ServiceOutageQuery
+type ServiceOutagePage = session.ServiceOutagePage
+type ServiceSnapshot = session.ServiceSnapshot
 
 // ServiceCompletionObject is stored separately from financial response objects.
 // Its entries are the complete, CauseID-sorted selection at ThroughSequence.

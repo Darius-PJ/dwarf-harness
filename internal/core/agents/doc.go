@@ -177,10 +177,20 @@
 // F3-91 is an observation projection, not another execution or eligibility gate.
 // ServiceStatus aggregates an agent's known lost, pending and unsupported causes;
 // ServiceOutages pages incident memberships and stable notice identities at one
-// caller/filter/frontier, and ServiceStatusSnapshot takes the same-head aggregate.
-// These queries are passive. Service records change no grants, authority, native
-// work, task facts, continuation owner, scheduler slots, capacity or money.
-// They notify Since readers without rescheduling or cancelling native work.
+// caller/filter/frontier, including an optional outage filter, and
+// ServiceStatusSnapshot takes the same-head aggregate. A known lost membership
+// wins over unsupported causes. Recovery exposes retained live-source count and
+// serviceError as well as uncovered sources. These queries are passive. Service
+// records change no grants, authority, native work, task facts, continuation
+// owner, scheduler slots, capacity or money. They notify Since readers without
+// rescheduling or cancelling native work.
+//
+// Session exposes service.status/service.outages and ContextView.Service.
+// Outage cursors bind the current head, caller and full filter; changing any
+// returns ErrServicePageStale. Every bound session receives colony begin/end
+// notices and lost-member joins on an existing incident, while service.changed
+// reaches only its member agent. Other events retain the agent/session envelope
+// filter. Hosts deduplicate colony events by their durable notice or member IDs.
 //
 // The service family is decoded beside the eight-family decoder, before private
 // envelope checks. Its empty envelope belongs to Core, and its command participates

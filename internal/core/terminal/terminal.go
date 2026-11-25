@@ -70,6 +70,8 @@ type runner struct {
 	exit     bool
 	forced   bool
 	written  error
+	notices  map[uuid.UUID]bool
+	joins    map[outageJoin]bool
 }
 
 type turnState struct {
@@ -81,10 +83,21 @@ type turnState struct {
 	finalAsked bool
 }
 
+type outageJoin struct {
+	outage, agent uuid.UUID
+	generation    int64
+}
+
+type outageListing struct {
+	page    session.ServiceOutagePage
+	changed bool
+}
+
 type job struct {
 	session session.Session
 	command session.Command
 	ids     lineIDs
+	notice  session.Event
 }
 
 type input struct {
@@ -208,6 +221,9 @@ func (r *runner) start(a *Agent) {
 			cursor = view.ThroughSequence
 		}
 		r.eligibilityView(ids, view.Eligibility)
+		if view.Service != nil {
+			r.writeService(renderServiceView(*view.Service) + renderServiceRecovery(view.Service.Recovery))
+		}
 		for _, turn := range view.Turns {
 			r.turnView(lineIDs{agent: a.AgentID, context: c.ContextID, turn: turn.TurnID}, turn)
 			if turn.State != "recovery_pending" {
@@ -238,6 +254,15 @@ func (r *runner) say(ids lineIDs, kind, text string) {
 		return
 	}
 	if _, err := io.WriteString(r.cfg.Output, render(label, kind, text)); err != nil {
+		r.written, r.exit, r.forced = err, true, true
+	}
+}
+
+func (r *runner) writeService(text string) {
+	if r.written != nil || r.cfg.Output == nil || text == "" {
+		return
+	}
+	if _, err := io.WriteString(r.cfg.Output, text); err != nil {
 		r.written, r.exit, r.forced = err, true, true
 	}
 }
@@ -386,6 +411,23 @@ func (r *runner) line(line string) {
 		} else {
 			r.queue(ids, session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: ids.context, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: turn}})
 		}
+	case "/service":
+		q := session.ServiceStatus{}
+		if len(fields) != 0 {
+			id, ok := parseFieldID(fields, 0, 1)
+			if !ok {
+				r.say(lineIDs{}, "refused:", "/service needs at most one agent UUID")
+				return
+			}
+			q.AgentID = id
+		}
+		r.queue(r.selected, session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: r.selected.context, Operation: "service.status", Arguments: q})
+	case "/outages":
+		if len(fields) != 0 {
+			r.say(lineIDs{}, "refused:", "/outages takes no arguments")
+			return
+		}
+		r.queue(r.selected, session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: r.selected.context, Operation: "service.outages", Arguments: session.ServiceOutages{}})
 	case "/send":
 		command, err := DecodeCommand([]byte(rest))
 		if err != nil {
@@ -408,7 +450,7 @@ func (r *runner) line(line string) {
 		}
 		r.queue(ids, command)
 	default:
-		r.say(lineIDs{}, "refused:", "unknown command; use /context, /status, /cancel, /send or /quit")
+		r.say(lineIDs{}, "refused:", "unknown command; use /context, /status, /cancel, /service, /outages, /send or /quit")
 	}
 }
 
@@ -431,10 +473,51 @@ func (r *runner) worker() {
 		case <-r.ctx.Done():
 			return
 		case j := <-r.jobs:
-			result, err := j.session.Do(r.ctx, j.command)
+			var result session.CommandResult
+			var err error
+			if _, ok := j.command.Arguments.(session.ServiceOutages); ok {
+				result, err = collectServiceOutages(r.ctx, j.session, j.command)
+			} else {
+				result, err = j.session.Do(r.ctx, j.command)
+			}
 			if !r.post(func() { r.result(j, result, err) }) {
 				return
 			}
+		}
+	}
+}
+
+// Three attempts bound a busy colony's stale-page restarts. Each failed
+// attempt discards its prefix; the last one is printed as explicitly partial.
+func collectServiceOutages(ctx context.Context, s session.Session, command session.Command) (session.CommandResult, error) {
+	args := command.Arguments.(session.ServiceOutages)
+	for attempt := 0; ; attempt++ {
+		listing := outageListing{}
+		for {
+			command.Arguments = args
+			result, err := s.Do(ctx, command)
+			if errors.Is(err, session.ErrServicePageStale) {
+				if attempt == 2 {
+					listing.changed = true
+					return session.CommandResult{CommandID: command.CommandID, Outcome: "ok", Data: listing}, nil
+				}
+				args.After, args.ThroughSequence = nil, 0
+				break
+			}
+			if err != nil {
+				return result, err
+			}
+			page, ok := result.Data.(session.ServiceOutagePage)
+			if !ok {
+				return result, ErrConfig
+			}
+			listing.page.ThroughSequence = page.ThroughSequence
+			listing.page.Rows = append(listing.page.Rows, page.Rows...)
+			if page.Next == nil {
+				result.Data = listing
+				return result, nil
+			}
+			args.After, args.ThroughSequence = page.Next, page.ThroughSequence
 		}
 	}
 }
@@ -450,11 +533,29 @@ func (r *runner) result(j job, result session.CommandResult, err error) {
 		return
 	}
 	switch v := result.Data.(type) {
+	case session.ServiceView:
+		r.writeService(renderServiceView(v) + renderServiceRecovery(v.Recovery))
+	case outageListing:
+		switch notice := j.notice.Data.(type) {
+		case ledger.RuntimeServiceOutageNotice:
+			r.say(lineIDs{}, "event", fmt.Sprintf("%s notice=%s outage=%s", j.notice.Type, notice.NoticeID, notice.OutageID))
+		case ledger.RuntimeServiceAgentChanged:
+			r.say(lineIDs{}, "event", fmt.Sprintf("outage.updated outage=%s agent=%s generation=%d", notice.OutageID, notice.AgentID, notice.Generation))
+		}
+		r.writeService(renderServiceOutages(v.page.Rows, v.page.ThroughSequence))
+		if v.changed {
+			r.say(lineIDs{}, "outages", "list changed; partial results, run /outages again")
+		} else if len(v.page.Rows) == 0 {
+			r.say(lineIDs{}, "outages", "none")
+		}
 	case session.TurnView:
 		r.turnView(j.ids, v)
 	case session.ContextView:
 		r.say(j.ids, "context", fmt.Sprintf("revision=%d turns=%d", v.Revision, len(v.Turns)))
 		r.eligibilityView(j.ids, v.Eligibility)
+		if v.Service != nil {
+			r.writeService(renderServiceView(*v.Service) + renderServiceRecovery(v.Service.Recovery))
+		}
 		for _, turn := range v.Turns {
 			r.turnView(lineIDs{agent: j.ids.agent, context: j.ids.context, turn: turn.TurnID}, turn)
 		}
@@ -573,6 +674,31 @@ func (r *runner) pump(a *Agent, cursor uint64) {
 func (r *runner) event(e session.Event) {
 	ids := lineIDs{agent: e.AgentID, context: e.ContextID, turn: e.TurnID}
 	switch v := e.Data.(type) {
+	case ledger.RuntimeServiceAgentChanged:
+		if e.Type == "service.changed" {
+			a := r.agents[v.AgentID]
+			ids := lineIDs{agent: a.AgentID, context: a.Contexts[0].ContextID}
+			r.queue(ids, session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: ids.context, Operation: "service.status", Arguments: session.ServiceStatus{}})
+			return
+		}
+		key := outageJoin{v.OutageID, v.AgentID, v.Generation}
+		if r.joins == nil {
+			r.joins = make(map[outageJoin]bool)
+		}
+		if r.joins[key] {
+			return
+		}
+		r.joins[key] = true
+		r.queueOutage(e, v.OutageID)
+	case ledger.RuntimeServiceOutageNotice:
+		if r.notices == nil {
+			r.notices = make(map[uuid.UUID]bool)
+		}
+		if r.notices[v.NoticeID] {
+			return
+		}
+		r.notices[v.NoticeID] = true
+		r.queueOutage(e, v.OutageID)
 	case session.EligibilityView:
 		r.say(ids, "event", e.Type)
 		r.eligibilityView(ids, &v)
@@ -603,6 +729,12 @@ func (r *runner) event(e session.Event) {
 	default:
 		r.say(ids, "event", e.Type)
 	}
+}
+
+func (r *runner) queueOutage(event session.Event, outage uuid.UUID) {
+	a := r.cfg.Agents[0]
+	ids := lineIDs{agent: a.AgentID, context: a.Contexts[0].ContextID}
+	r.pending = append(r.pending, job{session: a.Session, ids: ids, notice: event, command: session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: ids.context, Operation: "service.outages", Arguments: session.ServiceOutages{OutageID: outage}}})
 }
 
 // track attaches live text once per turn; the turn keeps its bound IDs.

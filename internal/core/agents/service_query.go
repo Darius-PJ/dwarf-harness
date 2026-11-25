@@ -34,7 +34,7 @@ func (p serviceProjection) unverifiable(key serviceMemberKey) bool {
 	return false
 }
 func (s *Service) serviceRecoveryLocked() ServiceRecovery {
-	r := ServiceRecovery{LastErrorClass: s.serviceError}
+	r := ServiceRecovery{LastErrorClass: s.serviceError, RetainedSources: len(s.serviceRetained)}
 	for _, id := range s.p.service.order {
 		e := s.p.service.observations[id]
 		if !s.p.service.observationDone(e) {
@@ -69,15 +69,15 @@ func (s *Service) serviceViewLocked(agent uuid.UUID) ServiceView {
 		if c.unsupported || m.unsupported || p.unverifiable(key) {
 			view.Phase = "unsupported"
 			v.Unsupported = append(v.Unsupported, view)
-			v.State = "unsupported"
+			if v.State != "lost" {
+				v.State = "unsupported"
+			}
 			continue
 		}
 		switch m.snapshot.Phase {
 		case "lost":
 			v.Active = append(v.Active, view)
-			if v.State != "unsupported" {
-				v.State = "lost"
-			}
+			v.State = "lost"
 		case "pending":
 			v.Pending = append(v.Pending, view)
 		}
@@ -91,7 +91,9 @@ func (s *Service) serviceViewLocked(agent uuid.UUID) ServiceView {
 			view := serviceCauseView(c, serviceMember{})
 			view.Phase = "unsupported"
 			v.Unsupported = append(v.Unsupported, view)
-			v.State = "unsupported"
+			if v.State != "lost" {
+				v.State = "unsupported"
+			}
 			seen[c.id] = true
 		}
 	}
@@ -166,12 +168,12 @@ func (s *Service) ServiceOutages(ctx context.Context, q ServiceOutageQuery) (Ser
 	if err := s.refreshLocked(ctx, &historyReadSet{}, s.store.Durable()); err != nil {
 		return ServiceOutagePage{}, err
 	}
-	if c := q.Next; c != nil && (c.ThroughSequence != s.p.through || c.CallerID != q.CallerID || c.FilterAgentID != q.AgentID || c.FilterCauseID != q.CauseID) {
+	if c := q.Next; c != nil && (c.ThroughSequence != s.p.through || c.CallerID != q.CallerID || c.FilterAgentID != q.AgentID || c.FilterCauseID != q.CauseID || c.FilterOutageID != q.OutageID) {
 		return ServiceOutagePage{}, ErrServicePageStale
 	}
 	page := ServiceOutagePage{ThroughSequence: s.p.through}
 	for _, row := range s.serviceOutageRowsLocked() {
-		if q.AgentID != (uuid.UUID{}) && q.AgentID != row.AgentID || q.CauseID != (uuid.UUID{}) && q.CauseID != row.CauseID {
+		if q.AgentID != (uuid.UUID{}) && q.AgentID != row.AgentID || q.CauseID != (uuid.UUID{}) && q.CauseID != row.CauseID || q.OutageID != (uuid.UUID{}) && q.OutageID != row.OutageID {
 			continue
 		}
 		if c := q.Next; c != nil {
@@ -182,7 +184,7 @@ func (s *Service) ServiceOutages(ctx context.Context, q ServiceOutageQuery) (Ser
 		}
 		if len(page.Rows) == q.Limit {
 			last := page.Rows[len(page.Rows)-1]
-			page.Next = &ServiceOutageCursor{OutageID: last.OutageID, AgentID: last.AgentID, ThroughSequence: page.ThroughSequence, CallerID: q.CallerID, FilterAgentID: q.AgentID, FilterCauseID: q.CauseID}
+			page.Next = &ServiceOutageCursor{OutageID: last.OutageID, AgentID: last.AgentID, ThroughSequence: page.ThroughSequence, CallerID: q.CallerID, FilterAgentID: q.AgentID, FilterCauseID: q.CauseID, FilterOutageID: q.OutageID}
 			break
 		}
 		page.Rows = append(page.Rows, row)

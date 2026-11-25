@@ -9,8 +9,9 @@
 // authority. A Command uses schema 1, a UUIDv7 command ID and a context of that
 // agent and session, and carries exactly one value from the closed set:
 // message.send with MessageSend, turn.cancel with TurnCancel, turn.status with
-// TurnStatus, context.status with ContextStatus or promotion.request with
-// PromotionRequest. Any other pairing is refused before an effect.
+// TurnStatus, context.status with ContextStatus, promotion.request with
+// PromotionRequest, service.status with ServiceStatus or service.outages with
+// ServiceOutages. Any other pairing is refused before an effect.
 //
 // CommandResult carries only actual durable sequences: ReceiptSequence and
 // EffectSequence name committed records, and queries carry none. Retrying a
@@ -45,6 +46,15 @@
 // Inspection, attachment and reopening never start work; a refused input needs
 // a new explicit submission after release.
 //
+// ServiceStatus defaults to the bound agent; the trusted owner may name another
+// registered agent. ContextView includes the same passive service view at its
+// through-sequence. ServiceOutages optionally filters by outage ID and returns
+// flattened memberships at one current head. Its opaque After cursor binds the
+// head, caller and filter; a changed binding or mismatched ThroughSequence
+// returns ErrServicePageStale. These query values are not persisted formats.
+// Recovery includes uncovered records, retained live sources and their error
+// class. Known lost membership takes precedence over unsupported causes.
+//
 // Since pages the committed records of the view's agent and session after a
 // cursor, at most 128 events and 1 MiB per page. Wake closes at the next
 // runtime change, so a reader waits without polling. Identity fields come from
@@ -56,6 +66,10 @@
 // Disposition is empty, the four source sequences are zero and FirstAdmittedTurn
 // is nil. Query status for those facts. Sequence is the source record's own
 // sequence.
+// F3-91 is the exception to the envelope filter: every bound Session surfaces
+// outage.began/ended notices and outage.joined for a newly lost member of an
+// existing incident. Only the member's bound agent receives service.changed.
+// NoticeID and (OutageID, AgentID, generation) identify cross-session duplicates.
 //
 // LiveText returns a provisional snapshot and a subscription attached at the
 // same delta high-water. Deltas are decoded answer text only, never reasoning,

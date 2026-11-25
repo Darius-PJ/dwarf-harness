@@ -18,12 +18,12 @@
 //
 // Run serves the given Sessions. Plain text sends message.send to the
 // selected context with fresh command and turn IDs; /context <agent>
-// <context>, /status <turn>, /cancel <turn>, /send <command JSON> and /quit
-// are the commands, and any other /command refuses locally. /send decodes one
-// strict schema-1 command (DecodeCommand) whose JSON escapes carry multiline
-// text and artifact references; nothing is shell-evaluated. Commands run one
-// at a time in arrival order. Every displayed line carries the short
-// [agent/context/turn] identity of the event, turn or command it reports,
+// <context>, /status <turn>, /cancel <turn>, /service [agent], /outages,
+// /send <command JSON> and /quit are the commands, and any other /command refuses
+// locally. /send decodes one strict schema-1 command (DecodeCommand) whose JSON
+// escapes carry multiline text and artifact references; nothing is shell-evaluated.
+// Commands run one at a time in arrival order. Every displayed line carries the
+// short [agent/context/turn] identity of the event, turn or command it reports,
 // never the current selection, and escapes controls, ANSI and OSC sequences,
 // carriage returns, format characters and invalid UTF-8 while keeping
 // printable Unicode; each line of multiline text is labelled.
@@ -41,6 +41,19 @@
 // Eligibility is separate from the saved phase/wait and recovery availability.
 // Only the trusted owner's Core Service transitions set or release the gate;
 // there is no terminal eligibility command or automatic resend on release.
+//
+// /service, /outages and their passive /send equivalents use the same bounded
+// identifier formatting as WriteServiceStatus at startup. Lost service prints
+// as service_loss, separately from eligibility and saved turn state. No service
+// command sets state or sends work. Retained-source and recovery errors remain
+// visible; full source provenance, object digests and cursors are not printed.
+// Colony notices from every Session are deduplicated by NoticeID; joined members
+// by (OutageID, AgentID, generation). Each refresh lists the full affected set at
+// one head, passing Core's Next cursor back unchanged. A stale page restarts the
+// listing at most twice; if the third attempt changes, its obtained rows print
+// with a partial-list warning and an explicit /outages retry.
+// The host's normal startup and typed refusals print the Service snapshot before
+// Run or the existing refusal line. A missing snapshot is never shown as healthy.
 //
 // Run takes one live subscription per active turn of every agent, not only the
 // selection. Provisional text prints as "live (provisional):" and is never the

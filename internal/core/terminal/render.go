@@ -6,6 +6,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 )
 
 // lineIDs are a displayed line's bound identities, always taken from the
@@ -64,6 +66,41 @@ func escape(s string) string {
 			fmt.Fprintf(&out, `\U%08x`, r)
 		}
 		s = s[size:]
+	}
+	return out.String()
+}
+
+func renderServiceRecovery(v session.ServiceRecovery) string {
+	if v.UncoveredObservations == 0 && v.RetainedSources == 0 && v.LastErrorClass == "" {
+		return ""
+	}
+	return render("[terminal]", "service-recovery", fmt.Sprintf("uncovered=%d retained=%d class=%s", v.UncoveredObservations, v.RetainedSources, v.LastErrorClass))
+}
+
+func renderServiceView(v session.ServiceView) string {
+	var out strings.Builder
+	label := (lineIDs{agent: v.AgentID}).label()
+	state := v.State
+	if state == "lost" {
+		state = "service_loss"
+	}
+	out.WriteString(render(label, "service", fmt.Sprintf("agent=%s state=%s through=%d", v.AgentID, state, v.ThroughSequence)))
+	for _, list := range [][]session.ServiceCauseView{v.Active, v.Pending, v.Unsupported} {
+		for _, cause := range list {
+			out.WriteString(render(label, "service-cause", fmt.Sprintf("cause=%s outage=%s phase=%s generation=%d condition=%s family=%s code=%s scope=%s observation=%s", cause.CauseID, cause.OutageID, cause.Phase, cause.Generation, cause.Condition, cause.Cause.Family, cause.Cause.Code, cause.Cause.ScopeKind, cause.FirstSource.ObservationID)))
+		}
+	}
+	return out.String()
+}
+
+func renderServiceOutages(rows []session.ServiceOutageRow, through uint64) string {
+	var out strings.Builder
+	for _, row := range rows {
+		phase := "open"
+		if row.EndNoticeID != (uuid.UUID{}) {
+			phase = "ended"
+		}
+		out.WriteString(render("[terminal]", "outage", fmt.Sprintf("outage=%s cause=%s phase=%s begin=%s end=%s agent=%s generation=%d active=%t unsupported=%t family=%s code=%s scope=%s through=%d", row.OutageID, row.CauseID, phase, row.BeginNoticeID, row.EndNoticeID, row.AgentID, row.Generation, row.Active, row.Unsupported, row.Cause.Family, row.Cause.Code, row.Cause.ScopeKind, through)))
 	}
 	return out.String()
 }

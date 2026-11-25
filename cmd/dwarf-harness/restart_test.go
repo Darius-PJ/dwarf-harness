@@ -138,8 +138,13 @@ func TestRuntimeRestartStartup(t *testing.T) {
 // objects, following the agents golden-fixture hydration convention.
 func restartPrefix(t *testing.T, through uint64) (string, uuid.UUID, ledger.Origin) {
 	t.Helper()
-	source := filepath.Join("..", "..", "contract", "ledger", "testdata", "f3", "16")
-	colony := uuid.MustParse("019a1600-0000-7000-8000-000000000100")
+	return startupPrefix(t, "16", through)
+}
+
+func startupPrefix(t *testing.T, chapter string, through uint64) (string, uuid.UUID, ledger.Origin) {
+	t.Helper()
+	source := filepath.Join("..", "..", "contract", "ledger", "testdata", "f3", chapter)
+	colony := uuid.MustParse("019a" + chapter + "00-0000-7000-8000-000000000100")
 	root := filepath.Join(t.TempDir(), "colony")
 	if err := os.CopyFS(root, os.DirFS(filepath.Join(source, "objects"))); err != nil {
 		t.Fatal(err)
@@ -186,6 +191,9 @@ func restartPrefix(t *testing.T, through uint64) (string, uuid.UUID, ledger.Orig
 					t.Fatal(err)
 				}
 				directories[record.AgentID] = v.Directory
+				if origin.AgentID == (uuid.UUID{}) {
+					origin = ledger.Origin{AgentID: record.AgentID, SessionID: record.ExecutionSessionID, ContextID: record.ContextID}
+				}
 			}
 			if record.Type == ledger.TypeRuntimeTurnBound {
 				turn = record.TurnID
@@ -234,7 +242,9 @@ func restartPrefix(t *testing.T, through uint64) (string, uuid.UUID, ledger.Orig
 	if err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rebindStartupPolicy(t, root, directories[origin.AgentID], origin, turn, commits)
+	if chapter == "16" {
+		rebindStartupPolicy(t, root, directories[origin.AgentID], origin, turn, commits)
+	}
 	return root, turn, origin
 }
 

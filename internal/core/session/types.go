@@ -13,6 +13,7 @@ var (
 	ErrFinished         = errors.New("session: finished")
 	ErrClosed           = errors.New("session: closed")
 	ErrEligibilityHeld  = errors.New("session: eligibility held")
+	ErrServicePageStale = errors.New("agents: service outage page is stale")
 )
 
 // Session is a trusted-host owner view bound to one existing agent/session.
@@ -47,6 +48,86 @@ type TurnStatus struct {
 	TurnID uuid.UUID `json:"turn_id"`
 }
 type ContextStatus struct{}
+
+type ServiceStatus struct {
+	AgentID uuid.UUID `json:"agent_id,omitzero"`
+}
+
+// ServiceOutages is a passive owner query. After and ThroughSequence identify
+// a page at the same current head and OutageID filter.
+type ServiceOutages struct {
+	OutageID        uuid.UUID            `json:"outage_id,omitzero"`
+	After           *ServiceOutageCursor `json:"after,omitempty"`
+	Limit           int                  `json:"limit,omitempty"`
+	ThroughSequence uint64               `json:"through_sequence,omitempty"`
+}
+
+// ServiceCauseView is availability metadata, never an execution permission.
+type ServiceCauseView struct {
+	CauseID, OutageID                       uuid.UUID
+	Cause                                   ledger.ServiceCauseSpec
+	CauseVersion, MemberVersion, Generation int64
+	Phase, Condition                        string
+	FirstSource                             ledger.ServiceSource
+	DueUTCNS                                *int64
+}
+
+type ServiceRecovery struct {
+	UncoveredObservations int
+	RetainedSources       int
+	LastErrorClass        string
+}
+
+type ServiceView struct {
+	AgentID                      uuid.UUID
+	State                        string // available, lost or unsupported; pending does not imply loss
+	Active, Pending, Unsupported []ServiceCauseView
+	ThroughSequence              uint64
+	SourceThrough                int64
+	Recovery                     ServiceRecovery
+}
+
+type ServiceOutageRow struct {
+	OutageID, CauseID, AgentID uuid.UUID
+	Cause                      ledger.ServiceCauseSpec
+	Generation                 int64
+	Active                     bool
+	Unsupported                bool
+	BeginNoticeID, EndNoticeID uuid.UUID
+	BeginSequence, EndSequence uint64
+	Members, ActiveMembers     []uuid.UUID
+}
+
+// A cursor belongs to one caller/filter and one immutable current-head page.
+type ServiceOutageCursor struct {
+	OutageID        uuid.UUID `json:"outage_id"`
+	AgentID         uuid.UUID `json:"agent_id"`
+	ThroughSequence uint64    `json:"through_sequence"`
+	CallerID        uuid.UUID `json:"caller_id"`
+	FilterAgentID   uuid.UUID `json:"filter_agent_id,omitzero"`
+	FilterCauseID   uuid.UUID `json:"filter_cause_id,omitzero"`
+	FilterOutageID  uuid.UUID `json:"filter_outage_id,omitzero"`
+}
+
+type ServiceOutageQuery struct {
+	CallerID, AgentID, CauseID, OutageID uuid.UUID
+	Limit                                int
+	Next                                 *ServiceOutageCursor
+}
+
+type ServiceOutagePage struct {
+	Rows            []ServiceOutageRow
+	ThroughSequence uint64
+	Next            *ServiceOutageCursor
+}
+
+type ServiceSnapshot struct {
+	Agents          []ServiceView
+	Outages         []ServiceOutageRow
+	ThroughSequence uint64
+	SourceThrough   int64
+	Recovery        ServiceRecovery
+}
 type PromotionRequest struct {
 	WorkspaceID uuid.UUID `json:"workspace_id"`
 	Head        uuid.UUID `json:"head"`
@@ -108,6 +189,7 @@ type ContextView struct {
 	Turns           []TurnView       `json:"turns"`
 	ThroughSequence uint64           `json:"through_sequence"`
 	Eligibility     *EligibilityView `json:"eligibility,omitempty"`
+	Service         *ServiceView     `json:"service,omitempty"`
 }
 
 type Event struct {

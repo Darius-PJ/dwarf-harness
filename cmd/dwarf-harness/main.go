@@ -36,6 +36,10 @@ func main() {
 // Production leaves it nil.
 var workspaceCloseOverride func(*agents.Service, func() error) error
 
+// workspaceOpenOverride substitutes only workspace.Open's result in startup
+// refusal tests. Production leaves it nil.
+var workspaceOpenOverride func(context.Context, *ledgerstore.Store, string, workspace.Config) (*workspace.Service, workspace.Reconciliation, error)
+
 // run returns 0 after a drained exit, 1 after a refusal and 2 for usage.
 // Every refusal prints a fixed error class, never a path, value or locator.
 func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.Signal) int {
@@ -78,9 +82,33 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 		return refuse("core", err)
 	}
 	drain = []func() error{service.Close, store.Close}
+	printService := func(condition string, recoveryErr error) error {
+		if recoveryErr != nil {
+			if condition != "" {
+				condition += "; "
+			}
+			condition += "service_recovery_pending"
+		}
+		snapshot, err := service.ServiceStatusSnapshot(ctx)
+		if err != nil {
+			return terminal.WriteServiceStatus(stdout, nil, condition)
+		}
+		return terminal.WriteServiceStatus(stdout, &snapshot, condition)
+	}
 	profile := workspace.ProvisionalCapacityProfile()
-	ws, _, err := workspace.Open(ctx, store, *colonyDir, workspace.Config{Capacity: &profile})
+	openWorkspace := func() (*workspace.Service, workspace.Reconciliation, error) {
+		cfg := workspace.Config{Capacity: &profile}
+		if override := workspaceOpenOverride; override != nil {
+			return override(ctx, store, *colonyDir, cfg)
+		}
+		return workspace.Open(ctx, store, *colonyDir, cfg)
+	}
+	ws, workspaceReport, err := openWorkspace()
 	if err != nil {
+		if blocked, _ := workspace.ClassifyExecutionFailure(err); blocked {
+			_, recoveryErr := service.ReconcileServiceEvidence(ctx, nil)
+			_ = printService("process_unconfirmed", recoveryErr)
+		}
 		stop()
 		return refuse("workspace", err)
 	}
@@ -123,9 +151,14 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 		views[i].Contexts = append(views[i].Contexts, terminal.Context{ContextID: c.ContextID, Title: c.DisplayTitle})
 	}
 	if err := service.EnableTurnLoop(ctx, ws, options); err != nil {
+		if errors.Is(err, agents.ErrIntegrity) {
+			_, recoveryErr := service.ReconcileServiceEvidence(ctx, nil)
+			_ = printService("private_integrity", recoveryErr)
+		}
 		stop()
 		return refuse("turn loop", err)
 	}
+	_, serviceRecoveryErr := service.ReconcileServiceEvidence(ctx, &agents.ServiceHostReports{ProcessClosures: workspaceReport.ProcessClosures})
 	for i := range views {
 		view, err := service.OpenSession(ctx, agents.Binding{AgentID: views[i].AgentID, ContextID: views[i].Contexts[0].ContextID})
 		if err != nil {
@@ -138,6 +171,13 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 		views[i].Session = view
 	}
 	if err := terminal.WriteStartup(stdout, settings, bound); err != nil {
+		for _, v := range views {
+			v.Session.Close()
+		}
+		stop()
+		return 1
+	}
+	if err := printService("", serviceRecoveryErr); err != nil {
 		for _, v := range views {
 			v.Session.Close()
 		}

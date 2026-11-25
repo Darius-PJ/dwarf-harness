@@ -114,6 +114,30 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 			return result, err
 		}
 		return session.CommandResult{CommandID: command.CommandID, Outcome: "ok", TurnID: args.TurnID, Data: view}, nil
+	case session.ServiceStatus:
+		if command.Operation != "service.status" || args.AgentID != (uuid.UUID{}) && !validID(args.AgentID) {
+			return result, ErrInvalid
+		}
+		agent := args.AgentID
+		if agent == (uuid.UUID{}) {
+			agent = ids.agent
+		}
+		view, err := s.ServiceStatus(ctx, agent)
+		return session.CommandResult{CommandID: command.CommandID, Outcome: "ok", Data: view}, err
+	case session.ServiceOutages:
+		if command.Operation != "service.outages" || args.OutageID != (uuid.UUID{}) && !validID(args.OutageID) {
+			return result, ErrInvalid
+		}
+		if args.After != nil && args.ThroughSequence != 0 && args.After.ThroughSequence != args.ThroughSequence {
+			return result, ErrServicePageStale
+		}
+		q := ServiceOutageQuery{CallerID: ids.session, OutageID: args.OutageID, Limit: args.Limit, Next: args.After}
+		// A supplied first-page head is also a current-head assertion.
+		if q.Next == nil && args.ThroughSequence != 0 {
+			q.Next = &ServiceOutageCursor{ThroughSequence: args.ThroughSequence, CallerID: ids.session, FilterOutageID: args.OutageID}
+		}
+		page, err := s.ServiceOutages(ctx, q)
+		return session.CommandResult{CommandID: command.CommandID, Outcome: "ok", Data: page}, err
 	case session.ContextStatus:
 		if command.Operation != "context.status" {
 			return result, ErrInvalid
@@ -123,6 +147,8 @@ func (v *loopSession) Do(ctx context.Context, command session.Command) (session.
 		err := s.prepareHistoryLocked(ctx, reads, &ids, true, func(reads *historyReadSet) error {
 			st := s.p.scopes[keyFor(ids, "context")]
 			view = session.ContextView{ContextID: ids.context, Revision: st.revision, ThroughSequence: s.p.through, Turns: []session.TurnView{}}
+			service := s.serviceViewLocked(ids.agent)
+			view.Service = &service
 			for _, turn := range s.p.pendingLoopViews() {
 				if turn.Origin == originOf(ids) && turn.ToolID == (uuid.UUID{}) {
 					view.Turns = append(view.Turns, session.TurnView{TurnID: turn.TurnID})
@@ -332,7 +358,10 @@ func (v *loopSession) Since(ctx context.Context, cursor uint64, limit int) (sess
 	hint := s.history.checkpoint(cursor)
 	size := 0
 	checkpoint, err := s.readRange(ctx, cursor, through, hint, func(c ledger.Commit) error {
-		var next []session.Event
+		next, err := serviceSessionEvents(c, v.ids.agent)
+		if err != nil {
+			return err
+		}
 		for _, record := range c.Records {
 			if record.AgentID != v.ids.agent || record.ExecutionSessionID != v.ids.session {
 				continue
@@ -406,6 +435,45 @@ func (v *loopSession) Since(ctx context.Context, cursor uint64, limit int) (sess
 		return session.EventPage{Events: []session.Event{}, ThroughSequence: cursor, Wake: wake}, err
 	}
 	return page, err
+}
+
+// F3-91 has colony envelopes. Only its typed payloads bypass the ordinary
+// agent/session filter; no private or financial event gets that exception.
+func serviceSessionEvents(c ledger.Commit, agent uuid.UUID) ([]session.Event, error) {
+	var events []session.Event
+	hasNotice := false
+	for _, record := range c.Records {
+		hasNotice = hasNotice || record.Type == ledger.TypeRuntimeServiceOutageNotice
+	}
+	for _, record := range c.Records {
+		e := session.Event{Sequence: record.Seq, OperationID: record.OperationID}
+		switch record.Type {
+		case ledger.TypeRuntimeServiceAgentChanged:
+			m, err := ledger.DecodeRuntimeServiceAgentChanged(record.Payload)
+			if err != nil {
+				return nil, err
+			}
+			e.AgentID, e.Data = m.AgentID, m
+			if m.AgentID == agent {
+				e.Type = "service.changed"
+				events = append(events, e)
+			}
+			if m.Phase == "lost" && !hasNotice {
+				e.Type = "outage.joined"
+				events = append(events, e)
+			}
+		case ledger.TypeRuntimeServiceOutageNotice:
+			n, err := ledger.DecodeRuntimeServiceOutageNotice(record.Payload)
+			if err != nil {
+				return nil, err
+			}
+			if n.Edge == "began" || n.Edge == "ended" {
+				e.Type, e.Data = "outage."+n.Edge, n
+				events = append(events, e)
+			}
+		}
+	}
+	return events, nil
 }
 func loopEvents(record ledger.Record) ([]session.Event, error) {
 	e := session.Event{Sequence: record.Seq, AgentID: record.AgentID, ExecutionSessionID: record.ExecutionSessionID, ContextID: record.ContextID, TurnID: record.TurnID, OperationID: record.OperationID}

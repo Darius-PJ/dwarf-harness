@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"math"
+	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
@@ -30,7 +31,7 @@ func DecodeCommand(raw []byte) (session.Command, error) {
 		Schema:    int(r.integer(m["schema"], "schema", 1, 1)),
 		CommandID: r.id(m["command_id"], "command_id"),
 		ContextID: r.id(m["context_id"], "context_id"),
-		Operation: r.choice(m["operation"], "operation", "message.send", "turn.cancel", "turn.status", "context.status", "promotion.request"),
+		Operation: r.choice(m["operation"], "operation", "message.send", "turn.cancel", "turn.status", "context.status", "promotion.request", "service.status", "service.outages"),
 	}
 	args := m["arguments"]
 	switch c.Operation {
@@ -69,6 +70,41 @@ func DecodeCommand(raw []byte) (session.Command, error) {
 	case "context.status":
 		if r.object(args, "arguments", nil, nil) {
 			c.Arguments = session.ContextStatus{}
+		}
+	case "service.status":
+		if r.object(args, "arguments", nil, []string{"agent_id"}) {
+			q := session.ServiceStatus{}
+			if v := args.members["agent_id"]; v != nil {
+				q.AgentID = r.id(v, "arguments.agent_id")
+			}
+			c.Arguments = q
+		}
+	case "service.outages":
+		if r.object(args, "arguments", nil, []string{"outage_id", "after", "limit", "through_sequence"}) {
+			q := session.ServiceOutages{}
+			if v := args.members["outage_id"]; v != nil {
+				q.OutageID = r.id(v, "arguments.outage_id")
+			}
+			if v := args.members["limit"]; v != nil {
+				q.Limit = int(r.integer(v, "arguments.limit", 1, 128))
+			}
+			if v := args.members["through_sequence"]; v != nil {
+				q.ThroughSequence = uint64(r.integer(v, "arguments.through_sequence", 1, math.MaxInt64))
+			}
+			if v := args.members["after"]; v != nil && r.object(v, "arguments.after", []string{"outage_id", "agent_id", "through_sequence", "caller_id"}, []string{"filter_agent_id", "filter_cause_id", "filter_outage_id"}) {
+				q.After = &session.ServiceOutageCursor{
+					OutageID:        r.id(v.members["outage_id"], "arguments.after.outage_id"),
+					AgentID:         r.id(v.members["agent_id"], "arguments.after.agent_id"),
+					ThroughSequence: uint64(r.integer(v.members["through_sequence"], "arguments.after.through_sequence", 1, math.MaxInt64)),
+					CallerID:        r.id(v.members["caller_id"], "arguments.after.caller_id"),
+				}
+				for name, target := range map[string]*uuid.UUID{"filter_agent_id": &q.After.FilterAgentID, "filter_cause_id": &q.After.FilterCauseID, "filter_outage_id": &q.After.FilterOutageID} {
+					if value := v.members[name]; value != nil {
+						*target = r.id(value, "arguments.after."+name)
+					}
+				}
+			}
+			c.Arguments = q
 		}
 	case "promotion.request":
 		if r.object(args, "arguments", []string{"workspace_id", "head"}, []string{"restart_from"}) {

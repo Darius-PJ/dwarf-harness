@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
 )
 
 // ScopeBinding is one credential binding performed at startup: the version
@@ -40,6 +42,28 @@ func WriteStartup(w io.Writer, s Settings, bound []ScopeBinding) error {
 		}
 		p := c.Policy
 		out.WriteString(render(lineIDs{agent: c.AgentID, context: c.ContextID}.label(), "enabled", fmt.Sprintf("%q route %s version %d scope %s max_output_tokens %d task %s model_calls %d tool_calls %d timeout_ms %d live_bytes %d", c.DisplayTitle, c.RouteID, c.ExpectedRouteVersion, c.CredentialScopeID, c.MaxOutputTokens, task, p.MaxModelCalls, p.MaxToolCalls, p.TimeoutMS, p.MaxLiveBytes)))
+	}
+	_, err := io.WriteString(w, out.String())
+	return err
+}
+
+// WriteServiceStatus renders a trusted, passive snapshot before the interactive
+// terminal exists. A nil snapshot reports unavailable recovery, never health.
+// condition is a host-selected class, not an error's diagnostic text.
+func WriteServiceStatus(w io.Writer, snapshot *session.ServiceSnapshot, condition string) error {
+	var out strings.Builder
+	if snapshot == nil {
+		out.WriteString(render("[terminal]", "service-status", "recovery unavailable"))
+	} else {
+		out.WriteString(render("[terminal]", "service-status", fmt.Sprintf("through=%d source_through=%d", snapshot.ThroughSequence, snapshot.SourceThrough)))
+		out.WriteString(renderServiceRecovery(snapshot.Recovery))
+		for _, agent := range snapshot.Agents {
+			out.WriteString(renderServiceView(agent))
+		}
+		out.WriteString(renderServiceOutages(snapshot.Outages, snapshot.ThroughSequence))
+	}
+	if condition != "" {
+		out.WriteString(render("[terminal]", "service-condition", condition))
 	}
 	_, err := io.WriteString(w, out.String())
 	return err

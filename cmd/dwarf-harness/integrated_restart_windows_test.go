@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"uuid"
+
+	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 )
 
 func init() { startupUnconfirmedFence = testStartupUnconfirmedFence }
@@ -96,6 +98,11 @@ func testStartupUnconfirmedFence(t *testing.T) {
 	if code != 1 || strings.Count(output, "[terminal] startup refused: workspace:") != 1 || strings.Contains(output, "colony opened") || strings.Contains(output, "ready") {
 		t.Fatalf("unconfirmed running fence did not stop workspace startup: code=%d output=%s", code, output)
 	}
+	status := strings.Index(output, "service-status")
+	refusal := strings.Index(output, "[terminal] startup refused: workspace: unclassified failure\n")
+	if status < 0 || refusal < status || !strings.Contains(output[:refusal], "process_unconfirmed") {
+		t.Fatal("real unconfirmed Owner did not print typed status before the unchanged refusal", output)
+	}
 	for name, before := range files {
 		after, err := os.ReadFile(name)
 		if err != nil || !bytes.Equal(after, before) {
@@ -103,6 +110,42 @@ func testStartupUnconfirmedFence(t *testing.T) {
 		}
 		if strings.Contains(output, name) {
 			t.Fatal("startup refusal disclosed a private path")
+		}
+	}
+}
+
+func TestServiceStartupReports(t *testing.T) {
+	root, settings, _, before := serviceStartupFixture(t, 162)
+	for range 2 {
+		code, output := integratedStartupRun(t, root, settings)
+		if code != 0 || !strings.Contains(output, "state=service_loss") {
+			t.Fatalf("positive process closure restored without success: code=%d output=%s", code, output)
+		}
+		clears, restored, ended := 0, 0, 0
+		for _, record := range serviceStartupRecords(t, root) {
+			if record.Seq <= before.ThroughSequence {
+				continue
+			}
+			switch record.Type {
+			case ledger.TypeRuntimeServiceObserved:
+				v, err := ledger.DecodeRuntimeServiceObserved(record.Payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if v.Source.Reason == "process_closed" {
+					clears++
+					if v.Source.ExecutionProof != "live" {
+						t.Fatalf("startup did not carry its real workspace Open proof: %+v", v.Source)
+					}
+				}
+			case ledger.TypeRuntimeServiceAgentChanged:
+				restored++
+			case ledger.TypeRuntimeServiceOutageNotice:
+				ended++
+			}
+		}
+		if clears != 1 || restored != 0 || ended != 0 {
+			t.Fatalf("startup clear replayed or restored early: clears=%d transitions=%d notices=%d", clears, restored, ended)
 		}
 	}
 }
