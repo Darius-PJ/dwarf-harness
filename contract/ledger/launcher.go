@@ -10,7 +10,7 @@ import (
 	"uuid"
 )
 
-// F7-30 is proposed for freeze (D125), independently of the launcher wire draft.
+// F7-30 is frozen (D188), independently of the launcher wire draft.
 const (
 	TypeLauncherCommandBound   = "launcher.command_bound"
 	TypeLauncherCommandReceipt = "launcher.command_receipt"

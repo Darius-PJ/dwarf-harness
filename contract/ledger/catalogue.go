@@ -77,7 +77,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // F3-150 adds TypeRuntimeSetupApplied and TypeRuntimeSetupReceipt at version 1,
 // frozen (D187).
 // F7-30 adds TypeLauncherCommandBound and TypeLauncherCommandReceipt at
-// version 1, proposed for freeze (D125).
+// version 1, frozen (D188).
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
 		{TypeCommand, 1}:                        true,

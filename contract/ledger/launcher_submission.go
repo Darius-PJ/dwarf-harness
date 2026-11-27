@@ -8,7 +8,7 @@ import (
 	"uuid"
 )
 
-// LauncherSubmissionSchema is reserved for F7-30, proposed for freeze (D125).
+// LauncherSubmissionSchema is reserved for F7-30, frozen (D188).
 const LauncherSubmissionSchema = 11
 
 // LauncherSubmission is a binding preimage, independent of any wire version.

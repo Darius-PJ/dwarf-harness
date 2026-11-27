@@ -183,8 +183,8 @@
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
 // F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
 // F3-13 types, the four F3-139 types, the six F3-15 types, the two
-// F3-16 types, the two F3-90 types, the five F3-91 types and the two
-// additive F3-150 types below, each at version 1.
+// F3-16 types, the two F3-90 types, the five F3-91 types, the two F3-150
+// types and the two additive F7-30 types below, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -221,6 +221,9 @@
 // F3-150 is ticket 150's part of F3, frozen (D187),
 // also by addition to format version 1; record availability does not imply
 // setup commands, managed configuration or any permission.
+// F7-30 is ticket 30's part, C7's first producer family, frozen (D188),
+// also by addition to format version 1; record availability does not imply
+// a running host, an authenticated launcher connection or a binding producer.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -3903,7 +3906,7 @@
 // Earlier-family groups remain service-admissible; the real Core Open probe
 // verifies that agents skips setup groups without changing its earlier rules.
 //
-// # F7-30 launcher bindings (proposed for freeze, D125)
+// # F7-30 launcher bindings (frozen, D188)
 //
 // C7 owns launcher.command_bound v1 and launcher.command_receipt v1.
 // internal/core/agents is the designated producer through the existing
