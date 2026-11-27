@@ -675,3 +675,70 @@ func TestEventTimeNeverDecreases(t *testing.T) {
 		t.Errorf("event times %v, want %v", got, want)
 	}
 }
+
+func TestClaimOpen(t *testing.T) {
+	t.Parallel()
+	s := newColony(t, testDeps(nil))
+	commit := mustAppend(t, s, sample("kept"))
+	segment := filepath.Join(s.LogDir(), s.segName)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(segment, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := f.WriteString(`{"torn":`)
+	if err := errors.Join(writeErr, f.Close()); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := ClaimColony(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { claim.Close() })
+	if claim.Colony() != s.Colony() {
+		t.Fatal("claim changed colony identity")
+	}
+	if other, err := ClaimColony(s.dir); !errors.Is(err, ErrLocked) {
+		if other != nil {
+			other.Close()
+		}
+		t.Fatalf("second ClaimColony = %v", err)
+	}
+	recovered, report, err := claim.Open(s.cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { recovered.Close() })
+	if report.TruncatedBytes != int64(len(`{"torn":`)) || recovered.Durable() != commit.Last {
+		t.Fatalf("recovery = %+v, through = %d", report, recovered.Durable())
+	}
+	if err := claim.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if other, _, err := Open(s.dir, s.cat); !errors.Is(err, ErrLocked) {
+		if other != nil {
+			other.Close()
+		}
+		t.Fatalf("transferred claim released Store: %v", err)
+	}
+	if err := recovered.Close(); err != nil {
+		t.Fatal(err)
+	}
+	unopened, err := ClaimColony(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again, report, err := Open(s.dir, s.cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if report.TruncatedBytes != 0 || again.Durable() != commit.Last {
+		t.Fatalf("reopen = %+v, through = %d", report, again.Durable())
+	}
+}

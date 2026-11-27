@@ -78,6 +78,7 @@ var xSysUsers = []string{
 	"internal/core/winexec",     // B30 item 4.
 	"internal/core/credentials", // D151.
 	"internal/core/gitprocess",  // D168.
+	"internal/core/localipc",    // D190: owner-local IPC and native peer checks.
 }
 
 var xSysTestUsers = []string{

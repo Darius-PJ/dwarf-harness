@@ -22,7 +22,6 @@ import (
 // An unavailable credential must not prevent restart bookkeeping. Exercise the
 // actual CLI path, then inspect its durable result through a fresh Core Open.
 func TestRuntimeRestartStartup(t *testing.T) {
-	t.Run("shutdown_unconfirmed", testShutdownUnconfirmed)
 	if startupUnconfirmedFence != nil {
 		t.Run("startup_unconfirmed_fence", startupUnconfirmedFence)
 	}

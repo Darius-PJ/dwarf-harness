@@ -8,6 +8,7 @@ import (
 
 	"github.com/Darius-PJ/dwarf-harness/internal/core/agents"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/credentials"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/host"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/setup"
@@ -15,8 +16,19 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/core/workspace"
 )
 
-// loadStartupConfiguration is the single configuration-source seam for both
-// today's direct terminal and the later detached host composition.
+// startupConfiguration injects the same configuration selection and credential
+// rebinding into the combined program and detached host composition.
+func startupConfiguration(inv invocation) host.Configuration {
+	return host.Configuration{
+		Load: func(ctx context.Context, store *ledgerstore.Store) (terminal.Settings, bool, error) {
+			return loadStartupConfiguration(ctx, store, inv.settings, inv.settingsSupplied)
+		},
+		Bindings: managedCredentialBindings,
+	}
+}
+
+// loadStartupConfiguration selects the source while the store is held, before
+// agents open and before any credential binding.
 func loadStartupConfiguration(ctx context.Context, store *ledgerstore.Store, path string, supplied bool) (terminal.Settings, bool, error) {
 	var external []byte
 	if supplied {
@@ -27,7 +39,7 @@ func loadStartupConfiguration(ctx context.Context, store *ledgerstore.Store, pat
 		return terminal.Settings{}, false, err
 	}
 	if !configuration.Managed {
-		s, err := readSettings(path)
+		s, err := host.ReadSettings(path)
 		return s, false, err
 	}
 	// This build has no host-settings decoder or validation runner. The opaque
@@ -122,7 +134,7 @@ func startupFailure(err error, target setup.Target, path string) *setup.Failure 
 		code, fix = "profile_expired", "route set --input --review-out"
 	case errors.Is(err, providers.ErrInvalid), errors.Is(err, providers.ErrUnsupported):
 		code, fix = "profile_invalid", "route set --input --review-out"
-	case errors.Is(err, errSettingsFile), errors.Is(err, terminal.ErrSettings):
+	case errors.Is(err, host.ErrSettingsFile), errors.Is(err, terminal.ErrSettings):
 		code, path, fix = "review_invalid", "settings", "--settings"
 	case errors.Is(err, agents.ErrInvalid), errors.Is(err, agents.ErrNotBound):
 		code, fix = "review_invalid", "context configure --input --review-out"
@@ -135,4 +147,16 @@ func startupFailure(err error, target setup.Target, path string) *setup.Failure 
 
 func describeSetupFailure(f *setup.Failure) string {
 	return fmt.Sprintf("code=%s target=%s/%s member=%s fix=%q", f.Code, f.Target.Kind, f.Target.ID, f.Path, f.FixCommand)
+}
+
+func describe(err error) string {
+	var failure *setup.Failure
+	if errors.As(err, &failure) {
+		return describeSetupFailure(failure)
+	}
+	var cause *agents.RefusalCause
+	if errors.As(err, &cause) {
+		return describeSetupFailure(startupFailure(err, setup.Target{}, "dispatch"))
+	}
+	return host.Describe(err)
 }

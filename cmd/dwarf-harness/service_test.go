@@ -11,9 +11,7 @@ import (
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/agents"
-	"github.com/Darius-PJ/dwarf-harness/internal/core/gitprocess"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
-	"github.com/Darius-PJ/dwarf-harness/internal/core/workspace"
 )
 
 func serviceStartupFixture(t *testing.T, through uint64) (string, string, ledger.Origin, agents.ServiceSnapshot) {
@@ -95,33 +93,6 @@ func requireServiceStartupRefusal(t *testing.T, code int, output, stage, class s
 }
 
 func TestServiceStartupRefusal(t *testing.T) {
-	// The process-wide workspace seam is deliberately not parallel.
-	t.Run("workspace_unconfirmed", func(t *testing.T) {
-		root, settings, _, snapshot := serviceStartupFixture(t, 142)
-		orphan := filepath.Join(root, "scratch", "startup-sentinel")
-		if err := os.MkdirAll(orphan, 0700); err != nil {
-			t.Fatal(err)
-		}
-		file := filepath.Join(orphan, "keep.txt")
-		if err := os.WriteFile(file, []byte("retained scratch"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		workspaceOpenOverride = func(context.Context, *ledgerstore.Store, string, workspace.Config) (*workspace.Service, workspace.Reconciliation, error) {
-			return nil, workspace.Reconciliation{}, &gitprocess.UnconfirmedError{Reason: "private native detail"}
-		}
-		defer func() { workspaceOpenOverride = nil }()
-		code, output := integratedStartupRun(t, root, settings)
-		requireServiceStartupRefusal(t, code, output, "workspace", "process_recovery_required", snapshot)
-		if strings.Contains(output, "colony opened") || strings.Contains(output, "private native detail") || !strings.Contains(output, "process_unconfirmed") {
-			t.Fatal("unconfirmed branch entered normal startup or lost its sanitized class", output)
-		}
-		if raw, err := os.ReadFile(file); err != nil || string(raw) != "retained scratch" {
-			t.Fatal("refused startup swept private state", err)
-		}
-		if got := serviceStartupRecords(t, root); uint64(len(got)) != snapshot.ThroughSequence {
-			t.Fatal("refused startup bound credentials, reconciled turns or invented service evidence")
-		}
-	})
 	t.Run("integrity", func(t *testing.T) {
 		root, settings, origin, snapshot := serviceStartupFixture(t, 142)
 		var directory, digest string

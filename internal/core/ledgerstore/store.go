@@ -429,29 +429,79 @@ func Open(dir string, cat ledger.Catalogue) (*Store, Recovery, error) {
 	return open(dir, cat, realDeps())
 }
 
-func open(dir string, cat ledger.Catalogue, d deps) (*Store, Recovery, error) {
+// Claim holds the colony's existing writer lock before recovery begins.
+// Open transfers that handle once. Close after transfer cannot unlock Store.
+// A Claim is used serially by its startup owner.
+type Claim struct {
+	dir    string
+	colony uuid.UUID
+	lock   *durable.Lock
+}
+
+// ReadColony reads only the initialized identity, without locking or recovery.
+// Its result is advisory until a Claim supplies the authoritative identity.
+func ReadColony(dir string) (uuid.UUID, error) { return readColony(dir) }
+
+// ClaimColony validates an initialized colony and takes its nonblocking lock.
+func ClaimColony(dir string) (*Claim, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, Recovery{}, err
+		return nil, err
 	}
-	// colony.json is looked for before the lock is taken, so that the lock
-	// file is never created outside a colony. readColony, under the lock,
-	// stays the authoritative read.
 	switch _, err := os.Lstat(filepath.Join(dir, colonyFile)); {
 	case errors.Is(err, fs.ErrNotExist):
-		return nil, Recovery{}, fmt.Errorf("%w: %w", ErrNotColony, err)
+		return nil, fmt.Errorf("%w: %w", ErrNotColony, err)
 	case err != nil:
-		return nil, Recovery{}, err
+		return nil, err
 	}
 	lock, err := lockColony(dir)
 	if err != nil {
-		return nil, Recovery{}, err
+		return nil, err
 	}
-	s, rec, err := openLocked(dir, cat, d, lock)
+	id, err := readColony(dir)
+	if err != nil {
+		return nil, errors.Join(err, lock.Close())
+	}
+	return &Claim{dir: dir, colony: id, lock: lock}, nil
+}
+
+// Colony returns the identity read under the retained writer lock.
+func (c *Claim) Colony() uuid.UUID { return c.colony }
+
+// Open recovers the colony while transferring the same writer lock to Store.
+func (c *Claim) Open(cat ledger.Catalogue) (*Store, Recovery, error) {
+	return c.open(cat, realDeps())
+}
+
+func (c *Claim) open(cat ledger.Catalogue, d deps) (*Store, Recovery, error) {
+	if c.lock == nil {
+		return nil, Recovery{}, appender.ErrClosed
+	}
+	lock := c.lock
+	c.lock = nil
+	s, rec, err := openLocked(c.dir, cat, d, lock)
 	if err != nil {
 		return nil, Recovery{}, errors.Join(err, lock.Close())
 	}
 	return s, rec, nil
+}
+
+// Close releases an unopened claim. It is idempotent after Open or Close.
+func (c *Claim) Close() error {
+	if c.lock == nil {
+		return nil
+	}
+	lock := c.lock
+	c.lock = nil
+	return lock.Close()
+}
+
+func open(dir string, cat ledger.Catalogue, d deps) (*Store, Recovery, error) {
+	c, err := ClaimColony(dir)
+	if err != nil {
+		return nil, Recovery{}, err
+	}
+	return c.open(cat, d)
 }
 
 // openLocked opens and recovers the colony in dir under the colony lock.

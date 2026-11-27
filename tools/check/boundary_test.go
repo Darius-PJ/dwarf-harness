@@ -196,6 +196,11 @@ func TestImportBoundary(t *testing.T) {
 			"internal/core/gitprocess/plant_test.go":    src("gitprocess", "testing", xSysModule+"/windows"),
 			"internal/core/gitprocess/external_test.go": src("gitprocess_test", "testing", m("internal/core/gitprocess"), xSysModule+"/windows"),
 		}},
+		{name: "localipc and its own tests import x sys", files: map[string]string{
+			"internal/core/localipc/plant.go":         src("localipc", xSysModule+"/windows"),
+			"internal/core/localipc/plant_test.go":    src("localipc", "testing", xSysModule+"/windows"),
+			"internal/core/localipc/external_test.go": src("localipc_test", "testing", m("internal/core/localipc"), xSysModule+"/windows"),
+		}},
 		{name: "agents test variants import x sys", files: map[string]string{
 			"internal/core/agents/agents.go":               src("agents"),
 			"internal/core/agents/agents_internal_test.go": src("agents", "testing", xSysModule, xSysModule+"/windows"),
@@ -203,6 +208,11 @@ func TestImportBoundary(t *testing.T) {
 		}},
 
 		// Must fail.
+		{
+			name:  "localipc sibling cannot import x sys",
+			files: map[string]string{"internal/core/localipcsibling/plant.go": src("localipcsibling", xSysModule+"/windows")},
+			want:  []violation{forbidden("internal/core/localipcsibling", xSysModule+"/windows")},
+		},
 		{
 			name:  "gitprocess subpackage cannot import x sys",
 			files: map[string]string{"internal/core/gitprocess/child/plant.go": src("child", xSysModule+"/windows")},
