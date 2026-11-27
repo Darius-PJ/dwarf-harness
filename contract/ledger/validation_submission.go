@@ -8,8 +8,8 @@ import (
 	"uuid"
 )
 
-// ValidationSubmission is the canonical schema-10 preimage, proposed for freeze
-// (D125). Arguments is the matching concrete value, never arbitrary JSON.
+// ValidationSubmission is the canonical schema-10 preimage, frozen (D189).
+// Arguments is the matching concrete value, never arbitrary JSON.
 // Origin is the established command origin; requested.origin additionally
 // preserves the optional turn and the envelope's execution-session spelling.
 type ValidationSubmission struct {

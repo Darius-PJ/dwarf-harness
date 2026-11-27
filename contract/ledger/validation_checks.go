@@ -15,7 +15,7 @@ import (
 	"uuid"
 )
 
-// F4-17 configuration formats are proposed for freeze (D125).
+// F4-17 configuration formats are frozen (D189).
 const (
 	WorkspaceChecksFormat   = "dwarf-harness/workspace-checks"
 	EnvironmentPolicyFormat = "dwarf-harness/environment-policy"

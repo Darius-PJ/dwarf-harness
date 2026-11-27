@@ -78,7 +78,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // frozen (D187).
 // F7-30 adds TypeLauncherCommandBound and TypeLauncherCommandReceipt at
 // version 1, frozen (D188).
-// F4-17 adds eleven version-1 validation types, proposed for freeze (D125).
+// F4-17 adds eleven version-1 validation types, frozen (D189).
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
 		{TypeCommand, 1}:                        true,

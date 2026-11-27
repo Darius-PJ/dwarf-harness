@@ -184,7 +184,8 @@
 // F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
 // F3-13 types, the four F3-139 types, the six F3-15 types, the two
 // F3-16 types, the two F3-90 types, the five F3-91 types, the two F3-150
-// types and the two additive F7-30 types below, each at version 1.
+// types, the two F7-30 types and the eleven additive F4-17 types below, each
+// at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -224,6 +225,9 @@
 // F7-30 is ticket 30's part, C7's first producer family, frozen (D188),
 // also by addition to format version 1; record availability does not imply
 // a running host, an authenticated launcher connection or a binding producer.
+// F4-17 is ticket 17's part of F4, C4's first producer family, frozen
+// (D189), also by addition to format version 1; record availability does
+// not imply a running validation runner, an executed check or a promotion gate.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -231,6 +235,7 @@
 // The namespace "workspace." is reserved for C2's record families.
 // The namespace "graph." is reserved for U3's record families.
 // The namespaces "runtime." and "private." are reserved for C3's Core runtime.
+// The namespace "validation." is reserved for C4's record families.
 // The namespace "launcher." is reserved for C7's record families.
 //
 // # F0 record types
@@ -4018,7 +4023,7 @@
 //
 // # F4-17: required validation checks
 //
-// F4-17 is proposed for freeze (D125). C4 owns these eleven version-1
+// F4-17 is frozen (D189). C4 owns these eleven version-1
 // validation.* types. Core agents is their only producer/appender caller.
 // Core validation, promotion, check governance and authorized inspection
 // consume the records; no payload is a promotion acceptance, permission grant,
@@ -4309,6 +4314,11 @@
 // Define carries only definition_id; refuse neither ID; other receipts only
 // validation_id. The embedded submission/hash are checked and the entire
 // receipt, not only each component, must fit MaxRecordBytes.
+//
+// Global command lookup includes schema 10. A matching same-ID canonical
+// request with the same principal and digest returns its original receipt
+// before state checks, after current disclosure authorization; changed
+// meaning is ErrCommandMismatch across all families.
 //
 // Requested carries incident_id, incident_version and reproduction_plan
 // together or none. Ordinary required_checks is the complete current required

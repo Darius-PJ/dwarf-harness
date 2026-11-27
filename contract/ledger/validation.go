@@ -12,7 +12,7 @@ import (
 	"uuid"
 )
 
-// F4-17's eleven version-1 record types are proposed for freeze (D125).
+// F4-17's eleven version-1 record types are frozen (D189).
 const (
 	TypeValidationCheckDefined      = "validation.check_defined"
 	TypeValidationRequested         = "validation.requested"
