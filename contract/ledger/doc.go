@@ -3774,4 +3774,128 @@
 // identity, source, actor, origin, order and planned-tail notice binding.
 // Codec fixtures and FuzzDecodeF3_91 are contract proof, not runtime timer,
 // dispatch, recovery, permission, financial or terminal proof.
+//
+// # Owner setup records (F3-150)
+//
+// Ticket 150's two version-1 types and schema-12 canonical submission are
+// proposed for freeze (D125). This addition changes no earlier family, schema,
+// group, golden, authorization or format version. Schema 12 is independently
+// reserved; it need not follow the largest schema already present.
+//
+// Payload owner: C3. The sole producer and reader is internal/core/setup,
+// through ledgerstore.Submit/SubmitAt and a ledger.Reader. Agents and workspace
+// skip this family; it gates, cancels and authorizes no other family's command.
+// All known fields, group envelopes, submission and receipt are replay-essential
+// owner evidence or configuration, never permission. Private instructions,
+// transcripts, secrets and the colony directory are not stored in this family.
+//
+// Codec rules follow F3-139: one complete UTF-8 JSON object, no repeated member
+// at any depth (including ignored extensions), no known null, canonical
+// lowercase UUIDv7 and nonzero lowercase SHA-256. Unknown optional members are
+// ignored at every depth and omitted from encoding and digest preimages.
+// MaxSetupPayloadBytes is 65536 for each complete payload and submission:
+// check input bytes before parsing, including whitespace and ignored members,
+// and independently check compact output bytes. Errors wrap ErrInvalid.
+// Integers are plain unsigned JSON decimals through MaxInt64, never signed,
+// fractional, exponential or quoted. expected_revision is below MaxInt64.
+// Optional members are omitted, never null; all other listed members are
+// required. A known argument of another operation is forbidden, even when null.
+//
+// Exact known-field encoding order:
+//
+//	SetupSubmission: schema (12), actor ("owner"), operation, target,
+//	  expected_revision, arguments
+//	SetupTarget: kind, id, agent_id?
+//	  kind is colony, workspace or context; agent_id is present exactly
+//	  for context and names its owning agent.
+//	colony.create / colony / expected_revision 0:
+//	  arguments {}
+//	workspace.register / workspace / expected_revision 0:
+//	  arguments {capture_inputs_sha256}
+//	workspace.inputs / workspace / expected_revision at least 1:
+//	  arguments {capture_inputs_sha256}
+//	context.set / context:
+//	  arguments {display_title, task_binding?, route_id,
+//	    expected_route_version, credential_scope_id, max_output_tokens,
+//	    turn_policy}
+//	startup.set / colony:
+//	  arguments {settings_sha256, settings_bytes}
+//	checks.publish / colony:
+//	  arguments {body_set_sha256, body_count}
+//	turn_policy: max_model_calls, max_tool_calls, timeout_ms,
+//	  max_argument_bytes, max_result_bytes, max_discovery_entries,
+//	  max_search_entries, max_search_matches, max_live_bytes
+//	task_binding: the frozen TaskBinding's task_id, assignment_id, generation
+//	runtime.setup_applied: submission
+//	runtime.setup_receipt: command_id, submission_sha256, outcome, revision
+//
+// The six operations, actor and target kinds are closed. display_title is
+// 1-128 UTF-8 bytes without control characters. Route version, output ceiling,
+// all nine turn-policy members, settings_bytes, body_count and task generation
+// are positive. The codecs check shape, not current turn-policy maxima,
+// existence, currentness, native context kind or cross-family relationships.
+// Outcome is open: ^[a-z][a-z0-9_]*$, at most 64 ASCII bytes. Writers emit
+// applied; the service refuses unfamiliar outcomes rather than applying them.
+// Receipt revision equals expected_revision plus one, checked by the service
+// against the group's submission, not by a standalone receipt codec.
+//
+// submission_sha256 is SHA-256 of compact SetupSubmission.Encode known-field
+// bytes, with encoding/json ordering/escaping (including HTML and U+2028/U+2029).
+// It equals the ledger.command digest. Command ID, time, sequence and resulting
+// revision are outside the preimage. body_set_sha256 hashes the published body
+// digests as lowercase hex in strictly ascending order, each followed by one LF.
+// startup.set identifies the exact owner-approved host-settings document by
+// digest and byte size, not a frozen settings member list or ticket-17 type.
+//
+// Service group and state rules (not codec history lookups)
+//
+// Each transition is one complete commit, with no extra or reordered records:
+//
+//	ledger.command, runtime.setup_applied, ledger.body_pin?,
+//	runtime.setup_receipt
+//
+// The pin is present exactly for startup.set and checks.publish. Every envelope
+// has actor owner and operation_id equal to command_id; agent, session, context,
+// turn and measurement paths are absent. body_refs occur only on setup_applied
+// and the pin, identical on both: [settings_sha256] for startup.set, the strictly
+// ascending published set of body_count digests for checks.publish. All records
+// of the other four operations have no body_refs. Pins are permanent and
+// additive. The command and receipt command IDs and digests agree; the service
+// recomputes the submission digest and checks the resulting revision.
+//
+// colony.create is the log's first commit, at most once, targets the envelope
+// colony and follows C1's native colony.json publication. Every other setup
+// group requires it. workspace.register and workspace.inputs follow their
+// unchanged native F2-05 commits and attest the native capture-input digest
+// and revision. Other setup groups configure targets that already exist.
+// Revision counters are per target and class: register/inputs share the native
+// F2-05 workspace revision; context.set has one counter per context; startup.set
+// and checks.publish each have their own counter per colony.
+//
+// Command deduplication precedes revision checks and any native call. An exact
+// duplicate returns the original receipt even after later target revisions;
+// changed meaning under the same command ID refuses. Each native and setup
+// step has its own commit and command identity where the native family provides
+// one. A crash between steps leaves the earlier step done and the later not
+// done; explicit re-apply completes the later step, never automatic replay.
+//
+// Native agent registration precedes context.set for its General context;
+// native work-context creation precedes its context.set. A native context
+// without setup configuration is not enabled. Enabled-context consumers fold
+// context.set in ledger order. Preflight requires the native owning agent and
+// context, General's fixed title and absent task binding, a work context's task
+// binding, and current policy bounds. Busy/recovery-pending contexts refuse.
+// Once a context has run a turn, only title, accepted route version, output
+// ceiling and turn limits may change; route, credential scope, task binding,
+// provider and model stay fixed. Missing cross-family references are checked
+// at preflight where required and by doctor, not by replay; route, credential
+// scope and task IDs may be forward references and confer no authority.
+//
+// TestGoldenF3_150 -update alone writes testdata/f3/150. Its one history starts
+// with colony.create, then native workspace registration/update and their setup
+// receipts, native agent/work-context creation and their configurations, a
+// second work-context configuration at revision 2, startup.set and checks.publish
+// with retained bodies and pins. The exact body-set preimage is beside the log.
+// Earlier-family groups remain service-admissible; the real Core Open probe
+// verifies that agents skips setup groups without changing its earlier rules.
 package ledger

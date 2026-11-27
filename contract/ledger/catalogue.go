@@ -74,6 +74,8 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // TypeRuntimeServiceOutageNotice and TypeRuntimeServiceReceipt.
 // F3-91 adds five entries to the preceding families, each at version 1.
 // It never contains a type in the reserved fixture namespace.
+// F3-150 adds TypeRuntimeSetupApplied and TypeRuntimeSetupReceipt at version 1,
+// proposed for freeze (D125).
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
 		{TypeCommand, 1}:                        true,
@@ -144,5 +146,9 @@ func Defined() Catalogue {
 		{TypeRuntimeServiceAgentChanged, 1}:     true,
 		{TypeRuntimeServiceOutageNotice, 1}:     true,
 		{TypeRuntimeServiceReceipt, 1}:          true,
+
+		// F3-150, proposed for freeze (D125).
+		{TypeRuntimeSetupApplied, 1}: true,
+		{TypeRuntimeSetupReceipt, 1}: true,
 	}}
 }
