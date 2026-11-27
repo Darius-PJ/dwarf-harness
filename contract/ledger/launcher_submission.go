@@ -129,7 +129,7 @@ func (p LauncherMeaning) Encode() (json.RawMessage, error) {
 	if !valid {
 		err = errors.New("invalid launcher request meaning")
 	}
-	return encodeLauncherPayload("launcher meaning", p, err)
+	return encodePayload("launcher meaning", p, err)
 }
 
 func (p LauncherMeaning) Digest() (Digest, error) {
@@ -142,7 +142,7 @@ func (p LauncherMeaning) Digest() (Digest, error) {
 
 func DecodeLauncherMeaning(js json.RawMessage) (LauncherMeaning, error) {
 	var p LauncherMeaning
-	err := decodeLauncherPayload("launcher meaning", js, func(m *members) error {
+	err := decodePayload("launcher meaning", js, func(m *members) error {
 		p = LauncherMeaning{Version: m.nat("version", true), Origin: graphObject(m, "origin", readOrigin), TaskBinding: optionalObject(m, "task_binding", readTaskBinding), CommandID: m.id("command_id"), Operation: m.text("operation"), Expected: graphObject(m, "expected", readLauncherTarget)}
 		p.Arguments = graphObject(m, "arguments", func(a *members) any {
 			switch p.Operation {

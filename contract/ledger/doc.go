@@ -228,6 +228,7 @@
 // The namespace "workspace." is reserved for C2's record families.
 // The namespace "graph." is reserved for U3's record families.
 // The namespaces "runtime." and "private." are reserved for C3's Core runtime.
+// The namespace "launcher." is reserved for C7's record families.
 //
 // # F0 record types
 //
@@ -3934,9 +3935,10 @@
 //	  kind, id, revision
 //
 // Principal is captured from the native peer, never a client identity claim.
-// user_sid is a canonical SID; authentication_id is 16 lowercase hexadecimal
-// digits. uid is an unsigned 32-bit integer, including zero. Stable identity
-// compares kind and user_sid or uid, never authentication_id.
+// user_sid is a canonical SID; authentication_id is the LUID's high then low
+// 32-bit words, encoded as 16 lowercase hexadecimal digits. uid is an unsigned
+// 32-bit integer, including zero. Stable identity compares kind and user_sid
+// or uid, never authentication_id.
 // Origin is the existing {agent_id,session_id,context_id}; colony identity is
 // supplied by the envelope. task_binding is the existing
 // {task_id,assignment_id,generation}, resolved by Core.
@@ -3984,6 +3986,8 @@
 // Preserve text, array order and restart_from exactly. The meaning digest is
 // SHA-256 of compact LauncherMeaning.Encode JSON. It excludes the principal,
 // every connection/RPC identity, transport ordinal, title and focus value.
+// The preimage is hashed, never stored, and not subject to the 65,536-byte
+// payload/submission cap; the producer's input limits bound it.
 // Same-ID retry compares this digest and stable principal identity BEFORE
 // revision evaluation, with current disclosure authorization still required.
 // A changed bound operation meaning needs a new record version by addition;

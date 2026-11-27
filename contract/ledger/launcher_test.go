@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"uuid"
 )
@@ -128,4 +129,29 @@ func TestLauncherMeaning(t *testing.T) {
 	if err != nil || d == a {
 		t.Fatalf("revision did not change meaning: %v", err)
 	}
+	t.Run("large_message", func(t *testing.T) {
+		t.Parallel()
+		p := launcherFixture()
+		text := strings.Repeat("<", 1_048_576)
+		m := LauncherMeaning{1, p.Origin, nil, p.RequestID, p.Operation, p.Target, LauncherMessageSend{TurnID: p.TurnID, Text: text}}
+		want, err := m.Digest()
+		if err != nil {
+			t.Fatalf("digest of admitted-size message: %v", err)
+		}
+		raw, err := m.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeLauncherMeaning(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Arguments.(LauncherMessageSend).Text != text {
+			t.Fatal("large message text was not preserved")
+		}
+		got, err := decoded.Digest()
+		if err != nil || got != want {
+			t.Fatalf("large message digest changed after decode: %v", err)
+		}
+	})
 }
