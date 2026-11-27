@@ -1,0 +1,1 @@
+{"format":"dwarf-harness/validation-authorization","schema":1,"principal":"hook","context_id":"0199c000-0000-7000-8000-0000000000d2","check_policy_hash":"dd5c1b825aa956b4d743e74b509d9cb01652dddc441d417117587fed69767b57","hook_id":"on_write","source_sequence":93,"source_record_hash":"4c36bbe1efa05a0c275aa15432b9e12eb6fc31948efd3547d8b8a885bd096633"}

@@ -4015,4 +4015,422 @@
 // a message binding, its native turn.start and loop.bind, then a cancellation
 // binding and its owner.stop, on the service-ordered F3-16 prefix. The prefix's
 // private object bytes remain those of testdata/f3/16, not new F7 objects.
+//
+// # F4-17: required validation checks
+//
+// F4-17 is proposed for freeze (D125). C4 owns these eleven version-1
+// validation.* types. Core agents is their only producer/appender caller.
+// Core validation, promotion, check governance and authorized inspection
+// consume the records; no payload is a promotion acceptance, permission grant,
+// isolation claim, field event or instruction to retry an execution.
+//
+// Configuration objects are closed UTF-8 JSON, with duplicate keys, null,
+// unknown members, trailing values and malformed integers refused. Unsupported
+// format/schema/adapter pairs return ErrUnsupportedValidation, distinct from
+// ErrInvalid. WorkspaceChecks and EnvironmentPolicy are at most MaxRecordBytes.
+// Their loaders hash exact accepted bytes, not a normalized encoding. Encoders
+// emit compact json.Marshal bytes in the declared struct order, with HTML
+// escaping, omitted optional members and no map-based hashing or RFC 8785.
+//
+// WorkspaceChecks order is format, schema, workspace_id, revision, required,
+// checks, hooks. Format is dwarf-harness/workspace-checks, schema is 1.
+// Required is nonempty, distinct and in execution order. Checks is strictly
+// check_id-sorted and has exactly that set: no waiver, exclusion or filtered
+// gate can be represented. Hooks is hook_id-sorted; each hook contains hook_id,
+// event, with event exactly observation.committed.
+//
+// CheckSpec order is check_id, adapter, adapter_version, executable_id,
+// package, working_directory, defining_files, inventory, canary,
+// environment_id, network_grant_refs, secret_grant_refs, wall_ms, output_bytes,
+// processes. Dispatch first reads the common adapter identity, then that
+// adapter's closed member set. Only go-test-json version 1 is defined here.
+// Package is "." or one safe "./dir", never an expansion or flag template.
+// Working_directory is "." or a safe subject-relative directory.
+// Network/secret references are empty in v1. Limits are positive, finite int64
+// values; a producer also checks its explicitly supplied capacity, with no
+// zero-as-unlimited or default-enabled runner.
+//
+// File order is path, mode, bytes, sha256. Paths are safe relative paths,
+// strictly raw-byte sorted, distinct and without case collisions; modes are
+// 100644 or 100755 and byte counts are nonnegative. A SHA-256 binds exact raw
+// bytes, never a Git object identifier. Inventory order is package, name,
+// parent?, expected. Nodes are nonempty and strictly (package,name)-sorted;
+// parent links resolve within the same package inventory; expected is passed.
+// Canary order is protocol, package_name, file, test_name, template_kind,
+// template_sha256. Protocol is go-fail-v1 and template_kind testing-error-v1.
+// File is dwarf_canary_v1_test.go and test_name is TestDwarfCanaryV1.
+// Package_name is an ASCII identifier of at most 64 bytes other than "_".
+// No defining-file basename may ASCII-case-fold to a dwarf_canary_ prefix;
+// no inventory name's first slash component may begin TestDwarfCanary.
+// Unknown protocol/template kind is unsupported; misspellings/collisions are
+// invalid. The canary never replaces or waives a required node.
+//
+// EnvironmentPolicy order is format, schema, workspace_id, revision,
+// environments; format is dwarf-harness/environment-policy, schema 1.
+// Environments is nonempty and environment_id-sorted. EnvironmentSpec order
+// is environment_id, os, arch, executable_id, executable_path,
+// executable_sha256, toolchain_version, toolchain_root,
+// toolchain_manifest_sha256, dependency_manifest_sha256, lock_files,
+// variables, gomaxprocs, memory_reservation_bytes. Absolute executable and
+// toolchain paths are declarations, not resolved by these codecs. Lock files
+// bind go.mod and any present go.sum. Availability, integrity and complete
+// environment assembly belong to the runner; no implicit download is allowed.
+// Variable order is name followed by exactly one of value or run_path.
+// Names are ASCII identifiers of 1..64 bytes, strictly raw-name-sorted and
+// distinct under ASCII case folding. Values contain 1..1024 UTF-8 bytes and
+// no byte below 0x20 or equal to 0x7f. Run_path is home, temp, gocache,
+// gopath, gomodcache or gotmp. Variables are public policy, never secret input.
+// Reserved under case folding: every GO* and CGO_* name, PATH, TMP, TEMP,
+// TMPDIR, HOME and USERPROFILE. A Windows spec requires literal SystemRoot;
+// WINDIR is optional but literal. No permitted-name enumeration is frozen.
+// S2 checks host matching and loader values, and refuses anything it cannot
+// honor. It supplies GOENV=off, GOTOOLCHAIN=local, GOFLAGS="", GOWORK=off,
+// GOPROXY=off, GOSUMDB=off, GOVCS=*:off, CGO_ENABLED=0; GOOS, GOARCH,
+// GOMAXPROCS and GOROOT come from the spec. Fresh GOCACHE, GOPATH,
+// GOMODCACHE, GOTMPDIR and platform home/temp roots replace inheritance.
+// Other reserved names, including PATH and GODEBUG, are absent in v1.
+//
+// FileManifest order is format, schema, files, with format
+// dwarf-harness/file-manifest and schema 1. LoadFileManifest streams File rows
+// under a caller-supplied positive row cap. The store's body-byte cap applies,
+// not the configuration's one-record cap. The caller bounds the body reader.
+// Visitor results are provisional until the complete document is accepted;
+// a refused input returns no digest and the caller discards collected rows.
+//
+// Digest preimages (compact typed JSON, in exactly this order):
+//
+//	check_sha256:
+//	  schema:1, check_spec:<complete CheckSpec>
+//	environment_sha256:
+//	  schema:1, environment_spec:<complete EnvironmentSpec>,
+//	  toolchain_manifest_sha256, dependency_manifest_sha256
+//	inventory_sha256:
+//	  schema:1, inventory:<ordered nodes>
+//	binding_sha256:
+//	  schema:1, colony_id, origin, trigger, subject, activation_record_hash,
+//	  epoch, field_law_sha256, validation_policy_hash, check_policy_hash,
+//	  environment_policy_hash, check_sha256, environment_sha256,
+//	  inventory_sha256, runner_sha256, adapter_sha256
+//	comparison_sha256:
+//	  schema:1, subject, check_sha256, environment_sha256, inventory_sha256,
+//	  field_law_sha256, validation_policy_hash, runner_sha256, adapter_sha256
+//
+// The golden retains exact bytes for the four named check, environment,
+// binding and comparison preimages. A comparison excludes origin, trigger,
+// activation revision, nonce and run roots, not actual subject or oracle
+// inputs. It permits comparison only, never execution reuse or disclosure.
+// The logical run-path names remain in the environment preimage; actual sorted
+// child variables have their separate concrete_environment_sha256.
+// capacity_profile_sha256 is an opaque digest of host settings. This contract
+// defines no preimage for it and it is NEVER replay-checkable against current
+// settings. runner_sha256 hashes the host executable, not child-reported bytes.
+//
+// Record key order is the corresponding exported struct's order. Origins
+// carry agent_id, execution_session_id, context_id, turn_id? and agree with
+// registered F3 provenance and the agent/session/context of every envelope in
+// their transition. No validation-group envelope carries turn_id, including
+// command, effects, pins and receipt. Trigger kinds are closed: explicit, hook,
+// promotion, reproduction. A nonexplicit trigger names its actual committed
+// source sequence/hash; only hook carries hook_id. Requested decoding requires
+// origin.turn_id for hook, refuses it for explicit and reproduction, and permits
+// it for promotion. A hook subject must be observation and its source sequence
+// and hash must equal the trigger's. Authorization contains principal (owner
+// or hook) and source_permissions_sha256. It identifies the retained
+// authorization snapshot but never substitutes for current authority.
+//
+// The authorization document has format dwarf-harness/validation-authorization,
+// schema 1, then principal, context_id, check_policy_hash?, hook_id?,
+// source_sequence?, source_record_hash?, in that order. Owner has only
+// context_id after principal. Hook requires all four additional members.
+// ValidationRequested.AuthorizationDocument is the shared derivation: the
+// context comes from origin; hook values come from check_policy_hash and
+// trigger. LoadValidationAuthorization is strict and requires exactly the
+// compact canonical encoding, without a newline. Unknown format/schema is
+// unsupported. Requested decoding recomputes this document's digest and
+// requires principal hook exactly for a hook trigger. The body remains
+// published and pinned, despite being reconstructible from records.
+// Visibility's authorization digest equals its request's authorization
+// digest; replay checks this join, and current reads still recheck authority.
+//
+// Subject kinds are canonical, observation and generation. All require
+// kind, workspace_id, object_format, source_sequence, source_record_hash,
+// commit, tree, capture_inputs_revision, capture_inputs_sha256. Git IDs have
+// 40 lowercase hex digits for sha1, 64 for sha256. Other members are refused
+// unless listed for that kind:
+//
+//	canonical: no further members; source is the latest promotion_accepted,
+//	  or workspace.registered before any acceptance.
+//	observation: source_manifest_sha256; source is scratch_changed.
+//	generation: source_manifest_sha256, request_id, capture_id,
+//	  submission_tree, submission_base, generation_id, generation_sequence,
+//	  generation_hash, predecessor_commit, predecessor_tree, integration_rules;
+//	  optional predecessor_request_id and predecessor_generation_id together;
+//	  optional predecessor_witness_seq only without that pair.
+//
+// Generation source is promotion_admitted; generation_sequence/hash name its
+// clean generation_derived. Commit/tree are derived, submission_tree/base are
+// the admission's sealed_tree/delta_base_tree, and the capture-inputs pair is
+// what the merge used. Decoders check presence/form; S3 checks actual F2 joins.
+// Lineage is origin_kind, author_context_id?, clone_root_context_id?,
+// derived_from_check_sha256?, model_family?. Its only origin_kind is
+// owner_policy. Ticket 17 writers omit the optional members because the
+// owner configuration supplies no such provenance.
+//
+// Record payload member order (all names below are version 1):
+//
+//	check_defined: definition_id, workspace_id, check_id, check_sha256,
+//	  check_policy_hash, environment_policy_hash, environment_sha256,
+//	  inventory_sha256, defining_files, lineage, pin_id
+//	requested: validation_id, origin, trigger, subject, authorization,
+//	  activation_record_hash, epoch, field_law_sha256, validation_policy_hash,
+//	  check_policy_hash, environment_policy_hash, required_checks,
+//	  capacity_profile_sha256, incident_id?, incident_version?,
+//	  reproduction_plan?
+//	request_changed: validation_id, expected_version, state, reason,
+//	  closed_attempts
+//	attempt_queued: validation_id, attempt_id, run_id, ordinal, subject,
+//	  definition_id, check_sha256, environment_sha256, inventory_sha256,
+//	  runner_sha256, adapter_sha256, binding_sha256, incident_id?,
+//	  incident_execution_index?
+//	attempt_started: validation_id, attempt_id, run_id,
+//	  materialized_manifest_sha256, overlay_sha256, canary_sha256,
+//	  nonce_sha256, concrete_environment_sha256
+//	attempt_finished: validation_id, attempt_id, run_id, outcome, reason,
+//	  started, exit_known, exit_code?, root_exited, tree_closed, io_joined,
+//	  closure_proof, canary, required_results, artifacts, input_integrity,
+//	  runner_suspect, root_pid?, process_run_id?
+//	evidence: evidence_id, validation_id, subject, definition_id, check_sha256,
+//	  environment_sha256, comparison_sha256, binding_sha256, attempt_ids,
+//	  summary, canonical, failure_grade, incident_id?, failure_count,
+//	  pass_count, required_count, prior, confidence, adjacent?
+//	request_ended: validation_id, expected_version, outcome, reason,
+//	  evidence_ids, not_launched_check_ids
+//	visibility_changed: validation_id, attempt_ids, expected_version, state,
+//	  authorization_sha256, predecessor_acceptance_sequence?,
+//	  predecessor_acceptance_hash?
+//	hook_refused: hook_id, workspace_id, source_sequence, source_record_hash,
+//	  reason
+//	receipt: command_id, submission_sha256, submission, validation_id?,
+//	  definition_id?, operation, version, effect_sequence
+//
+// Required_checks entries are check_id, definition_id, check_sha256,
+// environment_sha256, inventory_sha256. Reproduction-plan entries are subject,
+// definition_id, executions. Closed-attempt entries are attempt_id,
+// process_run_id?, proof. Artifact entries are kind, sha256, bytes, complete,
+// sorted by kind (stdout/stderr/events/manifest/overlay/integrity). Required
+// results are package, name, outcome in inventory order; outcomes are passed,
+// failed, skipped, missing (no run) and unfinished (run without terminal).
+// Closure proofs are live, retained_job, name_absent, unconfirmed, not_started;
+// input_integrity is verified, changed, missing or unavailable.
+//
+// Prior/confidence are unreduced {numerator,denominator}, both plain positive
+// uint64 decimals through 18446744073709551615, numerator < denominator.
+// They copy flake_rate_prior/failure_repair_confidence verbatim. All other
+// F4 integers are int64. Adjacent contains promotion_request_id,
+// acceptance_sequence, acceptance_hash, before_commit, before_tree,
+// after_commit, after_tree, before_evidence_ids, after_evidence_ids, complete;
+// it is a factual immediate-predecessor packet, never a culprit verdict.
+//
+// Body-reference sets, sorted and distinct, are shared by ValidationBodyRefs:
+//
+//	check_defined: both configuration policy hashes, defining_files hashes,
+//	  canary.template_sha256, toolchain_manifest_sha256,
+//	  dependency_manifest_sha256 from the selected check/environment.
+//	requested: authorization.source_permissions_sha256.
+//	attempt_started: materialized_manifest_sha256, overlay_sha256; both name
+//	  file-manifest bodies.
+//	attempt_finished: artifacts[].sha256, absent for no artifacts.
+//	visibility_changed: authorization_sha256.
+//	every other type, including receipt: absent.
+//
+// There are no preimage bodies: check/environment/inventory/binding/comparison
+// digests are derived identities. Also excluded: runner/adapter/executable and
+// lock-file hashes, canary/nonce/marker/concrete-environment/capacity hashes,
+// record hashes and Git IDs. Activation owns the law and policy pins; F2 owns
+// capture/source manifests. Definition transitivity is one level only: not
+// another check, manifest file contents or a whole recursive bundle. Without
+// the two loaded specifications the shared helper gives replay's payload-
+// visible minimum; readers check coverage and pin equality. Producers supply
+// both specifications and get the exact three additional digests.
+// The permanent definition pin has precisely the definition's set. Request
+// pins have precisely the authorization body. A failure pin has the union of
+// that attempt's started/finished sets and is never released by ticket 17.
+// End releases a request pin exactly when none of its evidence has canonical
+// grade F1/F2. Publishing always precedes naming/pinning a body.
+//
+// ValidationSubmission order is schema:10, actor, origin, operation,
+// expected_version, arguments. Submission origin is the established Origin
+// {agent_id,session_id,context_id}, distinct from the record's provenance shape.
+// Operations have the validation. prefix. Arguments repeat effect payloads,
+// in their member order, but omit expected_version/version, unpins and receipt.
+// Unlisted argument members are refused, even null. The operation table:
+//
+//	define | core | check_defined payload | C,check_defined,body_pin,R
+//	request | owner explicit; core hook/promotion |
+//	  {requested,attempts,pin_id} | C,requested,queued*,body_pin,R
+//	reproduce | owner | {requested,attempts,pin_id} |
+//	  C,requested,queued in plan order,body_pin,R
+//	launch | core | attempt_started payload | C,attempt_started,R
+//	finish | core | {attempt_finished,evidence,failure_pin_id?} |
+//	  C,attempt_finished,evidence,failure body_pin?,R
+//	advance | core | {validation_id,reason} | C,request_changed running,R
+//	cancel | owner or core | {validation_id,reason} |
+//	  C,request_changed stopping,R
+//	end | core | {validation_id,outcome,reason,evidence_ids,
+//	  not_launched_check_ids} | C,request_ended,request body_unpin?,R
+//	visibility | core | {validation_id,attempt_ids,state,authorization_sha256,
+//	  predecessor_acceptance_sequence?,predecessor_acceptance_hash?} |
+//	  C,visibility_changed,R
+//	reconcile | core | {validation_id,attempt_finished?,changed?,ended?} |
+//	  C,interrupted attempt_finished?,request_changed stopping?,
+//	  request_ended?,matching request body_unpin?,R
+//	refuse | core | hook_refused payload | C,hook_refused,R
+//
+// Here C is ledger.command and R validation.receipt. Effects are core; C/R
+// use the submission actor, and every envelope preserves its registered origin
+// and command operation_id. Status is a read. Request attempts are nonempty,
+// ordinal 1 onward and match the full required set, identities and subject.
+// Reproduction attempts exactly fill each plan entry and reserve consecutive
+// incident indices. Finish evidence ends in that attempt ID. Its failure pin
+// is present exactly for canonical evidence and a failed attempt. Reconcile
+// has at least one optional member, no evidence or failure pin, and only an
+// interrupted incomplete attempt. Changed is {reason,closed_attempts};
+// ended is {outcome,reason,evidence_ids,not_launched_check_ids}.
+//
+// Expected_version is always present, in 0..MaxInt64-1: zero for define,
+// request, reproduce, refuse; positive otherwise. Requested creates version 1;
+// request_changed, request_ended and visibility_changed each increment it.
+// Launch/finish preserve it; a finish after cancel uses the post-cancel value.
+// In a multi-effect reconciliation each request-level record consumes the
+// previous effect's resulting version. Receipt.version is zero for define/
+// refuse, one for request/reproduce, unchanged for launch/finish, plus one
+// for advance/cancel/end/visibility, and plus the request-level record count
+// for reconcile. Effect_sequence names the first validation.* effect.
+// Define carries only definition_id; refuse neither ID; other receipts only
+// validation_id. The embedded submission/hash are checked and the entire
+// receipt, not only each component, must fit MaxRecordBytes.
+//
+// Requested carries incident_id, incident_version and reproduction_plan
+// together or none. Ordinary required_checks is the complete current required
+// order; reproduction selects the incident's one retained check and a plan of
+// one same-subject entry or two ordered adjacent entries. The producer derives
+// the plan from real sources and current policy, not caller-supplied subjects.
+// Its version is the incident version the request was admitted against.
+// Incident version starts at 1 and advances once per admitted reproduction.
+//
+// The initial canonical admissible failure mints the incident and counts as
+// execution 1; no incident existed when that attempt was queued. An incident
+// attempt_queued has incident_id exactly with incident_execution_index, at
+// least 2. Replay requires consecutive indices from 2 and charges at queue
+// commit, even if the attempt is never launched, cancelled or interrupted.
+// Neither restart nor another command identity refunds a reservation.
+// Admission compares the whole plan with current incident capacity; replay
+// never compares historical indices or capacity digests with current settings.
+//
+// Each attempt progresses queued -> started -> finished once. Started is the
+// single durable launch intent, before Owner.Run; it binds the materialized
+// manifest, overlay, canary, nonce and concrete environment. Optional root_pid
+// and process_run_id are finish facts, never a second started phase.
+// Passed requires started, exit_known, root_exited, tree_closed and io_joined,
+// closure_proof live, canary.state expected_failed, input_integrity verified,
+// runner_suspect false, nonempty required_results all passed, and complete
+// published artifacts. A recovered exit or an absent process is never a pass.
+// Attempt outcomes are passed, failed, skipped, timeout, incomplete,
+// infra_failure and no_status. Evidence summaries are passed, failed, flaky
+// and inconclusive; failure grades are none, F1 and F2. A timeout cannot mint F1.
+// Canary-result order is state, template_sha256, canary_sha256?, nonce_sha256?,
+// observed_pid?, marker_sha256?. States are expected_failed, passed, missing,
+// ambiguous, unbound and not_run. Canary/nonce hashes occur together and are
+// required when started; their presence for a never-launched attempt depends
+// on its actual launch-intent record (S3 checks), never a fabricated nonce.
+// Marker/PID occur together, required for expected_failed/unbound, forbidden
+// for missing/ambiguous/not_run and optional for passed. Passed/failed/skipped
+// outcomes require expected_failed; infra_failure requires not_run. Timeout,
+// incomplete and no_status may carry any state. Passed/missing/ambiguous/
+// unbound canaries require runner_suspect. A false started flag allows only
+// infra_failure/incomplete with not_run, closure not_started, all four other
+// proof booleans false, no exit/PID/process ID and empty required_results.
+// A true started flag requires nonempty required_results.
+//
+// Request_changed states running/stopping are durable before launch or stop
+// signalling. closed_attempts is normally empty; reconciliation supplies only
+// newly positively closed, already-finished attempts with retained_job or
+// name_absent proof. Their original nonpassing outcomes are never rewritten.
+// A batch cannot end while a root remains unconfirmed. Request_ended outcomes
+// are finished, cancelled, interrupted and unavailable; unlaunched check IDs
+// remain in declared execution order and never acquire fabricated attempts.
+//
+// Generation diagnostics start sealed. A withheld result exposes only its
+// validation identity, generic lifecycle and sealed state, not hashes, paths,
+// verdicts, artifacts or command details. Release needs the exact predecessor's
+// durable acceptance, all non-own-input permissions, no invalidation and
+// current requester authority. audit_only_obsolete never later releases.
+// These checks precede every status, Since, body/artifact and natural-turn read.
+// Definition pins and canonical F1/F2 obligations are permanent in this family;
+// ordinary diagnostic bodies follow the existing finite body-retention policy.
+// Missing collected content is artifact_unavailable, never a fabricated pass.
+//
+// Hooks fire only after a live turn's own observation and ending commit, never
+// during replay or at tool completion. Service replay requires the trigger's
+// source to be workspace.scratch_changed in origin.context_id and the subject's
+// workspace. A runtime.turn_result for origin.turn_id must have the same
+// agent/session/context and satisfy bound_sequence < trigger.source_sequence
+// < turn_result sequence < request command sequence. If that turn has an F3-16
+// owner, the request follows owner.close. For each (hook_id,source_sequence),
+// history contains at most one hook-triggered request or one hook_refused.
+// A refused hook has no job or validation ID and does not change the turn's
+// outcome. Disabled/unsupported runners do not fire hooks. Open reconstructs
+// only; explicit startup reconciliation writes missing interruption/closure
+// bookkeeping without executing checks, inventing hooks or repeating effects.
+//
+// Reasons are open lowercase tokens of at most 64 bytes. The following is the
+// v1 writer set, not a closed decoding enumeration. A later producer slice may
+// add a token by addition and update this table in that same slice. Consumers
+// never interpret an unknown reason as success. Each row names its associated
+// outcome/state, cause and owner's next action; no terminal surface prints
+// private paths, digests, run roots or child output to explain a refusal.
+//
+//	token | outcome/state | cause | owner action
+//	required_passed | passed | every required node passed | none
+//	required_failed | failed | required assertion failed | inspect and repair
+//	required_skipped | skipped | required node skipped | remove skip or repair
+//	no_execution | no_status | no required execution observed | inspect runner
+//	terminal_missing | incomplete/no_status | terminal event absent | inspect run
+//	cached_output | incomplete/no_status | output claims cache reuse | fix inputs
+//	invalid_output | incomplete/no_status | malformed/conflicting events | inspect
+//	canary_passed | incomplete/no_status | sentinel did not fail | repair runner
+//	canary_missing | incomplete/no_status | sentinel absent | repair runner
+//	canary_ambiguous | incomplete/no_status | duplicate sentinel/marker | inspect
+//	canary_unbound | incomplete/no_status | marker identity mismatch | inspect
+//	exit_mismatch | incomplete/no_status | exit and events disagree | inspect
+//	input_changed | incomplete/no_status | pinned input mutated | restore inputs
+//	input_missing | incomplete/no_status | pinned input missing | republish input
+//	integrity_unavailable | incomplete/no_status | integrity unproven | inspect
+//	build_failed | infra_failure | suite could not build | repair build inputs
+//	environment_unavailable | infra_failure/refused | pins unavailable | republish
+//	definition_unavailable | refused/unavailable | definition missing | republish
+//	launch_failed | infra_failure | native launch failed | inspect host error
+//	timeout | timeout | wall limit reached | inspect suite or adjust capacity
+//	cancelled | stopping/cancelled/incomplete | owner cancelled | none
+//	interrupted | interrupted/incomplete | host lost execution | inspect ending
+//	superseded | stopping/incomplete | bound inputs no longer current | request anew
+//	authority_lost | stopping/incomplete | current authority lost | restore scope
+//	shutdown | stopping/incomplete | host is shutting down | inspect on restart
+//	recovery_pending | stopping/incomplete | closure unproven | resolve host fence
+//	busy | refused | finite capacity reserved | wait for capacity, request anew
+//	eligibility_held | refused/stopping | origin not eligible | resolve its hold
+//	validation_disabled | unavailable | capacity absent | configure capacity
+//	unsupported_platform | unavailable | native proof unavailable | use supported host
+//	unsupported_adapter | unavailable | adapter version unsupported | install support
+//	incident_executions_unset | unavailable | incident cap absent | configure cap
+//	budget_exhausted | refused | whole plan exceeds incident cap | review cap/plan
+//	revision_mismatch | refused | expected version stale | refresh request state
+//	subject_unavailable | refused/unavailable | immutable source unavailable | select valid source
+//	acceptance_unavailable | refused/unavailable | adjacency lacks witness | select real acceptance
+//	artifact_unavailable | read refused | retained identity lacks bytes | inspect retention
+//	started | running | first live attempt admitted | none
+//	completed | finished | all planned bookkeeping complete | inspect results
+//	closure_confirmed | running/stopping | retained roots positively closed | none
+//	released | released | disclosure predicate satisfied | none
+//	obsolete | audit_only_obsolete | speculative lineage invalidated | request anew
 package ledger

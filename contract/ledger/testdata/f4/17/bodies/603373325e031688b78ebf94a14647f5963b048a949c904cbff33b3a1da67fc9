@@ -1,0 +1,1 @@
+{"format":"dwarf-harness/file-manifest","schema":1,"files":[{"path":"go.mod","mode":"100644","bytes":34,"sha256":"f0c874b29ce1ae54c3d565c9d326c8a104f63da3d46886a673c479a1a6b932f1"},{"path":"unit_test.go","mode":"100644","bytes":63,"sha256":"320df020249495ca2dde23476d0cf9d415087f89e1e6d7289e55b18ec26644ae"}]}

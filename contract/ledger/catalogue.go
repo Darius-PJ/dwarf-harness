@@ -78,6 +78,7 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // frozen (D187).
 // F7-30 adds TypeLauncherCommandBound and TypeLauncherCommandReceipt at
 // version 1, frozen (D188).
+// F4-17 adds eleven version-1 validation types, proposed for freeze (D125).
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
 		{TypeCommand, 1}:                        true,
@@ -150,6 +151,17 @@ func Defined() Catalogue {
 		{TypeRuntimeServiceReceipt, 1}:          true,
 		{TypeLauncherCommandBound, 1}:           true,
 		{TypeLauncherCommandReceipt, 1}:         true,
+		{TypeValidationCheckDefined, 1}:         true,
+		{TypeValidationRequested, 1}:            true,
+		{TypeValidationRequestChanged, 1}:       true,
+		{TypeValidationAttemptQueued, 1}:        true,
+		{TypeValidationAttemptStarted, 1}:       true,
+		{TypeValidationAttemptFinished, 1}:      true,
+		{TypeValidationEvidence, 1}:             true,
+		{TypeValidationRequestEnded, 1}:         true,
+		{TypeValidationVisibilityChanged, 1}:    true,
+		{TypeValidationHookRefused, 1}:          true,
+		{TypeValidationReceipt, 1}:              true,
 
 		// F3-150, frozen (D187).
 		{TypeRuntimeSetupApplied, 1}: true,
