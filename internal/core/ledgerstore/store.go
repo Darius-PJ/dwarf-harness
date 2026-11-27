@@ -311,6 +311,23 @@ func Create(dir string, cat ledger.Catalogue) (*Store, error) {
 	return create(dir, cat, realDeps())
 }
 
+// CreateWithID creates an empty colony with the owner's reviewed UUIDv7.
+// It preserves Create's publication order and refuses an invalid ID before I/O.
+func CreateWithID(dir string, cat ledger.Catalogue, id uuid.UUID) (*Store, error) {
+	if !isV7(id) {
+		return nil, ledger.ErrInvalid
+	}
+	d := realDeps()
+	d.newID = func() uuid.UUID { return id }
+	s, err := create(dir, cat, d)
+	if err != nil {
+		return nil, err
+	}
+	// Only colony publication uses the reviewed ID. Commits still mint IDs.
+	s.deps.newID = uuid.NewV7
+	return s, nil
+}
+
 func create(dir string, cat ledger.Catalogue, d deps) (*Store, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {

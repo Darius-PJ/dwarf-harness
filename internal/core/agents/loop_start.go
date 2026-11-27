@@ -124,8 +124,11 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 			err = ErrInvalid
 		}
 		route = s.p.paidRoutes[setting.RouteID]
-		if err == nil && (!route.Enabled || route.Version != setting.ExpectedRouteVersion || route.CredentialScopeID != setting.CredentialScopeID || setting.MaxOutputTokens > route.Profile.OutputMax) {
-			err = ErrUnavailable
+		if err == nil && !route.Enabled {
+			err = &RefusalCause{Code: "route_missing", RouteID: setting.RouteID, class: ErrUnavailable}
+		}
+		if err == nil && (route.Version != setting.ExpectedRouteVersion || route.CredentialScopeID != setting.CredentialScopeID || setting.MaxOutputTokens > route.Profile.OutputMax) {
+			err = &RefusalCause{Code: "route_revision", RouteID: setting.RouteID, class: ErrUnavailable}
 		}
 		var credentialVersion int64
 		for id, c := range s.p.paidCredentials {
@@ -134,7 +137,7 @@ func (r *loopRuntime) start(ctx context.Context, reads *historyReadSet, ids subm
 			}
 		}
 		if err == nil && credential == (uuid.UUID{}) {
-			err = ErrUnavailable
+			err = &RefusalCause{Code: "credential_missing", CredentialScopeID: setting.CredentialScopeID, class: ErrUnavailable}
 		}
 		if s.p.agents[ids.agent].general == ids.context {
 			if setting.DisplayTitle != "General work" || setting.TaskBinding != nil {

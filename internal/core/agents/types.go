@@ -19,6 +19,19 @@ var (
 	ErrMaterialization = errors.New("agents: committed revision not materialized")
 )
 
+// RefusalCause adds safe setup prerequisites without changing the native
+// denial/unavailability class or service-loss classification.
+type RefusalCause struct {
+	Code              string
+	Scope             ledger.PaidScope
+	RouteID           uuid.UUID
+	CredentialScopeID uuid.UUID
+	class             error
+}
+
+func (e *RefusalCause) Error() string { return "agents: " + e.Code }
+func (e *RefusalCause) Unwrap() error { return e.class }
+
 // Limits bound producer admission, preparation and reads, not historical state.
 type Limits struct {
 	MaxObjectBytes          int64

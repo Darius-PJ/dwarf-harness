@@ -91,8 +91,11 @@ func (b *budgetBook) paidAuthority(scopes []ledger.PaidScope) error {
 		if a.version == 0 && scope.Kind == "task" {
 			continue
 		}
-		if a.version == 0 || !a.terms.Enabled {
-			return ErrDenied
+		if a.version == 0 {
+			return &RefusalCause{Code: "spend_ceiling_missing", Scope: scope, class: ErrDenied}
+		}
+		if !a.terms.Enabled {
+			return &RefusalCause{Code: "spend_disabled", Scope: scope, class: ErrDenied}
 		}
 	}
 	return nil
