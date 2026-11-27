@@ -10,19 +10,153 @@ The aim is a colony that can deliver real work without giving up private context
 
 ## Status
 
-DwarfHarness is pre-release. Nothing has been released. The `dwarf-harness` host and terminal program runs bounded test turns on an existing colony; no program initializes a colony yet, and the native GUI does not exist. This repository holds the contract packages, part of Core and of Undercurrent, the terminal program, a Go dependency resolver and the development tools, each tested on its own.
+DwarfHarness is pre-release. Nothing has been released. The `dwarf-harness` host and terminal program can create and configure a colony through explicit owner review and approval; the native GUI does not exist. This repository holds the contract packages, part of Core and of Undercurrent, the terminal program, a Go dependency resolver and the development tools, each tested on its own.
 
 Everything here is for testing only. Do not use it for real work: real assignments begin only after Release 1's exit test passes (see the [release tiers](docs/ROADMAPS.md#release-tiers)). Each step's status is on the [status board](docs/ROADMAPS.md#status-board).
 
-The terminal program needs a colony that is already initialized, with its agents, provider routes, grants, spend terms and capacity configured:
-
-```sh
-GOTOOLCHAIN=local CGO_ENABLED=0 go run ./cmd/dwarf-harness -colony-dir <colony> -settings <settings.json>
-```
-
-The settings file is strict, nonsecret JSON kept outside the repository; `internal/core/terminal` documents it. Core alone reads each credential source the settings name, and the program never prints a source locator. It initializes and installs nothing, and refuses to start, with a typed reason, on an uninitialized colony. Its turns have run only against local loopback providers. One owner-authorized live OpenAI drill ran one tool turn through Core's Session in a test driver, not through this program (`gpt-6-luna`; two calls; one tool); Anthropic has run only against loopback. The program proves neither step C3's exit nor any capacity, latency or isolation figure.
+Setup and terminal turns are separate operations. Setup never starts a turn or sends a model request. Its turns have run only against local loopback providers. One owner-authorized live OpenAI drill ran one tool turn through Core's Session in a test driver, not through this program (`gpt-6-luna`; two calls; one tool); Anthropic has run only against loopback. The program proves neither step C3's exit nor any capacity, latency or isolation figure.
 
 The first release needs only Windows. The code stays portable, and the check also runs on Linux and macOS.
+
+## Colony setup
+
+Build the program with `GOTOOLCHAIN=local CGO_ENABLED=0 go build ./cmd/dwarf-harness`.
+Always supply `--colony-dir` before the command. Setup is offline owner administration:
+finish the current terminal with `/quit` before changing its configuration. A held
+colony refuses `colony_in_use`; setup never takes over its owner.
+
+Every operation has two separate invocations:
+
+```text
+dwarf-harness --colony-dir C colony create --input create.json --review-out create.review.json
+dwarf-harness --colony-dir C colony create --apply create.review.json --approve SHA256
+```
+
+For colony creation, `create.json` contains `{}` and the review file must be
+**outside** the new colony directory. The first invocation captures the exact
+operation, generated identities, current revisions and artifact bytes. Read its
+full review, then supply its `review_sha256` to the second invocation. A review
+does not apply the requested operation. Existing review files are not overwritten.
+The same approved file can be reapplied to recover its original receipt; it does
+not create another agent, context or credential version.
+
+Reviews contain private instructions, host file contents and credential source
+locators, but never credential values. Keep input and review files outside the
+repository; on Windows, use an owner-only directory with appropriate access
+permissions. Human review prints the complete document and quoted exact artifact
+text, including line endings. `--json` instead prints safe identities, digests and
+receipts, without private artifact text or source locators. Refusals report a code,
+target identity, member path and a fix entrance, not raw native errors or input
+path values.
+
+### Input forms
+
+Inputs are strict JSON objects: no unknown or duplicate members, `null`, trailing
+values or literal credentials. Input JSON is limited to 1 MiB. Named artifact
+paths are strings, resolved relative to the input file's directory; the command
+captures their exact bytes before review. Apply never rereads those paths.
+Instructions are limited to 1 MiB and provider profiles to 32 KiB.
+
+| Command | Input members |
+|---|---|
+| `colony create` | `{}`; the directory is the global flag |
+| `workspace register` | `repository` (also relative to the input directory) |
+| `workspace inputs` | `repository`; resolves its applied registration, or use `--workspace UUID` / `workspace_id` |
+| `agent create` | `name`, `instructions_file`, `general` |
+| `context create` | `agent_id` or `--agent`, `title`, context settings below |
+| `context configure` | `context_id` or `--context`, `title`, complete replacement context settings |
+| `task create` | `description_base64`, `acceptance_sha256`, `dependencies`, `audience`; optional native `task_id`, `origin`, `assignment`, or `--context` |
+| `grant issue` | `origin`, `spec`: exact native grant ID, grantee, operations, typed resources, data class, recipients, limits, delegation depth, lifetime and optional parent/task binding |
+| `capacity set` | `origin`, `scope`, `limits`: `turn_slots`, `local_slots`, `buffer_bytes`, `local_units`, `max_operation_bytes` |
+| `route set` | `enabled`, `profile_file`; `--context` or explicit `origin`, `route_id`, `credential_scope_id` |
+| `credential bind` | `provider`, `source_kind`, `source_locator`; `--context` or explicit `origin`, `scope_id`; optional `revoke_previous_version` |
+| `credential revoke` | `origin`, `scope_id`, `credential_version` |
+| `spend set` | `origin`, `scope`, `enabled`, `mode`, `usd`, `period_kind`; optional `warning_ppm` |
+
+Native identities in these objects are UUIDs, `origin` is
+`{"agent_id":"UUID","context_id":"UUID"}`, and scopes use their native `kind` and
+optional `id`. Grant resources retain the native kind-specific object shape, not
+wildcard strings. `capacity set` reviews the native `capacity configure` operation.
+Money is explicit: `mode` is `finite` with decimal `usd`, or `unlimited` with an
+empty `usd`; `period_kind` is `lifetime`, `utc_day` or `utc_month`. Configure the
+colony's terms first; subsequent scopes must use its period. No grant, capacity
+or spend ceiling is implied by creation.
+
+For example, an `agent create` input needs no hand-copied identities:
+
+```json
+{
+  "name": "Scout",
+  "instructions_file": "instructions.md",
+  "general": {"max_output_tokens": 4096}
+}
+```
+
+`general` accepts `route_id`, `expected_route_version`, `credential_scope_id`,
+`max_output_tokens` and `turn_policy`. Its title remains `General work` and it has
+no task binding. Missing route/scope IDs request fresh UUIDv7 identities, with
+initial expected route version 1. The review shows those identities and every
+expanded finite turn-policy field; it does not fabricate a route or credential.
+
+Work-context settings use the same fields at the input object's top level, plus
+`title` and an optional `task_binding` triple (`task_id`, `assignment_id`,
+`generation`). Creation can mint the triple at generation 1; configuration is a
+complete replacement, not a patch. Omitted `turn_policy` selects the finite
+testing template shown in review; it does not retain an old custom policy.
+
+```text
+dwarf-harness --colony-dir C context create --agent Scout --input work.json --review-out work.review.json
+dwarf-harness --colony-dir C route set --context "Scout/General work" --input route.json --review-out route.review.json
+dwarf-harness --colony-dir C credential bind --context "Scout/General work" --input source.json --review-out source.review.json
+dwarf-harness --colony-dir C task create --context Scout/Research --input task.json --review-out task.review.json
+```
+
+`--agent` accepts an exact registered name or UUID; a supplied `agent_id` must
+agree. `--context` selects an exact registered agent name/UUID followed by `/`
+and the configured context title/UUID. Unknown or ambiguous names are refused,
+never guessed. It is accepted by route setting, credential binding, task creation
+and context configuration. Task creation resolves the reviewed work context's
+intended assignment. Apply uses only the approved review, without either selector.
+
+For `workspace inputs`, the repository's inspected common directory must match
+one applied registration exactly. Alternatively, select an existing workspace
+with `--workspace UUID`; an input `workspace_id`, if also supplied, must agree.
+Unknown or ambiguous registrations are refused. Registration allocates its UUID
+during apply, so use the applied state or receipt, never the registration review,
+when explicitly selecting that workspace later. Selectors are review-only flags.
+
+Credential sources are only `environment` and `windows_credential_manager`.
+Supply the variable or Credential Manager entry name, never its value. Binding
+authorizes a fresh native bind on each owner start from the newest active source
+selection for each used scope. Startup replaces only that selected version,
+preserving other explicitly active versions. A missing or invalid selected source
+refuses startup with the scope identity; there is no fallback to an older source.
+Setup commands do not perform this startup rebinding.
+
+### Managed and legacy startup
+
+```text
+dwarf-harness --colony-dir C
+```
+
+The initial applied `colony.create` record selects managed mode. Context settings
+then come only from the ledger. Supplying `--settings`, even an empty file, refuses
+`mixed_configuration`: nothing is imported, merged or generated. A managed colony
+without a configured context refuses `setup_required`. Missing routes, tasks,
+grants, capacities and spend terms remain turn prerequisites, not implicit grants
+or reasons to invent configuration at startup. Validation is disabled in this
+build; check setup, `doctor` and `startup set` are not exposed yet.
+
+Populated colonies without that initial setup record remain explicit legacy mode:
+
+```text
+dwarf-harness --colony-dir C --settings legacy.json
+```
+
+The legacy file remains strict nonsecret JSON as documented by
+`internal/core/terminal`; it is never imported into managed setup. Omitting it
+refuses `settings_required`, and setup mutations refuse `legacy_configuration`.
+An empty unfinished colony is `creation_incomplete`, not an automatic migration.
 
 ## Building and checking
 

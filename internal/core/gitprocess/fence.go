@@ -185,6 +185,10 @@ func (o *Owner) slotsPath(id uuid.UUID) string {
 	return filepath.Join(o.root, "runs", id.String()+".slots")
 }
 func (o *Owner) loadFences() error {
+	return o.loadFencesMode(false)
+}
+
+func (o *Owner) loadFencesMode(inspection bool) error {
 	path := filepath.Join(o.root, "identity.json")
 	raw, err := readRegular(path)
 	missingIdentity := errors.Is(err, os.ErrNotExist)
@@ -239,6 +243,12 @@ func (o *Owner) loadFences() error {
 		if err != nil {
 			return err
 		}
+	}
+	if inspection {
+		if pendingIdentity || len(debris) != 0 || !missingIdentity && !hasRuns {
+			return ErrUnconfirmed
+		}
+		return nil
 	}
 	// Validate the complete layout before removing any debris. A neighboring
 	// malformed state must not turn a refused Open into a partial sweep.

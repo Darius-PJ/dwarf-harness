@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
-	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
 // Configuration is the early-start selection. The host decodes HostSettings
@@ -21,7 +20,7 @@ type Configuration struct {
 // LoadConfiguration must run immediately after Store.Open. A nil external file
 // means --settings was absent; an explicitly supplied empty file is still an
 // external file and conflicts with a managed colony.
-func LoadConfiguration(ctx context.Context, store *ledgerstore.Store, external []byte) (Configuration, error) {
+func LoadConfiguration(ctx context.Context, store setupReader, external []byte) (Configuration, error) {
 	state, err := Load(ctx, store)
 	if err != nil {
 		return Configuration{}, classify(err, "start", Target{})

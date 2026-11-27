@@ -79,32 +79,48 @@ func (e *Failure) Unwrap() error { return e.cause }
 
 func fail(code, operation string, target Target, cause error) error {
 	fix := operation
+	switch fix {
+	case "capacity configure":
+		fix = "capacity set"
+	case "grant.issue":
+		fix = "grant issue"
+	}
+	if fix != "" {
+		fix += " --input --review-out"
+	}
 	switch code {
-	case "approval_required", "review_changed", "review_invalid":
-		fix = "review"
+	case "approval_required":
+		fix = operation + " --apply --approve"
+		if operation == "capacity configure" {
+			fix = "capacity set --apply --approve"
+		}
+	case "review_changed", "review_invalid":
+		if operation == "" || operation == "review" {
+			fix = "--input --review-out"
+		}
 	case "creation_incomplete", "colony_exists":
-		fix = "colony create"
-	case "legacy_configuration", "mixed_configuration", "settings_required":
+		fix = "colony create --input --review-out"
+	case "legacy_configuration", "settings_required":
 		fix = "--settings"
-	case "setup_required":
-		fix = "agent create"
-	case "context_busy":
-		fix = "context inspect"
+	case "mixed_configuration":
+		fix = "--colony-dir"
+	case "setup_required", "agent_exists":
+		fix = "agent create --input --review-out"
+	case "context_busy", "colony_in_use":
+		fix = "/quit"
 	case "provider_move_requires_context_move":
-		fix = "context move"
+		fix = "context configure --input --review-out"
 	case "route_missing", "route_revision", "profile_invalid", "profile_expired":
-		fix = "route set"
+		fix = "route set --input --review-out"
 	case "credential_missing", "credential_invalid", "credential_unsupported", "credential_revoked":
-		fix = "credential bind"
+		fix = "credential bind --input --review-out"
 	case "spend_ceiling_missing", "spend_disabled", "spend_period_mismatch":
-		fix = "spend set"
-	case "colony_in_use":
-		fix = "close colony"
+		fix = "spend set --input --review-out"
 	case "private_integrity", "storage_unavailable":
-		fix = "restore verified storage"
+		fix = "--colony-dir"
 	}
 	if fix == "" {
-		fix = "review"
+		fix = "--input --review-out"
 	}
 	return &Failure{Code: code, Operation: operation, Target: target, FixCommand: fix, cause: cause}
 }

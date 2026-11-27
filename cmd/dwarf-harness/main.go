@@ -1,9 +1,7 @@
-// Command dwarf-harness hosts one initialized colony's Core and serves the
-// plain terminal on it. It never initializes a colony, installs a provider,
-// grant, spend term or capacity, or reads a credential source other than the
-// owner's explicit startup bindings in the settings file.
-//
-//	dwarf-harness -colony-dir <colony> -settings <settings.json>
+// Command dwarf-harness hosts a colony's Core and plain terminal. Positional
+// setup commands review and apply explicit owner operations without turns.
+// Managed colonies load their settings from the ledger; legacy colonies use
+// the owner's explicit --settings file.
 package main
 
 import (
@@ -22,6 +20,7 @@ import (
 	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/providers"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/session"
+	"github.com/Darius-PJ/dwarf-harness/internal/core/setup"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/terminal"
 	"github.com/Darius-PJ/dwarf-harness/internal/core/workspace"
 )
@@ -44,25 +43,34 @@ var workspaceOpenOverride func(context.Context, *ledgerstore.Store, string, work
 // Every refusal prints a fixed error class, never a path, value or locator.
 func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.Signal) int {
 	flags := flag.NewFlagSet("dwarf-harness", flag.ContinueOnError)
-	flags.SetOutput(stdout)
-	colonyDir := flags.String("colony-dir", "", "initialized colony directory")
-	settingsPath := flags.String("settings", "", "strict settings JSON file (nonsecret)")
-	if err := flags.Parse(args); err != nil || *colonyDir == "" || *settingsPath == "" || flags.NArg() != 0 {
-		fmt.Fprintln(stdout, "usage: dwarf-harness -colony-dir <colony> -settings <settings.json>")
-		return 2
+	flags.SetOutput(io.Discard)
+	colonyDir := flags.String("colony-dir", "", "colony directory")
+	settingsPath := flags.String("settings", "", "legacy strict settings JSON file (nonsecret)")
+	if err := flags.Parse(args); err != nil || *colonyDir == "" {
+		return writeSetupFailure(stdout, false, commandFailure("review_invalid", "command", "--colony-dir", setup.Target{Kind: "colony"}), 2)
 	}
+	settingsSupplied := false
+	flags.Visit(func(f *flag.Flag) { settingsSupplied = settingsSupplied || f.Name == "settings" })
+	if flags.NArg() != 0 {
+		return runSetup(*colonyDir, settingsSupplied, flags.Args(), stdout)
+	}
+	target := setup.Target{Kind: "colony"}
 	refuse := func(stage string, err error) int {
-		fmt.Fprintf(stdout, "[terminal] startup refused: %s: %s\n", stage, describe(err))
+		fmt.Fprintf(stdout, "[terminal] startup refused: %s: %s\n", stage, describe(startupFailure(err, target, stage)))
 		return 1
-	}
-	settings, err := readSettings(*settingsPath)
-	if err != nil {
-		return refuse("settings", err)
 	}
 	ctx := context.Background()
 	store, _, err := ledgerstore.Open(*colonyDir, ledger.Defined())
 	if err != nil {
 		return refuse("colony", err)
+	}
+	target.ID = store.Colony()
+	settings, managed, err := loadStartupConfiguration(ctx, store, *settingsPath, settingsSupplied)
+	if err != nil {
+		return refuse("settings", errors.Join(err, store.Close()))
+	}
+	if managed {
+		fmt.Fprintln(stdout, "[terminal] validation disabled: this build has no validation startup settings")
 	}
 	// Drain order: Core stops its turns before the workspace, then the store.
 	drain := []func() error{store.Close}
@@ -132,6 +140,13 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 			return refuse("turn recovery", err)
 		}
 	}
+	if managed {
+		settings, err = managedCredentialBindings(ctx, service, settings)
+		if err != nil {
+			stop()
+			return refuse("credential binding", err)
+		}
+	}
 	bound, err := bindCredentials(ctx, service, settings)
 	if err != nil {
 		stop()
@@ -141,8 +156,13 @@ func run(args []string, stdin *os.File, stdout io.Writer, interrupts <-chan os.S
 	views := []terminal.Agent{}
 	index := map[uuid.UUID]int{}
 	for _, c := range settings.Contexts {
-		p := c.Policy
-		options.Contexts = append(options.Contexts, agents.LoopContextSettings{Binding: agents.Binding{AgentID: c.AgentID, ContextID: c.ContextID}, RouteID: c.RouteID, ExpectedRouteVersion: c.ExpectedRouteVersion, CredentialScopeID: c.CredentialScopeID, MaxOutputTokens: c.MaxOutputTokens, DisplayTitle: c.DisplayTitle, TaskBinding: c.TaskBinding, TimeoutMS: p.TimeoutMS, Policy: agents.TurnPolicy{Schema: 1, MaxModelCalls: p.MaxModelCalls, MaxToolCalls: p.MaxToolCalls, MaxArgumentBytes: p.MaxArgumentBytes, MaxResultBytes: p.MaxResultBytes, MaxDiscoveryEntries: p.MaxDiscoveryEntries, MaxSearchEntries: p.MaxSearchEntries, MaxSearchMatches: p.MaxSearchMatches, MaxLiveBytes: p.MaxLiveBytes}})
+		setting := setup.LoopSetting(agents.Binding{AgentID: c.AgentID, ContextID: c.ContextID}, c.Configuration())
+		if err := agents.ValidateSetupTemplate(setting); err != nil {
+			stop()
+			failure := commandFailure("review_invalid", "turn_policy", "context configure --input --review-out", setup.Target{Kind: "context", ID: c.ContextID, AgentID: c.AgentID})
+			return refuse("turn loop", failure)
+		}
+		options.Contexts = append(options.Contexts, setting)
 		i, ok := index[c.AgentID]
 		if !ok {
 			i, index[c.AgentID] = len(views), len(views)
@@ -228,7 +248,7 @@ func bindCredentials(ctx context.Context, service *agents.Service, s terminal.Se
 		version := uuid.NewV7()
 		_, err = service.BindCredential(ctx, origin, agents.CredentialBinding{CommandID: uuid.NewV7(), ScopeID: b.ScopeID, ExpectedVersion: scope.Version, Provider: b.Provider, CredentialVersion: version, SourceKind: b.SourceKind, SourceLocator: b.SourceLocator, RevokePreviousVersion: b.RevokePreviousVersion})
 		if err != nil {
-			return nil, err
+			return nil, startupFailure(err, setup.Target{Kind: "credential", ID: b.ScopeID}, "credential_bindings")
 		}
 		after, err := service.CredentialScopeStatus(ctx, agents.CredentialScopeLookup{ScopeID: b.ScopeID})
 		if err != nil {
@@ -248,6 +268,14 @@ func bindCredentials(ctx context.Context, service *agents.Service, s terminal.Se
 // describe prints only a known error class's fixed text. Wrapped errors can
 // carry paths or digests, so their own text is never printed.
 func describe(err error) string {
+	var setupFailure *setup.Failure
+	if errors.As(err, &setupFailure) {
+		return describeSetupFailure(setupFailure)
+	}
+	var cause *agents.RefusalCause
+	if errors.As(err, &cause) {
+		return describeSetupFailure(startupFailure(err, setup.Target{}, "dispatch"))
+	}
 	var busy *agents.BusyError
 	if errors.As(err, &busy) {
 		return "busy: " + busy.Reason

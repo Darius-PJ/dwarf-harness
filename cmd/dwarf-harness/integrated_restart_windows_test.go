@@ -99,9 +99,9 @@ func testStartupUnconfirmedFence(t *testing.T) {
 		t.Fatalf("unconfirmed running fence did not stop workspace startup: code=%d output=%s", code, output)
 	}
 	status := strings.Index(output, "service-status")
-	refusal := strings.Index(output, "[terminal] startup refused: workspace: unclassified failure\n")
+	refusal := strings.Index(output, "[terminal] startup refused: workspace: code=process_recovery_required ")
 	if status < 0 || refusal < status || !strings.Contains(output[:refusal], "process_unconfirmed") {
-		t.Fatal("real unconfirmed Owner did not print typed status before the unchanged refusal", output)
+		t.Fatal("real unconfirmed Owner did not print typed status before the safe refusal", output)
 	}
 	for name, before := range files {
 		after, err := os.ReadFile(name)

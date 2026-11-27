@@ -15,6 +15,9 @@
 // capability or measured fit. A context without task_binding must be titled
 // "General work". Source locators stay with the host: WriteStartup and
 // CredentialBinding's formatting print only scope, provider and versions.
+// The host selects either these legacy settings or managed Core setup, never
+// both. ConfiguredContext and Configuration convert only the view; no settings
+// file is generated or imported, and managed starts need no --settings.
 //
 // Run serves the given Sessions. Plain text sends message.send to the
 // selected context with fresh command and turn IDs; /context <agent>

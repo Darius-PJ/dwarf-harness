@@ -11,7 +11,6 @@ import (
 	"uuid"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/ledger"
-	"github.com/Darius-PJ/dwarf-harness/internal/core/ledgerstore"
 )
 
 var ErrInconsistent = errors.New("setup: inconsistent committed records")
@@ -53,10 +52,18 @@ var setupConsumption = ledger.Consumption{
 	ledger.TypeRuntimeWorkAdmitted: {1}, ledger.TypeRuntimePaidRouteConfigured: {1},
 }
 
+// setupReader is the verified prefix shared by normal startup and inspection.
+type setupReader interface {
+	LogDir() string
+	Colony() uuid.UUID
+	Durable() uint64
+	ReadBody(context.Context, ledger.Digest) ([]byte, error)
+}
+
 // Load reads the acknowledged prefix without opening agents or workspace,
 // repairing files, resolving sources or applying incomplete setup operations.
-func Load(ctx context.Context, store *ledgerstore.Store) (State, error) {
-	if store == nil {
+func Load(ctx context.Context, store setupReader) (State, error) {
+	if store == nil || reflect.ValueOf(store).Kind() == reflect.Pointer && reflect.ValueOf(store).IsNil() {
 		return State{}, fail("storage_unavailable", "", Target{}, nil)
 	}
 	return load(ctx, store.LogDir(), store.Colony(), store.Durable())

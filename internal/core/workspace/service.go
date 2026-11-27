@@ -124,6 +124,10 @@ func Open(ctx context.Context, store workspaceStore, colonyDir string, cfg Confi
 }
 
 func openService(ctx context.Context, store workspaceStore, colonyDir string, cfg Config, deps serviceDeps) (*Service, Reconciliation, error) {
+	return openServiceMode(ctx, store, colonyDir, cfg, deps, false)
+}
+
+func openServiceMode(ctx context.Context, store workspaceStore, colonyDir string, cfg Config, deps serviceDeps, inspection bool) (*Service, Reconciliation, error) {
 	var report Reconciliation
 	if store == nil {
 		return nil, report, ErrInvalid
@@ -186,26 +190,29 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 	s.activationHashes = make(map[ledger.Digest]bool)
 	s.activationFloor = math.MinInt64
 	s.activationWake = make(chan struct{}, 1)
-	s.activationContext, s.stopActivation = context.WithCancel(context.Background())
-	processes, opening, err := gitprocess.Open(ctx, filepath.Join(colony, "workspaces", "processes"), gitprocess.Options{RequireTree: runtime.GOOS == "windows"})
-	if err != nil {
-		s.stopActivation()
-		return nil, report, err
-	}
+	var reconciled gitprocess.Report
 	opened := false
-	defer func() {
-		if !opened {
+	if !inspection {
+		s.activationContext, s.stopActivation = context.WithCancel(context.Background())
+		processes, opening, err := gitprocess.Open(ctx, filepath.Join(colony, "workspaces", "processes"), gitprocess.Options{RequireTree: runtime.GOOS == "windows"})
+		if err != nil {
 			s.stopActivation()
-			_ = processes.Close()
+			return nil, report, err
 		}
-	}()
-	reconciled, err := processes.Reconcile(ctx)
-	if err != nil {
-		return nil, report, err
+		defer func() {
+			if !opened {
+				s.stopActivation()
+				_ = processes.Close()
+			}
+		}()
+		reconciled, err = processes.Reconcile(ctx)
+		if err != nil {
+			return nil, report, err
+		}
+		s.processes, s.treeProof = processes, opening.TreeProofSupported
+		s.git = newGitRunner(processes, deps.environ)
+		s.engine = newCaptureEngine(s.git, colony)
 	}
-	s.processes, s.treeProof = processes, opening.TreeProofSupported
-	s.git = newGitRunner(processes, deps.environ)
-	s.engine = newCaptureEngine(s.git, colony)
 	reader, err := ledger.OpenReader(store.LogDir(), ledger.ReadOptions{Colony: store.Colony(), Through: store.Durable(), Consume: workspaceConsumption(), AllTypes: true})
 	if err != nil {
 		return nil, report, err
@@ -249,6 +256,9 @@ func openService(ctx context.Context, store workspaceStore, colonyDir string, cf
 			return nil, report, err
 		}
 		s.workspaces[id] = w
+	}
+	if inspection {
+		return s, report, nil
 	}
 	if err := prepareGitLayout(colony); err != nil {
 		return nil, report, err

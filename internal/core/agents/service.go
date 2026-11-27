@@ -183,6 +183,10 @@ func Open(ctx context.Context, store privateStore, colonyDir string, limits Limi
 	return openService(ctx, store, colonyDir, limits, serviceDeps{})
 }
 func openService(ctx context.Context, store privateStore, colonyDir string, limits Limits, deps serviceDeps) (*Service, Reconciliation, error) {
+	return openServiceMode(ctx, store, colonyDir, limits, deps, true)
+}
+
+func openServiceMode(ctx context.Context, store privateStore, colonyDir string, limits Limits, deps serviceDeps, complete bool) (*Service, Reconciliation, error) {
 	var report Reconciliation
 	if store == nil {
 		return nil, report, ErrInvalid
@@ -218,7 +222,7 @@ func openService(ctx context.Context, store privateStore, colonyDir string, limi
 		}
 	}
 	s.openedThrough = s.p.through
-	report, err = s.inspectOpen(ctx)
+	report, err = s.inspectOpen(ctx, complete)
 	if err != nil {
 		return nil, report, err
 	}

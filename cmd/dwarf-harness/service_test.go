@@ -73,8 +73,8 @@ func serviceStartupRecords(t *testing.T, root string) []ledger.Record {
 
 func requireServiceStartupRefusal(t *testing.T, code int, output, stage, class string, snapshot agents.ServiceSnapshot) {
 	t.Helper()
-	line := "[terminal] startup refused: " + stage + ": " + class + "\n"
-	refusal := strings.Index(output, line)
+	line := "[terminal] startup refused: " + stage + ": "
+	refusal := strings.Index(output, line+"code="+class+" ")
 	status := strings.Index(output, "service-status")
 	if code != 1 || status < 0 || refusal < status || strings.Count(output, line) != 1 || strings.Contains(output, " ready ") {
 		t.Fatalf("snapshot did not precede the fixed refusal: code=%d output=%s", code, output)
@@ -111,7 +111,7 @@ func TestServiceStartupRefusal(t *testing.T) {
 		}
 		defer func() { workspaceOpenOverride = nil }()
 		code, output := integratedStartupRun(t, root, settings)
-		requireServiceStartupRefusal(t, code, output, "workspace", "unclassified failure", snapshot)
+		requireServiceStartupRefusal(t, code, output, "workspace", "process_recovery_required", snapshot)
 		if strings.Contains(output, "colony opened") || strings.Contains(output, "private native detail") || !strings.Contains(output, "process_unconfirmed") {
 			t.Fatal("unconfirmed branch entered normal startup or lost its sanitized class", output)
 		}
@@ -164,7 +164,7 @@ func TestServiceStartupRefusal(t *testing.T) {
 			t.Fatal(err)
 		}
 		code, output := integratedStartupRun(t, root, settings)
-		requireServiceStartupRefusal(t, code, output, "turn loop", agents.ErrIntegrity.Error(), snapshot)
+		requireServiceStartupRefusal(t, code, output, "turn loop", "private_integrity", snapshot)
 		if !strings.Contains(output, "private_integrity") {
 			t.Fatal("integrity refusal omitted typed condition")
 		}

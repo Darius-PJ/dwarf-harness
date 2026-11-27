@@ -121,7 +121,7 @@ func (s *Service) objectIssue(path privateScope, b ReadBinding, slot string, h H
 	}
 	return issue
 }
-func (s *Service) inspectOpen(ctx context.Context) (Reconciliation, error) {
+func (s *Service) inspectOpen(ctx context.Context, complete bool) (Reconciliation, error) {
 	var report Reconciliation
 	// Stable order makes a report useful without granting map order authority.
 	keys := make([]scopeKey, 0, len(s.p.scopes))
@@ -225,7 +225,7 @@ func (s *Service) inspectOpen(ctx context.Context) (Reconciliation, error) {
 		if k.context == ([16]byte{}) {
 			scope = "agent"
 		}
-		if err := s.inspectScope(ctx, st.ids, scope, true, true, &report, check.observed); err != nil {
+		if err := s.inspectScope(ctx, st.ids, scope, complete, true, &report, check.observed); err != nil {
 			if !errors.Is(err, ErrIntegrity) && !errors.Is(err, ErrMaterialization) {
 				return report, err
 			}
@@ -324,6 +324,9 @@ func (s *Service) inspectScope(ctx context.Context, ids submissionIDs, scope str
 		if err != nil || observation.state == materializationForeign {
 			issues = append(issues, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "foreign_materialization"})
 			continue
+		}
+		if observation.state == materializationStale && !complete && report != nil {
+			report.Issues = append(report.Issues, IntegrityIssue{ReadBinding: b, Slot: slot, Revision: revision, ExpectedSHA256: h.SHA256, ObservedSHA256: observation.digest, Reason: "stale_materialization"})
 		}
 		if observation.state == materializationStale && complete {
 			if s.deps.beforeMaterialize != nil {

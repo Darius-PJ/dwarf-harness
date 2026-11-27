@@ -161,9 +161,11 @@ func expand(input ContextInput, general bool) ledger.SetupContextArguments {
 	return ledger.SetupContextArguments{DisplayTitle: input.DisplayTitle, TaskBinding: input.TaskBinding, RouteID: input.RouteID, ExpectedRouteVersion: input.ExpectedRouteVersion, CredentialScopeID: input.CredentialScopeID, MaxOutputTokens: input.MaxOutputTokens, TurnPolicy: *input.TurnPolicy}
 }
 
-func loopSetting(a ledger.SetupContextArguments) agents.LoopContextSettings {
+// LoopSetting converts complete persisted settings without changing their
+// historical bounds. The caller supplies the context's native identity.
+func LoopSetting(binding agents.Binding, a ledger.SetupContextArguments) agents.LoopContextSettings {
 	p := a.TurnPolicy
-	return agents.LoopContextSettings{RouteID: a.RouteID, ExpectedRouteVersion: a.ExpectedRouteVersion, CredentialScopeID: a.CredentialScopeID, DisplayTitle: a.DisplayTitle, TaskBinding: a.TaskBinding, MaxOutputTokens: a.MaxOutputTokens, TimeoutMS: p.TimeoutMS, Policy: agents.TurnPolicy{Schema: 1, MaxModelCalls: p.MaxModelCalls, MaxToolCalls: p.MaxToolCalls, MaxArgumentBytes: p.MaxArgumentBytes, MaxResultBytes: p.MaxResultBytes, MaxDiscoveryEntries: p.MaxDiscoveryEntries, MaxSearchEntries: p.MaxSearchEntries, MaxSearchMatches: p.MaxSearchMatches, MaxLiveBytes: p.MaxLiveBytes}}
+	return agents.LoopContextSettings{Binding: binding, RouteID: a.RouteID, ExpectedRouteVersion: a.ExpectedRouteVersion, CredentialScopeID: a.CredentialScopeID, DisplayTitle: a.DisplayTitle, TaskBinding: a.TaskBinding, MaxOutputTokens: a.MaxOutputTokens, TimeoutMS: p.TimeoutMS, Policy: agents.TurnPolicy{Schema: 1, MaxModelCalls: p.MaxModelCalls, MaxToolCalls: p.MaxToolCalls, MaxArgumentBytes: p.MaxArgumentBytes, MaxResultBytes: p.MaxResultBytes, MaxDiscoveryEntries: p.MaxDiscoveryEntries, MaxSearchEntries: p.MaxSearchEntries, MaxSearchMatches: p.MaxSearchMatches, MaxLiveBytes: p.MaxLiveBytes}}
 }
 
 // Review reads inputs and current revisions, allocates every command identity
@@ -564,7 +566,7 @@ func validateDocument(doc ReviewDocument) error {
 			return fail("review_invalid", doc.Operation, step.Target, nil)
 		}
 		if settings, ok := value.(*ledger.SetupContextArguments); ok {
-			if err := agents.ValidateSetupTemplate(loopSetting(*settings)); err != nil {
+			if err := agents.ValidateSetupTemplate(LoopSetting(agents.Binding{AgentID: step.Target.AgentID, ContextID: step.Target.ID}, *settings)); err != nil {
 				return classify(err, doc.Operation, step.Target)
 			}
 			if doc.Operation == "agent create" && (settings.DisplayTitle != "General work" || settings.TaskBinding != nil) || doc.Operation == "context create" && settings.TaskBinding == nil {

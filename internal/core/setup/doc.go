@@ -37,4 +37,6 @@
 // Failure exposes stable safe causes and remediation commands while preserving
 // native errors.Is/errors.As chains. Errors and receipts contain no instructions,
 // profile/source contents, credential locators or secret-derived material.
+// The agent_exists cause means an agent with that name already exists; review
+// agent create with a distinct name. Names do not grant authority.
 package setup

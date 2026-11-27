@@ -15,8 +15,8 @@ const MaxSettingsBytes = 1 << 20
 // GeneralTitle is the fixed display title of an agent's General context.
 const GeneralTitle = "General work"
 
-// Settings is the host's external, nonsecret startup configuration. It is
-// never committed, and its credential source locators are never displayed.
+// Settings is the host's selected, nonsecret startup configuration. Legacy
+// files are decoded explicitly; managed settings come from the setup fold.
 type Settings struct {
 	Contexts           []ContextSettings
 	CredentialBindings []CredentialBinding
@@ -200,4 +200,18 @@ func (r *reader) policy(n *node, path string) Policy {
 		r.fail(join(path, "max_search_matches"), "at most max_search_entries")
 	}
 	return p
+}
+
+// Configuration converts the terminal view without adding defaults or changing
+// historical policy bounds. Core remains responsible for current validation.
+func (c ContextSettings) Configuration() ledger.SetupContextArguments {
+	p := c.Policy
+	return ledger.SetupContextArguments{DisplayTitle: c.DisplayTitle, TaskBinding: c.TaskBinding, RouteID: c.RouteID, ExpectedRouteVersion: c.ExpectedRouteVersion, CredentialScopeID: c.CredentialScopeID, MaxOutputTokens: c.MaxOutputTokens, TurnPolicy: ledger.SetupTurnPolicy{MaxModelCalls: p.MaxModelCalls, MaxToolCalls: p.MaxToolCalls, TimeoutMS: p.TimeoutMS, MaxArgumentBytes: p.MaxArgumentBytes, MaxResultBytes: p.MaxResultBytes, MaxDiscoveryEntries: p.MaxDiscoveryEntries, MaxSearchEntries: p.MaxSearchEntries, MaxSearchMatches: p.MaxSearchMatches, MaxLiveBytes: p.MaxLiveBytes}}
+}
+
+// ConfiguredContext creates the safe display view of complete managed settings.
+// Credential source locators are never part of this conversion.
+func ConfiguredContext(agent, contextID uuid.UUID, a ledger.SetupContextArguments) ContextSettings {
+	p := a.TurnPolicy
+	return ContextSettings{AgentID: agent, ContextID: contextID, DisplayTitle: a.DisplayTitle, TaskBinding: a.TaskBinding, RouteID: a.RouteID, ExpectedRouteVersion: a.ExpectedRouteVersion, CredentialScopeID: a.CredentialScopeID, MaxOutputTokens: a.MaxOutputTokens, Policy: Policy{MaxModelCalls: p.MaxModelCalls, MaxToolCalls: p.MaxToolCalls, TimeoutMS: p.TimeoutMS, MaxArgumentBytes: p.MaxArgumentBytes, MaxResultBytes: p.MaxResultBytes, MaxDiscoveryEntries: p.MaxDiscoveryEntries, MaxSearchEntries: p.MaxSearchEntries, MaxSearchMatches: p.MaxSearchMatches, MaxLiveBytes: p.MaxLiveBytes}}
 }
