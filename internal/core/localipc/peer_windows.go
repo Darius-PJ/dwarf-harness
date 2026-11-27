@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"unsafe"
 
 	"github.com/Darius-PJ/dwarf-harness/contract/launcher"
@@ -156,37 +158,114 @@ func (o *Owner) serverPeer(f *os.File) (principal launcher.Principal, err error)
 }
 
 func (o *Owner) security(h windows.Handle) error {
+	sid, err := o.privateAccessSID(h)
+	if err != nil || sid != o.logon {
+		return ErrPrivate
+	}
+	return nil
+}
+
+// privateAccessSID checks the entire owner-only shape without requiring that
+// its one ACE belongs to this sign-in session.
+func (o *Owner) privateAccessSID(h windows.Handle) (string, error) {
 	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
-		return ErrPrivate
+		return "", ErrPrivate
 	}
 	owner, _, err := sd.Owner()
 	if err != nil || owner == nil || owner.String() != o.user {
-		return ErrPrivate
+		return "", ErrPrivate
 	}
 	control, _, err := sd.Control()
 	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
-		return ErrPrivate
+		return "", ErrPrivate
 	}
 	acl, defaulted, err := sd.DACL()
 	if err != nil || defaulted || acl == nil || acl.AceCount != 1 {
-		return ErrPrivate
+		return "", ErrPrivate
 	}
 	var ace *windows.ACCESS_ALLOWED_ACE
 	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
 	if windows.GetAce(acl, 0, &ace) != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != 0 || ace.Mask != windows.GENERIC_ALL && ace.Mask != fileAllAccess {
-		return ErrPrivate
+		return "", ErrPrivate
 	}
 	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-	if sid.String() != o.logon {
-		return ErrPrivate
-	}
+	name := sid.String()
 	runtime.KeepAlive(sd)
-	return nil
+	return name, nil
 }
 func (o *Owner) attributes() *windows.SecurityAttributes {
 	return &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: o.descriptor}
 }
+
+// renewLogon is used only by Claim-held directory preparation and pending-file
+// publication. NtCreateFile avoids Win32's implicit SYNCHRONIZE request, which
+// the owner's READ_CONTROL/WRITE_DAC rights cannot satisfy under the old DACL.
+// FILE_READ_ATTRIBUTES is needed to reject reparse points before any repair.
+func (o *Owner) renewLogon(path string, directory bool) (err error) {
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\\.\`) {
+		path = path[4:]
+	} else if strings.HasPrefix(path, `\\`) {
+		path = `UNC\` + path[2:]
+	}
+	name, err := windows.NewNTUnicodeString(`\??\` + path)
+	if err != nil {
+		return err
+	}
+	attributes := windows.OBJECT_ATTRIBUTES{
+		Length:     uint32(unsafe.Sizeof(windows.OBJECT_ATTRIBUTES{})),
+		ObjectName: name,
+		Attributes: windows.OBJ_CASE_INSENSITIVE,
+	}
+	var h windows.Handle
+	var status windows.IO_STATUS_BLOCK
+	err = windows.NtCreateFile(&h, windows.READ_CONTROL|windows.WRITE_DAC|windows.FILE_READ_ATTRIBUTES, &attributes, &status, nil, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, windows.FILE_OPEN, windows.FILE_OPEN_REPARSE_POINT, 0, 0)
+	runtime.KeepAlive(name)
+	if err != nil {
+		if status, ok := err.(windows.NTStatus); ok {
+			return status.Errno()
+		}
+		return err
+	}
+	defer func() { err = errors.Join(err, windows.CloseHandle(h)) }()
+	var info windows.ByHandleFileInformation
+	if windows.GetFileInformationByHandle(h, &info) != nil || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || (info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0) != directory {
+		return ErrPrivate
+	}
+	previous, err := o.privateAccessSID(h)
+	if err != nil {
+		return err
+	}
+	if previous == o.logon {
+		return nil
+	}
+	sid, err := windows.StringToSid(previous)
+	if err != nil || !sid.IsWellKnown(windows.WinLogonIdsSid) {
+		return ErrPrivate
+	}
+	acl, _, err := o.descriptor.DACL()
+	if err != nil {
+		return ErrPrivate
+	}
+	err = windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
+	runtime.KeepAlive(o.descriptor)
+	if err != nil {
+		return err
+	}
+	return o.security(h)
+}
+
+func (o *Owner) preparePending(path string) (*os.File, error) {
+	if err := o.renewLogon(path, false); err != nil {
+		return nil, err
+	}
+	return o.openPrivate(path, false)
+}
+
 func (o *Owner) privateDir(path string, create bool) (os.FileInfo, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -196,6 +275,10 @@ func (o *Owner) privateDir(path string, create bool) (os.FileInfo, error) {
 		err = windows.CreateDirectory(name, o.attributes())
 		runtime.KeepAlive(o.descriptor)
 		if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+			return nil, err
+		}
+		// Only PrepareRun requests creation here, after ClaimColony succeeds.
+		if err := o.renewLogon(path, true); err != nil {
 			return nil, err
 		}
 	}

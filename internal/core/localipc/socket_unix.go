@@ -77,6 +77,9 @@ func (o *Owner) openPrivate(path string, create bool) (*os.File, error) {
 	}
 	return f, nil
 }
+func (o *Owner) preparePending(path string) (*os.File, error) {
+	return o.openPrivate(path, false)
+}
 func replaceDiscovery(from, to string) error { return os.Rename(from, to) }
 func (o *Owner) address(colony, host uuid.UUID) (string, string, error) {
 	base, err := filepath.EvalSymlinks("/tmp")

@@ -14,6 +14,8 @@ import (
 
 const discoveryLimit = 4096
 
+// PrepareRun may renew a previous sign-in session's owner-only Windows DACL.
+// Like Publish, it must be called only while holding the colony Claim.
 func (o *Owner) PrepareRun(dir string) error {
 	_, err := o.privateDir(filepath.Join(dir, "run"), true)
 	return err
@@ -72,11 +74,8 @@ func (o *Owner) Publish(dir string, colony, host uuid.UUID, endpoint string) err
 		return err
 	}
 	pending := filepath.Join(run, "host.json.pending")
-	if _, err := os.Lstat(pending); err == nil {
-		f, err := o.openPrivate(pending, false)
-		if err != nil {
-			return err
-		}
+	f, err := o.preparePending(pending)
+	if err == nil {
 		if err := f.Close(); err != nil {
 			return err
 		}
@@ -86,7 +85,7 @@ func (o *Owner) Publish(dir string, colony, host uuid.UUID, endpoint string) err
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	f, err := o.openPrivate(pending, true)
+	f, err = o.openPrivate(pending, true)
 	if err != nil {
 		return err
 	}
