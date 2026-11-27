@@ -30,7 +30,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Builds on ticket [16](16-prove-concurrent-private-runtime-restart-and-child-shutdown.md)'s runtime, its measurement driver and analyzer, and its matrix figures.
 - A ruled design chooses the method and any remedy before code (D117).
@@ -61,3 +61,5 @@ Canonical sections: Core roadmap C3; its cited controlling Core design and lates
 ## Comments
 
 2026-11-20 — Published at the project manager's proposal: the owner chose to stop ticket [16](16-prove-concurrent-private-runtime-restart-and-child-shutdown.md)'s matrix at its preregistered 12-hour cap and carry its two 60-context cells here (D173). Publication grants no separate implementation, contract-freeze, release or study approval; the start and authority gates above stand.
+
+2026-11-27 — Release tier (D182): On trigger. Schedule it when turns queue at the owner's real agent count, after first raising Core's paid-call concurrency limit (default 3); C3 closed with ticket [91](91-record-service-loss-and-restoration-for-every-agent.md) without it, deferring the measurement D173 assigned here. This changes no criterion or blocker.

@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Native client from ticket [54](54-attach-one-native-gui-to-a-live-core-and-recover-its-own-view-safely.md): Fyne v2.8.1 in the isolated gui/ module, authenticated C7 attach and typed commands only; no browser, game engine, GUI database or direct colony-file access.
 - Adds an owner-frozen C7 statistics projection over existing C3, BudgetBook and router facts; absent producers show unavailable, never zero.
@@ -59,3 +59,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-09 — Consolidation cross-link: under [D108](../../../docs/DECISIONS.md#d108-character-sprites-a-still-front-view-an-animated-three-quarter-view-and-corps-emblems-and-colours), the agent sheet shows the three-quarter sprite with its idle or role action loop chosen from Core's actual work status, and the party sheet shows straight-on still sprites; both views carry the Corps emblem and colour. These extensions add no blocker or criterion to this ticket.
 
 2026-10-09 — Cross-link from ticket [88](88-generate-a-minimal-original-layered-art-sample-with-the-go-art-generator.md)'s closing: the status keeps its own icon and text, and the animation loop is never the status indicator. Mapping Core's statuses onto the idle and working loops, and what plays for statuses the owner has not named, such as service loss, paused and unknown, are decisions for this ticket. With reduced motion the sheet shows a still frame and keeps the status text. This adds no blocker or criterion to this ticket.
+
+2026-11-27 — Release tier (D182): Release 3, desktop and fortress layer. Fortress work waits for this layer's go/no-go after real use, which asks whether the terminal plus the basic app limits the owner and whether the fortress is worth its tickets. This changes no criterion or blocker.

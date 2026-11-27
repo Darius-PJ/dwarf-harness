@@ -17,10 +17,10 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Actual pinned Windows/toolchain/environment profile, declared workload and owner-preregistered immutable V6 matrix.
-- No whole-C4 dependency; no real colony work before C4 real-work gate (tickets [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md), [23](23-measure-every-change-delivery-under-steady-and-burst-load.md)).
+- No whole-C4 dependency. Real work on the owner's repositories starts when Release 1's exit test passes (D182); this qualification is not its gate.
 
 ## Acceptance criteria
 
@@ -29,6 +29,7 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 - [ ] Positive authorized outputs work while hostile writes/reads of every protected root, owner IPC, disabled-network paths and inherited handles fail on actual Windows.
 - [ ] Kill/cancel/timeout/Core-loss races demonstrate descendant closure and no publication or slot/root reuse on ambiguity; a qualified outer boundary does not excuse an in-process oracle/canary bypass.
 - [ ] Measure CPU/RAM/disk/start/stop/contention and service capacity for the declared steady/burst workload with Defender enabled. Export only the exact evidenced Windows profile; provide costs to C4's delivered-throughput gate without treating attempts or refusals as accepted work or claiming A3.
+- [ ] Unless ticket [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md) has already provided them, provide runnable pinned per-profile finite V6 attack and control fixtures for Go, pytest and Node through the real runner and each real adapter, with no new authority or alternate runner; qualification/pass remains a separate real gate (moved from tickets [17](17-run-admissible-required-go-checks-on-exact-candidates.md), [18](18-validate-python-candidates-with-reconciled-test-evidence.md) and [19](19-validate-node-candidates-with-reconciled-test-evidence.md), D182).
 
 ## Bounded acceptance profiles
 
@@ -63,3 +64,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-11-07 — D167 rework: by the owner's decision this ticket now also waits for ticket [144](144-make-the-windows-executors-race-step-tests-reliable-on-hosted-runners.md), so that the Windows A2 qualification rests on explained tests: two of the three hosted race-step failures 144 investigates are confinement proofs this qualification relies on. Its blockers were 18, 19 and 45; they are now 18, 19, 45 and 144. The number and criteria are unchanged; this grants no separate implementation, contract-freeze or release approval.
 
 2026-11-08 — Ticket [144](144-make-the-windows-executors-race-step-tests-reliable-on-hosted-runners.md) is resolved, and it found no product defect in the Windows executor: two of the three hosted failures were the Go race runtime's startup failure inside a race-built test payload, and the third a test observer's census during a Job's rundown. The confinement proofs this qualification relies on keep their assertions: under the race detector the sandboxed payload is now a plain companion build while the executor and supervisors stay race-built, the peer test gained a live-target check, and only the exited root's rundown census was dropped. The executor's race-step tests then passed twenty consecutive hosted full-matrix runs of their final commit. Tickets 18 and 19 remain open, so this ticket's status and criteria are unchanged.
+
+2026-11-27 — Release tier rework (D182, D186): On trigger. Schedule it when agents run untrusted programs, or for a wider release; no cheaper first response is named. It now also provides the runnable V6 attack and control fixtures dropped from tickets [17](17-run-admissible-required-go-checks-on-exact-candidates.md), [18](18-validate-python-candidates-with-reconciled-test-evidence.md) and [19](19-validate-node-candidates-with-reconciled-test-evidence.md), unless ticket [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md) already has. Its gate no longer names tickets 22 and 23 as the real-work gate, which Release 1's exit test now holds (D182). This grants no implementation, contract-freeze or release approval.

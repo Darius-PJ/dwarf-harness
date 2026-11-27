@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Actual configured models/profiles, authorized test credentials/budget and a finite preregistered agent-run/fixture/resource manifest.
 
@@ -26,7 +26,7 @@ Independent U2 validation capability after whole C4; U1.E engine capability (tic
 ## Acceptance criteria
 
 - [ ] Real C3-bound agents exercise fixed impossible-task fixtures through the actual C4 runner on test workspaces; no model-free stub or second runner stands in for this path.
-- [ ] Consume C4 real-work gate (tickets [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md), [23](23-measure-every-change-delivery-under-steady-and-burst-load.md))'s exact V6 receipts and transitions, including all profile/adapter/canary/control bindings and 33/57 caps, without constructing a competing release threshold or rerunning evidence merely for a duplicate report.
+- [ ] Consume C4 attack-suite and load gate (tickets [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md), [23](23-measure-every-change-delivery-under-steady-and-burst-load.md))'s exact V6 receipts and transitions, including all profile/adapter/canary/control bindings and 33/57 caps, without constructing a competing release threshold or rerunning evidence merely for a duplicate report.
 - [ ] Report observed forged-pass, confirmation/canary catch and runner-overhead numerators/denominators for the actual enabled models and permission profiles; distinguish these finite observations from a statistical zero-risk guarantee.
 - [ ] F1 stays authorized reproduction-only with no local/federated source or automatic follow-up/model turn; explicit reproduction uses existing Core authority, and suite-only artifacts never become accepted delivery or field sources.
 - [ ] Missing, changed or unbound profiles/evidence remain failed/inconclusive under the Core rule; report A2/A3 not measured rather than inferring assurance from labels.
@@ -59,3 +59,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-27 — Release tier (D182): Release 3, Undercurrent layer. Measuring attacks through real agents waits for this layer's go/no-go after real use, which asks whether agents miss awareness of each other's work that a shared signal would supply; a go also schedules tickets [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md) and [23](23-measure-every-change-delivery-under-steady-and-burst-load.md), which this ticket waits on. This changes no criterion or blocker.

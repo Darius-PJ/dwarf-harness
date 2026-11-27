@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-08
 Spec: [DwarfHarness system specification](../spec.md); feature: [fortress GUI specification](../../fortress-gui/spec.md)
 Roadmap capability: C6 stable topology handoff with C7 authorized projection (D89–D96)
-Blocked by: 27, 31
+Blocked by: 31, 153
 
 ## What to build
 
@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Owner-frozen C6 membership, role and relationship families and the corresponding C7 projection addition; C7 base is unchanged.
 - No C8, C9 or GUI dependency.
@@ -50,3 +50,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-08 — Published from the [fortress GUI specification](../../fortress-gui/spec.md) after the owner approved publishing tickets 87–129 in the consolidated breakdown review. These tickets join 01–86 in this tracker so one team works a single frontier. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-27 — Release tier rework (D182, D186): Release 3, teams layer. Its snapshot lists Corps, roles and the role matrix's edges, which moved with ticket [27](27-use-the-complete-role-graph-and-communal-boards-without-context-leakage.md)'s split to ticket [153](153-enforce-the-corps-grand-and-diplomat-role-matrix-without-context-leakage.md). Its blockers were 27 and 31; they are now 31 and 153, because the snapshot needs ticket 153's membership, parent links and role routes, and ticket 153 itself waits for ticket 27. This grants no implementation, contract-freeze or release approval.

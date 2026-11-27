@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Actual supported Windows/Linux/macOS machines, screen readers and accessibility inspectors; native SDK/compiler/runtime prerequisites and signing/notarization identities.
 - Declare package/runtime/performance acceptance bounds before measuring. Failure stays blocked; toolkit APIs, browser tests or cross-builds do not establish support.
@@ -53,3 +53,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-08 — Consolidation cross-link: Ticket [129](129-qualify-the-complete-fortress-on-supported-native-platforms.md) reapplies these accessibility and packaging gates with the fortress enabled; GUI-E parity remains independently deliverable. These extensions add no blocker or criterion to this ticket.
 
 2026-10-20 — For the first release, this ticket needs only its Windows parts; its Linux and macOS parts follow the release ([D138](../../../docs/DECISIONS.md#d138-a-windows-first-release-with-portable-code)). The code stays portable and is tested on Linux and macOS in CI. Its number, blockers and criteria are unchanged.
+
+2026-11-27 — Release tier (D182): On trigger. Schedule it when someone else uses the desktop app or it is packaged for distribution; no cheaper first response is named. This changes no criterion or blocker.

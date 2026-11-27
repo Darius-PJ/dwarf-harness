@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Owner-frozen C8 story/publication/cadence families.
 - Actual configured Griot, grants, budgets and provider authorization for model-backed behavior/cost evidence.
@@ -51,3 +51,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — Consolidation cross-link: Ticket [102](102-approve-initial-founding-stories-from-grand-prehistory-and-corps-reinterpretations.md) adds human-approved initial founding mythology on this publication path, and ticket [104](104-hand-off-recipient-scoped-attenuated-succession-evidence.md) builds succession-handoff evidence on its explicit lesson handoff. These extensions add no blocker or criterion to this ticket.
+
+2026-11-27 — Release tier (D182): Release 3, teams layer. Griot stories wait for this layer's go/no-go after real use, which asks whether the owner runs enough agents that teams, leaders and hand-overs would save him work; a go also schedules ticket [28](28-keep-shutdown-and-revocation-admissible-under-saturated-social-traffic.md), which this ticket waits on. This changes no criterion or blocker.

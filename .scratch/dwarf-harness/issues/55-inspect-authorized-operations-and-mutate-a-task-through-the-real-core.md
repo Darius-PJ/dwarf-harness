@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: GUI-C operational projection
-Blocked by: 25, 27, 54
+Blocked by: 20, 54
 
 ## What to build
 
@@ -17,19 +17,20 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Frozen projection/command families for consumed producers.
-- Optional R1/U6 projections stay explicitly unknown/unavailable when absent; do not add whole-router/field dependencies. Their actual native handoff proof belongs with the available producer.
+- Optional R1/U6 projections, and team (C6/C8) and check-governance (C5) data, stay explicitly unknown/unavailable when absent; do not add whole-router, field, team or governance dependencies. Their actual native handoff proof belongs with the available producer.
 
 ## Acceptance criteria
 
-- [ ] The native overview shows only authorized colony/Corps/role/agent/context topology in a textual tree/list and bounded operational panes; one execution session and its private contexts remain distinct.
+- [ ] The native overview shows only authorized agent and context topology in a textual tree/list and bounded operational panes; one execution session and its private contexts remain distinct.
 - [ ] A task panel exposes authorized description, acceptance criteria, version, exact subject/evidence, dependencies/state and blocked reason. A real version-checked action changes Core state or displays its actual stale/permission refusal without optimistic completion.
 - [ ] Grant/approval and BudgetBook/resource views show scope, ceilings, expiry/revocation, available/reserved/charged amounts, units and revision/time basis. Missing authorization or unavailable headroom/hints is never inferred as allowance.
 - [ ] The promotion train shows durable order, the caller's permitted requests/receipts, readiness and generic pending when sealed. A ref move or speculative pass is not acceptance; foreign paths, hashes, logs, checks, identities and failure verdicts remain sealed across every UI route.
 - [ ] Authorization precedes render/cache/search/reconnect/notification/accessibility announcement/clipboard/export/attachment access; revoke or switch principal/context during those paths and observe no forbidden content, count or existence disclosure.
 - [ ] Queues, graphs, diagnostics and previews honor row/byte/page limits with authorized pagination/virtualization. Live refresh preserves focus, selection and reader position, and inert-text rules and keyboard/status semantics remain intact under load.
+- [ ] Every failure this ticket introduces reaches the terminal or the app with a cause the owner can act on (D182).
 
 ## Verification boundary
 
@@ -49,3 +50,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — Consolidation cross-link: Ticket [113](113-open-rpg-agent-and-corps-party-sheets-with-real-scoped-statistics.md) links fortress party sheets to these panels, and ticket [119](119-browse-scoped-memories-and-administrator-views-through-checked-paths.md) verifies GUI-C's administrator inspection on them. These extensions add no blocker or criterion to this ticket.
+
+2026-11-27 — Release tier rework (D182, D186): Release 2. Criterion 1's topology narrows to agents and contexts. The gate's rule that absent router or Undercurrent data shows as unavailable now covers team and check-governance data too. The transparency criterion is added. Its blockers were 25, 27 and 54; they are now 20 and 54. Its promotion train needs ticket [20](20-publish-only-the-validated-cumulative-prefix.md)'s landing, while team and governance data show as unavailable when absent instead of being waited for. This grants no implementation, contract-freeze or release approval.

@@ -17,19 +17,18 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - C0 completed; relevant owner-frozen consumed ledger/producer families before implementation.
 - Explicit integrated D52 boundary approval; no inferred approval from ticket publication.
 - Completed U1.L and owner-frozen law-format; no U1.E dependency.
-- Testing-only harness workloads until whole C4; any A2 claim additionally needs actual per-profile C10 qualification.
+- Testing-only harness workloads until Release 1's exit test passes (D182); any A2 claim additionally needs actual per-profile C10 qualification.
 
 ## Acceptance criteria
 
 - [ ] Real pytest/JUnit execution uses trusted collection, run binding and full terminal reconciliation under the same exact-subject gate.
 - [ ] Collection/usage/internal errors, empty or skip-only suites, truncation, mismatched exits and wrong canaries cannot pass.
-- [ ] Pinned adversarial/control fixtures work through the real adapter; no new authority or alternate runner.
-- [ ] Provide runnable pinned per-profile finite V6 fixtures through the real runner; qualification/pass remains a separate real gate, reusable by C10 without waiting for whole C4.
+- [ ] Every failure this ticket introduces reaches the terminal with a cause the owner can act on (D182).
 
 ## Verification boundary
 
@@ -46,3 +45,5 @@ Canonical sections: Core roadmap C4; its cited controlling Core design and lates
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-27 — Release tier rework (D182, D184, D186): Release 1, because the owner's first repository is Python (D184). Slimmed: criteria 3 and 4, the adversarial and control fixtures and the runnable V6 fixtures, are dropped. They move with ticket [17](17-run-admissible-required-go-checks-on-exact-candidates.md)'s to tickets [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md) and [46](46-qualify-the-real-windows-runner-profile-for-a2.md), both On trigger. The transparency criterion is added. This grants no implementation, contract-freeze or release approval.

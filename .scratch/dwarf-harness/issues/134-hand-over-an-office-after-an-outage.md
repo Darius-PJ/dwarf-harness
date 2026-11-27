@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Owner-frozen C8 succession, declaration and handover families; reviewed cutover and office handover from ticket [106](106-hand-over-an-officer-role-atomically-and-retire-the-predecessor-after-success.md), and the owner stand-in from ticket [133](133-stand-in-for-a-lost-office-as-the-owner.md).
 
@@ -49,3 +49,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-08 — Published under [D102](../../../docs/DECISIONS.md#d102-officer-service-loss-moved-work-pre-router-onset-and-ticket-landing) after the owner approved the service-loss landing breakdown. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-27 — Release tier (D182): Release 3, teams layer. Replacing a leader who will not return waits for this layer's go/no-go after real use, which asks whether the owner runs enough agents that teams, leaders and hand-overs would save him work. This changes no criterion or blocker.

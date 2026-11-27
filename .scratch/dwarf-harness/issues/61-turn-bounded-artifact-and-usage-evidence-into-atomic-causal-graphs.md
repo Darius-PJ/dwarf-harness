@@ -17,12 +17,12 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Owner-frozen ledger-appender/reader and specified U3 graph-delta family.
 - Explicit D29 approval for Go go/packages before that resolver is enabled; unavailable approval/analyzers mean unknown coverage, not a silent substitute.
 
-No actual accepted-promotion integration yet; does not wait for U1.E engine capability (ticket [60](60-propagate-sources-with-bounded-replay-safe-best-arrivals.md)) or C4 real-work gate (tickets [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md), [23](23-measure-every-change-delivery-under-steady-and-burst-load.md)).
+No actual accepted-promotion integration yet; does not wait for U1.E engine capability (ticket [60](60-propagate-sources-with-bounded-replay-safe-best-arrivals.md)) or C4 attack-suite and load gate (tickets [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md), [23](23-measure-every-change-delivery-under-steady-and-burst-load.md)).
 
 ## Acceptance criteria
 
@@ -95,3 +95,5 @@ Two items remain for a later slice of this ticket, S6, besides the producer free
 2026-10-24 — [D142](../../../docs/DECISIONS.md#d142-tickets-139-and-140-published-with-three-blocker-changes) rework: the blockers were 07, 09, 11, 15, 17 and are now 07, 09, 11, 15, 17, 139. Ticket [139](139-register-shared-resources-and-work-domains-through-core.md) produces the registered shared resources and owner-registered work domains that this ticket's resource and work-domain nodes (its first criterion) and its positive resource→consumer usage (its third, with ticket 15's action facts) wait for, as the comment above records. The number and criteria are unchanged; this grants no separate implementation, contract-freeze or release approval.
 
 2026-10-31 — Ticket [15](15-run-bounded-context-bound-model-and-tool-turns.md) is resolved: its action facts are the F3-15 bound turn and tool records ([D165](../../../docs/DECISIONS.md#d165-f3-15-bound-turn-and-tool-records-frozen), [D166](../../../docs/DECISIONS.md#d166-two-f3-15-producer-readings-refusals-before-a-native-command-and-unauthorized-passive-requests)). Tickets 07, 09, 11 and 139 are resolved too; ticket [17](17-run-admissible-required-go-checks-on-exact-candidates.md) is still open, so this ticket stays blocked. This adds no blocker or criterion.
+
+2026-11-27 — Release tier (D182): Release 3, Undercurrent layer. The coupling map stops at its landed slices until this layer's go/no-go after real use, which asks whether agents miss awareness of each other's work that a shared signal would supply. This changes no criterion or blocker.

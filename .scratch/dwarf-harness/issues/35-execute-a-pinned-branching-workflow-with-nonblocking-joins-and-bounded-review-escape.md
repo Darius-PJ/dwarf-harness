@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: C9 full finite workflow core-and-terminal capability
-Blocked by: 34
+Blocked by: 34, 153
 
 ## What to build
 
@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Owner-frozen exact WorkflowSpec/WorkflowRun and completion/acceptance families.
 - C9 backend capability (tickets [35](35-execute-a-pinned-branching-workflow-with-nonblocking-joins-and-bounded-review-escape.md), [36](36-load-and-update-shared-format-skills-lazily-through-core.md)) export additionally requires ticket [36](36-load-and-update-shared-format-skills-lazily-through-core.md); no GUI or whole-C9 prerequisite.
@@ -51,3 +51,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — D88 rework: the owner chose to include the deferred D88 rework in this consolidation and approved the plan. Criteria now cover workflow participation in the single continuation owner and compulsory typed transitions. Number and blockers are unchanged; this grants no separate implementation, contract-freeze or release approval.
+
+2026-11-27 — Release tier rework (D182, D186): Release 3, teams layer. Its compile and execution check every agent edge against current role and grant state through the broker. It reached C6 only through ticket [34](34-run-a-bounded-typed-recipe-from-the-terminal-and-evaluate-its-real-acceptance.md), which now waits on ticket [20](20-publish-only-the-validated-cumulative-prefix.md) instead of tickets 28 and 29. Its blockers were 34; they are now 34 and 153, because that check needs ticket [153](153-enforce-the-corps-grand-and-diplomat-role-matrix-without-context-leakage.md)'s role matrix, which keeps a C6 ancestor after ticket 34's rewire. This grants no implementation, contract-freeze or release approval.

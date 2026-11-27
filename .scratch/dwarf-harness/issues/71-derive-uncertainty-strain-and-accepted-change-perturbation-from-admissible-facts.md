@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: U4 first source capability
-Blocked by: 25, 60, 63
+Blocked by: 24, 25, 60, 63
 
 ## What to build
 
@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Frozen C2/C4/C5 source/evidence families; actual producers done; no consumer-owned alternate dedup schema.
 
@@ -60,3 +60,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-27 — Release tier rework (D182, D186): Release 3, Undercurrent layer. Its source capability waits for this layer's go/no-go after real use, which asks whether agents miss awareness of each other's work that a shared signal would supply. A go also schedules On-trigger ticket [24](24-govern-pinned-checks-confirmed-repair-and-quarantine.md), and it already schedules tickets 22 and 23 through ticket 63. Its blockers were 25, 60 and 63; they are now 24, 25, 60 and 63. It needs ticket 24's repair, quarantine and failure records, which it reached through ticket 25 until 25 stopped waiting for 24 (D182). This grants no implementation, contract-freeze or release approval.

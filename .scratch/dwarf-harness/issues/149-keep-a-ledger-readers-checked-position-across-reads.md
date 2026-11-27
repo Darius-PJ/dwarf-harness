@@ -31,7 +31,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Start gate: implementation begins only after the owner reassesses this ticket at the pause that follows ticket [91](91-record-service-loss-and-restoration-for-every-agent.md)'s close. The design brief and its ruling may proceed before then.
 - A design brief and a ruling come before code (D117).
@@ -73,3 +73,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-11-22 — Published at the project manager's proposal. Ticket [147](147-cut-the-agents-packages-test-time.md)'s diagnosis and floor rulings found the cost. The owner approved this ticket, choosing the project manager's recommended option: he approved in principle a product change to D157's rule, and asked to reassess the ticket at the pause that follows ticket [91](91-record-service-loss-and-restoration-for-every-agent.md)'s close (D180). Publication grants no separate implementation, contract-freeze, release or study approval; the start and authority gates above stand.
+
+2026-11-27 — Release tier (D182): On trigger. Schedule it when history reads are slow in real use; the workflow engineer may take it earlier for test time, and the change to D157's rule still needs the owner's sign-off (D180). When it is triggered, its design ruling restates criterion 2 under D181, resets criterion 4's baseline to check 140 or later, and has the entry amending D157 list the affected steps and registered `ledger-reader` consumers (D40). This changes no criterion or blocker.

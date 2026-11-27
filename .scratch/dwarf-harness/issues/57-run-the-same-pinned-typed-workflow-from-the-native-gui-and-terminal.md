@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Frozen C9 launcher projections and real backend; no whole-C9 dependency.
 - Native keyboard/privacy behavior belongs in this slice; supported-platform qualification follows.
@@ -49,3 +49,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — Consolidation cross-link: Ticket [113](113-open-rpg-agent-and-corps-party-sheets-with-real-scoped-statistics.md) links fortress party sheets to the workflow panel delivered here. These extensions add no blocker or criterion to this ticket.
+
+2026-11-27 — Release tier (D182): Release 3, desktop and fortress layer. Workflows in the app wait for this layer's go/no-go after real use, which asks whether the terminal plus the basic app limits the owner and whether the fortress is worth its tickets. This changes no criterion or blocker.

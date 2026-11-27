@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-08
 Spec: [DwarfHarness system specification](../spec.md); feature: [fortress GUI specification](../../fortress-gui/spec.md)
 Roadmap capability: R1 grouped outage prompt joined to C3 service loss (D97, D100, D102)
-Blocked by: 39, 91
+Blocked by: 91, 154
 
 ## What to build
 
@@ -17,9 +17,9 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
-- The router pause and grouped prompt from ticket [39](39-pause-and-safely-resume-the-exact-context-on-an-owner-selected-provider.md) and the service-loss state from ticket [91](91-record-service-loss-and-restoration-for-every-agent.md); no C6, C8, C9 or GUI dependency.
+- The router pause and grouped prompt from ticket [154](154-hand-over-paused-turns-to-an-owner-selected-provider-through-the-router.md) and the service-loss state from ticket [91](91-record-service-loss-and-restoration-for-every-agent.md); no C6, C8, C9 or GUI dependency.
 - Live-provider evidence requires the owner's credentials and authorization; controlled refusals, resets and provider changes exercise the remaining cases.
 
 ## Acceptance criteria
@@ -51,3 +51,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-08 — Published under [D102](../../../docs/DECISIONS.md#d102-officer-service-loss-moved-work-pre-router-onset-and-ticket-landing) after the owner approved the service-loss landing breakdown. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-27 — Release tier rework (D182, D186): Release 3, teams layer. The router pause and grouped prompt this ticket counts toward service loss moved with ticket [39](39-pause-and-safely-resume-the-exact-context-on-an-owner-selected-provider.md)'s split to ticket [154](154-hand-over-paused-turns-to-an-owner-selected-provider-through-the-router.md), which its gate now names. Its blockers were 39 and 91; they are now 91 and 154, because the pause and prompt now belong to ticket 154, which itself waits for ticket 39. A go on the teams layer therefore also schedules On-trigger ticket 154, and through it router tickets [38](38-compile-safe-per-turn-controls-and-the-single-required-d25-module.md) and [37](37-observe-bound-turns-without-changing-the-c3-request.md); tickets [135](135-show-outages-pauses-and-stand-in-actions-in-every-view.md) and [136](136-show-outages-and-stand-in-for-an-office-from-the-gui.md) inherit this. It also inherits ticket 91's open question (D183): what an owner stop within the grace means for a pending membership once router pauses supply onset. This grants no implementation, contract-freeze or release approval.

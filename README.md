@@ -12,7 +12,7 @@ The aim is a colony that can deliver real work without giving up private context
 
 DwarfHarness is pre-release. Nothing has been released. The `dwarf-harness` host and terminal program runs bounded test turns on an existing colony; no program initializes a colony yet, and the native GUI does not exist. This repository holds the contract packages, part of Core and of Undercurrent, the terminal program, a Go dependency resolver and the development tools, each tested on its own.
 
-Everything here is for testing only. Do not use it for real work: real assignments begin only after the validation runner and promotion gate (step C4) pass their end-to-end gate. Each step's status is on the [status board](docs/ROADMAPS.md#status-board).
+Everything here is for testing only. Do not use it for real work: real assignments begin only after Release 1's exit test passes (see the [release tiers](docs/ROADMAPS.md#release-tiers)). Each step's status is on the [status board](docs/ROADMAPS.md#status-board).
 
 The terminal program needs a colony that is already initialized, with its agents, provider routes, grants, spend terms and capacity configured:
 

@@ -17,17 +17,17 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Explicit configured provider/model and Core-controlled credential; current source-verified finite endpoint/tariff profile; current model-call authority; owner-selected finite ceiling(s) or explicit unlimited. Missing credentials/authorization means no paid dispatch. Live-provider evidence requires the owner's credentials and authorization. Specific family/scope: for live calibration
 - Consent to use replay conversations and labelled reruns
-- Until whole C4 real-work gate (tickets [22](22-qualify-the-real-promotion-path-against-the-finite-v6-suite.md), [23](23-measure-every-change-delivery-under-steady-and-burst-load.md))/C4 is Done, every harness-agent workload, replay corpus and authorized live-provider drill is testing-only. No added C4 build dependency for R0/R1; no production-savings or real-delivery claim.
+- Until Release 1's exit test passes (D182), every harness-agent workload, replay corpus and authorized live-provider drill is testing-only. No added C4 build dependency for R0/R1; no production-savings or real-delivery claim.
 
 ## Scope boundaries
 
 - Run beginTurn/compile/observe in shadow with the default command, continuation, deterministic-rule and heuristic cascade; finish the versioned capability file with sources and verification dates.
 - Maintain bounded per-context route/cache state and a separate D51 tools-plus-system prefix record. Diagnostic JSONL and counterfactual shadow cache state are not the authoritative money ledger.
-- Include R0's actual cache calibration and labelled-subset evidence. Role-specific relationship/board drills remain the C6 C6 role-route capability (ticket [27](27-use-the-complete-role-graph-and-communal-boards-without-context-leakage.md)) integration, not an R0/R1 prerequisite.
+- Include R0's actual cache calibration and labelled-subset evidence. Role-specific relationship/board drills remain the C6 role matrix (ticket [153](153-enforce-the-corps-grand-and-diplomat-role-matrix-without-context-leakage.md)) integration, not an R0/R1 prerequisite.
 
 ## Acceptance criteria
 
@@ -58,3 +58,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-11-20 — Ticket [16](16-prove-concurrent-private-runtime-restart-and-child-shutdown.md) is resolved, so all listed blockers are clear. The criteria are unchanged. No runtime, production-delivery or other start-gate approval is inferred.
+
+2026-11-27 — Release tier rework (D182, D186): On trigger. Schedule it when the owner wants per-turn model routing or live provider limits; first, each context keeps a fixed model and spend is read in ticket [151](151-see-and-troubleshoot-from-the-terminal.md). Its owner gates aren't asked while it waits (D182 item 8). Its role-specific relationship and board drill now points to ticket [153](153-enforce-the-corps-grand-and-diplomat-role-matrix-without-context-leakage.md), which took the role matrix from ticket [27](27-use-the-complete-role-graph-and-communal-boards-without-context-leakage.md). This grants no implementation, contract-freeze or release approval.

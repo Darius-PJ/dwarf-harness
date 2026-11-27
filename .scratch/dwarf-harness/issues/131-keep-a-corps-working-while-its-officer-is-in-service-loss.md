@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Owner-frozen C6 messaging and C8 outage families. Actual role and Corps-authority records from C6 (tickets [28](28-keep-shutdown-and-revocation-admissible-under-saturated-social-traffic.md) and [29](29-retire-and-overturn-checks-through-real-owning-corps-authority.md)), the eligibility hold from ticket [90](90-hold-first-actions-and-ordinary-work-behind-generic-core-eligibility-guards.md) and the service-loss state from ticket [91](91-record-service-loss-and-restoration-for-every-agent.md).
 - Verifiable through Core's command/event boundary and the terminal; the shared view projections follow in ticket [135](135-show-outages-pauses-and-stand-in-actions-in-every-view.md).
@@ -52,3 +52,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-08 — Published under [D102](../../../docs/DECISIONS.md#d102-officer-service-loss-moved-work-pre-router-onset-and-ticket-landing) after the owner approved the service-loss landing breakdown. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-27 — Release tier (D182): Release 3, teams layer. Team work while its leader is out waits for this layer's go/no-go after real use, which asks whether the owner runs enough agents that teams, leaders and hand-overs would save him work; a go also schedules ticket [28](28-keep-shutdown-and-revocation-admissible-under-saturated-social-traffic.md), which this ticket waits on. This changes no criterion or blocker.

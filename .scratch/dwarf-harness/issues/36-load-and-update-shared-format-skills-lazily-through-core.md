@@ -5,7 +5,7 @@ Type: task
 Published: 2026-10-06
 Spec: [DwarfHarness system specification](../spec.md)
 Roadmap capability: C9 skill capability
-Blocked by: 28, 29
+Blocked by: 16
 
 ## What to build
 
@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Owner-frozen C9 skill/update families and normal file-write permissions.
 - No workflow-runtime, GUI or optional router-module dependency.
@@ -29,6 +29,7 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 - [ ] Core performs expected-version edits under ordinary permissions/consent. In-place changes affect the discovered file; copy mode copies the complete folder into owned storage, edits the copy and leaves the source unchanged.
 - [ ] A harness-mediated edit immediately invalidates the affected index. External changes appear at the next session-start snapshot without polling or a new watcher service.
 - [ ] A real terminal/context flow observes the new authorized version and refuses a competing stale edit. Newly created skills use owned storage; discovery does not imply bundled private libraries or compatibility with another harness's executable commands.
+- [ ] Every failure this ticket introduces reaches the terminal with a cause the owner can act on (D182).
 
 ## Verification boundary
 
@@ -49,3 +50,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — Consolidation cross-link: Ticket [97](97-run-pinned-grill-with-docs-as-a-first-action-with-durable-human-question-waits.md) adds the pinned grill-with-docs first-action run, which ordinary discovery and same-name edits from this capability cannot replace once pinned. These extensions add no blocker or criterion to this ticket.
+
+2026-11-27 — Release tier rework (D182, D186): Release 2. The transparency criterion is added. Its blockers were 28 and 29; they are now 16. Skills load through Core's ordinary permissions and session start, which ticket [16](16-prove-concurrent-private-runtime-restart-and-child-shutdown.md)'s runtime supplies, and nothing here uses C6 message traffic or Corps authority. This grants no implementation, contract-freeze or release approval.

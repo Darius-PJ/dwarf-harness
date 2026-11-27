@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Actual supported Windows, Linux and macOS machines, screen readers and accessibility inspectors; native SDK, signing and notarization prerequisites.
 - Declare workload and resource bounds before measuring; a failure stays blocked, and the declared workload is never shrunk to pass.
@@ -54,3 +54,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-08 — Consolidation cross-link: Ticket [136](136-show-outages-and-stand-in-for-an-office-from-the-gui.md) runs the new FG22 officer-outage scenario on the supported platforms after this ticket's qualification; this ticket's FG01–FG21 run is unchanged ([D102](../../../docs/DECISIONS.md#d102-officer-service-loss-moved-work-pre-router-onset-and-ticket-landing)). These extensions add no blocker or criterion to this ticket.
 
 2026-10-20 — For the first release, this ticket needs only its Windows parts; its Linux and macOS parts follow the release ([D138](../../../docs/DECISIONS.md#d138-a-windows-first-release-with-portable-code)). The code stays portable and is tested on Linux and macOS in CI. Its number, blockers and criteria are unchanged.
+
+2026-11-27 — Release tier (D182): Release 3, desktop and fortress layer. Fortress qualification waits for this layer's go/no-go after real use, which asks whether the terminal plus the basic app limits the owner and whether the fortress is worth its tickets; a go also schedules tickets [58](58-qualify-native-accessibility-packaging-and-full-c9-parity-on-supported-platforms.md) and [115](115-show-configured-classifier-helpers-as-dogs-with-their-real-status.md), which this ticket waits on, and its accessibility and packaging parts stay on trigger. This changes no criterion or blocker.

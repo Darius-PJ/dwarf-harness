@@ -17,7 +17,7 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
 - Specify the rubric, input window, numeric encoding, sentiment normalization and grid cutpoints, with D78 cost reasoning, before the annotation family is frozen with C1; B16's six-word rubric is not the contract.
 - Actual configured producer under ordinary BudgetBook admission; an external helper additionally needs its R5/C10 qualification (ticket [52](52-run-an-external-routing-helper-only-inside-a-qualified-finite-compartment.md)).
@@ -52,3 +52,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 ## Comments
 
 2026-10-08 — Published from the [fortress GUI specification](../../fortress-gui/spec.md) after the owner approved publishing tickets 87–129 in the consolidated breakdown review. These tickets join 01–86 in this tracker so one team works a single frontier. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
+
+2026-11-27 — Release tier (D182): Release 3, teams layer. Relationship labels wait for this layer's go/no-go after real use, which asks whether the owner runs enough agents that teams, leaders and hand-overs would save him work. This changes no criterion or blocker.

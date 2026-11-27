@@ -17,9 +17,9 @@ Publication and triage do not grant D52 approval, freeze a contract, advance roa
 
 Respect the current status of all six contracts. Their owners may draft and build their own boundary as the roadmap permits; consumers and later producer families wait for the specifically required owner freezes. C1 completes with its F0 freeze request, not an assumed approval. No placeholder records, permissive substitutes, second authority stores or new contract boundaries are authorized.
 
-Harness workloads remain testing-only until every C4 end-to-end, adversarial and declared-workload gate passes. Later containment, per-kind release and study approvals remain independent gates.
+Harness workloads remain testing-only until Release 1's exit test passes (D182). Later containment, per-kind release and study approvals remain independent gates.
 
-- Owner-frozen launcher-protocol; Fyne v2.8.1 in isolated gui/ module and pinned native toolchain.
+- C7's launcher-protocol, provisional until now, is owner-frozen with producer-ready golden samples before this client consumes it (D182); Fyne v2.8.1 in isolated gui/ module and pinned native toolchain.
 - Actual native application/Core runtime available; no browser or mock-view acceptance.
 - GUI-A/B may start after C7 launcher capability (ticket [31](31-catch-up-two-terminal-views-while-keeping-live-text-ephemeral.md)) alone; no C9 backend capability (tickets [35](35-execute-a-pinned-branching-workflow-with-nonblocking-joins-and-bounded-review-escape.md), [36](36-load-and-update-shared-format-skills-lazily-through-core.md)) or whole-C9 prerequisite.
 
@@ -31,6 +31,9 @@ Harness workloads remain testing-only until every C4 end-to-end, adversarial and
 - [ ] The client only uses frozen contracts and authenticated typed commands; no direct colony/Git/context/artifact/keychain access, provider calls or credentials. Displaying the same events causes no model call.
 - [ ] All model/tool/skill/story text is inert native text from the first surface: no HTML, generated controls, remote resources or shell links. A link requires a separately typed authorized safe-URI action.
 - [ ] Initial transcripts/live buffers are bounded and keyboard usable with meaningful control names, visible focus, non-color status and stable selection. Security, bounded rendering and usable native controls are not deferred to polish.
+- [ ] Before the client consumes it, request the owner's D40 freeze of C7's `launcher-protocol` as tickets [30](30-start-or-attach-to-one-authenticated-detached-colony-host.md) and [31](31-catch-up-two-terminal-views-while-keeping-live-text-ephemeral.md) built it, with producer-ready golden samples; the client builds only against the frozen version (moved from ticket 31's gates, D182).
+- [ ] With a terminal view and the app attached, competing approval/start/cancel commands execute once or return the real stale/busy result in every view. Turn cancellation targets the shared turn and never implicitly withdraws its promotions; promotion cancellation remains request-specific (moved from ticket 31, D182).
+- [ ] Every failure this ticket introduces reaches the terminal or the app with a cause the owner can act on (D182).
 
 ## Verification boundary
 
@@ -51,3 +54,5 @@ Canonical sections (resolved through the parent specification’s reading map):
 2026-10-06 — The owner approved publishing the 86 tickets in the breakdown review. This adopts the decomposition for local publication only; it does not grant any separate implementation, contract-freeze, release or study approval.
 
 2026-10-08 — Consolidation cross-link: GUI-F fortress work starts from this client with ticket [107](107-compose-layered-dwarves-and-tiles-from-bounded-passive-asset-packs.md) (asset pipeline) and ticket [123](123-qualify-a-reusable-native-terminal-within-the-effort-allowance-or-choose-the-external-fallback.md) (native-terminal qualification). These extensions add no blocker or criterion to this ticket.
+
+2026-11-27 — Release tier rework (D182, D186): Release 2. Before the app consumes the launcher protocol, this ticket requests its owner freeze, with producer-ready golden samples. It also takes ticket [31](31-catch-up-two-terminal-views-while-keeping-live-text-ephemeral.md)'s former criterion 4 on competing commands from several open views, now a terminal and the app. The transparency criterion is added. This grants no implementation, contract-freeze or release approval.
