@@ -46,89 +46,119 @@ func continuationCaptureCrashChild(t *testing.T, boundary string, barrier func(*
 		t.Fatal(err)
 	}
 	continuationWait(t, f.turnFixture, turn, "workspace_capture")
+	if boundary == "capture_stop_parked" {
+		stop := session.Command{Schema: 1, CommandID: uuid.NewV7(), ContextID: f.origin.ContextID, Operation: "turn.cancel", Arguments: session.TurnCancel{TurnID: turn}}
+		if _, err := f.view.Do(context.Background(), stop); err != nil {
+			t.Fatal(err)
+		}
+		parked := continuationWait(t, f.turnFixture, turn, "workspace_capture")
+		if parked.OperationID != stop.CommandID {
+			t.Fatal("crash did not reach the new park under the stop")
+		}
+		barrier(f, turn, scratch)
+	}
 	free()
 	f.finished(t, turn)
 	t.Fatal("capture crash boundary was not reached")
 }
 
 func testContinuationCaptureRestart(t *testing.T) {
-	t.Run("restart_capture_after_observation_before_resume", func(t *testing.T) {
-		t.Parallel()
-		f := continuationKilled(t, "capture_after_observation")
-		owner := f.owner(t)
-		if owner.Snapshot.State != "waiting_resource" || owner.Snapshot.ResumeState != "finishing" || owner.Snapshot.WaitReason != "workspace_capture" || len(f.report.PendingLoops) != 1 || f.report.PendingLoops[0].SavedPhase != "waiting_resource" || f.report.PendingLoops[0].WaitReason != "workspace_capture" {
-			t.Fatalf("restart relabelled the saved capture wait: owner=%+v report=%+v", owner.Snapshot, f.report)
-		}
-		if f.signal.Scratch.ID == (uuid.UUID{}) || f.signal.Scratch.ParentScratchID != (uuid.UUID{}) || f.signal.CaptureCalls != 1 {
-			t.Fatalf("kill fixture did not reach the intended dedicated capture boundary: scratch=%+v calls=%d want=1", f.signal.Scratch, f.signal.CaptureCalls)
-		}
-		calls := 0
-		f.service.deps.beforeFinishCommit = func(uuid.UUID) error { calls++; return errors.New("recovery attempted a capture") }
-		ws, _, err := workspace.Open(context.Background(), f.store, f.signal.Root, workspace.Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer ws.Close()
-		request := LoopReconciliation{CommandID: uuid.NewV7(), TurnID: f.signal.Turn, ExpectedOwnerVersion: owner.Snapshot.Version}
-		receipt, err := f.service.ReconcileLoop(context.Background(), request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		through := f.store.Durable()
-		if retry, err := f.service.ReconcileLoop(context.Background(), request); err != nil || !reflect.DeepEqual(retry, receipt) || f.store.Durable() != through {
-			t.Fatalf("capture recovery retry appended: %+v %v", retry, err)
-		}
-		observations, merges, endings, native, stops := 0, 0, 0, 0, 0
-		tip := f.signal.Scratch.TipCommit
-		if err := f.service.scan(context.Background(), 0, f.store.Durable(), func(c ledger.Commit) error {
-			for _, record := range c.Records {
-				if record.Type == ledger.TypeScratchChanged {
-					v := scopedDecode(t, ledger.DecodeScratchChanged, record.Payload)
-					if v.ScratchID == f.signal.Scratch.ID {
-						observations++
-						tip = v.ScratchCommit
-					}
-				}
-				if record.Type == ledger.TypeScratchMergeBack {
-					v := scopedDecode(t, ledger.DecodeScratchMergeBack, record.Payload)
-					if v.ScratchID == f.signal.Scratch.ID {
-						merges++
-					}
-				}
-				if record.TurnID != f.signal.Turn {
-					continue
-				}
-				if record.Type == ledger.TypeRuntimeTurnResult {
-					v := scopedDecode(t, ledger.DecodeRuntimeTurnResult, record.Payload)
-					endings++
-					if v.Outcome != "interrupted" {
-						t.Fatalf("recovery ignored persisted stop: %+v", v)
-					}
-				}
-				if record.Type == ledger.TypeRuntimeScopedReceipt {
-					v := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, record.Payload)
-					if v.Submission.Operation == "turn.end" || v.Submission.Operation == "turn.cancel" {
-						native++
-					}
-				}
-				if record.Type == ledger.TypeRuntimeContinuationReceipt {
-					v := scopedDecode(t, ledger.DecodeRuntimeContinuationReceipt, record.Payload)
-					if v.Submission.Operation == "owner.stop" {
-						stops++
-					}
-				}
+	for _, row := range []struct {
+		name, boundary, outcome string
+		observations            int
+	}{
+		{"restart_capture_after_observation_before_resume", "capture_after_observation", "interrupted", 1},
+		{"restart_capture_parked_under_stop", "capture_stop_parked", "cancelled", 0},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			f := continuationKilled(t, row.boundary)
+			owner := f.owner(t)
+			if owner.Snapshot.State != "waiting_resource" || owner.Snapshot.ResumeState != "finishing" || owner.Snapshot.WaitReason != "workspace_capture" || len(f.report.PendingLoops) != 1 || f.report.PendingLoops[0].SavedPhase != "waiting_resource" || f.report.PendingLoops[0].WaitReason != "workspace_capture" {
+				t.Fatalf("restart relabelled the saved capture wait: owner=%+v report=%+v", owner.Snapshot, f.report)
 			}
-			return nil
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if observations != 1 || merges != 0 || calls != 0 || endings != 1 || native != 1 || stops != 0 || f.owner(t).Snapshot.State != "terminal" {
-			t.Fatalf("capture recovery repeated work: observations=%d merges=%d calls=%d endings=%d native=%d stops=%d", observations, merges, calls, endings, native, stops)
-		}
-		cmd := exec.CommandContext(context.Background(), "git", "-C", f.signal.Scratch.Dir, "rev-parse", "HEAD")
-		out, err := cmd.CombinedOutput()
-		if err != nil || strings.TrimSpace(string(out)) != tip {
-			t.Fatalf("recovery changed the acknowledged scratch tip: got=%s want=%s err=%v", out, tip, err)
-		}
-	})
+			wantCalls := 1
+			if row.boundary == "capture_stop_parked" {
+				wantCalls = 0
+			}
+			if f.signal.Scratch.ID == (uuid.UUID{}) || f.signal.Scratch.ParentScratchID != (uuid.UUID{}) || f.signal.CaptureCalls != wantCalls {
+				t.Fatalf("kill fixture did not reach the intended dedicated capture boundary: scratch=%+v calls=%d want=%d", f.signal.Scratch, f.signal.CaptureCalls, wantCalls)
+			}
+			calls := 0
+			f.service.deps.beforeFinishCommit = func(uuid.UUID) error { calls++; return errors.New("recovery attempted a capture") }
+			ws, _, err := workspace.Open(context.Background(), f.store, f.signal.Root, workspace.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ws.Close()
+			request := LoopReconciliation{CommandID: uuid.NewV7(), TurnID: f.signal.Turn, ExpectedOwnerVersion: owner.Snapshot.Version}
+			receipt, err := f.service.ReconcileLoop(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			through := f.store.Durable()
+			if retry, err := f.service.ReconcileLoop(context.Background(), request); err != nil || !reflect.DeepEqual(retry, receipt) || f.store.Durable() != through {
+				t.Fatalf("capture recovery retry appended: %+v %v", retry, err)
+			}
+			observations, merges, endings, native, stops := 0, 0, 0, 0, 0
+			tip := f.signal.Scratch.TipCommit
+			if err := f.service.scan(context.Background(), 0, f.store.Durable(), func(c ledger.Commit) error {
+				for _, record := range c.Records {
+					if record.Type == ledger.TypeScratchChanged {
+						v := scopedDecode(t, ledger.DecodeScratchChanged, record.Payload)
+						if v.ScratchID == f.signal.Scratch.ID {
+							observations++
+							tip = v.ScratchCommit
+						}
+					}
+					if record.Type == ledger.TypeScratchMergeBack {
+						v := scopedDecode(t, ledger.DecodeScratchMergeBack, record.Payload)
+						if v.ScratchID == f.signal.Scratch.ID {
+							merges++
+						}
+					}
+					if record.TurnID != f.signal.Turn {
+						continue
+					}
+					if record.Type == ledger.TypeRuntimeTurnResult {
+						v := scopedDecode(t, ledger.DecodeRuntimeTurnResult, record.Payload)
+						endings++
+						if v.Outcome != row.outcome {
+							t.Fatalf("recovery ignored persisted stop: %+v", v)
+						}
+					}
+					if record.Type == ledger.TypeRuntimeScopedReceipt {
+						v := scopedDecode(t, ledger.DecodeRuntimeScopedReceipt, record.Payload)
+						if v.Submission.Operation == "turn.end" || v.Submission.Operation == "turn.cancel" {
+							native++
+							if row.outcome == "cancelled" && v.CommandID != owner.Snapshot.CancelCommandID {
+								t.Fatal("recovery minted a new native cancel identity")
+							}
+						}
+					}
+					if record.Type == ledger.TypeRuntimeContinuationReceipt {
+						v := scopedDecode(t, ledger.DecodeRuntimeContinuationReceipt, record.Payload)
+						if v.Submission.Operation == "owner.stop" {
+							stops++
+						}
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			wantStops := 0
+			if row.outcome == "cancelled" {
+				wantStops = 1
+			}
+			if observations != row.observations || merges != 0 || calls != 0 || endings != 1 || native != 1 || stops != wantStops || f.owner(t).Snapshot.State != "terminal" {
+				t.Fatalf("capture recovery repeated work: observations=%d merges=%d calls=%d endings=%d native=%d stops=%d", observations, merges, calls, endings, native, stops)
+			}
+			cmd := exec.CommandContext(context.Background(), "git", "-C", f.signal.Scratch.Dir, "rev-parse", "HEAD")
+			out, err := cmd.CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != tip {
+				t.Fatalf("recovery changed the acknowledged scratch tip: got=%s want=%s err=%v", out, tip, err)
+			}
+		})
+	}
 }

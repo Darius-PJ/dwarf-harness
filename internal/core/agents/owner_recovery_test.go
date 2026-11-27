@@ -181,7 +181,7 @@ func TestContinuationCrashChild(t *testing.T) {
 				t.Fatal(err)
 			}
 			sub := receipt.Submission
-			if boundary == "legacy_bind" && sub.Operation == "owner.initialize" || boundary == "ready" && sub.Operation == "owner.advance" && sub.ExpectedState == "ready" {
+			if boundary == "legacy_bind" && sub.Operation == "owner.initialize" || boundary == "ready" && sub.Operation == "owner.advance" && sub.ExpectedState == "ready" || boundary == "native_ended" && sub.Arguments.NativeEndingSequence != 0 {
 				barrier()
 			}
 			return d
@@ -259,6 +259,7 @@ func TestTurnLoopCrashRecovery(t *testing.T) {
 	for _, row := range []struct{ name, boundary, operation, outcome string }{
 		{"legacy_bind_initialize_is_callers_command", "legacy_bind", "owner.initialize", "interrupted"},
 		{"restart_ready", "ready", "owner.reconcile", "interrupted"},
+		{"native_ended_before_loop_end", "native_ended", "owner.reconcile", "finished"},
 		{"reconcile_paid_unknown_completes", "paid_sent", "owner.reconcile", "interrupted"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
