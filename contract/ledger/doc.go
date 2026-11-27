@@ -183,8 +183,8 @@
 // F2-08 types, the four F2-09 types, the four F-U3-61 types, the four
 // F3-10 types, the ten F3-11 types, the three F3-12 types, the eight
 // F3-13 types, the four F3-139 types, the six F3-15 types, the two
-// F3-16 types, the two F3-90 types and the five additive F3-91 types below,
-// each at version 1.
+// F3-16 types, the two F3-90 types, the five F3-91 types and the two
+// additive F3-150 types below, each at version 1.
 // F2-05 joined by the owner's additive freeze (D115); it does not change F0
 // or format version 1. F2-06 is ticket 06's part of F2, frozen (D118),
 // also by addition to format version 1.
@@ -218,6 +218,9 @@
 // F3-91 is ticket 91's part of F3, frozen (D175),
 // also by addition to format version 1; record availability does not imply
 // operational service-loss detection, timers, restoration or owner notices.
+// F3-150 is ticket 150's part of F3, frozen (D187),
+// also by addition to format version 1; record availability does not imply
+// setup commands, managed configuration or any permission.
 // The type namespace "ledger." is reserved for F0
 // record types: no other record family may use it. The namespace "fixture."
 // is reserved for this contract's golden fixtures and tests: no record
@@ -3778,7 +3781,7 @@
 // # Owner setup records (F3-150)
 //
 // Ticket 150's two version-1 types and schema-12 canonical submission are
-// proposed for freeze (D125). This addition changes no earlier family, schema,
+// frozen (D187). This addition changes no earlier family, schema,
 // group, golden, authorization or format version. Schema 12 is independently
 // reserved; it need not follow the largest schema already present.
 //

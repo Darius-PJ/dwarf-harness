@@ -7,7 +7,7 @@ import (
 	"uuid"
 )
 
-// F3-150's version-1 records are proposed for freeze (D125).
+// F3-150's version-1 records are frozen (D187).
 const (
 	TypeRuntimeSetupApplied = "runtime.setup_applied"
 	TypeRuntimeSetupReceipt = "runtime.setup_receipt"

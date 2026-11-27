@@ -12,7 +12,7 @@ import (
 )
 
 // SetupSubmission is schema 12's canonical owner request,
-// proposed for freeze (D125). Arguments is the matching concrete value.
+// frozen (D187). Arguments is the matching concrete value.
 type SetupSubmission struct {
 	Schema           int64       `json:"schema"`
 	Actor            string      `json:"actor"`
