@@ -76,6 +76,8 @@ func (c Catalogue) Contains(tv TypeVersion) bool { return c.set[tv] }
 // It never contains a type in the reserved fixture namespace.
 // F3-150 adds TypeRuntimeSetupApplied and TypeRuntimeSetupReceipt at version 1,
 // frozen (D187).
+// F7-30 adds TypeLauncherCommandBound and TypeLauncherCommandReceipt at
+// version 1, proposed for freeze (D125).
 func Defined() Catalogue {
 	return Catalogue{set: map[TypeVersion]bool{
 		{TypeCommand, 1}:                        true,
@@ -146,6 +148,8 @@ func Defined() Catalogue {
 		{TypeRuntimeServiceAgentChanged, 1}:     true,
 		{TypeRuntimeServiceOutageNotice, 1}:     true,
 		{TypeRuntimeServiceReceipt, 1}:          true,
+		{TypeLauncherCommandBound, 1}:           true,
+		{TypeLauncherCommandReceipt, 1}:         true,
 
 		// F3-150, frozen (D187).
 		{TypeRuntimeSetupApplied, 1}: true,

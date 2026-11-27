@@ -3901,4 +3901,111 @@
 // with retained bodies and pins. The exact body-set preimage is beside the log.
 // Earlier-family groups remain service-admissible; the real Core Open probe
 // verifies that agents skips setup groups without changing its earlier rules.
+//
+// # F7-30 launcher bindings (proposed for freeze, D125)
+//
+// C7 owns launcher.command_bound v1 and launcher.command_receipt v1.
+// internal/core/agents is the designated producer through the existing
+// serialized SubmitAt path. Core replay, command lookup and authenticated
+// original-request status consume them. These are immutable operational
+// bindings retained for the log's lifetime, not grants, admissions, queues,
+// shutdown intents or execution results. No text, credential, private object
+// bytes, input_object, host_id, body_refs or measurement_path is recorded.
+// All known members and envelope bindings are replay-essential.
+//
+// Each complete payload and canonical submission is bounded independently to
+// 65,536 bytes, including ignored extensions and embedded submissions. Existing
+// ledger JSON, recursive duplicate refusal, canonical UUIDv7, nonzero digest,
+// unsigned decimal integer through MaxInt64 and absent-not-null rules apply.
+// Unknown optional members are ignored and excluded from canonicalization;
+// known members forbidden for a variant are refused even when null.
+//
+// Exact compact member order (? means absent by omission):
+//
+//	launcher.command_bound:
+//	  request_id, principal, origin, operation, turn_id?, task_binding?,
+//	  target, request_sha256, native_admission_id?
+//	launcher.command_receipt:
+//	  command_id, submission_sha256, submission, outcome, effect_sequence
+//	principal (closed variants):
+//	  {kind:"windows_logon", user_sid, authentication_id}
+//	  {kind:"unix_uid", uid}
+//	target:
+//	  kind, id, revision
+//
+// Principal is captured from the native peer, never a client identity claim.
+// user_sid is a canonical SID; authentication_id is 16 lowercase hexadecimal
+// digits. uid is an unsigned 32-bit integer, including zero. Stable identity
+// compares kind and user_sid or uid, never authentication_id.
+// Origin is the existing {agent_id,session_id,context_id}; colony identity is
+// supplied by the envelope. task_binding is the existing
+// {task_id,assignment_id,generation}, resolved by Core.
+//
+// Operation is CLOSED to message.send, turn.cancel and promotion.request.
+// turn_id is present exactly for message.send and turn.cancel.
+// native_admission_id is present exactly for message.send. task_binding is
+// present only for message.send in a work context, and must equal its current
+// assignment; it is absent for a general context and other operations.
+// Target kind is CLOSED to context and continuation, revision is nonnegative.
+// message.send and promotion.request target the origin context;
+// turn.cancel targets its turn's continuation owner version.
+//
+// LauncherSubmissionSchema is 11, independently reserved for this family.
+// Canonical LauncherSubmission members are schema, actor, origin, operation,
+// request_id, request_sha256, arguments. Actor is CLOSED to owner and operation
+// to launcher.bind. Arguments are the bound record's members after request_id
+// in their exact order; top-level origin and request_sha256 equal the nested
+// members. SHA-256 of Encode's compact JSON is submission_sha256.
+//
+// Exactly one group per request_id is [ledger.command,
+// launcher.command_bound, launcher.command_receipt]. All three envelopes have
+// actor owner, the registered full origin, no turn_id, and operation_id equal
+// to the fresh Core-generated group command ID. This ID, request_id and the
+// optional native_admission_id are distinct and checked against consumed and
+// promised command IDs. Receipt outcome is CLOSED to recorded;
+// effect_sequence names the group's second record. Submission, command,
+// effect and receipt identities/digests must agree. A producer submits at its
+// preflighted tail, with three moved-tail attempts then BusyError{ledger_tail}.
+// Generic Reader/EncodeCommit/ledgerstore do not enforce producer history rules.
+//
+// # F7-30 request meaning and promised native identities
+//
+// LauncherMeaningVersion is 1 and numbers this frozen preimage, not any
+// negotiated launcher wire. Members are version, origin, task_binding?,
+// command_id, operation, expected, arguments. expected uses LauncherTarget.
+// The three frozen argument shapes, in exact order, are:
+//
+//	message.send       {turn_id,text,artifacts}
+//	turn.cancel        {turn_id}
+//	promotion.request  {workspace_id,head,restart_from?}
+//
+// Artifact items are {source_sequence,sha256,bytes}, with positive integers
+// and nonzero digests. Omitted artifacts normalize to []; nothing else does.
+// Preserve text, array order and restart_from exactly. The meaning digest is
+// SHA-256 of compact LauncherMeaning.Encode JSON. It excludes the principal,
+// every connection/RPC identity, transport ordinal, title and focus value.
+// Same-ID retry compares this digest and stable principal identity BEFORE
+// revision evaluation, with current disclosure authorization still required.
+// A changed bound operation meaning needs a new record version by addition;
+// no frozen type depends on contract/launcher or its draft version.
+//
+// Where a launcher.command_bound exists, its request_id may be consumed only
+// by loop.bind (message.send) or owner.stop (turn.cancel) with the bound
+// origin/turn, and its native_admission_id only by that message's turn.start,
+// in producer preflight and replay. Logs without F7-30 replay unchanged;
+// native submission bytes, receipts and ticket 90's declared identity are
+// untouched. Global command lookup extends by schema 11, not a contiguous
+// schema-number assumption or a second UUID database.
+//
+// A bound request with authoritative proof of no native admission may be
+// explicitly retried with identical meaning under current guards. Busy, held,
+// stale and unavailable leave it retryable; startup never retries it.
+// An admitted or uncertain operation is never re-executed. Status is derived
+// from actual native witnesses; this family adds no command_result or resolve.
+// host.shutdown has no F7 record and no colony-only origin variant.
+//
+// testdata/f7/30 contains one log generated by TestLauncherBindGolden -update:
+// a message binding, its native turn.start and loop.bind, then a cancellation
+// binding and its owner.stop, on the service-ordered F3-16 prefix. The prefix's
+// private object bytes remain those of testdata/f3/16, not new F7 objects.
 package ledger

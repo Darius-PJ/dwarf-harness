@@ -107,6 +107,8 @@ func TestNewCatalogue(t *testing.T) {
 		{"runtime.service_agent_changed", 1}:            true,
 		{"runtime.service_outage_notice", 1}:            true,
 		{"runtime.service_receipt", 1}:                  true,
+		{"launcher.command_bound", 1}:                   true,
+		{"launcher.command_receipt", 1}:                 true,
 
 		{"runtime.setup_applied", 1}: true,
 		{"runtime.setup_receipt", 1}: true,
