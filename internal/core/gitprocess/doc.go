@@ -9,6 +9,12 @@
 // it is not an expected Git exit. Microsoft does not guarantee that notification's
 // delivery: a lost message leaves a refused spawn to Git's own exit status.
 //
+// Validation Go children are the second internal client. Each attempt owns a
+// separate Owner and finite process tree through mandatory Close; exit 1 may be
+// the validation adapter's expected canary result, never native closure evidence.
+// The adapter owns output bounds and interpretation, while this package alone
+// owns process creation, descendant termination and positive root/tree/I/O proof.
+//
 // Run streams with fixed buffers. On root exit it immediately terminates any
 // remaining descendants, including detached Git maintenance, and preserves all
 // bytes already in stdout/stderr while proving Job accounting zero, an empty

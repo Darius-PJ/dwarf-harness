@@ -932,6 +932,36 @@
 // real validation, rework, resources, backlog and latency; these opt-in phases
 // measure only disposable mechanics, not validated accepted throughput.
 //
+// # Exact validation subjects
+//
+// ResolveValidationSubject accepts only workspace-owned canonical, acknowledged
+// observation or current clean-generation selectors; raw trees and scratch paths
+// are not capabilities. Canonical resolution binds the current acceptance witness
+// or, before any acceptance, observed main and the registration record's identity.
+// Observation resolution binds scratch_changed and its still-open scratch/ref;
+// later edits or a polluted index do not alter that source. Generation resolution
+// binds the actual admission, current generation and predecessor chain within the
+// generation window. Durable record sequence/hash pairs are read from the ledger,
+// never synthesized. Capture-input revisions are loaded by their recorded hashes.
+//
+// ExportValidationSubject rechecks the opaque descriptor before effects and after
+// copying. It streams full NUL-delimited ls-tree and cat-file --batch contents,
+// uses a private history-free object/index area under pinned C2 configuration,
+// rejects unsupported conversions, performs read-tree -u --reset, verifies raw
+// versus blob/CRLF content and re-normalizes every file to its exact tree object.
+// The private Git area is removed before return. The returned FileManifest hashes
+// actual exported bytes, including CRLF conversion; it is not a Git tree digest.
+// Unknown, foreign, stale or released sources refuse. A source released while
+// copying makes the export fail and its partial private directories are removed.
+// No ref family or external hold is created: the source need only survive the
+// private copy, which the validation caller owns through native closure and its
+// terminal bookkeeping. Existing same-user check/use limits still apply.
+//
+// CapacityProfile.Validation is optional for workspace-only operation and has no
+// default. A configured ValidationCapacity must be internally consistent, with
+// positive aggregate and per-job resources and one through four lanes. Validation
+// requires it explicitly; dispatch owns aggregate queue/lane/resource reservation.
+//
 // # Loose objects
 //
 // Observe and refused captures can leave loose objects. Core runs no object
