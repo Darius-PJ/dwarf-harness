@@ -60,7 +60,16 @@ func testServiceMoneyOnset(t *testing.T) {
 		t.Parallel()
 		f := newPaidFixture(t)
 		s := f.service
-		e := serviceMoneyRefusal(t, f, s.p.reviewFloor)
+		// The colony's last record is from the previous UTC day, so the
+		// refusal's period must come from the service clock, not the floor.
+		current := max(s.p.reviewFloor, time.Now().UTC().UnixNano())
+		s.p.reviewFloor = time.Unix(0, current).UTC().AddDate(0, 0, -1).UnixNano()
+		s.deps.reviewClock = func() (int64, error) { return current, nil }
+		// A shared seed can predate midnight; keep the demand and its repeats
+		// in one current period rather than following later commit timestamps.
+		now := max(s.p.reviewFloor, time.Now().UTC().UnixNano())
+		s.deps.reviewClock = func() (int64, error) { return now, nil }
+		e := serviceMoneyRefusal(t, f, now)
 		first := serviceRecord(t, s, e)
 		through := f.store.Durable()
 		for range 3 {
@@ -70,7 +79,7 @@ func testServiceMoneyOnset(t *testing.T) {
 			again.Source.ObservationID = again.ObservationID
 			again.Source.CommandID = uuid.NewV7()
 			again.Source.ObservedThrough = int64(through)
-			again.Source.ObservedUTCNS = s.p.reviewFloor
+			again.Source.ObservedUTCNS = now
 			if got := serviceRecord(t, s, again); !sameScopedValue(got, first) || f.store.Durable() != through {
 				t.Fatal("a parked money demand appended on its next wake")
 			}
